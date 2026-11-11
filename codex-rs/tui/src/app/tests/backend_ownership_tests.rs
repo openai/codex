@@ -102,6 +102,23 @@ async fn foreign_backend_selection_cannot_resume_same_id_or_unarchive() -> Resul
         requests.lock().unwrap().is_empty(),
         "a foreign selection must cause zero requests"
     );
+
+    let collision = ThreadId::new();
+    assert!(app.backend_registry.observe(origin.backend_id(), collision));
+    let target = SessionTarget {
+        backend_id: server.backend_id(),
+        thread_id: collision,
+        cwd: None,
+        ..target
+    };
+    app.resume_target_session(&mut tui, &mut server, target)
+        .await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft"
+    );
+    assert!(requests.lock().unwrap().is_empty());
     origin.shutdown().await?;
     server.shutdown().await?;
     proxy.await??;
@@ -311,6 +328,7 @@ async fn prepared_resume_cannot_activate_through_another_backend() -> Result<()>
             blocks_direct_input: false,
             task_tools_available: true,
         },
+        restored_blank_session: false,
         read_only: false,
         history_notice: None,
         provider_error: None,

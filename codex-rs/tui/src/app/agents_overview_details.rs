@@ -232,6 +232,11 @@ impl App {
             }),
             lines,
             usage_lines: root_id
+                .filter(|id| {
+                    self.backend_registry
+                        .owner(*id)
+                        .is_none_or(|owner| self.app_server_backend_id == Some(owner))
+                })
                 .and_then(|id| self.agents_overview.usage.get(&id))
                 .map(|usage| {
                     super::agents_overview_usage::usage_lines(

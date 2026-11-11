@@ -51,6 +51,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         session_telemetry,
         terminal_size_tags: Vec::new(),
         app_event_tx,
+        backend_registry: Default::default(),
         chat_widget,
         workspace_command_runner: None,
         backend_preference_context: backend_selection::BackendPreferenceContext::new(
@@ -101,6 +102,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
+        app_server_backend_id: None,
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
             primary: false,

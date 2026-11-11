@@ -10,6 +10,8 @@ use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
 use crate::app::owned_transcript::tests::attach_thread;
 use crate::app::tests::make_test_app_with_channels;
+use crate::app_server_session::ThreadParamsMode;
+use crate::backend_id::BackendId;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 use codex_config::types::AgentsOverviewGrouping as PersistedAgentsOverviewGrouping;
 
@@ -141,7 +143,9 @@ use crate::render::renderable::Renderable;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::test_support::test_path_display;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::CloudClient;
 use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
@@ -172,6 +176,219 @@ use ratatui::layout::Rect;
 
 static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
+
+#[tokio::test]
+async fn refreshing_one_backends_pins_preserves_cross_backend_rank() {
+    let mut app = make_test_app().await;
+    let local = BackendId::new();
+    let cloud = BackendId::new();
+    let (client, _commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let session = AppServerSession::new(
+        local,
+        AppServerClient::Cloud(client),
+        ThreadParamsMode::Cloud,
+    );
+    let local_pin = ThreadId::new();
+    let cloud_pin = ThreadId::new();
+    let mut previous = None;
+    for (owner, pin) in [(local, local_pin), (cloud, cloud_pin), (local, local_pin)] {
+        let request = Uuid::new_v4();
+        app.agents_overview.active_refresh = Some((request, owner));
+        app.apply_agents_overview_thread_refresh(
+            &session,
+            request,
+            Ok(AgentsOverviewThreadRefresh {
+                cleared_unread: Vec::new(),
+                last_messages: HashMap::new(),
+                threads: HashMap::new(),
+                recent_seed_complete: true,
+                discovery: None,
+                pinned_thread_ids: Some(Some(vec![pin])),
+            }),
+        );
+        let ranks = app
+            .agents_overview_view(Vec::new(), /*selected_thread_id*/ None)
+            .pinned_thread_ranks
+            .unwrap();
+        if owner == cloud {
+            assert_eq!(ranks.len(), 2);
+            previous = Some(ranks);
+        } else if let Some(expected) = previous.as_ref() {
+            assert_eq!(&ranks, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
+    let mut app = make_test_app().await;
+    let stub = |owner, mode| {
+        let (client, commands, events) = CloudClient::channel(/*capacity*/ 1);
+        let session = AppServerSession::new(owner, AppServerClient::Cloud(client), mode);
+        (session, (commands, events))
+    };
+    let (mut displayed, _displayed_transport) = stub(BackendId::new(), ThreadParamsMode::Cloud);
+    let remote_owner = BackendId::new();
+    let [local_id, remote_id, colliding_id] = std::array::from_fn(|_| ThreadId::new());
+    let [local, remote, colliding] = [
+        (local_id, "Local task"),
+        (remote_id, "Remote task"),
+        (colliding_id, "Colliding task"),
+    ]
+    .map(|(id, name)| {
+        overview_thread(id, /*parent_thread_id*/ None, name, ThreadStatus::Idle)
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.app_server_backend_id = Some(displayed.backend_id());
+    let local_reads = HashMap::from([(local_id, Some((local, false, None))), (remote_id, None)]);
+    let remote_reads = HashMap::from([
+        (remote_id, Some((remote.clone(), false, None))),
+        (colliding_id, Some((colliding, false, None))),
+    ]);
+    let name_updated = |id: ThreadId, thread_name| {
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadNameUpdated(
+            ThreadNameUpdatedNotification {
+                thread_id: id.to_string(),
+                thread_name,
+            },
+        )))
+    };
+    for (owner, reads, pins) in [
+        (displayed.backend_id(), local_reads, None),
+        (remote_owner, remote_reads, Some(Vec::new())),
+    ] {
+        let request_id = Uuid::new_v4();
+        app.agents_overview.active_refresh = Some((request_id, owner));
+        if owner == remote_owner {
+            let event = name_updated(colliding_id, Some("Name from the displayed backend".into()));
+            app.handle_app_server_event(&displayed, event).await;
+            app.open_agents_overview(&displayed);
+        }
+        app.apply_agents_overview_thread_refresh(
+            &displayed,
+            request_id,
+            Ok(AgentsOverviewThreadRefresh {
+                cleared_unread: Vec::new(),
+                threads: reads,
+                last_messages: HashMap::new(),
+                recent_seed_complete: owner == remote_owner,
+                discovery: (owner != displayed.backend_id()).then(Default::default),
+                pinned_thread_ids: Some(pins),
+            }),
+        );
+        if owner == displayed.backend_id() {
+            assert_eq!(app.backend_registry.owner(remote_id), None);
+            assert_eq!(
+                app.agents_overview
+                    .pins_by_backend
+                    .get(&displayed.backend_id()),
+                Some(&None)
+            );
+        }
+    }
+    assert_eq!(
+        app.agents_overview.active_refresh.map(|(_, owner)| owner),
+        Some(displayed.backend_id())
+    );
+    app.agents_overview.refresh_task.take().unwrap().abort();
+    app.agents_overview.active_refresh = None;
+    assert_eq!(
+        app.agents_overview.pins_by_backend.get(&remote_owner),
+        Some(&Some(Vec::new()))
+    );
+    assert!(!app.agents_overview.view_state.lock().unwrap().has_more);
+    assert_eq!(app.agents_overview.threads.len(), 2);
+    assert_eq!(app.backend_registry.owner(remote_id), Some(remote_owner));
+    assert_eq!(
+        app.backend_registry.owner(colliding_id),
+        Some(displayed.backend_id())
+    );
+    assert!(!app.agents_overview.threads.contains_key(&colliding_id));
+
+    app.handle_app_server_event(&displayed, name_updated(remote_id, /*thread_name*/ None))
+        .await;
+    assert_eq!(
+        app.agents_overview.threads[&remote_id].as_ref(),
+        Some(&remote)
+    );
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    assert!(matches!(
+        app.select_agents_overview_thread(&mut tui, &mut displayed, remote_id)
+            .await?,
+        AppRunControl::Continue
+    ));
+    assert!(matches!(
+        rx.try_recv()?,
+        AppEvent::ResumeBackendSession(target)
+            if target.backend_id == remote_owner && target.thread_id == remote_id
+    ));
+    assert!(app.agents_overview.threads.contains_key(&local_id));
+    let mut view = app.agents_overview_view(vec![remote], Some(remote_id));
+    assert!(!view.pin_action_supported);
+    view.handle_key_event(KeyCode::Char('n').into());
+    let new_session = std::iter::from_fn(|| rx.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::NewAgentsOverviewSession { .. }))
+        .expect("selected foreign row emitted a new-session action");
+    // A refresh replaces the visible row before its action reaches dispatch.
+    app.agents_overview.visible_thread_ids = vec![local_id];
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    app.handle_event(&mut tui, &mut displayed, new_session)
+        .await?;
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 72);
+    let feedback = [
+        "Unable to complete action",
+        "Open this task before using that action.",
+        "Return to command center",
+    ]
+    .into_iter()
+    .filter(|line| rendered.contains(line))
+    .collect::<Vec<_>>()
+    .join("\n");
+    insta::assert_snapshot!(feedback, @"
+    Unable to complete action
+    Open this task before using that action.
+    Return to command center
+    ");
+
+    // The stale-dispatch check replaced the map, not the one-row Remote view.
+    app.agents_overview.visible_thread_ids = vec![remote_id];
+
+    // Reverse the foreground so the backend that supports pinning is displayed.
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    let (mut foreground, _foreground_transport) = stub(remote_owner, ThreadParamsMode::Embedded);
+    app.app_server_backend_id = Some(remote_owner);
+    app.repaint_agents_overview();
+    let selected = app
+        .chat_widget
+        .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+        .and_then(|index| app.agents_overview.visible_thread_ids.get(index))
+        .copied();
+    assert_eq!(selected, Some(remote_id));
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    let pin = KeyCode::Char('p');
+    app.chat_widget.handle_key_event(pin.into());
+    let event = rx.try_recv()?;
+    assert!(
+        matches!(
+            &event,
+            AppEvent::ToggleAgentsOverviewPin { thread_id, pinned: true } if *thread_id == local_id
+        ),
+        "unexpected pin event: {event:?}"
+    );
+    app.handle_event(&mut tui, &mut foreground, event).await?;
+    assert_eq!(app.agents_overview.pending_pin_change, None);
+
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(pin.into());
+    assert!(matches!(
+        rx.try_recv()?,
+        AppEvent::ToggleAgentsOverviewPin { thread_id, pinned: true } if thread_id == remote_id
+    ));
+    Ok(())
+}
 
 #[tokio::test]
 async fn overview_right_opens_current_or_highlighted_task() {
@@ -326,7 +543,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         overview_thread(id, /*parent_thread_id*/ None, name, ThreadStatus::Idle)
     });
     let request_id = Uuid::new_v4();
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     // The seed is still in flight and the command center has never been opened.
     for notification in [
         ServerNotification::ThreadNameUpdated(ThreadNameUpdatedNotification {
@@ -403,7 +620,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
     assert_eq!(app.agents_overview.threads, expected);
 
     let request_id = Uuid::new_v4();
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     app.apply_agents_overview_thread_refresh(
         &app_server,
         request_id,
@@ -418,7 +635,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
     );
     assert_eq!(app.agents_overview.threads, expected);
     let request_id = Uuid::new_v4();
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     app.apply_agents_overview_thread_refresh(
         &app_server,
         request_id,
@@ -438,7 +655,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         AppServerEvent::Lagged { skipped: 1 },
     ] {
         let old_request = Uuid::new_v4();
-        app.agents_overview.request_id = Some(old_request);
+        app.agents_overview.active_refresh = Some((old_request, app_server.backend_id()));
         app.agents_overview.activity.entry(retained).or_default();
         app.agents_overview.last_messages = stale_messages.clone();
         app.handle_app_server_event(&app_server, event).await;
@@ -450,7 +667,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
             "new-reasoning",
             "**Checking the revised task**",
         ));
-        let current_request = app.agents_overview.request_id.unwrap();
+        let current_request = app.agents_overview.active_refresh.unwrap().0;
         for (request_id, last_messages) in [
             (old_request, stale_messages.clone()),
             (current_request, HashMap::new()),
@@ -470,7 +687,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
             assert!(app.agents_overview.last_messages.is_empty());
         }
         assert!(app.agents_overview.activity.contains_key(&retained));
-        assert!(app.agents_overview.request_id.is_none());
+        assert!(app.agents_overview.active_refresh.is_none());
     }
     app_server.shutdown().await?;
     Ok(())
@@ -655,7 +872,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
         "agents_overview_recent_sessions",
         age.replace_all(&rendered, " [age]")
     );
-    assert!(restarted.agents_overview.discovery.has_more());
+    assert!(restarted.agents_overview.has_more(app_server.backend_id()));
     // Opening starts a metadata refresh; Show more queues behind it.
     restarted.show_more_agents_overview(&app_server);
     finish_overview_refresh(&mut restarted, &app_server, &mut event_rx).await;
@@ -669,7 +886,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
             .collect::<HashSet<_>>(),
         ids.into_iter().collect()
     );
-    assert!(!restarted.agents_overview.discovery.has_more());
+    assert!(!restarted.agents_overview.has_more(app_server.backend_id()));
     app_server.shutdown().await?;
     Ok(())
 }
@@ -685,7 +902,7 @@ async fn finish_overview_refresh(
                 events.recv().await.expect("overview event")
             {
                 // Aborting a refresh task cannot retract an already queued response.
-                if app.agents_overview.request_id != Some(request_id) {
+                if app.agents_overview.active_refresh.map(|(id, _)| id) != Some(request_id) {
                     continue;
                 }
                 assert!(result.is_ok(), "{result:?}");
@@ -717,7 +934,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
     app.chat_widget.show_bottom_pane_view(Box::new(view));
 
     let request_id = uuid::Uuid::new_v4();
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
 
     let parent_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
@@ -747,7 +964,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 
     assert_eq!(
         (
-            app.agents_overview.request_id,
+            app.agents_overview.active_refresh.map(|(id, _)| id),
             app.agents_overview.refresh_pending,
         ),
         (Some(request_id), false)
@@ -778,7 +995,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 
     assert_eq!(
         (
-            app.agents_overview.request_id,
+            app.agents_overview.active_refresh.map(|(id, _)| id),
             app.agents_overview.refresh_pending,
         ),
         (Some(request_id), true)
@@ -890,7 +1107,7 @@ async fn agents_overview_details_show_available_attention_without_expanding_rows
     assert!(!rendered.contains("Which dependency version"));
     assert!(rendered.contains("Waiting for approval."));
     assert!(app.thread_event_channels.is_empty());
-    assert!(app.agents_overview.request_id.is_none());
+    assert!(app.agents_overview.active_refresh.is_none());
 
     let view = app.agents_overview_view(threads, Some(unloaded));
     app.chat_widget.show_bottom_pane_view(Box::new(view));
@@ -1091,7 +1308,7 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!("agents_overview_live_activity", render_bottom_popup(&app.chat_widget, /*width*/ 96).replace(&format!("{project}  1"), &normalized_group).replace(&project, "/tmp/project"));
     });
-    assert!(app.agents_overview.request_id.is_none());
+    assert!(app.agents_overview.active_refresh.is_none());
 
     // A working child can stream through a server attachment without a local channel.
     let parent = overview_thread(
@@ -2771,7 +2988,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
         }),
     ] {
         let request_id = Uuid::new_v4();
-        app.agents_overview.request_id = Some(request_id);
+        app.agents_overview.active_refresh = Some((request_id, server.backend_id()));
         app.apply_agents_overview_thread_refresh(&server, request_id, result);
         assert!(
             app.agents_overview
@@ -2790,7 +3007,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
   Error loading tasks
     ");
     let request_id = Uuid::new_v4();
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, server.backend_id()));
     app.apply_agents_overview_thread_refresh(
         &server,
         request_id,
@@ -3116,27 +3333,24 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
         "Task",
         ThreadStatus::Idle,
     );
+    let owner = BackendId::new();
+    app.backend_registry.observe(owner, id);
     target.cwd = test_path_buf("/tmp/checkout/subdir").abs();
-    app.agents_overview.pinned_thread_ids = Some(Vec::new());
+    app.agents_overview.pins_by_backend =
+        [(crate::backend_id::BackendId::new(), Some(Vec::new()))].into();
     let mut view = app.agents_overview_view(vec![target.clone()], Some(id));
     view.handle_key_event(KeyCode::Char('p').into());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(AppEvent::ToggleAgentsOverviewPin {
-            thread_id,
-            pinned: true,
-        }) if thread_id == id
-    ));
+    let _ = rx.try_recv().expect("first pin shortcut emits an event");
     view.handle_key_event(KeyCode::Char('p').into());
     assert!(rx.try_recv().is_err());
     for grouping_index in 0..3 {
         view.handle_key_event(KeyCode::Char('n').into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
+            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd == target.cwd)
         );
         view.handle_key_event(KeyCode::Char('w').into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { cwd: Some(cwd) }) if cwd == target.cwd)
+            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd == target.cwd)
         );
         view.handle_key_event(KeyCode::Char('g').into());
         if grouping_index == 0 {
@@ -3161,6 +3375,9 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     empty.handle_key_event(KeyCode::Char('n').into());
     assert!(matches!(
         rx.try_recv(),
-        Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
+        Ok(AppEvent::NewAgentsOverviewSession {
+            backend_id: None,
+            cwd: None
+        })
     ));
 }

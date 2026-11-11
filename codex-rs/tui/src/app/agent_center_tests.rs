@@ -91,7 +91,11 @@ async fn live_center_keeps_status_order_across_progress_refreshes() {
             .unwrap();
         assert_eq!(app.agents_overview.visible_thread_ids[selected], ids[0]);
     }
-    app.agents_overview.pinned_thread_ids = Some(vec![ids[3], ids[2]]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![ids[3], ids[2]]),
+    )]
+    .into();
     for parent in [ids[0], ids[3]] {
         threads.push(overview_thread(
             ThreadId::new(),
@@ -273,10 +277,15 @@ async fn live_center_status_order_tracks_updates_while_filtered_and_pinned() {
     assert_eq!(rendered_titles(&view), vec!["Bravo", "Charlie", "Alpha"]);
     view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    app.agents_overview.pinned_thread_ids = Some(vec![ids[0], ids[2]]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![ids[0], ids[2]]),
+    )]
+    .into();
     view = app.agents_overview_view(threads.clone(), Some(ids[1]));
     assert_eq!(rendered_titles(&view), vec!["Alpha", "Charlie", "Bravo"]);
-    app.agents_overview.pinned_thread_ids = Some(vec![]);
+    app.agents_overview.pins_by_backend =
+        [(crate::backend_id::BackendId::new(), Some(vec![]))].into();
     view = app.agents_overview_view(threads, Some(ids[1]));
     assert_eq!(rendered_titles(&view), vec!["Bravo", "Charlie", "Alpha"]);
 }
@@ -333,7 +342,11 @@ async fn live_center_columns() {
         ThreadStatus::Idle,
     ));
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
-    app.agents_overview.pinned_thread_ids = Some(vec![current, ThreadId::from_u128(/*value*/ 44)]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![current, ThreadId::from_u128(/*value*/ 44)]),
+    )]
+    .into();
     app.agents_overview
         .unread
         .insert(ThreadId::from_u128(/*value*/ 47));
@@ -738,7 +751,8 @@ toggle_pin = 'z p'
     )
     .unwrap();
     app.keymap = RuntimeKeymap::from_config(&config).unwrap();
-    app.agents_overview.pinned_thread_ids = Some(Vec::new());
+    app.agents_overview.pins_by_backend =
+        [(crate::backend_id::BackendId::new(), Some(Vec::new()))].into();
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     insta::assert_snapshot!(
         "live_center_custom_footer",

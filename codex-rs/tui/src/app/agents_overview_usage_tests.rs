@@ -14,6 +14,7 @@ use pretty_assertions::assert_eq;
 async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> Result<()> {
     let mut app = make_test_app_with_chat().await;
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.app_server_backend_id = Some(app_server.backend_id());
     app.chat_widget.update_account_state(
         /*status_account_display*/ None,
         Some(PlanType::Business),
@@ -22,6 +23,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
     );
     let selected = ThreadId::from_u128(/*value*/ 1);
     let other = ThreadId::new();
+    app.backend_registry.observe(app_server.backend_id(), other);
     let threads = [(selected, "Review parser"), (other, "Other task")].map(|(id, name)| {
         overview_thread(id, /*parent_thread_id*/ None, name, ThreadStatus::Idle)
     });
@@ -83,7 +85,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         reasoning_output_tokens: 0,
     };
     app.agents_overview.threads.remove(&selected);
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     app.track_agents_overview_notification(&ServerNotification::ThreadTokenUsageUpdated(
         ThreadTokenUsageUpdatedNotification {
             thread_id: selected.to_string(),
@@ -159,13 +161,37 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
     let other_usage = app.agents_overview.usage.entry(other).or_default();
     other_usage.estimate = Some(expected.clone());
     other_usage.tokens = Some(tokens.clone());
+    let foreign = ThreadId::new();
+    app.backend_registry
+        .observe(crate::backend_id::BackendId::new(), foreign);
+    let foreign_thread = overview_thread(
+        foreign,
+        /*parent_thread_id*/ None,
+        "Foreign task",
+        ThreadStatus::Idle,
+    );
+    app.agents_overview
+        .threads
+        .insert(foreign, Some(foreign_thread.clone()));
+    let foreign_usage = app.agents_overview.usage.entry(foreign).or_default();
+    foreign_usage.estimate = Some(expected.clone());
+    let row = app.agents_overview.threads.remove(&selected).unwrap();
+    app.agents_overview
+        .search_matches
+        .insert(selected, row.clone().unwrap());
     app.agents_overview.pending_usage = Some((thread_id, request_id));
     app.finish_agents_overview_usage(thread_id, request_id, Ok(ThreadUsageOutcome::Disabled));
+    app.agents_overview.threads.insert(selected, row);
     assert!(
         app.agents_overview
             .usage
-            .values()
-            .all(|usage| usage.estimate.is_none())
+            .iter()
+            .filter(|(id, _)| **id != foreign)
+            .all(|(_, usage)| usage.estimate.is_none())
+    );
+    assert_eq!(
+        app.agents_overview.usage[&foreign].estimate,
+        Some(expected.clone())
     );
     assert_eq!(
         app.agents_overview.usage[&other].tokens,
@@ -178,6 +204,17 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
     app.refresh_agents_overview_usage(&app_server, tui.frame_requester());
     assert!(app.agents_overview.usage_disabled);
     assert_eq!(app.agents_overview.pending_usage, None);
+    let view = app.agents_overview_view(vec![foreign_thread], Some(foreign));
+    assert!(view.rows[0].details.usage_lines.is_empty());
+    app.agents_overview.usage.get_mut(&other).unwrap().estimate = Some(expected.clone());
+    app.reset_agents_overview_usage_for_backend_switch();
+    assert_eq!(
+        app.agents_overview.usage[&other].tokens,
+        Some(tokens.clone())
+    );
+    assert_eq!(app.agents_overview.usage[&other].estimate, None);
+    assert!(!app.agents_overview.usage.contains_key(&foreign));
+    app.agents_overview.threads.remove(&foreign);
     for event in [
         AppServerEvent::Lagged { skipped: 1 },
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(

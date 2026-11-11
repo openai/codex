@@ -17,6 +17,17 @@ use codex_app_server_protocol::WarningNotification;
 const REALTIME_STOP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 impl App {
+    pub(super) fn displayed_conversation_backend_id(&self) -> Option<crate::backend_id::BackendId> {
+        self.current_displayed_thread_id()
+            .and_then(|thread_id| {
+                self.thread_event_channels
+                    .get(&thread_id)
+                    .and_then(|channel| channel.backend_id)
+                    .or_else(|| self.backend_registry.owner(thread_id))
+            })
+            .or(self.app_server_backend_id)
+    }
+
     pub(super) async fn stop_realtime_conversation(&mut self, app_server: &mut AppServerSession) {
         let thread_id = self
             .background_voice

@@ -108,6 +108,7 @@ fn is_subagent(thread: &Thread) -> bool {
 
 #[derive(Clone)]
 pub(super) struct AgentsOverviewRow {
+    pub(super) backend_id: Option<crate::backend_id::BackendId>,
     pub(super) search_id: Option<uuid::Uuid>,
     pub(super) details: AgentsOverviewDetails,
     pub(super) thread: Thread,
@@ -229,6 +230,7 @@ pub(super) struct AgentsOverviewView {
     project_groups: Vec<AgentsOverviewProjectGroup>,
     directory_group_keys: Vec<PathBuf>,
     pub(super) pinned_thread_ranks: Option<HashMap<ThreadId, usize>>,
+    pub(super) pin_action_supported: bool,
     pub(super) pin_action_pending: bool,
     pub(super) can_return_to_chat: bool,
     selected: usize,
@@ -307,6 +309,7 @@ impl AgentsOverviewView {
             project_groups,
             directory_group_keys,
             pinned_thread_ranks: None,
+            pin_action_supported: true,
             pin_action_pending: false,
             can_return_to_chat: false,
             selected,
@@ -362,6 +365,7 @@ impl AgentsOverviewView {
 
     fn can_toggle_selected_pin(&self) -> bool {
         !self.pin_action_pending
+            && self.pin_action_supported
             && self.pinned_thread_ranks.is_some()
             && self
                 .selected_row()
@@ -787,6 +791,7 @@ impl BottomPaneView for AgentsOverviewView {
         }
         if self.agents_keymap.new_task.is_pressed(key) {
             self.app_event_tx.send(AppEvent::NewAgentsOverviewSession {
+                backend_id: self.selected_row().and_then(|row| row.backend_id),
                 cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
             });
             return;
@@ -794,6 +799,7 @@ impl BottomPaneView for AgentsOverviewView {
         if self.agents_keymap.new_worktree.is_pressed(key) {
             if self.worktrees_enabled {
                 self.app_event_tx.send(AppEvent::NewAgentsOverviewWorktree {
+                    backend_id: self.selected_row().and_then(|row| row.backend_id),
                     cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
                 });
             }

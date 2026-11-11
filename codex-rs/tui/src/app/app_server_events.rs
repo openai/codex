@@ -78,11 +78,12 @@ impl App {
                 if let Some(task) = self.agents_overview.refresh_task.take() {
                     task.abort();
                 }
-                self.agents_overview.request_id = None;
+                self.agents_overview.active_refresh = None;
                 self.agents_overview.refresh_show_more = false;
                 self.agents_overview.active_refresh_thread_ids.clear();
                 self.agents_overview.refresh_pending = false;
-                self.agents_overview.initialized = false;
+                self.agents_overview
+                    .invalidate_discovery(app_server_client.backend_id(), /*displayed*/ true);
                 self.agents_overview.refresh_notifications.clear();
                 self.agents_overview.activity.clear();
                 self.agents_overview.last_messages.clear();
@@ -100,6 +101,14 @@ impl App {
                 }
             }
             AppServerEvent::ServerNotification(notification) => {
+                if let ServerNotificationThreadTarget::Thread(thread_id) =
+                    server_notification_thread_target(notification.as_ref())
+                    && !self
+                        .backend_registry
+                        .observe(app_server_client.backend_id(), thread_id)
+                {
+                    return;
+                }
                 let request_resolved = matches!(
                     notification.as_ref(),
                     ServerNotification::ServerRequestResolved(_)
@@ -258,17 +267,11 @@ impl App {
                 .or_default();
         }
         self.track_agents_overview_notification(&notification);
-        // Retained blank sessions stay subscribed after their event channels are cleared.
         if let ServerNotification::ThreadSettingsUpdated(settings) = &notification
             && let Ok(thread_id) = ThreadId::from_string(&settings.thread_id)
-            && self.agents_overview.blank_sessions.contains_key(&thread_id)
-            && !self.thread_event_channels.contains_key(&thread_id)
         {
-            self.apply_thread_settings_to_cached_session(thread_id, &settings.thread_settings)
+            self.update_retained_blank_settings(thread_id, settings)
                 .await;
-            if let Some(input) = self.agents_overview.input_states.get_mut(&thread_id) {
-                input.pending_thread_settings = Some(settings.clone());
-            }
         }
         if matches!(
             &notification,
@@ -359,6 +362,9 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                self.agents_overview
+                    .invalidate_discovery(app_server_client.backend_id(), /*displayed*/ true);
+                self.refresh_changed_agents_overview_threads(app_server_client);
                 self.agents_overview.usage.clear();
                 self.agents_overview.pending_usage = None;
                 self.agents_overview.usage_disabled = false;

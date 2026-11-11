@@ -106,7 +106,7 @@ impl App {
             return;
         }
         let request_id = Uuid::new_v4();
-        self.agents_overview.pending_pin_change = Some(request_id);
+        self.agents_overview.pending_pin_change = Some((request_id, app_server.backend_id()));
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -139,13 +139,19 @@ impl App {
         pinned: bool,
         result: Result<(), String>,
     ) {
-        if self.agents_overview.pending_pin_change != Some(request_id) {
+        let Some((_, owner)) = self
+            .agents_overview
+            .pending_pin_change
+            .filter(|(id, _)| *id == request_id)
+        else {
             return;
-        }
+        };
         self.agents_overview.pending_pin_change = None;
         match result {
             Ok(()) => {
-                if let Some(pinned_thread_ids) = self.agents_overview.pinned_thread_ids.as_mut() {
+                if let Some(Some(pinned_thread_ids)) =
+                    self.agents_overview.pins_by_backend.get_mut(&owner)
+                {
                     if pinned {
                         if !pinned_thread_ids.contains(&thread_id) {
                             pinned_thread_ids.push(thread_id);
@@ -166,7 +172,7 @@ impl App {
         if let Some(refresh) = self.agents_overview.refresh_task.take() {
             refresh.abort();
         }
-        self.agents_overview.request_id = None;
+        self.agents_overview.active_refresh = None;
         self.agents_overview.refresh_show_more = false;
         self.agents_overview.refresh_notifications.clear();
         let refresh_thread_ids =
@@ -374,7 +380,7 @@ impl App {
             if let Some(refresh) = self.agents_overview.refresh_task.take() {
                 refresh.abort();
             }
-            self.agents_overview.request_id = None;
+            self.agents_overview.active_refresh = None;
             self.agents_overview.refresh_show_more = false;
             self.agents_overview.active_refresh_thread_ids.clear();
             self.agents_overview

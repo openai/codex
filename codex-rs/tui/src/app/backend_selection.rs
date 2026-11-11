@@ -389,12 +389,18 @@ impl App {
         self.clear_active_thread().await;
         self.agents_overview.search_matches.clear();
         self.agents_overview.pending_usage = None;
+        self.reset_agents_overview_usage_for_backend_switch();
         self.agents_overview.usage_disabled = false;
+        self.agents_overview.reset_visible_pagination();
         self.app_event_tx = AppEventSender::new(self.app_event_tx.app_event_tx.clone());
+        self.app_server_backend_id = Some(destination.backend_id());
         self.app_server_target = target;
         self.reconnect = Default::default();
         if let Ok(mut state) = self.agents_overview.view_state.lock() {
             state.connection_notice = None;
+            let destination_id = destination.backend_id();
+            state.has_more = self.agents_overview.initialized.contains(&destination_id)
+                && self.agents_overview.has_more(destination_id);
             state.restart_history_search();
         }
         self.rate_limit_hard_stop_generation = self.rate_limit_hard_stop_generation.wrapping_add(1);
@@ -428,6 +434,12 @@ impl App {
             let displayed_session = backends.displayed;
             let owner = target.backend_id;
             let outgoing = backends.displayed_owner();
+            if let Some(registered_owner) = self.backend_registry.owner(target.thread_id)
+                && let Err(error) = target.ensure_backend(registered_owner)
+            {
+                self.add_session_picker_error(error.to_string());
+                return Ok(AppRunControl::Continue);
+            }
             if owner == outgoing {
                 return self
                     .apply_resume_picker_selection(
@@ -501,13 +513,21 @@ impl App {
                     }
                 }
             }
+            let restored_blank_session = prepared.restored_blank_session;
+            let has_resumed_mode = prepared.thread.session.collaboration_mode.is_some();
             let control = self
                 .activate_prepared_session(tui, destination, prepared)
                 .await?;
             backends.displayed = destination_slot;
+            if !restored_blank_session {
+                self.agents_overview.blank_sessions.remove(&thread_id);
+            }
             if let Some(mut input) = self.agents_overview.input_states.remove(&thread_id) {
-                let blank = self.agents_overview.blank_sessions.contains_key(&thread_id);
-                let settings = blank
+                if !restored_blank_session {
+                    self.chat_widget
+                        .update_input_collaboration_mode(&mut input, has_resumed_mode);
+                }
+                let settings = restored_blank_session
                     .then(|| input.pending_thread_settings.take())
                     .flatten();
                 self.restore_session_draft(thread_id, input, settings).await;

@@ -74,7 +74,7 @@ impl App {
     }
 
     pub(super) fn show_more_agents_overview(&mut self, app_server: &AppServerSession) {
-        if !self.agents_overview.discovery.has_more() {
+        if !self.agents_overview.has_more(app_server.backend_id()) {
             return;
         }
         self.agents_overview.show_more_requested |= self.agents_overview.refill_count == 0;
@@ -217,7 +217,7 @@ impl App {
         {
             self.agents_overview.refresh_thread_ids.insert(thread_id);
         }
-        if self.agents_overview.request_id.is_some() {
+        if self.agents_overview.active_refresh.is_some() {
             // Replay the latest notification of each kind after the read, in arrival order.
             // This also protects sessions whose metadata has not arrived in the initial seed.
             let pending = self
@@ -256,7 +256,6 @@ impl App {
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_none()
-            || (!self.agents_overview.initialized && self.agents_overview.request_id.is_none())
         {
             return;
         }
@@ -264,26 +263,34 @@ impl App {
     }
 
     fn start_agents_overview_refresh(&mut self, app_server: &AppServerSession) {
+        let backend_id = app_server.backend_id();
+        let initialized = self.agents_overview.initialized.contains(&backend_id);
+        let source_has_more = self.agents_overview.has_more(backend_id);
         let visible = self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
-        if !visible && self.agents_overview.initialized {
+        if !visible && initialized {
             return;
         }
-        if self.agents_overview.request_id.is_some() {
+        if self.agents_overview.active_refresh.is_some() {
             self.agents_overview.refresh_pending = true;
             return;
         }
-        if self.agents_overview.initialized
+        if initialized
             && self.agents_overview.refresh_thread_ids.is_empty()
             && !self.agents_overview.show_more_requested
-            && !(self.agents_overview.refill_count > 0 && self.agents_overview.discovery.has_more())
+            && !(self.agents_overview.refill_count > 0 && source_has_more)
             && !self.agents_overview.pin_refresh_requested
         {
             return;
         }
 
+        let owns_thread = |thread_id| {
+            self.backend_registry
+                .owner(thread_id)
+                .is_none_or(|owner| owner == backend_id)
+        };
         let mut unread_rows = Vec::new();
         if std::mem::take(&mut self.agents_overview.pin_refresh_requested) {
             unread_rows.extend(
@@ -291,18 +298,17 @@ impl App {
                     .visible_thread_ids
                     .iter()
                     .copied()
-                    .filter(|id| self.agents_overview.unread.contains(id)),
+                    .filter(|id| self.agents_overview.unread.contains(id) && owns_thread(*id)),
             );
         }
         let request_id = Uuid::new_v4();
-        self.agents_overview.request_id = Some(request_id);
-        let initialized = self.agents_overview.initialized;
+        self.agents_overview.active_refresh = Some((request_id, backend_id));
+        self.agents_overview.refresh_invalidated = false;
         let refill = self.agents_overview.refill_count;
         let show_more =
             refill == 0 && std::mem::take(&mut self.agents_overview.show_more_requested);
         self.agents_overview.refresh_show_more = show_more;
-        let discover =
-            !initialized || show_more || (refill > 0 && self.agents_overview.discovery.has_more());
+        let discover = !initialized || show_more || (refill > 0 && source_has_more);
         let limit = if initialized && refill > 0 {
             refill.min(10)
         } else {
@@ -310,13 +316,20 @@ impl App {
         };
         let mut discovery = discover.then(|| {
             if initialized {
-                self.agents_overview.discovery.clone()
+                self.agents_overview
+                    .discovery
+                    .get(&backend_id)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
-                self.agents_overview.removed_threads.clear();
+                self.agents_overview
+                    .removed_threads
+                    .retain(|id| !owns_thread(*id));
                 Default::default()
             }
         });
         let mut thread_ids = std::mem::take(&mut self.agents_overview.refresh_thread_ids);
+        thread_ids.retain(|id| owns_thread(*id));
         self.agents_overview.active_refresh_thread_ids = thread_ids.clone();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();

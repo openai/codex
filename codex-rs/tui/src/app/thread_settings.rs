@@ -11,6 +11,7 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
@@ -191,6 +192,24 @@ impl App {
             ..ThreadSettingsUpdateParams::default()
         };
         self.send_thread_settings_update(app_server, params).await;
+    }
+
+    // Retained blank sessions stay subscribed after their event channels are cleared.
+    pub(super) async fn update_retained_blank_settings(
+        &mut self,
+        thread_id: ThreadId,
+        notification: &ThreadSettingsUpdatedNotification,
+    ) {
+        if !self.agents_overview.blank_sessions.contains_key(&thread_id)
+            || self.thread_event_channels.contains_key(&thread_id)
+        {
+            return;
+        }
+        self.apply_thread_settings_to_cached_session(thread_id, &notification.thread_settings)
+            .await;
+        if let Some(input) = self.agents_overview.input_states.get_mut(&thread_id) {
+            input.pending_thread_settings = Some(notification.clone());
+        }
     }
 
     pub(super) async fn apply_thread_settings_to_cached_session(

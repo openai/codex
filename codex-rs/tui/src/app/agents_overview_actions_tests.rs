@@ -30,7 +30,7 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             AppEvent::ToggleAgentsOverviewPin { thread_id, pinned },
         ))
         .await?;
-        let pending = app
+        let (pending, _) = app
             .agents_overview
             .pending_pin_change
             .expect("pin request started");
@@ -774,8 +774,8 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         },
     ));
     let request_id = Uuid::new_v4();
-    app.agents_overview.initialized = false;
-    app.agents_overview.request_id = Some(request_id);
+    app.agents_overview.initialized.clear();
+    app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     app.apply_agents_overview_thread_refresh(
         &app_server,
         request_id,
@@ -1054,7 +1054,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         }
         // Cached details and approval state are invalidated as a group after success.
         let request_id = Uuid::new_v4();
-        app.agents_overview.request_id = Some(request_id);
+        app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
         let stale_threads = app.agents_overview.threads.clone();
         Box::pin(app.run_agents_overview_action(&mut tui, &mut app_server, background, action))
             .await?;
@@ -1161,7 +1161,9 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         }
         crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, primary);
         // Canceling pagination must allow automatic refill to finish after removing the last task.
-        app.agents_overview.initialized = true;
+        app.agents_overview
+            .initialized
+            .insert(app_server.backend_id());
         app.agents_overview.view_state.lock().unwrap().loading = true;
         // An invalidated refresh can already be queued when the lifecycle action
         // aborts its task. It must not satisfy the wait for the replacement refresh.
@@ -1178,7 +1180,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
                 }),
             });
         Box::pin(app.handle_event(&mut tui, &mut app_server, confirmed)).await?;
-        if app.agents_overview.request_id.is_some() {
+        if app.agents_overview.active_refresh.is_some() {
             finish_overview_refresh(&mut app, &app_server, &mut rx).await;
         }
         assert!(!app.agents_overview.view_state.lock().unwrap().loading);

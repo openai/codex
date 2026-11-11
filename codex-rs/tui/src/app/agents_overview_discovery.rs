@@ -148,6 +148,10 @@ impl AgentsOverviewDiscovery {
         limit: usize,
     ) -> (Vec<(Thread, bool)>, bool) {
         let [interactive, other] = &mut self.sources;
+        // Cloud does not support filtering its task list to Exec and AppServer threads.
+        if matches!(handle, AppServerRequestHandle::Cloud(_)) {
+            other.exhausted = true;
+        }
         let (left, right) = tokio::join!(
             interactive.fill(handle, Vec::new()),
             other.fill(
@@ -326,8 +330,10 @@ impl App {
         let Some(search) = state.history.as_mut().filter(|s| s.id == id) else {
             return;
         };
+        let backend_id = self.app_server_backend_id;
         for (thread, unread) in rows {
             if let Ok(id) = codex_protocol::ThreadId::from_string(&thread.id)
+                && self.backend_registry.owner(id).or(backend_id) == backend_id
                 && !overview.threads.get(&id).is_some_and(Option::is_some)
                 && !overview.removed_threads.contains(&id)
                 && !overview.hidden_threads.contains(&id)

@@ -736,6 +736,24 @@ impl ChatWidget {
         })
     }
 
+    /// Keep the current session's collaboration settings when restoring a saved draft.
+    pub(crate) fn update_input_collaboration_mode(
+        &self,
+        input: &mut ThreadInputState,
+        has_resumed_mode: bool,
+    ) {
+        input.current_collaboration_mode = self.current_collaboration_mode.clone();
+        if has_resumed_mode {
+            input
+                .active_collaboration_mask
+                .clone_from(&self.active_collaboration_mask);
+        } else if let Some(mask) = input.active_collaboration_mask.as_mut() {
+            // Keep the local selection for older servers. Replay reapplies a supplied mode.
+            mask.model = Some(self.current_model().to_string());
+            mask.reasoning_effort = Some(self.effective_reasoning_effort());
+        }
+    }
+
     pub(crate) fn restore_thread_input_state(
         &mut self,
         input_state: Option<ThreadInputState>,

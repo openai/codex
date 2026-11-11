@@ -240,7 +240,12 @@ impl App {
             self.reconnect.offline = true;
             self.account_email_request_id = None;
             // Cached blank sessions are usable only while this connection owns a subscription.
-            self.agents_overview.blank_sessions.clear();
+            self.agents_overview.blank_sessions.retain(|id, _| {
+                self.backend_registry
+                    .owner(*id)
+                    .zip(self.app_server_backend_id)
+                    .is_some_and(|(owner, reconnecting)| owner != reconnecting)
+            });
             self.reconnect.failed = false;
             if self.pending_server_version_notice.take().is_some() {
                 self.reconnect.seen_version_notice = None;
@@ -256,7 +261,11 @@ impl App {
             if let Some(task) = self.agents_overview.refresh_task.take() {
                 task.abort();
             }
-            self.agents_overview.request_id = None;
+            self.agents_overview.active_refresh = None;
+            if let Some(owner) = self.app_server_backend_id {
+                self.agents_overview
+                    .invalidate_discovery(owner, /*displayed*/ true);
+            }
             self.agents_overview.refresh_show_more = false;
             self.agents_overview.active_refresh_thread_ids.clear();
             self.agents_overview.refresh_pending = false;
@@ -372,6 +381,7 @@ impl App {
         // prevents their late completions from submitting follow-up operations on the new one.
         let (tx, rx) = mpsc::unbounded_channel();
         self.app_event_tx = AppEventSender::new(tx);
+        self.app_server_backend_id = Some(session.backend_id());
         *app_event_rx = rx;
         // The old timer targets the discarded channel, so a new preview can be scheduled.
         self.config_notification_test_pending = None;
@@ -445,7 +455,7 @@ impl App {
             cancellation.cancel();
         }
         self.agents_overview.dispatched_requests.clear();
-        self.agents_overview.request_id = None;
+        self.agents_overview.active_refresh = None;
         self.agents_overview.refresh_show_more = false;
         self.agents_overview.active_refresh_thread_ids.clear();
         self.agents_overview.refresh_pending = false;
@@ -560,7 +570,9 @@ impl App {
         self.refresh_pending_thread_approvals().await;
         // Discover tasks whose notifications were missed, without clearing retained rows.
         // A hidden overview performs this discovery when it is next opened.
-        self.agents_overview.initialized = false;
+        self.agents_overview
+            .initialized
+            .remove(&app_server.backend_id());
         if self.reconnect.presentation == ReconnectPresentation::Overview {
             let threads = self
                 .agents_overview

@@ -1,12 +1,114 @@
 //! Incoming events cannot use a colliding native thread ID to mutate another backend's state.
 
 use super::*;
+use crate::app::agents_overview::tests::overview_thread;
+use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::app_server_session::AppServerSessionEvent;
 use crate::backend_id::BackendId;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+
+#[tokio::test]
+async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
+    let (mut app, _events, _) = make_test_app_with_channels().await;
+    let (server, _, proxy) =
+        session_lifecycle_requests::start_recording_remote_app_server(&app.config).await?;
+    let owner = server.backend_id();
+    let displayed = BackendId::new();
+    let collision = ThreadId::new();
+    assert!(app.backend_registry.observe(displayed, collision));
+    let collision_row = overview_thread(
+        collision,
+        /*parent_thread_id*/ None,
+        "other backend",
+        ThreadStatus::Idle,
+    );
+    app.agents_overview
+        .threads
+        .insert(collision, Some(collision_row.clone()));
+
+    for deleted in [false, true] {
+        let id = ThreadId::new();
+        assert!(app.backend_registry.observe(owner, id));
+        let row = overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "owned row",
+            ThreadStatus::Idle,
+        );
+        app.agents_overview.threads.insert(id, Some(row.clone()));
+        let request_id = uuid::Uuid::new_v4();
+        app.agents_overview.active_refresh = Some((request_id, owner));
+        for target in [id, collision] {
+            let notification = if deleted {
+                ServerNotification::ThreadDeleted(serde_json::from_value(
+                    serde_json::json!({ "threadId": target.to_string() }),
+                )?)
+            } else {
+                ServerNotification::ThreadArchived(serde_json::from_value(
+                    serde_json::json!({ "threadId": target.to_string() }),
+                )?)
+            };
+            app.handle_polled_backend_event(
+                &server,
+                displayed,
+                AppServerSessionEvent {
+                    backend_id: owner,
+                    event: AppServerEvent::ServerNotification(Box::new(notification)),
+                },
+            )
+            .await;
+        }
+        assert!(!app.agents_overview.threads.contains_key(&id));
+        assert!(app.agents_overview.threads.contains_key(&collision));
+        assert!(app.agents_overview.refresh_invalidated);
+        assert_eq!(app.agents_overview.refill_count, 0);
+        app.apply_agents_overview_thread_refresh(
+            &server,
+            request_id,
+            Ok(AgentsOverviewThreadRefresh {
+                cleared_unread: Vec::new(),
+                threads: HashMap::from([(id, Some((row, false, None)))]),
+                last_messages: HashMap::new(),
+                recent_seed_complete: true,
+                discovery: None,
+                pinned_thread_ids: None,
+            }),
+        );
+        assert!(!app.agents_overview.threads.contains_key(&id));
+        assert_eq!(
+            app.agents_overview.threads.get(&collision),
+            Some(&Some(collision_row.clone()))
+        );
+        if !deleted {
+            let notification = ServerNotification::ThreadUnarchived(serde_json::from_value(
+                serde_json::json!({ "threadId": id.to_string() }),
+            )?);
+            app.handle_polled_backend_event(
+                &server,
+                displayed,
+                AppServerSessionEvent {
+                    backend_id: owner,
+                    event: AppServerEvent::ServerNotification(Box::new(notification)),
+                },
+            )
+            .await;
+            assert!(!app.agents_overview.removed_threads.contains(&id));
+        }
+    }
+    app.show_more_agents_overview(&server);
+    assert!(app.agents_overview.refresh_show_more);
+    if let Some(task) = app.agents_overview.refresh_task.take() {
+        task.abort();
+    }
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() -> Result<()> {
@@ -51,6 +153,7 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
         )
         .await;
     }
+    let owner = server.backend_id();
     for event in [
         AppServerEvent::Lagged { skipped: 1 },
         AppServerEvent::Disconnected {
@@ -70,6 +173,18 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
             },
         ))),
     ] {
+        let account_updated = matches!(
+            &event,
+            AppServerEvent::ServerNotification(notification)
+                if matches!(notification.as_ref(), ServerNotification::AccountUpdated(_))
+        );
+        if account_updated {
+            app.agents_overview.initialized.extend([owner, foreign]);
+            app.agents_overview
+                .discovery
+                .insert(owner, Default::default());
+            app.agents_overview.active_refresh = Some((uuid::Uuid::new_v4(), owner));
+        }
         app.handle_polled_backend_event(
             &server,
             foreign,
@@ -79,6 +194,12 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
             },
         )
         .await;
+        if account_updated {
+            assert!(!app.agents_overview.discovery.contains_key(&owner));
+            assert!(!app.agents_overview.initialized.contains(&owner));
+            assert!(app.agents_overview.initialized.contains(&foreign));
+            assert!(app.agents_overview.refresh_invalidated);
+        }
     }
     assert!(!app.reconnect.offline);
     assert_eq!(app.rate_limit_hard_stop_generation, hard_stop_generation);

@@ -1374,6 +1374,13 @@ impl App {
             config,
             local_settings,
         } = prepared;
+        if let Err(error) = self
+            .backend_registry
+            .register_started(app_server.backend_id(), &started)
+        {
+            self.chat_widget.add_error_message(error.to_string());
+            return;
+        }
         if let Some(thread_id) = self.current_displayed_thread_id()
             && let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id)
         {
@@ -1741,6 +1748,7 @@ impl App {
             read_only,
             history_notice,
             provider_error,
+            ..
         } = prepared;
         if backend_id != app_server.backend_id() {
             self.add_session_picker_error(
@@ -1749,6 +1757,8 @@ impl App {
             );
             return Ok(AppRunControl::Continue);
         }
+        self.backend_registry
+            .observe(backend_id, resumed.session.thread_id);
         let resumed_thread_id = resumed.session.thread_id;
         let retained_input = ((self.chat_widget.is_external_writer_view()
             || self.chat_widget.has_provider_error())

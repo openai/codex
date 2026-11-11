@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app::backend_sessions::BackendSessions;
+use crate::app_server_session::AppServerSessionEvent;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::SkillsListEntry;
@@ -987,6 +988,327 @@ async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Res
     backends.shutdown().await?;
     source_proxy.await??;
     destination_proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn backend_handoff_restores_a_live_blank_session_without_resuming_it() -> Result<()> {
+    check_retained_draft_handoff(
+        /*saved_history*/ false,
+        HistoryCapabilities::Current,
+        /*retained_blank*/ true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn backend_handoff_restores_a_live_blank_session_on_an_older_server() -> Result<()> {
+    let capabilities = HistoryCapabilities::LegacyOnly;
+    check_retained_draft_handoff(
+        /*saved_history*/ false,
+        capabilities,
+        /*retained_blank*/ true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn backend_handoff_falls_back_when_the_first_turn_page_is_unsupported() -> Result<()> {
+    check_retained_draft_handoff(
+        /*saved_history*/ false,
+        HistoryCapabilities::FirstTurnPageUnsupported,
+        /*retained_blank*/ true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn backend_handoff_reads_saved_turns_instead_of_reusing_a_stale_blank() -> Result<()> {
+    check_retained_draft_handoff(
+        /*saved_history*/ true,
+        HistoryCapabilities::Current,
+        /*retained_blank*/ true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn backend_handoff_keeps_resumed_settings_for_populated_task_draft() -> Result<()> {
+    check_retained_draft_handoff(
+        /*saved_history*/ true,
+        HistoryCapabilities::Current,
+        /*retained_blank*/ false,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn same_backend_reopen_recovers_history_for_a_stale_blank() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let model = core_test_support::responses::start_mock_server().await;
+    app_test_support::MockResponsesConfig::new(&model.uri()).write(&app.config.codex_home)?;
+    crate::legacy_core::config::set_project_trust_level(
+        &app.config.codex_home,
+        app.config.cwd.as_path(),
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(std::io::Error::other)?;
+    app.config = app
+        .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+        .await?;
+    let mut server =
+        boxed_future!(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let blank = server.start_thread(&app.config).await?;
+    let thread_id = blank.session.thread_id;
+    app.backend_registry
+        .register_started(server.backend_id(), &blank)?;
+    app.agents_overview.blank_sessions.insert(thread_id, blank);
+
+    // Returning to the backend through another task leaves this cached blank untouched.
+    let other = server.start_thread(&app.config).await?;
+    let other_id = other.session.thread_id;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.enqueue_primary_thread_session(other.session, other.turns)
+        .await?;
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(other_id));
+
+    // The helper consumes the turn notifications without delivering them to App.
+    let prompt = "Sent while the backend was parked";
+    side_chat_policy_tests::ask(&mut server, &model, thread_id, prompt).await?;
+    assert!(app.agents_overview.blank_sessions.contains_key(&thread_id));
+    let mut expected_mode = app.chat_widget.effective_collaboration_mode();
+    app.chat_widget.set_model("stale-model");
+    app.chat_widget.apply_external_edit("saved draft".into());
+    let draft = app.chat_widget.capture_thread_input_state().unwrap();
+    app.agents_overview.input_states.insert(thread_id, draft);
+    expected_mode.mode = ModeKind::Plan;
+    expected_mode.settings.developer_instructions = Some("Updated by the other client".into());
+    assert!(
+        server
+            .thread_settings_update(ThreadSettingsUpdateParams {
+                thread_id: thread_id.to_string(),
+                collaboration_mode: Some(expected_mode.clone()),
+                ..Default::default()
+            })
+            .await?
+    );
+    let _ = next_thread_settings_updated(&mut server, thread_id).await;
+
+    boxed_future!(app.select_agents_overview_thread(&mut tui, &mut server, thread_id)).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
+    let history = boxed_future!(active_reconnect::drain_history(
+        &mut app,
+        &mut tui,
+        &mut server,
+        &mut events
+    ))
+    .await?;
+    assert!(history.contains(prompt), "{history}");
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "saved draft");
+    assert_eq!(
+        app.chat_widget.effective_collaboration_mode(),
+        expected_mode
+    );
+    assert!(!app.agents_overview.blank_sessions.contains_key(&thread_id));
+    server.shutdown().await?;
+    Ok(())
+}
+
+async fn check_retained_draft_handoff(
+    saved_history: bool,
+    history_capabilities: HistoryCapabilities,
+    retained_blank: bool,
+) -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let source = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let (mut destination, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        history_capabilities,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        LoaderOverrides::without_managed_config_for_tests(),
+    )
+    .await?;
+    let destination_id = destination.backend_id();
+    let mut blank = if saved_history {
+        let timestamp = "2025-01-05T12-00-00";
+        let thread_id = create_fake_rollout(
+            &app.config.codex_home,
+            timestamp,
+            "2025-01-05T12:00:00Z",
+            "Sent while the backend was parked",
+            Some(&app.config.model_provider_id),
+            /*git_info*/ None,
+        )
+        .expect("materialize the retained thread");
+        let path = app_test_support::rollout_path(&app.config.codex_home, timestamp, &thread_id);
+        let contents = std::fs::read_to_string(&path)?;
+        let (metadata, history) = contents.split_once('\n').expect("rollout with history");
+        let mut metadata: serde_json::Value = serde_json::from_str(metadata)?;
+        metadata["payload"]["cwd"] = serde_json::to_value(&app.config.cwd)?;
+        std::fs::write(path, format!("{metadata}\n{history}"))?;
+        let thread_id = ThreadId::from_string(&thread_id)?;
+        destination
+            .resume_thread(
+                &app.local_settings,
+                app.config.clone(),
+                thread_id,
+                crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+            )
+            .await?
+    } else {
+        destination.start_thread(&app.config).await?
+    };
+    let thread_id = blank.session.thread_id;
+    let mut server_mode = blank.session.collaboration_mode.as_deref().cloned();
+    let initial_policy = blank.session.approval_policy;
+    blank.turns.clear();
+    let resume_count = recorded_params(&requests, "thread/resume").len();
+    let target = crate::resume_picker::SessionTarget {
+        backend_id: destination_id,
+        path: None,
+        thread_id,
+        cwd: Some(app.config.cwd.to_path_buf()),
+        history_mode: None,
+    };
+    app.backend_registry
+        .register_started(destination_id, &blank)?;
+    if retained_blank {
+        app.agents_overview.blank_sessions.insert(thread_id, blank);
+    }
+    app.chat_widget
+        .restore_user_message_to_composer("draft for the retained task".into());
+    let collaboration_mode = if saved_history {
+        app.chat_widget.set_model("old-model");
+        let mode = server_mode
+            .as_mut()
+            .expect("server supplies the current mode");
+        mode.mode = ModeKind::Plan;
+        mode.settings.developer_instructions = Some("Instructions from the parked task".into());
+        Some(mode.clone())
+    } else {
+        None
+    };
+    let retained = app.chat_widget.capture_thread_input_state().unwrap();
+    app.agents_overview.input_states.insert(thread_id, retained);
+    app.chat_widget
+        .restore_user_message_to_composer("draft for the displayed task".into());
+
+    let parked_policy = (!saved_history && history_capabilities == HistoryCapabilities::Current)
+        .then_some(if initial_policy == AskForApproval::Never {
+            AskForApproval::OnRequest
+        } else {
+            AskForApproval::Never
+        });
+    if collaboration_mode.is_some() || parked_policy.is_some() {
+        let settings = ThreadSettingsUpdateParams {
+            thread_id: thread_id.to_string(),
+            collaboration_mode,
+            approval_policy: parked_policy,
+            ..Default::default()
+        };
+        assert!(destination.thread_settings_update(settings).await?);
+        let update = next_thread_settings_updated(&mut destination, thread_id).await;
+        if parked_policy.is_some() {
+            let event = AppServerEvent::ServerNotification(Box::new(
+                ServerNotification::ThreadSettingsUpdated(update),
+            ));
+            let event = AppServerSessionEvent {
+                backend_id: destination_id,
+                event,
+            };
+            app.handle_polled_backend_event(&destination, source.backend_id(), event)
+                .await;
+        }
+    }
+    let mut backends = BackendSessions::from_initial(source, vec![destination]);
+    let settings = app.backend_settings();
+    backends.settings.insert(destination_id, settings);
+    if history_capabilities == HistoryCapabilities::LegacyOnly {
+        app.app_server_target = AppServerTarget::Cloud;
+        app.app_server_backend_id = Some(backends.displayed_owner());
+        assert!(app.begin_reconnect());
+    }
+
+    let outgoing = backends.displayed_owner();
+    app.agents_overview.initialized.insert(outgoing);
+    app.agents_overview.show_more_requested = true;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let pages_before = recorded_params(&requests, "thread/turns/list").len();
+    let reads_before = recorded_params(&requests, "thread/read").len();
+    app.resume_backend_session(&mut tui, &mut backends, target)
+        .await?;
+
+    assert_eq!(
+        backends.displayed_owner(),
+        destination_id,
+        "handoff errors: {:?}; reads: {:?}; pages: {:?}; resumes: {:?}",
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) =>
+                    Some(lines_to_single_string(&cell.raw_lines())),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        recorded_params(&requests, "thread/read"),
+        recorded_params(&requests, "thread/turns/list"),
+        recorded_params(&requests, "thread/resume"),
+    );
+    assert!(app.agents_overview.initialized.contains(&outgoing));
+    assert!(!app.agents_overview.initialized.contains(&destination_id));
+    assert!(!app.agents_overview.show_more_requested);
+    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    if saved_history {
+        assert_eq!(
+            app.chat_widget.effective_collaboration_mode(),
+            server_mode.unwrap()
+        );
+    }
+    if let Some(parked_policy) = parked_policy {
+        let policy = &app.chat_widget.config_ref().permissions.approval_policy;
+        assert_eq!(AskForApproval::from(policy.value()), parked_policy);
+    }
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "draft for the retained task"
+    );
+    let page_probe_count = recorded_params(&requests, "thread/turns/list")[pages_before..]
+        .iter()
+        .filter(|params| params["limit"] == 1)
+        .count();
+    // The saved-history case uses a legacy rollout even on the current server.
+    assert_eq!(
+        page_probe_count,
+        usize::from(
+            !saved_history
+                && matches!(
+                    history_capabilities,
+                    HistoryCapabilities::Current | HistoryCapabilities::FirstTurnPageUnsupported
+                )
+        )
+    );
+    if retained_blank
+        && (page_probe_count == 0
+            || history_capabilities == HistoryCapabilities::FirstTurnPageUnsupported)
+    {
+        assert!(
+            recorded_params(&requests, "thread/read")[reads_before..]
+                .iter()
+                .any(|params| params["includeTurns"] == true)
+        );
+    }
+    assert_eq!(
+        recorded_params(&requests, "thread/resume").len(),
+        resume_count + usize::from(saved_history),
+    );
+    assert_eq!(
+        app.agents_overview.blank_sessions.contains_key(&thread_id),
+        !saved_history,
+    );
+    backends.shutdown().await?;
+    proxy.await??;
     Ok(())
 }
 

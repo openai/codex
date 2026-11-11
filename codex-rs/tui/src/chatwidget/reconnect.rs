@@ -88,12 +88,7 @@ impl ChatWidget {
                     .push_front(UserMessageHistoryRecord::UserMessageText);
                 input.recovered_queue |= !input.reconnect_pending;
             }
-            input.current_collaboration_mode = self.current_collaboration_mode.clone();
-            // Keep the local selection for older servers. Replay reapplies a supplied mode.
-            if let Some(mask) = input.active_collaboration_mask.as_mut() {
-                mask.model = Some(self.current_model().to_string());
-                mask.reasoning_effort = Some(self.effective_reasoning_effort());
-            }
+            self.update_input_collaboration_mode(&mut input, /*has_resumed_mode*/ false);
             self.restore_thread_input_state(
                 Some(input),
                 ThreadInputStateRestoreMode {
