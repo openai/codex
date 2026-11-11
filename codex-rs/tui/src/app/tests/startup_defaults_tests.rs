@@ -24,7 +24,7 @@ pub(super) async fn run_startup_for_test(
     selection: SessionSelection,
     app_server_target: AppServerTarget,
 ) -> Result<AppExitInfo> {
-    App::run(
+    crate::boxed_future!(App::run(
         tui,
         initial_backends,
         config.clone(),
@@ -58,7 +58,7 @@ pub(super) async fn run_startup_for_test(
         crate::startup_draft::tests::quiet_startup_test_pump(),
         /*managed_worktree*/ None,
         /*daemon_cli_executable*/ None,
-    )
+    ))
     .await
 }
 
