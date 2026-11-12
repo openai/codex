@@ -32,6 +32,7 @@ impl Tui {
         Self::flush_pending_history_lines(
             &mut self.terminal,
             &mut self.pending_history_lines,
+            &mut self.retained_images,
             self.scrollback,
             screen_size,
         )?;
