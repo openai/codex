@@ -172,7 +172,7 @@ impl Requests {
                     Some(protocol::ThreadItemsListCursor::Opaque(cursor)) => Some(cursor),
                     None => None,
                     Some(protocol::ThreadItemsListCursor::Anchor(_)) => {
-                        bail!("Cloud item anchors are not supported yet.")
+                        bail!("Cloud item anchors are not supported yet.");
                     }
                 };
                 let page = self
@@ -305,7 +305,7 @@ fn thread_list_query(params: protocol::ThreadListParams) -> Result<cloud::Thread
             Some(protocol::ThreadSortKey::UpdatedAt) => cloud::ThreadSortKey::UpdatedAt,
             Some(protocol::ThreadSortKey::RecencyAt) => cloud::ThreadSortKey::RecencyAt,
             Some(protocol::ThreadSortKey::SectionPosition) => {
-                bail!("Cloud section ordering is not supported yet.")
+                bail!("Cloud section ordering is not supported yet.");
             }
         },
         sort_direction: match params.sort_direction {
@@ -440,18 +440,22 @@ fn admitted_message(outcome: cloud::AdmissionOutcome) -> Result<CloudUserMessage
         cloud::AdmissionOutcome::Duplicate { turn_id } => {
             CloudUserMessageReceipt::Duplicate { turn_id }
         }
-        cloud::AdmissionOutcome::Queued { .. } => bail!(
-            "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
-        ),
+        cloud::AdmissionOutcome::Queued { .. } => {
+            bail!(
+                "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
+            );
+        }
     })
 }
 
 fn admitted_turn(outcome: cloud::AdmissionOutcome) -> Result<protocol::Turn> {
     match admitted_message(outcome)? {
         CloudUserMessageReceipt::Started(turn) | CloudUserMessageReceipt::Steered(turn) => Ok(turn),
-        CloudUserMessageReceipt::Duplicate { .. } => bail!(
-            "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
-        ),
+        CloudUserMessageReceipt::Duplicate { .. } => {
+            bail!(
+                "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
+            );
+        }
     }
 }
 

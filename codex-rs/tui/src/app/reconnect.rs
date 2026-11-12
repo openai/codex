@@ -138,7 +138,7 @@ pub(super) async fn reconnect(
         }
     }
     tracing::warn!(stage, "automatic reconnect timed out");
-    color_eyre::eyre::bail!("Automatic reconnect timed out while {stage}.")
+    color_eyre::eyre::bail!("Automatic reconnect timed out while {stage}.");
 }
 
 impl App {

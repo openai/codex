@@ -20,7 +20,7 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
             color_eyre::eyre::bail!("Reopen Codex to reconnect the cloud backend.");
         }
         AppServerTarget::Embedded => {
-            color_eyre::eyre::bail!("embedded sessions have no remote connection")
+            color_eyre::eyre::bail!("embedded sessions have no remote connection");
         }
         #[cfg(windows)]
         AppServerTarget::LocalDaemon {

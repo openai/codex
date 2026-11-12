@@ -147,9 +147,11 @@ impl Replies {
         // A server can close Attach immediately after returning successful headers.
         // A healthy idle stream needs no event to prove that it is ready.
         let first_event = match tokio::task::unconstrained(stream.next()).now_or_never() {
-            Some(None | Some(Err(_))) => bail!(
-                "Cloud conversation activated but its stream did not connect. Reopen it before sending."
-            ),
+            Some(None | Some(Err(_))) => {
+                bail!(
+                    "Cloud conversation activated but its stream did not connect. Reopen it before sending."
+                );
+            }
             Some(Some(Ok(event))) => Some(event),
             None => None,
         };

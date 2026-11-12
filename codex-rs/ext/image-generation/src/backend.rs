@@ -19,7 +19,7 @@ const X_CODEX_IMAGE_TURN_ID_HEADER: &str = "x-codex-image-turn-id";
 
 pub(crate) struct ImageBackendError {
     message: String,
-    codex_error: CodexErr,
+    codex_error: Box<CodexErr>,
     imagegen_request_id: Option<String>,
 }
 
@@ -29,14 +29,14 @@ impl ImageBackendError {
         let message = error.to_string();
         Self {
             message,
-            codex_error: map_api_error(error),
+            codex_error: Box::new(map_api_error(error)),
             imagegen_request_id,
         }
     }
 
     fn from_message(message: String) -> Self {
         Self {
-            codex_error: CodexErr::Stream(message.clone()),
+            codex_error: Box::new(CodexErr::Stream(message.clone())),
             message,
             imagegen_request_id: None,
         }
