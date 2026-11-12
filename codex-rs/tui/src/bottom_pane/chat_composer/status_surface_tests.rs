@@ -871,7 +871,7 @@ fn oversized_goal_yields_to_an_eligible_whole_hint_with_status_disabled() {
         Some("100% context left")
     );
 
-    composer.set_context_window_pending(/*pending*/ true);
+    composer.set_context_window_hidden(/*hidden*/ true);
     composer.set_goal_status_indicator(Some(GoalStatusIndicator::Paused));
     let (text, _) = render(&composer, /*width*/ 18, /*footer*/ None);
     assert_eq!(text.lines().last().map(str::trim), Some("? for shortcuts"));

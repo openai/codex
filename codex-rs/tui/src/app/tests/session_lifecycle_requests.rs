@@ -1874,6 +1874,73 @@ async fn make_history_test_app() -> Result<(Box<App>, tempfile::TempDir)> {
 }
 
 #[tokio::test]
+async fn read_only_history_hides_the_statusline_until_interactive_resume() -> Result<()> {
+    let (mut app, _codex_home) = make_history_test_app().await?;
+    let thread_id = create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "saved prompt")?;
+    app.config
+        .permissions
+        .set_permission_profile(PermissionProfile::read_only())?;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.chat_widget.setup_status_line(
+        vec![crate::bottom_pane::StatusLineItem::SessionId],
+        /*use_theme_colors*/ false,
+    );
+
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 100).contains(&thread_id.to_string()));
+
+    let (view, _) = server
+        .read_thread_for_viewing(&app.config, &app.local_settings, thread_id)
+        .await?;
+    app.enqueue_primary_thread_session(view.session, view.turns)
+        .await?;
+    let footer = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+    insta::assert_snapshot!(footer, @r"
+    › Ask Codex to do anything
+
+      ? for shortcuts
+    ");
+
+    for window in [Some(100_000), None] {
+        app.chat_widget.handle_server_notification(
+            token_usage_notification(thread_id, "turn-1", window),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 100), footer);
+    }
+
+    let live = server
+        .resume_thread(
+            &app.local_settings,
+            app.config.clone(),
+            thread_id,
+            app.resume_model_settings(),
+        )
+        .await?;
+    assert_eq!(
+        live.session.permission_profile,
+        PermissionProfile::read_only()
+    );
+    app.enqueue_primary_thread_session(live.session, live.turns)
+        .await?;
+    let footer = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+    assert!(footer.contains(&thread_id.to_string()), "{footer}");
+    app.chat_widget
+        .setup_status_line(Vec::new(), /*use_theme_colors*/ false);
+    app.chat_widget.handle_server_notification(
+        token_usage_notification(thread_id, "turn-2", /*model_context_window*/ None),
+        /*replay_kind*/ None,
+    );
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 100).contains("10 used"));
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn cloud_resume_with_current_directory_needs_no_cwd_override() -> Result<()> {
     use codex_config::types::ResumeCwdMode;
 

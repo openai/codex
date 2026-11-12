@@ -1430,6 +1430,7 @@ impl App {
         notification: &ThreadStartedNotification,
     ) -> Option<ThreadSessionState> {
         let mut session = self.primary_session_configured.clone()?;
+        session.read_only_history = false;
         session.thread_id = thread_id;
         // The primary session supplies defaults. The new thread supplies its own fork parent.
         session.set_fork_parent(notification.thread.forked_from_id.as_deref());

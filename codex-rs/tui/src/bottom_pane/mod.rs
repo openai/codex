@@ -1503,8 +1503,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_context_window_pending(&mut self, pending: bool) {
-        self.composer.set_context_window_pending(pending);
+    pub(crate) fn set_context_window_hidden(&mut self, hidden: bool) {
+        self.composer.set_context_window_hidden(hidden);
         self.request_redraw();
     }
 

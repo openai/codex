@@ -27,6 +27,8 @@ pub(crate) struct MessageHistoryMetadata {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadSessionState {
+    /// This TUI opened saved history without a live attachment.
+    pub(crate) read_only_history: bool,
     pub(crate) daybreak_enabled: bool,
     pub(crate) windows_sandbox_host: crate::app::WindowsSandboxHost,
     pub(crate) thread_id: ThreadId,

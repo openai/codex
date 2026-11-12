@@ -55,7 +55,7 @@ fn embedded_composer_shows_validation_error_without_losing_draft() {
     let (mut composer, mut rx) = new_test_composer();
     composer.config = ChatComposerConfig::plain_text();
     composer.set_footer_hint_override(Some(vec![("enter".into(), "submit".into())]));
-    composer.set_context_window_pending(/*pending*/ true);
+    composer.set_context_window_hidden(/*hidden*/ true);
     let text = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
     composer.handle_paste(text.clone());
     assert_eq!(

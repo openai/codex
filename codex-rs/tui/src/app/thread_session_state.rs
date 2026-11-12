@@ -78,6 +78,7 @@ impl App {
         let permission_profile = self.current_permission_profile();
         let active_permission_profile = self.current_active_permission_profile();
         let mut session = if let Some(mut session) = self.primary_session_configured.clone() {
+            session.read_only_history = true;
             if session.thread_id != thread_id {
                 // `thread/read` does not include all thread settings, so do not carry
                 // thread-scoped state from the currently active session.
@@ -87,6 +88,7 @@ impl App {
             session
         } else {
             ThreadSessionState {
+                read_only_history: true,
                 daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id,
@@ -174,6 +176,7 @@ mod tests {
 
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,

@@ -329,7 +329,7 @@ impl ChatComposer {
         }
         let show_warning = self.show_warning_notice(options);
         if !self.footer.status_line_enabled
-            && !self.footer.context_window_pending
+            && !self.footer.context_window_hidden
             && self.footer.side_conversation_context_label.is_none()
             && !self.is_bang_shell_command()
         {

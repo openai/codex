@@ -3111,6 +3111,7 @@ async fn thread_session_state_from_thread_response(
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
+        read_only_history: false,
         daybreak_enabled: false,
         windows_sandbox_host,
         thread_id,

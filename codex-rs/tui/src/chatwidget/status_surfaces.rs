@@ -465,6 +465,9 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+        if self.read_only_history {
+            return Default::default();
+        }
         parse_items_with_invalids(self.configured_status_line_items())
     }
 

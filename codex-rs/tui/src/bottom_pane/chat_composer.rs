@@ -790,7 +790,7 @@ impl ChatComposer {
                 flash: None,
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                context_window_pending: false,
+                context_window_hidden: false,
                 collaboration_mode_indicator: None,
                 goal_status_indicator: None,
                 ide_context_active: false,
@@ -1496,7 +1496,7 @@ impl ChatComposer {
     }
 
     fn right_footer_line_with_context(&self) -> Line<'static> {
-        let mut line = if self.footer.context_window_pending {
+        let mut line = if self.footer.context_window_hidden {
             Line::default()
         } else {
             context_window_line(
@@ -1505,7 +1505,9 @@ impl ChatComposer {
             )
         };
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
-            line.spans.push(" | ".dim());
+            if !line.spans.is_empty() {
+                line.spans.push(" | ".dim());
+            }
             line.spans.push(vim_mode);
         }
         line
@@ -4472,8 +4474,8 @@ impl ChatComposer {
         self.footer.context_window_used_tokens = used_tokens;
     }
 
-    pub(crate) fn set_context_window_pending(&mut self, pending: bool) {
-        self.footer.context_window_pending = pending;
+    pub(crate) fn set_context_window_hidden(&mut self, hidden: bool) {
+        self.footer.context_window_hidden = hidden;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {

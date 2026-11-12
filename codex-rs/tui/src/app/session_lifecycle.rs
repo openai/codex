@@ -837,6 +837,9 @@ impl App {
                 display,
             });
         }
+        if is_replay_only && let Some(session) = snapshot.session.as_mut() {
+            session.read_only_history = true;
+        }
         self.render_thread_snapshot(tui, app_server, thread_id, snapshot, !is_replay_only)?;
         if !is_replay_only
             && let Some(message) = self

@@ -688,6 +688,7 @@ pub(crate) struct ChatWidget {
     active_side_conversation: bool,
     blocks_direct_input: bool,
     external_writer_view: bool,
+    read_only_history: bool,
     provider_error: Option<codex_app_server_protocol::ModelProviderError>,
     /// Covers both queued and executing forks so repeated shortcuts cannot queue another one.
     pub(crate) fork_in_progress: bool,
@@ -1161,13 +1162,17 @@ impl ChatWidget {
         self.config.memories.generate_memories = generate_memories;
     }
 
+    fn sync_context_window_visibility(&mut self) {
+        self.bottom_pane
+            .set_context_window_hidden(self.read_only_history || self.token_usage_pending);
+    }
+
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
                 self.token_usage_pending = true;
-                self.bottom_pane
-                    .set_context_window_pending(/*pending*/ true);
+                self.sync_context_window_visibility();
                 self.bottom_pane
                     .set_context_window(/*percent*/ None, /*used_tokens*/ None);
                 self.token_info = None;
@@ -1177,8 +1182,7 @@ impl ChatWidget {
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         self.token_usage_pending = false;
-        self.bottom_pane
-            .set_context_window_pending(/*pending*/ false);
+        self.sync_context_window_visibility();
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);

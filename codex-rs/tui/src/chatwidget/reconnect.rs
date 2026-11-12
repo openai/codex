@@ -130,6 +130,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn pause_unavailable_thread(&mut self) {
+        self.read_only_history = true;
+        self.sync_context_window_visibility();
+        self.refresh_status_line();
         if let Some(questions) = &mut self.bottom_pane.questions {
             questions.delivery_enabled = false;
         }

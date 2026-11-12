@@ -544,7 +544,7 @@ fn startup_draft_bottom_pane(
             ..ChatComposerConfig::plain_text()
         },
     );
-    bottom_pane.set_context_window_pending(/*pending*/ true);
+    bottom_pane.set_context_window_hidden(/*hidden*/ true);
     bottom_pane
 }
 

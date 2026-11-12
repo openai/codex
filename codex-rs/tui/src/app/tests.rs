@@ -7469,6 +7469,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let primary_cwd = test_path_buf("/tmp/main").abs();
     let shared_root = test_path_buf("/tmp/shared").abs();
     let primary_session = ThreadSessionState {
+        read_only_history: true,
         daybreak_enabled: false,
         windows_sandbox_host: WindowsSandboxHost::Local,
         approval_policy: AskForApproval::OnRequest,
@@ -7546,6 +7547,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let session = store.session.clone().expect("inferred session");
     drop(store);
 
+    assert!(!session.read_only_history);
     assert_eq!(session.thread_id, agent_thread_id);
     assert!(session.daybreak_enabled);
     assert_eq!(session.windows_sandbox_host, WindowsSandboxHost::Remote);
@@ -7674,7 +7676,6 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         runtime_workspace_roots: vec![primary_cwd.clone()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
-    app.primary_session_configured = Some(primary_session);
 
     let thread = Thread {
         originator: None,
@@ -7712,10 +7713,17 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         turns: Vec::new(),
     };
 
+    let cold_session = app
+        .session_state_for_thread_read(read_thread_id, &thread)
+        .await;
+    assert!(cold_session.read_only_history);
+
+    app.primary_session_configured = Some(primary_session);
     let session = app
         .session_state_for_thread_read(read_thread_id, &thread)
         .await;
 
+    assert!(session.read_only_history);
     assert_eq!(session.thread_id, read_thread_id);
     assert_eq!(session.model, "server-reported-model");
     assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/read").as_path());
@@ -8820,6 +8828,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
     };
     let make_header = |is_first| -> Arc<dyn HistoryCell> {
         let session = ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -9533,6 +9542,7 @@ async fn replace_goal_confirmation_snapshot() {
 
 pub(super) fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
     ThreadSessionState {
+        read_only_history: false,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -10849,6 +10859,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     let make_header = |is_first| {
         let session = ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -10922,6 +10933,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     let base_id = ThreadId::new();
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: base_id,
@@ -12318,6 +12330,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
 
         let thread_id = ThreadId::new();
         let event = crate::session_state::ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
@@ -13097,6 +13110,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     let thread_id = ThreadId::new();
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
+            read_only_history: false,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
