@@ -10542,6 +10542,10 @@ async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
     let mut fixture = create_test_fixture()?;
     fixture.cfg = toml::from_str(
         r#"
+[otel]
+headers_helper = "company-auth telemetry-headers"
+headers_helper_refresh_interval_ms = 900000
+
 [otel.span_attributes]
 "example.trace_attr" = "enabled"
 
@@ -10562,6 +10566,18 @@ beta = "two"
     )
     .await?;
 
+    assert_eq!(
+        config.otel.headers_helper.as_deref(),
+        Some("company-auth telemetry-headers")
+    );
+    assert_eq!(
+        config
+            .otel
+            .headers_helper_refresh_interval_ms
+            .unwrap()
+            .get(),
+        900000
+    );
     assert_eq!(
         config.otel.span_attributes,
         HashMap::from([("example.trace_attr".to_string(), "enabled".to_string())])

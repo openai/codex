@@ -2734,6 +2734,7 @@ async fn assert_catalog_model_switch(max_context_tokens: Option<usize>) -> Resul
     let codex_home = Arc::new(TempDir::new()?);
     // Use the normal metrics sink to verify core's model attribution.
     let telemetry = OtelProvider::try_new(&OtelSettings {
+        headers_helper: None,
         http_client_factory: codex_core::test_support::default_http_client_factory(),
         environment: "test".to_string(),
         service_name: "skills-model-switch".to_string(),

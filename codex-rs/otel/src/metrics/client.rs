@@ -1,5 +1,6 @@
 use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
+use crate::headers_helper::HeadersHelper;
 use crate::metrics::MetricsError;
 use crate::metrics::Result;
 use crate::metrics::config::MetricsConfig;
@@ -345,6 +346,7 @@ impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
         let MetricsConfig {
+            headers_helper,
             http_client_factory,
             environment,
             service_name,
@@ -397,6 +399,7 @@ impl MetricsClient {
                         exporter,
                         temporality,
                         &http_client_factory,
+                        headers_helper,
                     )?,
                     policy: http_client_factory.network_policy().clone(),
                 };
@@ -657,6 +660,7 @@ fn build_otlp_metric_exporter(
     exporter: OtelExporter,
     temporality: Temporality,
     factory: &codex_http_client::HttpClientFactory,
+    headers_helper: Option<Arc<HeadersHelper>>,
 ) -> Result<opentelemetry_otlp::MetricExporter> {
     match exporter {
         OtelExporter::None => Err(MetricsError::ExporterDisabled),
@@ -664,6 +668,7 @@ fn build_otlp_metric_exporter(
             crate::config::resolve_exporter(&OtelExporter::Statsig),
             temporality,
             factory,
+            /*headers_helper*/ None,
         ),
         OtelExporter::OtlpGrpc {
             endpoint,
@@ -715,11 +720,12 @@ fn build_otlp_metric_exporter(
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if factory.network_policy().is_managed() {
+            if headers_helper.is_some() || factory.network_policy().is_managed() {
                 let client = crate::otlp::build_async_http_client(
                     factory,
                     tls.as_ref(),
                     OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+                    headers_helper,
                 )
                 .map_err(|err| MetricsError::InvalidConfig {
                     message: err.to_string(),

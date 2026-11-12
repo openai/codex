@@ -1,4 +1,5 @@
 use crate::config::OtelTlsConfig;
+use crate::headers_helper::HeadersHelper;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
@@ -17,6 +18,7 @@ use std::fs;
 use std::io;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) fn build_header_map(headers: &std::collections::HashMap<String, String>) -> HeaderMap {
@@ -149,6 +151,7 @@ pub(crate) fn build_async_http_client(
     factory: &codex_http_client::HttpClientFactory,
     tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
+    headers_helper: Option<Arc<HeadersHelper>>,
 ) -> Result<crate::network_policy::RuntimeHttpClient, Box<dyn Error>> {
     let mut config = codex_http_client::HttpClientTlsConfig::default();
 
@@ -189,12 +192,19 @@ pub(crate) fn build_async_http_client(
         }
     }
 
+    let mut builder = codex_http_client::HttpClientBuilder::new().without_request_logging();
+    if headers_helper.is_some() {
+        // Custom credential headers must never follow a collector redirect.
+        builder = builder.without_redirects();
+    }
     Ok(crate::network_policy::RuntimeHttpClient {
-        client: codex_http_client::HttpClientBuilder::new()
-            .without_request_logging()
-            .build_with_tls(factory, codex_http_client::ClientRouteClass::Other, config),
+        client: builder.build_with_tls(factory, codex_http_client::ClientRouteClass::Other, config),
         timeout: resolve_otlp_timeout(timeout_var),
-        runtime: tokio::runtime::Handle::try_current()?,
+        runtime: match &headers_helper {
+            Some(helper) => helper.runtime.clone(),
+            None => tokio::runtime::Handle::try_current()?,
+        },
+        headers_helper,
     })
 }
 
@@ -294,8 +304,13 @@ mod tests {
         let (_temp_dir, tls) = write_test_mtls_config();
 
         let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
-        build_async_http_client(&factory, Some(&tls), OTEL_EXPORTER_OTLP_TIMEOUT)
-            .expect("async HTTP client should accept PEM client identity");
+        build_async_http_client(
+            &factory,
+            Some(&tls),
+            OTEL_EXPORTER_OTLP_TIMEOUT,
+            /*headers_helper*/ None,
+        )
+        .expect("async HTTP client should accept PEM client identity");
     }
 
     fn write_test_mtls_config() -> (TempDir, OtelTlsConfig) {

@@ -1273,3 +1273,35 @@ fn project_config_cannot_change_system_proxy_routing_or_credential_masking() {
         }
     }
 }
+
+#[test]
+fn otel_headers_helpers_cannot_come_from_repository_config() {
+    let mut config: TomlValue = toml::from_str(
+        "[otel]\nheaders_helper = 'untrusted-command'\nheaders_helper_refresh_interval_ms = 1",
+    )
+    .unwrap();
+    let ignored =
+        sanitize_project_config(&mut config, CredentialBrokerProjectState::Unconfigured, &[]);
+    assert_eq!(ignored, ["otel"]);
+    assert!(config.get("otel").is_none());
+}
+
+#[test]
+fn otel_headers_helper_interval_must_be_positive() {
+    assert!(
+        toml::from_str::<ConfigToml>(
+            "[otel]\nheaders_helper = 'helper'\nheaders_helper_refresh_interval_ms = 0"
+        )
+        .is_err()
+    );
+    let config: ConfigToml = toml::from_str(
+        "[otel]\nheaders_helper = 'helper'\nheaders_helper_refresh_interval_ms = 900000",
+    )
+    .unwrap();
+    let otel = config.otel.unwrap();
+    assert_eq!(otel.headers_helper.as_deref(), Some("helper"));
+    assert_eq!(
+        otel.headers_helper_refresh_interval_ms.unwrap().get(),
+        900000
+    );
+}

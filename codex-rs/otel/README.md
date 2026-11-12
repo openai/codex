@@ -15,13 +15,16 @@ metrics (when enabled), then attach its layers to your `tracing_subscriber`
 registry:
 
 ```rust
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
+use codex_http_client::{HttpClientFactory, OutboundProxyPolicy};
+use codex_otel::OtelExporter;
+use codex_otel::OtelHttpProtocol;
+use codex_otel::OtelSettings;
 use codex_otel::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {
+    headers_helper: None,
+    http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     environment: "dev".to_string(),
     service_name: "codex-cli".to_string(),
     service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -39,6 +42,7 @@ let settings = OtelSettings {
         tls: None,
     },
     metrics_exporter: OtelExporter::None,
+    runtime_metrics: false,
     span_attributes: std::collections::HashMap::new(),
     tracestate: std::collections::BTreeMap::new(),
 };

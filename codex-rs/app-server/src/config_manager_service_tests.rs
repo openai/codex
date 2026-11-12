@@ -2011,6 +2011,8 @@ async fn read_projects_managed_otel_values_and_preserves_unmanaged_settings() {
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
         r#"[otel]
+headers_helper = "get-otel-headers"
+headers_helper_refresh_interval_ms = 60000
 tool_result = { max_bytes = 1234 }
 log_user_prompt = true
 environment = "user"
@@ -2046,6 +2048,8 @@ tracestate = { managed = { tenant = "enterprise" }, empty = {} }"#,
     assert_eq!(
         otel,
         &serde_json::json!({
+            "headers_helper": "get-otel-headers",
+            "headers_helper_refresh_interval_ms": 60000,
             "tool_result": { "max_bytes": 1234 },
             "log_sse_deltas": null,
             "log_user_prompt": false,
@@ -2073,6 +2077,8 @@ tracestate = { managed = { tenant = "enterprise" }, empty = {} }"#,
         ("otel.tracestate.managed.tenant", false),
         ("otel.tracestate.managed.region", true),
         ("otel.environment", true),
+        ("otel.headers_helper", true),
+        ("otel.headers_helper_refresh_interval_ms", true),
         ("otel.tool_result.max_bytes", true),
         ("otel.span_attributes.service.version", true),
         ("otel.tracestate.local.tenant", true),

@@ -155,6 +155,7 @@ fn test_provider(behavior: ShutdownBehavior) -> TestProvider {
 
     TestProvider {
         provider: OtelProvider {
+            headers_helper: None,
             logger: None,
             tracer_provider: Some(tracer_provider),
             tracer: None,

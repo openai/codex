@@ -20,6 +20,8 @@ chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-utils-process = { workspace = true }
+codex-http-headers-helper = { workspace = true }
 codex-api = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }

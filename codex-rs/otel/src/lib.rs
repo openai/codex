@@ -7,6 +7,7 @@ pub(crate) mod trace_context;
 
 mod agent_response;
 mod guardian_assessment;
+mod headers_helper;
 mod network_policy;
 mod otlp;
 mod skill_invocation;
@@ -21,6 +22,7 @@ use strum_macros::Display;
 pub use crate::agent_response::AgentResponseContext;
 pub use crate::agent_response::AgentResponseLogger;
 pub use crate::config::OtelExporter;
+pub use crate::config::OtelHeadersHelper;
 pub use crate::config::OtelHttpProtocol;
 pub use crate::config::OtelSettings;
 pub use crate::config::OtelTlsConfig;

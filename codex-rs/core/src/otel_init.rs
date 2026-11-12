@@ -4,11 +4,16 @@ use codex_config::types::OtelHttpProtocol as Protocol;
 use codex_features::Feature;
 use codex_login::default_client::originator;
 use codex_otel::OtelExporter;
+use codex_otel::OtelHeadersHelper;
 use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
 use codex_otel::OtelSettings;
 use codex_otel::OtelTlsConfig as OtelTlsSettings;
 use std::error::Error;
+use std::num::NonZeroU64;
+use std::time::Duration;
+
+const DEFAULT_HEADERS_HELPER_REFRESH_INTERVAL_MS: u64 = 29 * 60 * 1_000;
 
 /// Build an OpenTelemetry provider from the app Config.
 ///
@@ -82,7 +87,29 @@ pub fn build_provider(
     let service_name = service_name_override.unwrap_or(originator.value.as_str());
     let runtime_metrics = config.features.enabled(Feature::RuntimeMetrics);
 
+    let managed = config
+        .config_layer_stack
+        .requirements_toml()
+        .otel
+        .as_deref();
+    let headers_helper = config
+        .otel
+        .headers_helper
+        .as_ref()
+        .map(|command| OtelHeadersHelper {
+            command: command.clone(),
+            apply_to_logs: managed.is_none_or(|otel| otel.exporter.is_none()),
+            apply_to_traces: managed.is_none_or(|otel| otel.trace_exporter.is_none()),
+            apply_to_metrics: managed.is_none_or(|otel| otel.metrics_exporter.is_none()),
+            refresh_interval: Duration::from_millis(
+                config
+                    .otel
+                    .headers_helper_refresh_interval_ms
+                    .map_or(DEFAULT_HEADERS_HELPER_REFRESH_INTERVAL_MS, NonZeroU64::get),
+            ),
+        });
     OtelProvider::try_new(&OtelSettings {
+        headers_helper,
         http_client_factory: config.http_client_factory(),
         service_name: service_name.to_string(),
         service_version: service_version.to_string(),
