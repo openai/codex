@@ -12,8 +12,11 @@ use std::process::Stdio;
 fn cleanup_preserves_live_process_and_reclaims_its_abandoned_checkout() -> Result<()> {
     const CHILD_HOME: &str = "CODEX_MARKETPLACE_STAGING_CHILD_HOME";
     if let Some(home) = std::env::var_os(CHILD_HOME) {
-        let staging = MarketplaceStagingDir::new(Path::new(&home))?;
-        fs::create_dir_all(staging.path())?;
+        let staging = crate::configure_trusted_git_repository(
+            &mut std::process::Command::new("git"),
+            Path::new(&home),
+        )
+        .map_err(anyhow::Error::msg)?;
         fs::write(staging.path().join("payload"), "in-flight clone")?;
         println!("staging-ready");
         std::io::stdout().flush()?;
@@ -42,21 +45,28 @@ fn cleanup_preserves_live_process_and_reclaims_its_abandoned_checkout() -> Resul
         }
     }
     assert!(ready, "child should publish its checkout before cleanup");
-    let staging_root = home.path().join(".staging");
+    let tmp_root = home.path().join(".tmp");
+    let staging_root = tmp_root.join(".staging");
     let active = fs::read_dir(&staging_root)?.next().unwrap()?.path();
     let payload = active.join("checkout/payload");
 
     // Age must never override the lifetime lock, even across processes.
-    remove_stale_staging_dirs(home.path(), SystemTime::now() + LEGACY_ADD_MAX_AGE)?;
+    remove_stale_staging_dirs(&tmp_root, SystemTime::now() + LEGACY_ADD_MAX_AGE)?;
     assert_eq!(fs::read_to_string(&payload)?, "in-flight clone");
-    let concurrent = MarketplaceStagingDir::new(home.path())?;
+    let concurrent = MarketplaceStagingDir::new(&tmp_root)?;
     fs::create_dir_all(concurrent.path())?;
     fs::write(concurrent.path().join("payload"), "second clone")?;
 
     child.stdin.take().unwrap().write_all(b"x")?;
     assert!(child.wait()?.success());
     assert!(payload.exists(), "process exit must bypass TempDir cleanup");
-    cleanup_marketplace_staging(home.path());
+    drop(
+        crate::configure_trusted_git_repository(
+            &mut std::process::Command::new("git"),
+            home.path(),
+        )
+        .map_err(anyhow::Error::msg)?,
+    );
     assert!(!active.exists());
     assert_eq!(
         fs::read_to_string(concurrent.path().join("payload"))?,

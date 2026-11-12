@@ -1,7 +1,8 @@
+use crate::marketplace_staging::MarketplaceStagingDir;
+use crate::marketplace_staging::cleanup_marketplace_staging;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::process::Command;
-use tempfile::TempDir;
 
 // These variables can redirect Git to an untrusted repository or inject command-scoped settings.
 pub(crate) const REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES: &[&str] = &[
@@ -56,7 +57,7 @@ impl PluginGitMode {
 pub(crate) fn configure_trusted_git_repository(
     command: &mut Command,
     codex_home: &Path,
-) -> Result<TempDir, String> {
+) -> Result<MarketplaceStagingDir, String> {
     let canonical_home = AbsolutePathBuf::from_absolute_path(codex_home)
         .and_then(|path| path.canonicalize())
         .map_err(|err| format!("failed to resolve trusted Codex home: {err}"))?;
@@ -70,12 +71,15 @@ pub(crate) fn configure_trusted_git_repository(
         return Err("trusted Git repository root escapes Codex home".to_string());
     }
 
-    let repository = tempfile::Builder::new()
-        .prefix("git-")
-        .tempdir_in(staging_root.as_path())
+    // Keep the explicit GIT_DIR inside Codex home. The staging cleaner skips symlinks.
+    if staging_root.join(".staging").as_path().is_symlink() {
+        return Err("trusted Git staging directory is a symlink".to_string());
+    }
+    cleanup_marketplace_staging(staging_root.as_path());
+    let repository = MarketplaceStagingDir::new(staging_root.as_path())
         .map_err(|err| format!("failed to create trusted Git repository: {err}"))?;
     for directory in ["objects", "refs"] {
-        std::fs::create_dir(repository.path().join(directory))
+        std::fs::create_dir_all(repository.path().join(directory))
             .map_err(|err| format!("failed to initialize trusted Git repository: {err}"))?;
     }
     std::fs::write(repository.path().join("HEAD"), "ref: refs/heads/main\n")
