@@ -612,9 +612,15 @@ impl RolloutRecorder {
         };
         let fs_page = match sort_direction {
             SortDirection::Asc => {
+                // SQLite needs one extra indexed row to produce a recency cursor.
+                let scan_size = if sort_key == ThreadSortKey::RecencyAt && state_db_ctx.is_some() {
+                    page_size.saturating_add(1)
+                } else {
+                    page_size
+                };
                 list_threads_from_files_asc(
                     codex_home,
-                    page_size,
+                    scan_size,
                     cursor,
                     sort_key,
                     file_config,
@@ -1377,8 +1383,8 @@ fn page_from_filesystem_scan(
     sort_key: ThreadSortKey,
 ) -> ThreadsPage {
     match sort_direction {
-        SortDirection::Asc => page,
-        SortDirection::Desc => truncate_fs_page(page, page_size, sort_key),
+        SortDirection::Asc if sort_key != ThreadSortKey::RecencyAt => page,
+        SortDirection::Asc | SortDirection::Desc => truncate_fs_page(page, page_size, sort_key),
     }
 }
 
