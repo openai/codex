@@ -11,6 +11,7 @@ use codex_features::FEATURES;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -330,18 +331,22 @@ impl ConfigDocument {
                 Ok(self.write_value(&segments, value(*enabled)))
             }
             ConfigEdit::SetPath { segments, value } => {
+                let mut path = Cow::Borrowed(segments.as_slice());
                 if is_structured_feature_path(segments) && value.as_bool().is_some() {
                     let mut existing = Some(self.doc.as_item());
                     for segment in segments {
                         existing = existing.and_then(|item| item.as_table_like()?.get(segment));
                     }
                     if existing.and_then(TomlItem::as_table_like).is_some() {
-                        let mut enabled_segments = segments.clone();
-                        enabled_segments.push("enabled".to_string());
-                        return Ok(self.insert(&enabled_segments, value.clone()));
+                        path.to_mut().push("enabled".to_string());
                     }
                 }
-                Ok(self.insert(segments, value.clone()))
+                anyhow::ensure!(
+                    self.insert(&path, value.clone()),
+                    "could not set config path `{}`",
+                    segments.join(".")
+                );
+                Ok(true)
             }
             ConfigEdit::ClearPath { segments } => {
                 let preserves_broker_settings = is_structured_feature_path(segments)
