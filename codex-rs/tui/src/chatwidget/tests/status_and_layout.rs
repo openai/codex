@@ -4506,13 +4506,8 @@ async fn renamed_thread_footer_title_snapshot() {
 }
 
 #[tokio::test]
-async fn status_line_model_with_reasoning_fast_footer_snapshot() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
+async fn status_line_model_with_reasoning_speed_footer_snapshots() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.show_welcome_banner = false;
     chat.config.cwd = test_project_path().abs();
     chat.local_settings.tui.status_line = Some(vec![
@@ -4520,23 +4515,68 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         "context-used".to_string(),
         "current-dir".to_string(),
     ]);
+    chat.local_settings.tui.terminal_title = Some(vec!["model-with-reasoning".to_string()]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    chat.refresh_status_line();
+    chat.set_feature_enabled(Feature::UltrafastMode, /*enabled*/ true);
 
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw model-with-reasoning footer");
-    assert_chatwidget_snapshot!(
-        "status_line_model_with_reasoning_fast_footer",
-        normalized_backend_snapshot(terminal.backend())
-    );
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    let fast_tier = preset
+        .service_tiers
+        .iter_mut()
+        .find(|tier| tier.id == ServiceTier::Fast.request_value())
+        .expect("fast tier");
+    fast_tier.name = "Fast".to_string();
+    preset.service_tiers.extend([
+        codex_protocol::openai_models::ModelServiceTier {
+            id: "ultrafast".to_string(),
+            name: "Ultrafast".to_string(),
+            description: "Ultrafast processing".to_string(),
+        },
+        codex_protocol::openai_models::ModelServiceTier {
+            id: "low_latency".to_string(),
+            name: "Low Latency".to_string(),
+            description: String::new(),
+        },
+    ]);
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+
+    for (tier_id, tier_name, snapshot) in [
+        (
+            ServiceTier::Fast.request_value(),
+            "Fast",
+            "status_line_model_with_reasoning_fast_footer",
+        ),
+        (
+            "ultrafast",
+            "Ultrafast",
+            "status_line_model_with_reasoning_ultrafast_footer",
+        ),
+    ] {
+        chat.set_service_tier(Some(tier_id.to_string()));
+        chat.refresh_status_line();
+        chat.refresh_terminal_title();
+        assert_eq!(
+            chat.last_terminal_title.as_deref(),
+            Some(format!("gpt-5.4 xhigh {tier_name}").as_str())
+        );
+
+        let width = 80;
+        let height = chat.desired_height(width);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("draw model-with-reasoning footer");
+        assert_chatwidget_snapshot!(snapshot, normalized_backend_snapshot(terminal.backend()));
+    }
+
+    chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);
+    chat.set_service_tier(Some(ServiceTier::Flex.request_value().to_string()));
+    insta::assert_snapshot!(status_line_text(&chat).expect("status line"), @"gpt-5.4 xhigh flex");
+
+    chat.set_service_tier(Some("low_latency".to_string()));
+    insta::assert_snapshot!(status_line_text(&chat).expect("status line"), @"gpt-5.4 xhigh low latency");
 }
 
 #[tokio::test]
