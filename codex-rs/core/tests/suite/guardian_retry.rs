@@ -7,6 +7,7 @@ use codex_core::context::UserGoalUpdate;
 use codex_protocol::AgentPath;
 use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -110,9 +111,23 @@ async fn interrupted_guardian_review_preserves_evidence_once(
             config.model_provider.stream_idle_timeout_ms = Some(600_000);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.workspace_roots_explicit = false;
+            let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &SandboxPolicy::new_workspace_write_policy(),
+                config.cwd.as_path(),
+            );
             config
-                .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
-                .expect("set sandbox policy");
+                .permissions
+                .can_set_permission_profile(&permission_profile)
+                .expect("set permission profile");
+            config
+                .permissions
+                .set_workspace_roots(vec![config.cwd.clone()]);
+            config
+                .permissions
+                .set_permission_profile(permission_profile)
+                .expect("set permission profile");
+            config.workspace_roots = config.permissions.workspace_roots().to_vec();
         })
         .build_with_auto_env(&server)
         .await?;
@@ -250,9 +265,23 @@ async fn guardian_retry_executes_only_after_a_completed_approval() -> Result<()>
     let mut builder = test_codex().with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.workspace_roots_explicit = false;
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &SandboxPolicy::new_workspace_write_policy(),
+            config.cwd.as_path(),
+        );
         config
-            .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
-            .expect("set sandbox policy");
+            .permissions
+            .can_set_permission_profile(&permission_profile)
+            .expect("set permission profile");
+        config
+            .permissions
+            .set_workspace_roots(vec![config.cwd.clone()]);
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("set permission profile");
+        config.workspace_roots = config.permissions.workspace_roots().to_vec();
     });
     let test = builder.build_with_auto_env(&server).await?;
     let responses = vec![
@@ -445,9 +474,23 @@ async fn guardian_stale_approval_replaces_review_and_preserves_earlier_context()
             config.model_provider.base_url = Some(base_url);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.workspace_roots_explicit = false;
+            let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &SandboxPolicy::new_workspace_write_policy(),
+                config.cwd.as_path(),
+            );
             config
-                .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
-                .expect("sandbox policy");
+                .permissions
+                .can_set_permission_profile(&permission_profile)
+                .expect("set permission profile");
+            config
+                .permissions
+                .set_workspace_roots(vec![config.cwd.clone()]);
+            config
+                .permissions
+                .set_permission_profile(permission_profile)
+                .expect("set permission profile");
+            config.workspace_roots = config.permissions.workspace_roots().to_vec();
         })
         .build_with_auto_env(&server)
         .await?;

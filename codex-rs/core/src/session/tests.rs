@@ -4241,21 +4241,24 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
 async fn session_configured_reports_permission_profile_for_external_sandbox() -> anyhow::Result<()>
 {
     let server = start_mock_server().await;
-    let sandbox_policy = SandboxPolicy::ExternalSandbox {
-        network_access: codex_protocol::protocol::NetworkAccess::Restricted,
-    };
     let permission_profile = PermissionProfile::External {
         network: NetworkSandboxPolicy::Restricted,
     };
     let expected_permission_profile = permission_profile.clone();
     let mut builder = test_codex().with_config(move |config| {
+        config.workspace_roots_explicit = false;
         config
             .permissions
-            .set_permission_profile(permission_profile.clone())
+            .can_set_permission_profile(&permission_profile)
             .expect("set permission profile");
         config
-            .set_legacy_sandbox_policy(sandbox_policy)
-            .expect("set sandbox policy");
+            .permissions
+            .set_workspace_roots(vec![config.cwd.clone()]);
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("set permission profile");
+        config.workspace_roots = config.permissions.workspace_roots().to_vec();
     });
 
     let test = builder.build(&server).await?;

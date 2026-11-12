@@ -4,6 +4,7 @@ use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -64,9 +65,23 @@ async fn cancelling_tool_aborts_its_guardian_review(
                     .enable(Feature::GuardianDenialReconsideration)
                     .expect("enable Guardian denial reconsideration");
             }
+            config.workspace_roots_explicit = false;
+            let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &SandboxPolicy::new_workspace_write_policy(),
+                config.cwd.as_path(),
+            );
             config
-                .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
-                .expect("set sandbox policy");
+                .permissions
+                .can_set_permission_profile(&permission_profile)
+                .expect("set permission profile");
+            config
+                .permissions
+                .set_workspace_roots(vec![config.cwd.clone()]);
+            config
+                .permissions
+                .set_permission_profile(permission_profile)
+                .expect("set permission profile");
+            config.workspace_roots = config.permissions.workspace_roots().to_vec();
             if !matches!(cancellation, Cancellation::DirectTool) {
                 let _ = config.features.enable(Feature::CodeMode);
                 let _ = config.features.enable(Feature::CodeModeInterrupt);

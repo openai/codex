@@ -126,7 +126,6 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ProfileWorkspaceRoot;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::DenyReadValidator;
@@ -510,14 +509,8 @@ impl Permissions {
         sandbox_policy: &SandboxPolicy,
         cwd: &Path,
     ) -> ConstraintResult<()> {
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
         self.can_set_permission_profile(&permission_profile)
     }
 
@@ -529,14 +522,8 @@ impl Permissions {
         cwd: &Path,
     ) -> ConstraintResult<()> {
         self.can_set_legacy_sandbox_policy(&sandbox_policy, cwd)?;
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
         self.workspace_roots = match &sandbox_policy {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 let mut workspace_roots = vec![
@@ -1786,20 +1773,6 @@ impl Config {
 
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
-    }
-
-    pub fn set_legacy_sandbox_policy(
-        &mut self,
-        sandbox_policy: SandboxPolicy,
-    ) -> ConstraintResult<()> {
-        self.workspace_roots_explicit = matches!(
-            &sandbox_policy,
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } if !writable_roots.is_empty()
-        );
-        self.permissions
-            .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())?;
-        self.workspace_roots = self.permissions.workspace_roots().to_vec();
-        Ok(())
     }
 
     /// Combine runtime and profile roots without interpreting them on the current host.
