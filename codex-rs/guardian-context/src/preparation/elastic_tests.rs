@@ -170,7 +170,7 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
                 }),
             ],
         };
-        crate::preparation::prepare_sync_sections(&mut collected, crate::ContextBudgeting::Elastic)
+        crate::preparation::prepare_sections(&mut collected, crate::ContextBudgeting::Elastic)
             .unwrap();
         let context = collected
             .compose_prepared(

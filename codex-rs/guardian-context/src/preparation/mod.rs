@@ -113,15 +113,13 @@ pub fn prepare_context(
         },
     };
     context.retain_new_reviews(reviewer_history);
-    if target == crate::ContextTarget::Sync {
-        prepare_sync_sections(&mut context, budgeting)?;
-    }
+    prepare_sections(&mut context, budgeting)?;
     context.compose_prepared(presentation, transcript)
 }
 
-/// Applies synchronous section policy to the already bounded collection snapshot.
+/// Applies request section policy to the original collection snapshot.
 /// The host prepares its borrowed transcript selection before consuming the collection.
-pub(crate) fn prepare_sync_sections(
+pub(crate) fn prepare_sections(
     context: &mut CollectedContext,
     budgeting: ContextBudgeting,
 ) -> Result<(), SectionError> {

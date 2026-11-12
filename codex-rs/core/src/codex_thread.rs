@@ -1304,17 +1304,13 @@ impl CodexThread {
             .authorization_version(history.as_ref())
     }
 
-    /// Returns bounded root conversation evidence and its authorization version atomically.
+    /// Captures root originals and authorization before request-size preparation.
     pub async fn guardian_root_snapshot(&self) -> Option<GuardianRootSnapshot> {
-        let mut snapshot = self
-            .session
+        self.session
             .services
             .agent_control
             .get_guardian_package(self.session.thread_id)
-            .await?;
-        // Async consumers need only the bounded projection, not the sync source snapshot.
-        snapshot.request_candidates = None;
-        Some(snapshot)
+            .await
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

@@ -84,9 +84,7 @@ impl SectionContributor for RootConversationSection {
     }
 
     fn contribute(&self, input: &SectionInput<'_>) -> Result<Option<ContextSection>, SectionError> {
-        if input.target == crate::ContextTarget::Sync
-            && let Some(candidates) = input.root_conversation_candidates
-        {
+        if let Some(candidates) = input.root_conversation_candidates {
             return Ok(Some(ContextSection::RootConversation {
                 content: RootConversationContent::Collected(candidates.clone()),
             }));

@@ -1,4 +1,4 @@
-//! Marks bounded assistant evidence used to interpret user replies in Guardian reviews.
+//! Marks assistant evidence used to interpret user replies in Guardian reviews.
 //! Assistant text remains conversational context and never grants authorization.
 
 use codex_history::RetainedUserMessage;
@@ -39,8 +39,8 @@ pub fn render_retained_assistant_context(message: &RetainedUserMessage) -> Optio
     render_original_assistant_context(message)
 }
 
-/// Preserves the host fragment boundary while deferring sync size admission.
-pub(crate) fn render_original_assistant_context(message: &RetainedUserMessage) -> Option<String> {
+/// Preserves the host fragment boundary while deferring request size admission.
+pub fn render_original_assistant_context(message: &RetainedUserMessage) -> Option<String> {
     if !message.complete {
         return None;
     }

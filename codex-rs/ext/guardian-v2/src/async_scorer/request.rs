@@ -6,11 +6,11 @@
 use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TruncationObservation;
 use codex_guardian_context::estimate_input_tokens;
-use codex_guardian_reviewer::ConversationCheckpoint;
 use codex_guardian_reviewer::ConversationState;
 use codex_history::ResponseItemEnvelope;
 use std::borrow::Cow;
 
+use super::sampler::INPUT_TOKEN_MARGIN;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplingRequest;
 use super::transcript::CollectedTranscript;
@@ -38,29 +38,27 @@ impl LunaSamplingRequest {
             .snapshot()
             .map(|snapshot| snapshot.history().as_slice())
             .unwrap_or_default();
+        let setup = if conversation.snapshot().is_none() {
+            LunaSampler::prepare_setup(self)
+        } else {
+            Vec::new()
+        };
         let (mut context, _) = evidence.compose(cursor, history).ok()?;
         context.retain_new_instructions(history);
-        context.retain_new_images(history.iter().map(|item| &item.item), |image, _| {
+        context.retain_new_images(history.iter().map(|item| &item.item), |image, detail| {
+            *detail = None;
             Some(Cow::Borrowed(image))
         });
         let truncations = std::mem::take(&mut context.truncations);
         let section_costs = context.section_costs().collect();
-        let history = conversation.snapshot().map(ConversationCheckpoint::history);
-        let existing_context_tokens = history.map_or(0, |history| {
-            history
-                .iter()
-                .map(|item| estimate_input_tokens(&item.item))
-                .fold(0usize, usize::saturating_add)
-        });
-        // A continuation already owns its setup. Normalize only the new suffix while
-        // borrowing the immutable prefix for accounting; do not clone or rewrite it.
-        let (mut input, new_input_tokens) = LunaSampler::prepare_input(
-            self,
-            history.map(|_| Vec::new()),
-            context.into_annotated_messages(),
-        );
+        let existing_context_tokens = history
+            .iter()
+            .map(|item| estimate_input_tokens(&item.item))
+            .fold(0usize, usize::saturating_add);
+        let (mut input, new_input_tokens) =
+            LunaSampler::finish_input(self, setup, context.into_annotated_messages());
         let input_tokens = existing_context_tokens.saturating_add(new_input_tokens);
-        if input_tokens > max_input_tokens.saturating_sub(/*rhs*/ 256) {
+        if input_tokens > max_input_tokens.saturating_sub(INPUT_TOKEN_MARGIN) {
             return None;
         }
         if let Some(mut history) = conversation.take_history() {

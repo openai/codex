@@ -44,7 +44,9 @@ pub(crate) struct ContextInput<'a> {
     pub(crate) target: ContextTarget,
     pub(crate) history: &'a dyn ConversationHistorySnapshot,
     pub(crate) root_conversation: &'a [GuardianRootMessage],
-    pub(crate) trusted_user_answers: &'a [String],
+    pub(crate) root_conversation_candidates:
+        Option<&'a codex_guardian_context::RootConversationInput>,
+    pub(crate) trusted_user_answers: &'a [codex_guardian_context::TrustedUserAnswer],
     pub(crate) planned_action: Option<&'a PlannedAction>,
     pub(crate) permissions: Option<&'a codex_guardian_context::PermissionContext>,
     pub(crate) previous_reviews: Option<&'a PreviousReviews>,
@@ -89,6 +91,7 @@ impl TranscriptConfig {
             target,
             history,
             root_conversation,
+            root_conversation_candidates,
             trusted_user_answers,
             planned_action,
             permissions,
@@ -122,19 +125,14 @@ impl TranscriptConfig {
                 },
             },
         };
-        let trusted_user_answers = trusted_user_answers
-            .iter()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>();
         let context = default_registry().prepare(&SectionInput {
             target,
             history: &history,
             transcript: &profile.transcript,
             is_selected_exec_output: None,
             root_conversation,
-            root_conversation_candidates: None,
-            trusted_user_answers: &trusted_user_answers,
+            root_conversation_candidates,
+            trusted_user_answers,
             planned_action,
             permissions,
             previous_reviews,
@@ -214,11 +212,11 @@ impl SectionHistory for SnapshotHistory<'_> {
         self.0.review_items_with_sources()
     }
 
-    fn render_retained_assistant(
+    fn render_original_assistant(
         &self,
         message: &codex_history::RetainedUserMessage,
     ) -> Option<GuardianRootMessage> {
-        codex_core::context::render_retained_assistant_context(message)
+        codex_core::context::render_original_assistant_context(message)
             .map(GuardianRootMessage::Assistant)
     }
 }

@@ -13,7 +13,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
-const INPUT_BUDGET: usize = 128_000;
+const INPUT_BUDGET: usize = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS;
 
 struct History {
     items: Vec<ResponseItem>,
@@ -51,7 +51,8 @@ fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
             target: ContextTarget::Async,
             history,
             root_conversation: &[],
-            trusted_user_answers: &["Do not write files.".to_owned()],
+            root_conversation_candidates: None,
+            trusted_user_answers: &["Do not write files.".into()],
             planned_action: Some(&action),
             permissions: None,
             previous_reviews: Some(&reviews),
@@ -75,7 +76,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
         ],
         internal_chat_message_metadata_passthrough: None,
     };
-    let mut images = [
+    let images = [
         ImageReference::Inline {
             image_url: "data:image/png;base64,Zmlyc3Q=".to_owned(),
         },
@@ -146,11 +147,15 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     let mut next_native = native.clone();
     next_native.set_id(Some(ResponseItemId::from_server("amsg_next".to_owned())));
     history.items.push(next_native.clone());
-    // Source detail can differ from the normalized image already in classifier history.
-    if let ContentItem::InputImage { detail, .. } = &mut images[0] {
-        *detail = Some(ImageDetail::High);
+    // Normalize new images before admission; duplicate source detail can also differ.
+    const NEW_IMAGE_INDEX: usize = 2;
+    let mut new_images = [images[0].clone(), images[NEW_IMAGE_INDEX].clone()];
+    for image in &mut new_images {
+        if let ContentItem::InputImage { detail, .. } = image {
+            *detail = Some(ImageDetail::High);
+        }
     }
-    let evidence = collect(&history, &[images[0].clone(), images[2].clone()]);
+    let evidence = collect(&history, &new_images);
     // Fits three distinct images, but not another copy of the two retained images.
     let second = config
         .prepare_retained(&evidence, &mut state, /*max_input_tokens*/ 40_000)
@@ -167,7 +172,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     );
     assert_eq!(
         input_images(&second.input[committed.len()..]),
-        vec![images[2].clone()]
+        vec![images[NEW_IMAGE_INDEX].clone()]
     );
     assert_eq!(
         second

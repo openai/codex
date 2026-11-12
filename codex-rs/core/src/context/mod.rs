@@ -82,7 +82,7 @@ pub(crate) use current_time_reminder::CurrentTimeUnavailable;
 pub(crate) use developer_instructions::DeveloperInstructions;
 pub(crate) use environments_instructions::EnvironmentsInstructions;
 pub(crate) use guardian_approved_action::GuardianApprovedAction;
-pub(crate) use guardian_assistant_context::render_original_assistant_context;
+pub use guardian_assistant_context::render_original_assistant_context;
 pub use guardian_assistant_context::render_retained_assistant_context;
 pub(crate) use guardian_conversation_history::GuardianConversationHistory;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;

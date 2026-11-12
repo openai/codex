@@ -315,9 +315,9 @@ async fn decisions_startup_uses_thread_runtime_and_staging_destination() -> anyh
             "https://auth.api.openai.org/agent/register".parse()?,
         ));
         let request = crate::async_scorer::sampler::tests::sample_request("runtime-auth");
-        let (input, _) = LunaSampler::prepare_input(
+        let (input, _) = LunaSampler::finish_input(
             &request,
-            /*history*/ None,
+            LunaSampler::prepare_setup(&request),
             request
                 .input
                 .iter()

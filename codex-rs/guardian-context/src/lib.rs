@@ -240,7 +240,7 @@ pub trait SectionHistory: Send + Sync {
     }
 
     /// Renders an original complete assistant message without request-size selection.
-    /// Sync preparation applies admission after collection; hosts preserve their fragment boundary.
+    /// Request preparation applies admission after collection; hosts preserve their fragment boundary.
     fn render_original_assistant(
         &self,
         message: &codex_history::RetainedUserMessage,

@@ -2,6 +2,7 @@
 
 use super::*;
 use codex_core::CodexThread;
+use codex_guardian_context::ContextBudgeting;
 use pretty_assertions::assert_eq;
 
 async fn root_messages(thread: &CodexThread) -> Vec<GuardianRootMessage> {
@@ -331,6 +332,8 @@ pub(crate) async fn handoff_scenario(native_history: bool) -> Result<Vec<Respons
 
     // An old ID-less checkpoint stores an excerpt beside the original legacy backup.
     // The worker must receive one capped copy and preserve both evidence gaps.
+    const ANSWER_REPETITIONS: usize = 200;
+    let large_answer = "Only if conditions hold. ".repeat(ANSWER_REPETITIONS);
     let original = "Never publish project details. ".repeat(200);
     let excerpt = codex_guardian_context::truncate_text(&original, /*max_tokens*/ 900);
     let history = serde_json::from_value(json!([{"type":"compacted", "payload": {
@@ -341,13 +344,25 @@ pub(crate) async fn handoff_scenario(native_history: bool) -> Result<Vec<Respons
             "user_messages":[{"turn_id":"", "text":excerpt, "complete":false}],
             "user_messages_incomplete":true, "incomplete":false,
             "verified_answers":[{"turn_id":"large", "call_id":"large", "questions":[{
-                "question":"Publish?", "answer":"Only if conditions hold. ".repeat(200)
+                "question":"Publish?", "answer":large_answer.clone()
             }]}]
         }
     }}]))?;
     test.codex =
         crate::suite::guardian_checkpoint_migration::resume(&test, &test.codex, history).await?;
     let snapshot = leaf.guardian_root_snapshot().await.expect("migrated root");
+    let originals = snapshot
+        .request_candidates
+        .as_ref()
+        .expect("root originals");
+    assert!(
+        originals
+            .prepare(ContextBudgeting::Elastic)
+            .messages
+            .contains(&GuardianRootMessage::UserInput(format!(
+                "assistant: Publish?\nuser: {large_answer}\n"
+            )))
+    );
     assert_eq!(
         (
             snapshot.messages,

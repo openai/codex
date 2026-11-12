@@ -40,6 +40,7 @@ async fn pending_request(
         target: ContextTarget::Async,
         history: history.as_ref(),
         root_conversation: &[],
+        root_conversation_candidates: None,
         trusted_user_answers: &[],
         planned_action: None,
         permissions: None,

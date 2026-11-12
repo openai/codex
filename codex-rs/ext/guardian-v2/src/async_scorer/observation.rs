@@ -369,10 +369,13 @@ impl GuardianV2Extension {
         };
         // Snapshot before spawning so a delayed sample cannot see later reviews.
         let sync_reviews = guardian_evidence.snapshot();
-        let codex_core::context::GuardianUserInputSnapshot {
-            fragments: trusted_user_inputs,
-            authorization_version,
-        } = guardian_evidence.user_input_snapshot(input.conversation_history.as_ref());
+        let authorization_version =
+            guardian_evidence.authorization_version(input.conversation_history.as_ref());
+        let trusted_user_inputs = input
+            .conversation_history
+            .retained_context()
+            .map(codex_guardian_context::collect_verified_answer_candidates)
+            .unwrap_or_default();
         let history = Arc::clone(&input.conversation_history);
         let local_trusted_skill_paths = guardian_evidence.trusted_skill_paths(input.turn_id);
         let node_repl_images = if guardian_config.transcript.include_images {
