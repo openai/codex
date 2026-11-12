@@ -4766,12 +4766,14 @@ impl ThreadRequestProcessor {
                     matches!(existing_thread.agent_status().await, AgentStatus::Running);
 
                 // Parent-owned V2 children must not be rebuilt from public resume overrides.
+                // A recovery turn can already own the core slot before either status changes.
                 if can_accept_direct_input(
                     existing_thread.multi_agent_version(),
                     &config_snapshot.session_source,
                 ) && !has_subscribers
                     && matches!(loaded_status, ThreadStatus::Idle)
                     && !is_running
+                    && !existing_thread.has_active_turn().await
                 {
                     // A loaded idle thread is only a cache entry. Shut it down
                     // before removing it so cold resume cannot duplicate a

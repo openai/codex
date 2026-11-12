@@ -336,7 +336,7 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
             | AgentStatus::Completed(_)
             | AgentStatus::Errored(_)
             | AgentStatus::Interrupted
-    ) && thread.session.active_turn.lock().await.is_none()
+    ) && !thread.has_active_turn().await
         && !thread.session.has_outstanding_durable_sleep()
         && !thread
             .session
