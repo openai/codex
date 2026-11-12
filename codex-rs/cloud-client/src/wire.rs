@@ -17,6 +17,14 @@ pub(crate) struct ThreadIdRequest {
 }
 
 #[derive(Clone, prost::Message)]
+pub(crate) struct SetThreadNameRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: String,
+    #[prost(string, tag = "2")]
+    pub name: String,
+}
+
+#[derive(Clone, prost::Message)]
 pub(crate) struct UnarchiveResponse {
     #[prost(bytes = "bytes", optional, tag = "1")]
     pub thread: Option<Bytes>,

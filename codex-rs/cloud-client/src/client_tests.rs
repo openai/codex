@@ -133,6 +133,33 @@ async fn archive_addresses_the_requested_thread_and_requires_acknowledgment() {
 }
 
 #[tokio::test]
+async fn rename_sends_the_thread_and_title_and_requires_acknowledgment() {
+    let mut fixture = fixture_responses(vec![
+        response(vec![frame(&[])], tonic::Status::ok("")),
+        response(
+            vec![frame(&[])],
+            tonic::Status::permission_denied("synthetic denial"),
+        ),
+    ])
+    .await;
+
+    fixture.client.set_thread_name("t", "New").await.unwrap();
+    assert_request(&mut fixture, "SetThreadName", b"\x0a\x01t\x12\x03New").await;
+
+    let error = fixture
+        .client
+        .set_thread_name("u", "Other")
+        .await
+        .unwrap_err();
+    let MutationError::OutcomeUnknown(Error::Rpc(status)) = error else {
+        panic!("expected a remote rename failure");
+    };
+    assert_eq!(status.code, tonic::Code::PermissionDenied as i32);
+    assert_request(&mut fixture, "SetThreadName", b"\x0a\x01u\x12\x05Other").await;
+    assert!(fixture.requests.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn activation_preserves_native_settings_and_thread_metadata() {
     // Native Thread fields encoded independently of the client's wire types.
     let thread_base: &[u8] = &[

@@ -72,6 +72,25 @@ impl Requests {
                 }
                 serde_json::to_value(page)?
             }
+            Request::ThreadSetName { params, .. } => {
+                let name = params.name.trim();
+                self.client.set_thread_name(&params.thread_id, name).await?;
+                if let Some(loaded) = &mut self.loaded
+                    && loaded.thread.id == params.thread_id
+                {
+                    loaded.thread.name = Some(name.to_owned());
+                }
+                send_notification(
+                    output,
+                    protocol::ServerNotification::ThreadNameUpdated(
+                        protocol::ThreadNameUpdatedNotification {
+                            thread_id: params.thread_id,
+                            thread_name: Some(name.to_owned()),
+                        },
+                    ),
+                );
+                serde_json::to_value(protocol::ThreadSetNameResponse {})?
+            }
             Request::ThreadArchive { params, .. } => {
                 self.client.archive_thread(&params.thread_id).await?;
                 return Ok(Response::Archived(params.thread_id));

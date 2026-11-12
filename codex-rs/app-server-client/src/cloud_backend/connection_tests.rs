@@ -8,8 +8,84 @@ use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_bytes;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test]
+async fn rejected_rename_preserves_loaded_cloud_thread_name() -> Result<()> {
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(home.path().to_owned())
+        .fallback_cwd(Some(home.path().to_owned()))
+        .without_project_context()
+        .build()
+        .await?;
+    let mut requests = requests::Requests {
+        client: std::sync::Arc::new(cloud::Client::new(
+            &config.http_client_factory(),
+            &server.uri(),
+            cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
+        )?),
+        account: protocol::GetAccountResponse {
+            user_id: None,
+            account: None,
+            requires_openai_auth: true,
+            workspace_routing: None,
+        },
+        loaded: Some(Box::new(serde_json::from_value(serde_json::json!({
+            "thread": {
+                "id": "t", "sessionId": "t", "preview": "", "ephemeral": false,
+                "modelProvider": "openai", "createdAt": 0, "updatedAt": 0,
+                "status": {"type": "idle"}, "cwd": home.path(), "cliVersion": "",
+                "source": "cli", "turns": [], "name": "Old",
+            },
+            "model": "test", "modelProvider": "openai", "cwd": home.path(),
+            "approvalPolicy": "never", "approvalsReviewer": "user",
+            "sandbox": {"type": "readOnly"},
+        }))?)),
+        warned_partial_history: None,
+    };
+    Mock::given(method("POST"))
+        .and(path(
+            "/oaiproto.codex_app_server_backend.ThreadService/SetThreadName",
+        ))
+        .and(body_bytes(b"\x00\x00\x00\x00\x08\x0a\x01t\x12\x03New"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (output, mut notifications) = mpsc::unbounded_channel();
+    let mut replies = Replies::default();
+    let read = protocol::ThreadReadParams {
+        thread_id: "t".into(),
+        include_turns: false,
+    };
+    let rejected = handle_request(
+        protocol::ClientRequest::ThreadSetName {
+            request_id: protocol::RequestId::Integer(1),
+            params: protocol::ThreadSetNameParams {
+                thread_id: "t".into(),
+                name: " New ".into(),
+            },
+        },
+        cloud::SubmissionMode::StartIfIdle,
+        /*project*/ None,
+        &mut requests,
+        &mut replies,
+        &output,
+    )
+    .await;
+    assert!(rejected.unwrap_err().is::<cloud::MutationError>());
+    assert_eq!(
+        requests.read_thread(&read, /*status*/ None)?["thread"]["name"],
+        "Old"
+    );
+    assert!(notifications.try_recv().is_err());
+    Ok(())
+}
 
 #[tokio::test]
 async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> Result<()> {

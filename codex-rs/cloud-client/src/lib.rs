@@ -298,6 +298,25 @@ impl Client {
         Ok(())
     }
 
+    /// Saves a conversation name without opening an attachment.
+    pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<(), MutationError> {
+        if thread_id.trim().is_empty() || name.trim().is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
+        let payload = self
+            .mutate(
+                wire::SetThreadNameRequest {
+                    thread_id: thread_id.to_owned(),
+                    name: name.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/SetThreadName",
+            )
+            .await?;
+        wire::EmptyResponse::decode(payload)
+            .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
+        Ok(())
+    }
+
     /// Archives a conversation using the current account, without opening an attachment.
     pub async fn archive_thread(&self, thread_id: &str) -> Result<(), MutationError> {
         if thread_id.trim().is_empty() {
