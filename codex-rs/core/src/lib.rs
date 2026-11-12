@@ -13,7 +13,6 @@ mod model_request;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_history;
-mod realtime_prompt;
 mod responses_headers;
 pub use responses_headers::CodexResponsesHeaders;
 mod responses_metadata;

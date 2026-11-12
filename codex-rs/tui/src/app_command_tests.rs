@@ -13,18 +13,22 @@ fn realtime_offer_is_redacted_in_diagnostics_and_preserved_for_signaling() {
         "v=0\r\na=ice-ufrag:private-user\r\na=ice-pwd:private-credential\r\n".to_string();
     let command = AppCommand::RealtimeConversationStart {
         thread_id,
+        attempt_id: 1,
         offer_sdp: original_offer.clone().into(),
     };
 
     assert_eq!(
         format!("{command:?}"),
-        format!("RealtimeConversationStart {{ thread_id: {thread_id:?}, offer_sdp: <redacted> }}")
+        format!(
+            "RealtimeConversationStart {{ thread_id: {thread_id:?}, attempt_id: 1, offer_sdp: <redacted> }}"
+        )
     );
     assert_eq!(
         serde_json::to_value(&command).expect("command diagnostics serialize"),
         json!({
             "RealtimeConversationStart": {
                 "thread_id": thread_id,
+                "attempt_id": 1,
                 "offer_sdp": "<redacted>"
             }
         })

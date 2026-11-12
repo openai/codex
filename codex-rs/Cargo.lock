@@ -2058,6 +2058,7 @@ dependencies = [
  "codex-http-client",
  "codex-protocol",
  "codex-utils-rustls-provider",
+ "codex-utils-string",
  "codex-websocket-client",
  "eventsource-stream",
  "futures",
@@ -4664,6 +4665,7 @@ dependencies = [
  "codex-utils-template",
  "pretty_assertions",
  "tracing",
+ "whoami 1.6.1",
 ]
 
 [[package]]
@@ -5219,6 +5221,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-ansi-escape",
+ "codex-api",
  "codex-app-server-client",
  "codex-app-server-daemon",
  "codex-app-server-protocol",
@@ -5247,6 +5250,7 @@ dependencies = [
  "codex-models-manager",
  "codex-otel",
  "codex-plugin",
+ "codex-prompts",
  "codex-protocol",
  "codex-protocol-test-support",
  "codex-realtime-webrtc",

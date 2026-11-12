@@ -62,6 +62,16 @@ fn activate_voice(chat: &mut ChatWidget) -> ThreadId {
     thread_id
 }
 
+pub(crate) fn start_voice_attempt_for_test(
+    chat: &mut ChatWidget,
+    thread_id: ThreadId,
+    attempt_id: u64,
+) {
+    chat.realtime_conversation.thread_id = Some(thread_id);
+    chat.realtime_conversation.attempt_id = attempt_id;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Starting;
+}
+
 pub(crate) fn activate_voice_for_thread(chat: &mut ChatWidget, thread_id: ThreadId) {
     chat.thread_id = Some(thread_id);
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;

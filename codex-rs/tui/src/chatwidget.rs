@@ -376,6 +376,8 @@ pub(crate) use realtime::realtime_delegation_input;
 pub(crate) use realtime::tests::activate_voice_for_thread;
 #[cfg(test)]
 pub(crate) use realtime::tests::commit_realtime_history_events;
+#[cfg(test)]
+pub(crate) use realtime::tests::start_voice_attempt_for_test;
 mod reasoning_shortcuts;
 use self::realtime::RealtimeConversationUiState;
 mod rendering;
@@ -2144,13 +2146,13 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
-        if self.realtime_conversation.handle.is_some()
-            && let Some(thread_id) = self.thread_id
+        let had_live_peer = self.realtime_conversation.handle.is_some();
+        if let Some(thread_id) = self.reset_realtime_conversation()
+            && had_live_peer
         {
             self.app_event_tx
                 .send(AppEvent::StopRealtimeConversation { thread_id });
         }
-        self.reset_realtime_conversation();
         self.stop_rate_limit_poller();
     }
 }

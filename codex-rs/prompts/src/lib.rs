@@ -30,6 +30,7 @@ pub use permissions_instructions::PermissionsInstructions;
 pub use realtime::BACKEND_PROMPT;
 pub use realtime::END_INSTRUCTIONS;
 pub use realtime::START_INSTRUCTIONS;
+pub use realtime::prepare_realtime_backend_prompt;
 pub use review_exit::render_review_exit_interrupted;
 pub use review_exit::render_review_exit_success;
 pub use review_request::REVIEW_PROMPT;

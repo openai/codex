@@ -1435,6 +1435,13 @@ pub(crate) enum AppEvent {
         result: Result<StartedRealtimeWebrtcSession, RealtimeWebrtcStartupFailure>,
     },
 
+    /// Provider negotiation completed for this local voice startup attempt.
+    RealtimeCallCreated {
+        thread_id: ThreadId,
+        attempt_id: u64,
+        result: color_eyre::Result<crate::realtime_call::CreatedCall>,
+    },
+
     /// Result of establishing the WebRTC connection for an active voice attempt.
     RealtimeWebrtcConnected {
         thread_id: ThreadId,

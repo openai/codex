@@ -897,26 +897,43 @@ impl App {
             }
             AppCommand::RealtimeConversationStart {
                 thread_id: realtime_thread_id,
+                attempt_id,
                 offer_sdp,
             } => {
-                if *realtime_thread_id != thread_id {
+                let attempt_id = *attempt_id;
+                if *realtime_thread_id != thread_id
+                    || !self
+                        .chat_widget
+                        .is_starting_realtime_attempt(thread_id, attempt_id)
+                {
                     return Ok(true);
                 }
-                let model = self
-                    .chat_widget
-                    .config_ref()
-                    .experimental_realtime_ws_model
-                    .clone();
-                let voices = self.realtime_voices(app_server).await?;
-                let voice = self.effective_realtime_voice(app_server, &voices).await?;
-                app_server
-                    .thread_realtime_start(
-                        *realtime_thread_id,
-                        String::from(offer_sdp.clone()),
-                        model,
-                        voice,
-                    )
-                    .await?;
+                let registration = self.chat_widget.begin_call_negotiation();
+                let mut server = app_server.request_view();
+                let config = self.config.clone();
+                let cwd = self.chat_widget.config_ref().cwd.clone();
+                let offer = String::from(offer_sdp.clone());
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let create = async {
+                        let voices = Self::realtime_voices(&server).await?;
+                        let voice = Self::effective_realtime_voice(&server, &cwd, &voices)
+                            .await?
+                            .unwrap_or(voices.default_v1);
+                        let thread = server
+                            .thread_read(thread_id, /*include_turns*/ false)
+                            .await?;
+                        crate::realtime_call::create(&config, &thread, offer, voice).await
+                    };
+                    if let Ok(result) = futures::future::Abortable::new(create, registration).await
+                    {
+                        tx.send(AppEvent::RealtimeCallCreated {
+                            thread_id,
+                            attempt_id,
+                            result,
+                        });
+                    }
+                });
                 Ok(true)
             }
             AppCommand::RealtimeConversationStop {

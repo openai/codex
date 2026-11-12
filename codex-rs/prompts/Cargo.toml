@@ -23,6 +23,7 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-template = { workspace = true }
 tracing = { workspace = true }
+whoami = { workspace = true }
 
 [dev-dependencies]
 codex-protocol-test-support = { workspace = true }

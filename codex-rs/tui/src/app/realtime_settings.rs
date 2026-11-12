@@ -180,7 +180,6 @@ impl App {
     }
 
     pub(super) async fn realtime_voices(
-        &self,
         app_server: &AppServerSession,
     ) -> Result<RealtimeVoicesList> {
         let response = app_server
@@ -196,14 +195,14 @@ impl App {
     }
 
     pub(super) async fn effective_realtime_voice(
-        &self,
         app_server: &AppServerSession,
+        cwd: &std::path::Path,
         voices: &RealtimeVoicesList,
     ) -> Result<Option<RealtimeVoice>> {
         // Session setup installs the active conversation cwd for both server modes.
         let config = crate::config_update::read_effective_config_if_supported(
             app_server.request_handle(),
-            &self.chat_widget.config_ref().cwd,
+            cwd,
         )
         .await?;
         config
@@ -214,7 +213,7 @@ impl App {
     }
 
     pub(super) async fn open_realtime_voices(&mut self, app_server: &AppServerSession) {
-        let voices = match self.realtime_voices(app_server).await {
+        let voices = match Self::realtime_voices(app_server).await {
             Ok(voices) => voices,
             Err(error) => {
                 self.chat_widget
@@ -222,7 +221,13 @@ impl App {
                 return;
             }
         };
-        match self.effective_realtime_voice(app_server, &voices).await {
+        match Self::effective_realtime_voice(
+            app_server,
+            &self.chat_widget.config_ref().cwd,
+            &voices,
+        )
+        .await
+        {
             Ok(voice) => self.chat_widget.open_realtime_voices(voice, voices),
             Err(error) => self
                 .chat_widget
@@ -245,7 +250,7 @@ impl App {
         .await
         {
             Ok(response) => {
-                let voices = match self.realtime_voices(app_server).await {
+                let voices = match Self::realtime_voices(app_server).await {
                     Ok(voices) => voices,
                     Err(error) => {
                         self.chat_widget.add_error_message(format!(

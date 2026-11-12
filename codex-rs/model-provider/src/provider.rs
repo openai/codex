@@ -11,6 +11,8 @@ use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
 use codex_features::RuntimeAuthMode;
 use codex_login::AuthManager;
+use codex_login::AuthManagerConfig;
+use codex_login::AuthManagerInitializationError;
 use codex_login::CodexAuth;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
@@ -442,6 +444,16 @@ pub fn create_model_provider(
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
     create_model_provider_with_runtime(provider_info, auth_manager, /*runtime_auth*/ None)
+}
+
+/// Creates a model provider using the local login settings.
+pub async fn create_model_provider_from_local_config(
+    provider_info: ModelProviderInfo,
+    config: &impl AuthManagerConfig,
+) -> Result<SharedModelProvider, AuthManagerInitializationError> {
+    let credentials =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await?;
+    Ok(create_model_provider(provider_info, Some(credentials)))
 }
 
 pub(crate) fn create_model_provider_with_runtime(

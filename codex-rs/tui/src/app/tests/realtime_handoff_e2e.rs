@@ -127,13 +127,19 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, thread_id);
     while ops.try_recv().is_ok() {}
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    let thread = app_server
+        .thread_read(thread_id, /*include_turns*/ false)
+        .await?;
+    let call = crate::realtime_call::create(
+        &app.config,
+        &thread,
+        "v=offer\r\n".to_string(),
+        codex_protocol::protocol::RealtimeVoicesList::builtin().default_v1,
+    )
+    .await?;
+    assert_eq!(String::from(call.answer_sdp), "v=answer\r\n");
     app_server
-        .thread_realtime_start(
-            thread_id,
-            "v=offer\r\n".to_string(),
-            /*model*/ None,
-            /*voice*/ None,
-        )
+        .thread_realtime_start(thread_id, call.call_id)
         .await?;
     // The sideband fixture sends its delegation after the first outbound request.
     app_server

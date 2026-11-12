@@ -141,6 +141,7 @@ mod image_decode;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;
+mod realtime_call;
 mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;
