@@ -8,8 +8,6 @@ use crate::agent::api::AgentControl;
 use crate::agent::registry::AgentRegistry;
 use crate::config::RolloutBudgetConfig;
 use crate::rollout_budget::RolloutBudget;
-use crate::session::session::Session;
-use crate::state::ContextWindowIdGenerator;
 use crate::thread_manager::AgentTreeShutdownFailure;
 use crate::thread_manager::AgentTreeShutdownFailureReason;
 use crate::thread_manager::AgentTreeShutdownReport;
@@ -18,7 +16,6 @@ use crate::thread_manager::ThreadManagerState;
 use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::AgentPath;
-use codex_protocol::ItemIdGenerator;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::AgentErrorContext;
@@ -195,8 +192,6 @@ pub(crate) struct LocalAgentRuntime {
     pub(super) manager: Weak<ThreadManagerState>,
     /// Captured at construction so delegates retain their manager's allocation policy.
     pub(super) thread_id_generator: ThreadIdGenerator,
-    pub(crate) item_id_generator: ItemIdGenerator,
-    pub(crate) context_window_id_generator: ContextWindowIdGenerator,
     pub(super) agent_execution_limiter: Arc<AgentExecutionLimiter>,
     /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
     pub(super) rollout_budget: Arc<RolloutBudget>,
@@ -222,8 +217,6 @@ impl LocalAgentRuntime {
         let runtime = Self {
             manager,
             thread_id_generator,
-            item_id_generator: Session::new_item_id_generator(),
-            context_window_id_generator: Arc::new(codex_protocol::ContextWindowId::new_uuid_v7),
             registry: Arc::default(),
             residency: Arc::default(),
             mailboxes: Arc::default(),

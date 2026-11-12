@@ -555,6 +555,19 @@ impl RetainedContext {
         }
     }
 
+    pub(super) fn max_source_ordinal(&self) -> Option<u64> {
+        self.user_messages
+            .iter()
+            .chain(&self.assistant_messages)
+            .filter_map(|entry| {
+                entry
+                    .revision
+                    .as_ref()
+                    .and_then(crate::model_id_ordinals::item_ordinal)
+            })
+            .max()
+    }
+
     /// Restoring a saved thread must not bypass the live storage limits.
     /// A missing checkpoint cannot establish complete historical user instructions.
     /// Surviving local input metadata also advances the counter when its retained record is missing.

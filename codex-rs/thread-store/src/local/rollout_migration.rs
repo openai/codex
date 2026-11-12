@@ -85,7 +85,7 @@ struct MigrationLocks {
     _maintenance: Option<Arc<RolloutMaintenanceGuard>>,
     _writer: WriterLockGuard,
     // Let local writers proceed only after releasing the cross-process locks.
-    _live_writer: OwnedMutexGuard<()>,
+    _live_writer: OwnedMutexGuard<u64>,
 }
 
 enum CanonicalizationAttempt {

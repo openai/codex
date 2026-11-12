@@ -274,6 +274,7 @@ mod mcp_prewarm;
 mod mcp_refresh;
 mod mcp_runtime;
 mod model_catalog_settings;
+mod model_ids;
 pub(crate) mod multi_agents;
 mod plugin_selection;
 mod realtime_history;
@@ -601,6 +602,21 @@ pub(crate) fn assign_missing_item_id(
 }
 
 impl Session {
+    fn compaction_resume_metadata(&self, state: &SessionState) -> CompactionResumeMetadata {
+        CompactionResumeMetadata {
+            next_item_ordinal: None,
+            rejected_audio_file_ids: state.history.rejected_audio_file_ids(),
+            dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
+                thread_id: self.thread_id(),
+                tools: state.persisted_dynamic_tools.to_vec(),
+            })),
+            multi_agent_version: self.multi_agent_version(),
+            last_started_turn_id: state.last_started_turn_id.clone(),
+            turn_attribution: state.turn_attribution.clone(),
+            previous_turn_settings: state.previous_turn_settings(),
+        }
+    }
+
     pub(crate) async fn resolve_startup_model(
         models_manager: &dyn ModelsManager,
         config: &Config,
@@ -4958,18 +4974,7 @@ impl Session {
                 window_id: Some(metadata.window_ids.window_id),
                 compaction_response_id: metadata.compaction_response_id,
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
-                resume_metadata: Some(CompactionResumeMetadata {
-                    next_item_ordinal: None,
-                    rejected_audio_file_ids: state.history.rejected_audio_file_ids(),
-                    dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
-                        thread_id: self.thread_id(),
-                        tools: state.persisted_dynamic_tools.to_vec(),
-                    })),
-                    multi_agent_version: self.multi_agent_version(),
-                    last_started_turn_id: state.last_started_turn_id.clone(),
-                    turn_attribution: state.turn_attribution.clone(),
-                    previous_turn_settings: state.previous_turn_settings(),
-                }),
+                resume_metadata: Some(self.compaction_resume_metadata(&state)),
             };
             (compacted_item, started_item)
         };

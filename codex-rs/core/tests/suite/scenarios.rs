@@ -513,13 +513,11 @@ async fn gif_generation_preserves_animation_and_replays_a_still_preview() -> Res
 async fn admitted_prompt_id_reaches_responses() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let test = test_codex()
-        .with_config(|config| {
-            configure_scenario_catalog(config);
-            config.include_environment_context = false;
-        })
-        .build_with_auto_env(&server)
-        .await?;
+    let mut builder = test_codex().with_config(|config| {
+        configure_scenario_catalog(config);
+        config.include_environment_context = false;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
     let mock = mount_sse_sequence(
         &server,
         vec![

@@ -1200,7 +1200,7 @@ fn model_id_ordinals_resume_at_the_checkpoint_and_advance_for_local_items() -> R
         "guardian_review_ids": [{"id": "review_item008",
             "id_allocation": {"prefix": "review", "salt": "item", "ordinal": 301, "value": 8}}]
     });
-    let records: Vec<RolloutItem> = serde_json::from_value(json!([
+    let mut records: Vec<RolloutItem> = serde_json::from_value(json!([
         record(19),
         {"type": "compacted", "payload": {
             "message": "", "window_number": 4,
@@ -1214,6 +1214,9 @@ fn model_id_ordinals_resume_at_the_checkpoint_and_advance_for_local_items() -> R
     assert_eq!(crate::next_model_id_ordinals(&records[1..2]), (24, 5));
     assert_eq!(crate::next_model_id_ordinals(&records[1..]), (26, 5));
     assert_eq!(crate::next_model_id_ordinals(&records), (26, 5));
+    // An append containing a checkpoint and a later allocation stamps only the prefix.
+    assert_eq!(crate::stamp_item_ordinals(/*next*/ 25, &mut records), 26);
+    assert_eq!(crate::next_model_id_ordinals(&records[1..2]), (25, 5));
     Ok(())
 }
 

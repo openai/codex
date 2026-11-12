@@ -302,7 +302,7 @@ async fn cold_root_resume_overlaps_child_reads_and_applies_identities_in_graph_o
         .thread_manager
         .ensure_multi_agent_v2_child_loaded(first)
         .await?;
-    assert!(resumed.thread_manager.get_thread(first).await.is_ok());
+    let first_child = resumed.thread_manager.get_thread(first).await?;
     assert!(resumed.thread_manager.get_thread(last).await.is_err());
     assert!(resumed.thread_manager.get_thread(failed).await.is_err());
 
@@ -321,7 +321,7 @@ async fn cold_root_resume_overlaps_child_reads_and_applies_identities_in_graph_o
     )
     .await;
     resumed.submit_turn("continue restored child").await?;
-    let child = resumed.thread_manager.get_thread(first).await?;
+    let child = first_child;
     wait_for_event(child.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })

@@ -1008,11 +1008,31 @@ impl Session {
             session_configuration.thread_source.as_ref(),
             Some(ThreadSource::Subagent | ThreadSource::GuardianReview)
         );
-        let item_id_generator = Arc::clone(&agent_control.runtime().item_id_generator);
-        if let InitialHistory::Forked(items) = &mut initial_history {
-            for record in items {
-                if let RolloutItem::ResponseItem(item) = record {
-                    assign_missing_item_id(&mut item.item, &item_id_generator);
+        let prepare_ids = super::model_ids::from_history;
+        // New threads need their window ID to create the rollout. Resumes initialize once the
+        // writer has validated or refreshed the history snapshot.
+        let new_thread_ids = (!matches!(initial_history, InitialHistory::Resumed(_)))
+            .then(|| prepare_ids(&initial_history));
+        let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
+            && session_configuration.session_source.is_non_root_agent()
+            && config.features.enabled(Feature::TokenBudget);
+        if let (InitialHistory::Forked(records), Some(ids)) =
+            (&mut initial_history, &new_thread_ids)
+        {
+            for record in records {
+                match record {
+                    RolloutItem::ResponseItem(item) => {
+                        assign_missing_item_id(&mut item.item, &ids.item_id_generator)
+                    }
+                    RolloutItem::Compacted(checkpoint) if restore_child_window => {
+                        checkpoint.window_number = Some(0);
+                        checkpoint.first_window_id =
+                            Some(ids.initial_auto_compact_window_ids.window_id.clone());
+                        checkpoint.previous_window_id = None;
+                        checkpoint.window_id =
+                            Some(ids.initial_auto_compact_window_ids.window_id.clone());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1096,24 +1116,6 @@ impl Session {
                     SessionId::from(thread_id)
                 }
             });
-        let context_window_id_generator =
-            Arc::clone(&agent_control.runtime().context_window_id_generator);
-        let initial_auto_compact_window_ids =
-            AutoCompactWindowIds::new_initial(context_window_id_generator());
-        let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
-            && session_configuration.session_source.is_non_root_agent()
-            && config.features.enabled(Feature::TokenBudget);
-        if restore_child_window && let InitialHistory::Forked(items) = &mut initial_history {
-            let child_window_id = initial_auto_compact_window_ids.window_id.clone();
-            for item in items {
-                if let RolloutItem::Compacted(checkpoint) = item {
-                    checkpoint.window_number = Some(0);
-                    checkpoint.first_window_id = Some(child_window_id.clone());
-                    checkpoint.previous_window_id = None;
-                    checkpoint.window_id = Some(child_window_id.clone());
-                }
-            }
-        }
         let has_provided_agent_control =
             matches!(&agent_control, AgentControlInit::Provided { .. });
         let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
@@ -1215,6 +1217,9 @@ impl Session {
                 let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        let ids = new_thread_ids.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!("new thread missing its initial window")
+                        })?;
                         let auth = persistence_auth.await;
                         let params = CreateThreadParams {
                             attached_thread,
@@ -1241,7 +1246,10 @@ impl Session {
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
                             subagent_history_start_ordinal: None,
-                            initial_window_id: initial_auto_compact_window_ids.window_id.clone(),
+                            initial_window_id: ids
+                                .initial_auto_compact_window_ids
+                                .window_id
+                                .clone(),
                             runtime_workspace_roots: Some(config.workspace_roots.clone()),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
@@ -1401,6 +1409,11 @@ impl Session {
                 resumed.history = history;
                 resumed.history_revision = None;
             }
+            let super::model_ids::InitialModelIds {
+                item_id_generator,
+                context_window_id_generator,
+                initial_auto_compact_window_ids,
+            } = new_thread_ids.unwrap_or_else(|| prepare_ids(&initial_history));
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {
