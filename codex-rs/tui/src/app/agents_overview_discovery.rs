@@ -74,7 +74,7 @@ pub(crate) async fn list_pinned_threads(
                 Ok(page) => {
                     let next_cursor = page.next_cursor.clone();
                     threads.extend(listed_threads(page).filter(|(thread, _)| {
-                        is_overview_thread(thread) && supports_shared_pinning(&thread.source)
+                        is_overview_root(thread) && supports_shared_pinning(&thread.source)
                     }));
                     let Some(next_cursor) = next_cursor else {
                         break;
@@ -93,8 +93,12 @@ pub(crate) async fn list_pinned_threads(
     Ok(Some(threads))
 }
 
-fn is_overview_thread(thread: &Thread) -> bool {
-    !thread.ephemeral
+pub(super) fn is_visible_in_agents_overview(thread: &Thread) -> bool {
+    !thread.ephemeral && thread.attached_to_thread_id.is_none()
+}
+
+pub(super) fn is_overview_root(thread: &Thread) -> bool {
+    is_visible_in_agents_overview(thread)
         && thread.parent_thread_id.is_none()
         && !matches!(
             thread.source,
@@ -236,7 +240,7 @@ impl SourcePage {
                     self.exhausted = page.next_cursor.is_none();
                     self.cursor = page.next_cursor.clone();
                     self.rows.extend(
-                        listed_threads(page).filter(|(thread, _)| is_overview_thread(thread)),
+                        listed_threads(page).filter(|(thread, _)| is_overview_root(thread)),
                     );
                     return true;
                 }

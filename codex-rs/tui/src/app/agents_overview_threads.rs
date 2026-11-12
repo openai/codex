@@ -5,6 +5,7 @@
 use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::agents_overview_details::preview_agent_message;
+use super::agents_overview_discovery::is_overview_root;
 use super::agents_overview_discovery::list_pinned_threads;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
@@ -15,7 +16,6 @@ use crate::chatwidget::ChatWidget;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -26,7 +26,6 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::SubAgentSource;
 use futures::StreamExt;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -61,12 +60,7 @@ impl App {
         self.agents_overview.removed_threads.insert(thread_id);
         self.agents_overview.unread.remove(&thread_id);
         if let Some(Some(thread)) = self.agents_overview.threads.remove(&thread_id)
-            && !thread.ephemeral
-            && thread.parent_thread_id.is_none()
-            && !matches!(
-                thread.source,
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-            )
+            && is_overview_root(&thread)
             && !self.agents_overview.hidden_threads.contains(&thread_id)
         {
             self.agents_overview.refill_count += 1;

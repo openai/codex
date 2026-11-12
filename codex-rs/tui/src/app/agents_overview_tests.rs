@@ -1631,6 +1631,14 @@ async fn shared_overview_shows_only_root_sessions() {
     );
     side.ephemeral = true;
     threads.push(side);
+    let mut attached = overview_thread(
+        ThreadId::new(),
+        /*parent_thread_id*/ None,
+        "Saved side chat",
+        ThreadStatus::Idle,
+    );
+    attached.attached_to_thread_id = Some(first_root.to_string());
+    threads.push(attached);
     let default_model = app
         .model_catalog
         .models
