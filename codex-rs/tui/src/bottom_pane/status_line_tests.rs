@@ -1,6 +1,7 @@
 #![cfg(test)]
 
-use super::FooterContent;
+use super::StatusLine;
+use super::StatusLineFocus;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::osc8_hyperlink;
 use pretty_assertions::assert_eq;
@@ -20,7 +21,7 @@ fn clipped_links_keep_their_cells_after_a_halfwidth_katakana_grapheme() {
         /*x*/ 0, /*y*/ 0, /*width*/ 10, /*height*/ 1,
     );
     let mut buf = Buffer::empty(area);
-    FooterContent::from(line).render(area, &mut buf);
+    StatusLine::from(line).render(area, &mut buf, StatusLineFocus::Focused);
     assert_eq!(buf[(0, 0)].symbol(), osc8_hyperlink(project_url, "ｶﾞ"));
     for (x, ch) in (2..5).zip(" · ".chars()) {
         assert_eq!(buf[(x, 0)].symbol(), ch.to_string());
@@ -40,12 +41,12 @@ fn arabic_prefix_keeps_link_on_the_painted_cells_at_exact_fit_and_overflow() {
     let mut line = HyperlinkLine::from("لا · ");
     line.push_span("PR #42".into(), Some(url));
     assert_eq!(line.width(), 11);
-    let content = FooterContent::from(line);
+    let content = StatusLine::from(line);
 
     for (width, visible_link) in [(11, "PR #42"), (10, "PR #")] {
         let area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 1);
         let mut buf = Buffer::empty(area);
-        content.render(area, &mut buf);
+        content.render(area, &mut buf, StatusLineFocus::Focused);
         assert_eq!(buf[(4, 0)].symbol(), " ");
         for (x, ch) in (5..width).zip(visible_link.chars()) {
             assert_eq!(buf[(x, 0)].symbol(), osc8_hyperlink(url, &ch.to_string()));
@@ -57,7 +58,7 @@ fn arabic_prefix_keeps_link_on_the_painted_cells_at_exact_fit_and_overflow() {
 }
 
 #[test]
-fn prepared_tree_uses_its_natural_width_and_paints_only_the_footer_viewport() {
+fn prepared_tree_paints_only_the_footer_viewport() {
     use crate::terminal_hyperlinks::strip_osc8;
     use crate::ui_tree::UiTree;
     use ratatui::buffer::Cell;
@@ -69,8 +70,7 @@ fn prepared_tree_uses_its_natural_width_and_paints_only_the_footer_viewport() {
     .to_string()
     .parse()
     .unwrap();
-    let prepared = FooterContent::from(tree);
-    assert_eq!(prepared.width(), 11);
+    let prepared = StatusLine::from(tree);
 
     let area = Rect::new(
         /*x*/ 1, /*y*/ 1, /*width*/ 6, /*height*/ 4,
@@ -81,7 +81,7 @@ fn prepared_tree_uses_its_natural_width_and_paints_only_the_footer_viewport() {
         ),
         Cell::new("."),
     );
-    prepared.render(area, &mut buffer);
+    prepared.render(area, &mut buffer, StatusLineFocus::Focused);
     let rows: Vec<String> = buffer
         .content
         .chunks(8)

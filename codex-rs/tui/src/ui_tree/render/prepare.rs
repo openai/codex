@@ -10,7 +10,6 @@ use crate::ui_tree::UiNode;
 pub(super) struct PreparedNode {
     pub(super) kind: NodeKind,
     pub(super) widths: Widths,
-    pub(super) natural_height: u16,
 }
 
 #[derive(Debug, PartialEq)]
@@ -62,7 +61,6 @@ impl PreparedNode {
             widths.preferred = widths.preferred.max(width);
         }
         Some(Self {
-            natural_height: u16::try_from(text.lines.len()).unwrap_or(u16::MAX),
             kind: NodeKind::Text(text),
             widths,
         })
@@ -97,11 +95,6 @@ impl PreparedNode {
         };
         Some(Self {
             widths,
-            natural_height: children
-                .iter()
-                .map(|child| child.natural_height)
-                .max()
-                .unwrap_or_default(),
             kind: NodeKind::Row {
                 children,
                 gap,

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::footer_content::FooterContent;
+use crate::terminal_hyperlinks::HyperlinkLine;
 use codex_protocol::ThreadId;
 
 use super::status_line_from_segments;
@@ -248,7 +248,7 @@ impl StatusSurfacePreviewData {
         &self,
         items: I,
         use_theme_colors: bool,
-    ) -> Option<FooterContent>
+    ) -> Option<HyperlinkLine>
     where
         I: IntoIterator<Item = StatusLineItem>,
     {
@@ -263,7 +263,6 @@ impl StatusSurfacePreviewData {
             self.live_value_for(StatusSurfacePreviewItem::PullRequestNumber)
                 .and(self.pull_request_url.as_deref()),
         )
-        .map(FooterContent::from)
     }
 }
 

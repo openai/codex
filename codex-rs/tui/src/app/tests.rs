@@ -2218,7 +2218,6 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 #[tokio::test]
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
     use crate::bottom_pane::StatusLineItem;
-    use crate::bottom_pane::footer_content::FooterContent;
 
     let mut app = make_test_app().await;
     app.chat_widget.setup_status_line(
@@ -2249,10 +2248,11 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
             token_usage_notification(thread_id, "turn-1", Some(window)),
         )));
-        assert!(matches!(
-            app.chat_widget.status_line_content(),
-            Some(FooterContent::HyperlinkLine(_))
-        ));
+        assert!(
+            app.chat_widget
+                .status_line_content()
+                .is_some_and(|status| status.as_native().is_some())
+        );
         let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 60);
         assert!(
             rendered.lines().any(|row| row.trim() == expected),

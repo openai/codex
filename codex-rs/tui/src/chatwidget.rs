@@ -2122,14 +2122,16 @@ impl ChatWidget {
 
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.status_line_content()
-            .cloned()
-            .map(|content| content.into_hyperlink_line().line.to_string())
+        self.status_line_content().map(|status| {
+            status
+                .as_native()
+                .expect("native status line")
+                .line
+                .to_string()
+        })
     }
 
-    pub(crate) fn status_line_content(
-        &self,
-    ) -> Option<&crate::bottom_pane::footer_content::FooterContent> {
+    pub(crate) fn status_line_content(&self) -> Option<&crate::bottom_pane::StatusLine> {
         self.bottom_pane.status_line_content()
     }
 

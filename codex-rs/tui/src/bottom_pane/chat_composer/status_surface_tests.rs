@@ -39,7 +39,7 @@ fn extension_status_line_clips_links_to_footer_layout() {
     }"#
     .parse()
     .unwrap();
-    composer.set_status_line(Some(FooterContent::from(tree)));
+    composer.set_status_line(Some(StatusLine::from(tree)));
 
     for separate_status_line in [false, true] {
         for width in [12, 40] {
@@ -137,7 +137,7 @@ fn extension_uses_the_full_width_after_resize() {
         {"type":"link","props":{"href":"https://example.com/pr/12345"},"children":["12345"]}]}]}"#
             .parse()
             .unwrap();
-    composer.set_status_line(Some(FooterContent::from(tree)));
+    composer.set_status_line(Some(StatusLine::from(tree)));
     composer.set_collaboration_modes_enabled(/*enabled*/ true);
     let linked_number: String = "12345"
         .chars()
@@ -205,7 +205,7 @@ fn provider_status_and_hints_use_separate_rows() {
 fn status_rows_respect_host_budget_and_yield_to_the_draft() {
     let mut composer = composer();
     let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree\nfour\nfive""#.parse().unwrap();
-    composer.set_status_line(Some(FooterContent::from(tree)));
+    composer.set_status_line(Some(StatusLine::from(tree)));
     composer.set_text_content("a\nb\nc".into(), Vec::new(), Vec::new());
     composer.move_cursor_to_end();
     for separate_status_line in [false, true] {
@@ -252,8 +252,19 @@ fn status_rows_respect_host_budget_and_yield_to_the_draft() {
         ["one…"]
     );
     composer.set_collaboration_mode_indicator(/*indicator*/ None);
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        max_height: Some(14),
+        ..Default::default()
+    };
+    let area = Rect::new(0, 0, 7, 14);
+    assert_eq!(
+        render_status(&composer, area, options).1,
+        ["one", "two", "three", "four…"]
+    );
     let tree: crate::ui_tree::UiTree = r#""x\ny""#.parse().unwrap();
-    composer.set_status_line(Some(FooterContent::from(tree)));
+    composer.set_status_line(Some(StatusLine::from(tree)));
+    assert_eq!(render_status(&composer, area, options).1, ["x", "y"]);
     assert_eq!(
         composer.footer_hint_height(/*width*/ 7, ComposerRenderOptions::default()),
         0
@@ -283,8 +294,7 @@ fn sidebar_focus_keeps_dim_extension_status_rows() {
         if unfocused {
             assert_eq!(composer.footer.warning_notice_area.get(), None);
             assert!(!buffer.content.iter().any(|cell| cell.symbol() == "⚠"));
-            let status =
-                inset_footer_hint_area(composer.layout_with_options(buffer.area, options).status);
+            let status = composer.layout_with_options(buffer.area, options).status;
             for y in status.y..status.bottom() {
                 assert!(
                     buffer[(status.x, y)]
@@ -424,7 +434,7 @@ fn extension_status_paints_with_the_current_theme_at_the_same_width() {
         r#"{"type":"text","props":{"color":"primary"},"children":["λ"]}"#
             .parse()
             .unwrap();
-    composer.set_status_line(Some(FooterContent::from(content)));
+    composer.set_status_line(Some(StatusLine::from(content)));
     let previous = current_syntax_theme();
     let colors = [1, 2].map(|index| {
         let mut theme = previous.clone();
@@ -460,7 +470,7 @@ fn extension_status_paints_with_the_current_theme_at_the_same_width() {
 fn extension_status_keeps_its_rows_when_effort_changes() {
     let mut composer = composer();
     let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree""#.parse().unwrap();
-    composer.set_status_line(Some(FooterContent::from(tree)));
+    composer.set_status_line(Some(StatusLine::from(tree)));
     composer.set_active_reasoning_effort_baseline(/*effort*/ None);
     composer.set_active_reasoning_effort(
         Some(&ReasoningEffort::Max),

@@ -379,8 +379,8 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use super::voice_strip::VoiceStrip;
-use crate::bottom_pane::footer_content::FooterContent;
-use crate::bottom_pane::footer_content::StatusLineFocus;
+use crate::bottom_pane::StatusLine;
+use crate::bottom_pane::StatusLineFocus;
 use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
@@ -795,7 +795,7 @@ impl ChatComposer {
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
-                status_layout: Default::default(),
+                labeled_status_line: Default::default(),
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
@@ -908,13 +908,12 @@ impl ChatComposer {
             let style = IgnitionStyle::random(self.effort_animation_style);
             self.effort_ignition = Some(EffortIgnition::new(tier, style));
             self.effort_animation_style = Some(style);
-            if let Some(previous) = self.status_surface_content(StatusLineFocus::Focused)
-                && !matches!(previous.as_ref(), FooterContent::Extension { .. })
-            {
-                self.effort_status_line_transition = Some(EffortStatusLineTransition::new(
-                    tier,
-                    previous.into_owned().into_hyperlink_line(),
-                ));
+            let previous = self.with_status_surface_content(StatusLineFocus::Focused, |status| {
+                status.and_then(StatusLine::as_native).cloned()
+            });
+            if let Some(previous) = previous {
+                self.effort_status_line_transition =
+                    Some(EffortStatusLineTransition::new(tier, previous));
             }
             if let Some(frame_requester) = &self.frame_requester {
                 frame_requester.schedule_frame();
@@ -1891,7 +1890,7 @@ impl ChatComposer {
         self.attachments.local_image_paths()
     }
 
-    pub(crate) fn status_line_content(&self) -> Option<&FooterContent> {
+    pub(crate) fn status_line_content(&self) -> Option<&StatusLine> {
         self.footer.status_line_value.as_ref()
     }
 
@@ -4496,6 +4495,7 @@ impl ChatComposer {
             return false;
         }
         self.footer.active_agent_label = active_agent_label;
+        *self.footer.labeled_status_line.get_mut() = None;
         true
     }
 }

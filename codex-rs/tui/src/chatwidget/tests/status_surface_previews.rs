@@ -3,14 +3,6 @@ use crate::bottom_pane::preview_line_for_title_items;
 use crate::chatwidget::ThreadUsageOutcome;
 use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
-use ratatui::text::Line;
-
-fn line_text(line: Line<'static>) -> String {
-    line.spans
-        .into_iter()
-        .map(|span| span.content.into_owned())
-        .collect()
-}
 
 #[tokio::test]
 async fn thread_color_preview_matches_footer() {
@@ -31,7 +23,6 @@ async fn thread_color_preview_matches_footer() {
                 let line = preview
                     .status_line_for_items(items, use_colors)
                     .unwrap()
-                    .into_hyperlink_line()
                     .line;
                 let footer = crate::bottom_pane::status_line_from_segments(
                     items
@@ -54,7 +45,7 @@ fn status_preview_line_option(chat: &mut ChatWidget, items: &[StatusLineItem]) -
     let preview_data = chat.status_surface_preview_data();
     preview_data
         .status_line_for_items(items.iter().copied(), /*use_theme_colors*/ true)
-        .map(|content| line_text(content.into_hyperlink_line().line))
+        .map(|line| line.line.to_string())
 }
 
 fn status_preview_line(chat: &mut ChatWidget, items: &[StatusLineItem]) -> String {
@@ -65,7 +56,7 @@ fn title_preview_line(chat: &mut ChatWidget, items: &[TerminalTitleItem]) -> Str
     let preview_data = chat.terminal_title_preview_data();
     let preview =
         preview_line_for_title_items(items, &preview_data).expect("terminal title preview line");
-    line_text(preview)
+    preview.to_string()
 }
 
 fn combined_preview_snapshot(

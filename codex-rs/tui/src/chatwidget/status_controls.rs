@@ -5,7 +5,7 @@
 //! history-facing `/status` surface.
 
 use super::*;
-use crate::bottom_pane::footer_content::FooterContent;
+use crate::bottom_pane::StatusLine;
 use crate::status::thread_cost_micros;
 
 impl ChatWidget {
@@ -84,7 +84,7 @@ impl ChatWidget {
     }
 
     /// Sets the currently rendered footer status-line value.
-    pub(crate) fn set_status_line(&mut self, status_line: Option<FooterContent>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLine>) {
         self.bottom_pane.set_status_line(status_line);
     }
 

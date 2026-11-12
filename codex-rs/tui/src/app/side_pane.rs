@@ -8,8 +8,7 @@ use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::sidebar::SidebarLayout;
 use crate::bottom_pane::FooterLayout;
-use crate::bottom_pane::StatusLine;
-use crate::bottom_pane::footer_content::StatusLineFocus;
+use crate::bottom_pane::StatusLineFocus;
 use crate::custom_terminal::Frame;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
@@ -458,8 +457,9 @@ impl SidePaneLayout {
             /*priority_hint_rows*/ hint_rows,
         );
         let status = companion.display.status_line.as_ref();
-        let status_line = StatusLine::default();
-        let wanted_status = status_line.height(status, area.width, footer.status_budget(available));
+        let wanted_status = status.map_or(0, |status| {
+            status.height(footer.status_bounds(area.width, available))
+        });
         let footer = footer.allocate(available, wanted_status);
         let above = available - footer.height();
         let mut transcript = Rect {
@@ -512,12 +512,13 @@ impl SidePaneLayout {
                 &mut Default::default(),
             );
         }
-        status_line.render(
-            status,
-            footer.status_area(area),
-            frame.buffer,
-            StatusLineFocus::Unfocused,
-        );
+        if let Some(status) = status {
+            status.render(
+                footer.status_area(area),
+                frame.buffer,
+                StatusLineFocus::Unfocused,
+            );
+        }
     }
 }
 

@@ -22,9 +22,8 @@
 //!   agent label, side-conversation state, or some combination of those.
 //!
 //! The composer fits ordinary navigation, modes, actions, and warnings in `chat_composer::passive_hints`.
-pub(crate) mod footer_content;
 
-use self::footer_content::FooterContent;
+use super::StatusLine;
 use super::shortcut_overlay;
 use super::status_line_style::STATUS_LINE_SEPARATOR;
 use crate::key_hint;
@@ -63,7 +62,7 @@ pub(crate) struct FooterProps {
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
     pub(crate) quit_shortcut_key: KeyBinding,
-    pub(crate) status_line_value: Option<FooterContent>,
+    pub(crate) status_line_value: Option<StatusLine>,
     pub(crate) status_line_enabled: bool,
     pub(crate) key_hints: FooterKeyHints,
     /// Active thread label shown when the footer is rendering contextual information instead of an
@@ -795,7 +794,7 @@ fn footer_from_props_lines(
 /// The returned line may contain the configured status line, the currently viewed agent label, or
 /// both combined. Active instructional states such as quit reminders, shortcut overlays, and queue
 /// prompts deliberately return `None` so those call-to-action hints stay visible.
-pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<FooterContent> {
+pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<StatusLine> {
     if !props.mode.shows_passive_line(props.is_task_running) {
         return None;
     }
@@ -804,10 +803,13 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<FooterCo
         .status_line_value
         .as_ref()
         .filter(|_| props.status_line_enabled);
-    let mut line = match status {
-        Some(FooterContent::HyperlinkLine(line)) => line.as_ref().clone(),
-        Some(content @ FooterContent::Extension { .. }) => return Some(content.clone()),
-        None => HyperlinkLine::default(),
+    let mut line = if let Some(status) = status {
+        let Some(line) = status.as_native() else {
+            return Some(status.clone());
+        };
+        line.clone()
+    } else {
+        HyperlinkLine::default()
     };
     let suffix = passive_footer_suffix(props, status.is_some());
     if status.is_none() && suffix.spans.is_empty() {
@@ -1040,8 +1042,13 @@ mod tests {
                 let status_line_active = props.status_line_enabled
                     && props.mode.shows_passive_line(props.is_task_running);
                 let passive_status_line = if status_line_active {
-                    passive_footer_status_line(props)
-                        .map(|content| content.into_hyperlink_line().line)
+                    passive_footer_status_line(props).map(|status| {
+                        status
+                            .as_native()
+                            .expect("native footer fixture")
+                            .line
+                            .clone()
+                    })
                 } else {
                     None
                 };
