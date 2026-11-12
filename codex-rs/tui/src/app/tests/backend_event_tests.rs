@@ -56,6 +56,7 @@ async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
             app.handle_polled_backend_event(
                 &server,
                 displayed,
+                &mut HashMap::new(),
                 AppServerSessionEvent {
                     backend_id: owner,
                     event: AppServerEvent::ServerNotification(Box::new(notification)),
@@ -91,6 +92,7 @@ async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
             app.handle_polled_backend_event(
                 &server,
                 displayed,
+                &mut HashMap::new(),
                 AppServerSessionEvent {
                     backend_id: owner,
                     event: AppServerEvent::ServerNotification(Box::new(notification)),
@@ -188,6 +190,7 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
         app.handle_polled_backend_event(
             &server,
             foreign,
+            &mut HashMap::new(),
             AppServerSessionEvent {
                 backend_id: server.backend_id(),
                 event,

@@ -14,6 +14,65 @@ use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
 #[tokio::test]
+async fn reconnect_queues_enter_and_resumes_ordinary_next_turn_submission() {
+    let (mut chat, mut events, _operations) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.codex_op_target = CodexOpTarget::AppEvent;
+    chat.thread_stream_disconnected = true;
+    chat.apply_external_edit("queued prompt".into());
+    chat.handle_key_event(KeyCode::Enter.into());
+    chat.apply_external_edit("still editing".into());
+    assert_eq!(chat.queued_user_message_texts(), ["queued prompt"]);
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+    );
+
+    let frame = render_bottom_popup(&chat, /*width*/ 80);
+    let visible: Vec<_> = frame
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("queued prompt") || line.contains("still editing"))
+        .collect();
+    insta::assert_snapshot!(visible.join("\n"), @r"
+    ↳ queued prompt
+    › still editing
+    ");
+
+    chat.thread_stream_disconnected = false;
+    assert!(chat.maybe_send_next_queued_input());
+    assert_eq!(chat.composer_text_with_pending(), "still editing");
+    let mut sequence = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) if cell.as_any().is::<UserHistoryCell>() => {
+                sequence.push("prompt")
+            }
+            AppEvent::CodexOp(AppCommand::UserTurn {
+                cloud_submission,
+                items,
+                ..
+            }) => {
+                assert_eq!(
+                    cloud_submission,
+                    crate::app_command::CloudSubmissionIntent::StartIfIdle
+                );
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "queued prompt".into(),
+                        text_elements: vec![]
+                    }]
+                );
+                sequence.push("submit");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(sequence, ["prompt", "submit"]);
+}
+
+#[tokio::test]
 async fn composer_submission_sends_once_and_requests_latest() {
     let (mut chat, mut events, mut operations) =
         make_chatwidget_manual(/*model_override*/ None).await;

@@ -16,6 +16,7 @@ use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -126,7 +127,42 @@ impl App {
                     .await;
                 self.repaint_agents_overview();
             }
+            AppServerEvent::ThreadStreamReconnected(thread_id) => {
+                if let Ok(id) = ThreadId::from_string(&thread_id)
+                    && self.current_displayed_thread_id() == Some(id)
+                    && self.chat_widget.thread_id() == Some(id)
+                    && self.chat_widget.thread_stream_disconnected
+                    && let Some(channel) = self.thread_event_channels.get_mut(&id)
+                    && channel
+                        .backend_id
+                        .is_none_or(|owner| owner == app_server_client.backend_id())
+                {
+                    channel.history_may_be_incomplete = true;
+                    self.chat_widget.thread_stream_disconnected = false;
+                    if self.active_turn_id_for_thread(id).await.is_none() {
+                        self.chat_widget.maybe_send_next_queued_input();
+                    }
+                }
+            }
             AppServerEvent::ThreadStreamDisconnected(error) => {
+                if let Ok(id) = ThreadId::from_string(&error.thread_id)
+                    && self.current_displayed_thread_id() == Some(id)
+                    && self.chat_widget.thread_id() == Some(id)
+                    && self.thread_event_channels.get(&id).is_some_and(|channel| {
+                        channel
+                            .backend_id
+                            .is_none_or(|owner| owner == app_server_client.backend_id())
+                    })
+                    && let AppServerRequestHandle::Cloud(handle) =
+                        app_server_client.request_handle()
+                {
+                    self.chat_widget.thread_stream_disconnected = true;
+                    if !self.chat_widget.is_user_turn_pending_or_running()
+                        && handle.reconnect_idle_thread(&error.thread_id)
+                    {
+                        return;
+                    }
+                }
                 self.handle_server_notification_event(
                     app_server_client,
                     ServerNotification::Error(*error),
@@ -269,9 +305,12 @@ impl App {
         self.track_agents_overview_notification(&notification);
         if let ServerNotification::ThreadSettingsUpdated(settings) = &notification
             && let Ok(thread_id) = ThreadId::from_string(&settings.thread_id)
+            && self
+                .update_retained_blank_settings(thread_id, settings)
+                .await
+            && let Some(input) = self.agents_overview.input_states.get_mut(&thread_id)
         {
-            self.update_retained_blank_settings(thread_id, settings)
-                .await;
+            input.pending_thread_settings = Some(settings.clone());
         }
         if matches!(
             &notification,

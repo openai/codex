@@ -7,14 +7,18 @@ use super::app_server_event_targets::server_notification_thread_target;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerSessionEvent;
 use crate::backend_id::BackendId;
+use crate::chatwidget::ThreadInputState;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ServerNotification;
+use codex_protocol::ThreadId;
+use std::collections::HashMap;
 
 impl App {
     pub(super) async fn handle_polled_backend_event(
         &mut self,
         app_server: &AppServerSession,
         displayed_owner: BackendId,
+        parked_inputs: &mut HashMap<ThreadId, ThreadInputState>,
         event: AppServerSessionEvent,
     ) {
         if displayed_owner != event.backend_id {
@@ -55,9 +59,12 @@ impl App {
                 }
                 if let ServerNotification::ThreadSettingsUpdated(settings) = notification.as_ref()
                     && self.backend_registry.owner(thread_id) == Some(event.backend_id)
+                    && self
+                        .update_retained_blank_settings(thread_id, settings)
+                        .await
+                    && let Some(input) = parked_inputs.get_mut(&thread_id)
                 {
-                    self.update_retained_blank_settings(thread_id, settings)
-                        .await;
+                    input.pending_thread_settings = Some(settings.clone());
                 }
                 if self.voice_owner_thread_id() == Some(thread_id) {
                     self.deliver_background_voice_notification(thread_id, notification);

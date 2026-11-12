@@ -65,6 +65,8 @@ struct SessionEntry {
     listening: bool,
     pending_events: VecDeque<AppServerSessionEvent>,
     side_startup: Vec<AppServerSessionEvent>,
+    // The displayed session keeps its input states in the App.
+    parked_inputs: HashMap<codex_protocol::ThreadId, crate::chatwidget::ThreadInputState>,
 }
 
 /// A session's stable position in an append-only backend collection.
@@ -106,6 +108,7 @@ impl BackendSessions {
             listening: true,
             pending_events: VecDeque::new(),
             side_startup: Vec::new(),
+            parked_inputs: HashMap::new(),
         });
     }
 
@@ -122,6 +125,37 @@ impl BackendSessions {
 
     pub(super) fn session_at(&self, slot: SessionSlot) -> &AppServerSession {
         &self.entries[slot.0].session
+    }
+
+    pub(super) fn session_and_parked_inputs(
+        &mut self,
+        slot: SessionSlot,
+    ) -> (
+        &AppServerSession,
+        &mut HashMap<codex_protocol::ThreadId, crate::chatwidget::ThreadInputState>,
+    ) {
+        let entry = &mut self.entries[slot.0];
+        (&entry.session, &mut entry.parked_inputs)
+    }
+
+    pub(super) fn switch_displayed(
+        &mut self,
+        destination: SessionSlot,
+        displayed_inputs: &mut HashMap<
+            codex_protocol::ThreadId,
+            crate::chatwidget::ThreadInputState,
+        >,
+    ) {
+        *self.parked_inputs_mut(self.displayed) = std::mem::take(displayed_inputs);
+        *displayed_inputs = std::mem::take(self.parked_inputs_mut(destination));
+        self.displayed = destination;
+    }
+
+    pub(super) fn parked_inputs_mut(
+        &mut self,
+        slot: SessionSlot,
+    ) -> &mut HashMap<codex_protocol::ThreadId, crate::chatwidget::ThreadInputState> {
+        &mut self.entries[slot.0].parked_inputs
     }
 
     pub(super) fn displayed_owner(&self) -> BackendId {

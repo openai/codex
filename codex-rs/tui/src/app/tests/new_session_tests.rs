@@ -970,8 +970,11 @@ async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Res
             model_provider: "repaired-provider".into(),
         },
     );
-    app.agents_overview
-        .input_states
+    let destination_slot = backends
+        .slot(destination_id)
+        .expect("registered destination");
+    backends
+        .parked_inputs_mut(destination_slot)
         .insert(resumed_id, stale_input);
 
     app.resume_backend_session(&mut tui, &mut backends, target)
@@ -1180,11 +1183,20 @@ async fn check_retained_draft_handoff(
     }
     app.chat_widget
         .restore_user_message_to_composer("draft for the retained task".into());
-    let collaboration_mode = if saved_history {
+    let parked_policy = (!saved_history && history_capabilities == HistoryCapabilities::Current)
+        .then_some(if initial_policy == AskForApproval::Never {
+            AskForApproval::OnRequest
+        } else {
+            AskForApproval::Never
+        });
+    if saved_history {
         app.chat_widget.set_model("old-model");
-        let mode = server_mode
-            .as_mut()
-            .expect("server supplies the current mode");
+    }
+    if parked_policy.is_some() {
+        server_mode = Some(app.chat_widget.effective_collaboration_mode());
+    }
+    let collaboration_mode = if saved_history || parked_policy.is_some() {
+        let mode = server_mode.as_mut().expect("test has a mode to update");
         mode.mode = ModeKind::Plan;
         mode.settings.developer_instructions = Some("Instructions from the parked task".into());
         Some(mode.clone())
@@ -1192,17 +1204,19 @@ async fn check_retained_draft_handoff(
         None
     };
     let retained = app.chat_widget.capture_thread_input_state().unwrap();
-    app.agents_overview.input_states.insert(thread_id, retained);
     app.chat_widget
         .restore_user_message_to_composer("draft for the displayed task".into());
+    let mut backends = BackendSessions::from_initial(source, vec![destination]);
+    let destination_slot = backends
+        .slot(destination_id)
+        .expect("registered destination");
+    backends
+        .parked_inputs_mut(destination_slot)
+        .insert(thread_id, retained);
+    let outgoing = backends.displayed_owner();
 
-    let parked_policy = (!saved_history && history_capabilities == HistoryCapabilities::Current)
-        .then_some(if initial_policy == AskForApproval::Never {
-            AskForApproval::OnRequest
-        } else {
-            AskForApproval::Never
-        });
     if collaboration_mode.is_some() || parked_policy.is_some() {
+        let destination = backends.session_at_mut(destination_slot);
         let settings = ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             collaboration_mode,
@@ -1210,7 +1224,7 @@ async fn check_retained_draft_handoff(
             ..Default::default()
         };
         assert!(destination.thread_settings_update(settings).await?);
-        let update = next_thread_settings_updated(&mut destination, thread_id).await;
+        let update = next_thread_settings_updated(destination, thread_id).await;
         if parked_policy.is_some() {
             let event = AppServerEvent::ServerNotification(Box::new(
                 ServerNotification::ThreadSettingsUpdated(update),
@@ -1219,11 +1233,11 @@ async fn check_retained_draft_handoff(
                 backend_id: destination_id,
                 event,
             };
-            app.handle_polled_backend_event(&destination, source.backend_id(), event)
+            let (destination, parked_inputs) = backends.session_and_parked_inputs(destination_slot);
+            app.handle_polled_backend_event(destination, outgoing, parked_inputs, event)
                 .await;
         }
     }
-    let mut backends = BackendSessions::from_initial(source, vec![destination]);
     let settings = app.backend_settings();
     backends.settings.insert(destination_id, settings);
     if history_capabilities == HistoryCapabilities::LegacyOnly {
@@ -1232,7 +1246,6 @@ async fn check_retained_draft_handoff(
         assert!(app.begin_reconnect());
     }
 
-    let outgoing = backends.displayed_owner();
     app.agents_overview.initialized.insert(outgoing);
     app.agents_overview.show_more_requested = true;
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -1260,7 +1273,7 @@ async fn check_retained_draft_handoff(
     assert!(!app.agents_overview.initialized.contains(&destination_id));
     assert!(!app.agents_overview.show_more_requested);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
-    if saved_history {
+    if saved_history || parked_policy.is_some() {
         assert_eq!(
             app.chat_widget.effective_collaboration_mode(),
             server_mode.unwrap()

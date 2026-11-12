@@ -867,7 +867,8 @@ async fn run_onboarding_screen_inner(
                         AppServerEvent::Disconnected { message } => {
                             return Err(color_eyre::eyre::eyre!(message));
                         }
-                        AppServerEvent::ThreadStreamDisconnected(_)
+                        AppServerEvent::ThreadStreamReconnected(_)
+                | AppServerEvent::ThreadStreamDisconnected(_)
                         | AppServerEvent::Lagged { .. }
                         | AppServerEvent::ServerRequest(_) => {}
                     }

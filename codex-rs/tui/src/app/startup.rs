@@ -1625,8 +1625,9 @@ See the Codex keymap documentation for supported actions and examples."
                                 backends.defer_side_startup(event);
                             }
                             Some(event) if owner != displayed_owner || !app.reconnect.offline => {
-                                if let Some(session) = backends.session(owner) {
-                                    app.handle_polled_backend_event(session, displayed_owner, event).await;
+                                if let Some(slot) = backends.slot(owner) {
+                                    let (session, parked_inputs) = backends.session_and_parked_inputs(slot);
+                                    app.handle_polled_backend_event(session, displayed_owner, parked_inputs, event).await;
                                 }
                             }
                             Some(_) => {}

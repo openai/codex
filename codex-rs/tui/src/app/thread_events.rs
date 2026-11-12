@@ -653,6 +653,8 @@ pub(super) struct ThreadEventChannel {
     pub(super) sender: mpsc::Sender<ThreadBufferedEvent>,
     pub(super) receiver: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     pub(super) store: Arc<Mutex<ThreadEventStore>>,
+    /// Live Attach restored delivery without reading the history from the gap.
+    pub(super) history_may_be_incomplete: bool,
     attachment: ThreadEventAttachment,
 }
 
@@ -664,6 +666,7 @@ impl ThreadEventChannel {
             receiver: Some(receiver),
             store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
             backend_id: None,
+            history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
         }
     }
@@ -698,6 +701,7 @@ impl ThreadEventChannel {
                 capacity, session, turns,
             ))),
             backend_id: None,
+            history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
         }
     }

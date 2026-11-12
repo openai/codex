@@ -4,9 +4,11 @@ use super::*;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 
 impl App {
-    pub(super) async fn capture_session_inputs(&mut self) {
+    pub(super) async fn capture_session_inputs(&mut self, owner: crate::backend_id::BackendId) {
         for (id, channel) in &self.thread_event_channels {
-            if let Some(input_state) = channel.store.lock().await.input_state.clone() {
+            if channel.backend_id.is_none_or(|backend| backend == owner)
+                && let Some(input_state) = channel.store.lock().await.input_state.clone()
+            {
                 self.agents_overview.input_states.insert(*id, input_state);
             }
         }
@@ -93,7 +95,7 @@ impl App {
                 let thread_id = target_session.thread_id;
                 let switching_threads = self.current_displayed_thread_id() != Some(thread_id);
                 if switching_threads {
-                    self.capture_session_inputs().await;
+                    self.capture_session_inputs(app_server.backend_id()).await;
                 }
                 if let AppRunControl::Exit(reason) = self
                     .resume_target_session(tui, app_server, target_session)

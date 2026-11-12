@@ -35,11 +35,11 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
         }),
     )?);
     let mut requests = requests::Requests {
-        client: cloud::Client::new(
+        client: std::sync::Arc::new(cloud::Client::new(
             &config.http_client_factory(),
             &server.uri(),
             cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
-        )?,
+        )?),
         account: protocol::GetAccountResponse {
             user_id: None,
             account: None,

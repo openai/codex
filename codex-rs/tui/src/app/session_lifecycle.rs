@@ -1760,11 +1760,26 @@ impl App {
         self.backend_registry
             .observe(backend_id, resumed.session.thread_id);
         let resumed_thread_id = resumed.session.thread_id;
-        let retained_input = ((self.chat_widget.is_external_writer_view()
-            || self.chat_widget.has_provider_error())
-            && self.chat_widget.thread_id() == Some(resumed_thread_id))
+        let was_reconnecting = self.chat_widget.thread_stream_disconnected;
+        let owned_channel = self
+            .thread_event_channels
+            .get(&resumed_thread_id)
+            .filter(|channel| channel.backend_id.is_none_or(|owner| owner == backend_id));
+        let same_thread = self.chat_widget.thread_id() == Some(resumed_thread_id);
+        let refreshing_history = same_thread
+            && !was_reconnecting
+            && owned_channel.is_some_and(|channel| channel.history_may_be_incomplete);
+        let retained_input = (same_thread
+            && owned_channel.is_some()
+            && (refreshing_history
+                || was_reconnecting
+                || self.chat_widget.is_external_writer_view()
+                || self.chat_widget.has_provider_error()))
         .then(|| self.chat_widget.capture_thread_input_state())
         .flatten();
+        let confirmed_message_ids = refreshing_history.then(|| {
+            super::thread_events::confirmed_user_message_ids(&resumed.turns, std::iter::empty())
+        });
         self.detach_current_thread_for_navigation(app_server, Some(resumed_thread_id))
             .await;
         self.local_settings = local_settings;
@@ -1786,16 +1801,27 @@ impl App {
             .await
         {
             Ok(()) => {
+                self.ensure_thread_channel(resumed_thread_id)
+                    .history_may_be_incomplete = false;
                 self.remember_attached_host_project(app_server);
                 if let Some(mut input) = retained_input {
                     // A successful resume is the authority for clearing the old rejection.
                     input.provider_error = None;
-                    self.chat_widget.restore_thread_input_state(
-                        Some(input),
-                        ThreadInputStateRestoreMode {
-                            preserve_in_flight_turn: false,
-                        },
-                    );
+                    if let Some(confirmed_message_ids) = confirmed_message_ids {
+                        input.reconnect_pending = true;
+                        self.chat_widget
+                            .restore_reconnected_input(Some(input), &confirmed_message_ids);
+                    } else {
+                        self.chat_widget.restore_thread_input_state(
+                            Some(input),
+                            ThreadInputStateRestoreMode {
+                                preserve_in_flight_turn: false,
+                            },
+                        );
+                    }
+                    if was_reconnecting && !read_only && provider_error.is_none() {
+                        self.chat_widget.maybe_send_next_queued_input();
+                    }
                 }
                 if let Some(error) = provider_error {
                     self.chat_widget

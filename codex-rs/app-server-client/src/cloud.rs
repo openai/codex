@@ -60,8 +60,18 @@ pub struct CloudCommand {
     pub response: oneshot::Sender<io::Result<RequestResult>>,
 }
 
+#[derive(Clone, Default)]
+pub(super) enum IdleReconnect {
+    #[default]
+    Inactive,
+    Offered(Arc<str>),
+    Opening(Arc<str>),
+    Connected(Arc<str>),
+}
+
 #[derive(Clone)]
 pub struct CloudRequestHandle {
+    pub(super) reconnect: tokio::sync::watch::Sender<IdleReconnect>,
     commands: mpsc::Sender<CloudCommand>,
     catalog: Option<Arc<codex_cloud_client::Client>>,
 }
@@ -147,6 +157,7 @@ impl CloudClient {
                 stream_losses: CloudStreamLosses::default(),
                 handle: CloudRequestHandle {
                     commands,
+                    reconnect: Default::default(),
                     catalog: catalog.map(Arc::new),
                 },
                 events: event_receiver,
@@ -164,6 +175,17 @@ impl CloudClient {
         while let Some(event) = self.events.recv().await {
             if let AppServerEvent::ThreadStreamDisconnected(error) = &event
                 && !self.stream_losses.should_deliver(&error.thread_id)
+            {
+                continue;
+            }
+            if let AppServerEvent::ThreadStreamReconnected(id) = &event
+                && !self.handle.reconnect.send_if_modified(|state| {
+                    if matches!(state, IdleReconnect::Connected(root) if root.as_ref() == id) {
+                        *state = IdleReconnect::Inactive;
+                        return true;
+                    }
+                    false
+                })
             {
                 continue;
             }
@@ -207,6 +229,19 @@ impl CloudClient {
 }
 
 impl CloudRequestHandle {
+    /// Accept a quiet Attach only for the conversation displayed by the caller.
+    pub fn reconnect_idle_thread(&self, thread_id: &str) -> bool {
+        self.reconnect.send_if_modified(|state| {
+            if let IdleReconnect::Offered(root) = state
+                && root.as_ref() == thread_id
+            {
+                *state = IdleReconnect::Opening(Arc::clone(root));
+                return true;
+            }
+            false
+        })
+    }
+
     /// Whether a completed model read still belongs to the bound Cloud account.
     pub fn model_catalog_is_current(&self) -> bool {
         self.catalog

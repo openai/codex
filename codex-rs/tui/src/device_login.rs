@@ -205,9 +205,9 @@ pub(crate) async fn handle_event_during_device_login(
                 .await?;
             Ok(false)
         }
-        AppServerEvent::ServerNotification(_) | AppServerEvent::ThreadStreamDisconnected(_) => {
-            Ok(false)
-        }
+        AppServerEvent::ServerNotification(_)
+        | AppServerEvent::ThreadStreamDisconnected(_)
+        | AppServerEvent::ThreadStreamReconnected(_) => Ok(false),
     }
 }
 

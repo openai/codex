@@ -104,6 +104,8 @@ use tower::util::BoxCloneSyncService;
 use url::Url;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(150);
+const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
@@ -179,6 +181,7 @@ impl Client {
             .without_redirects()
             .without_request_logging()
             .http2_prior_knowledge()
+            .http2_keep_alive(HTTP2_KEEP_ALIVE_INTERVAL, HTTP2_KEEP_ALIVE_TIMEOUT)
             .connect_timeout(Duration::from_secs(30));
         let http = if local_http {
             // Plaintext credentials must never leave loopback through an outbound proxy.

@@ -1335,7 +1335,9 @@ impl AuthConfig {
             .await
     }
 
-    async fn load_auth_with_modes(
+    /// Applies the mode filter to the selected source before hydrating its credentials.
+    /// A disallowed stored login or `CODEX_ACCESS_TOKEN` returns no credentials.
+    pub async fn load_auth_with_modes(
         &self,
         enable_codex_api_key_env: bool,
         allowed_auth_modes: Option<&[AuthMode]>,

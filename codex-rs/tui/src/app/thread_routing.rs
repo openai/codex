@@ -282,11 +282,18 @@ impl App {
         target_session: &crate::resume_picker::SessionTarget,
     ) -> bool {
         if self.chat_widget.has_provider_error()
+            || self.chat_widget.thread_stream_disconnected
             || self.active_thread_id != Some(target_session.thread_id)
             || self
                 .thread_event_channels
                 .get(&target_session.thread_id)
-                .is_some_and(|channel| channel.attachment() != ThreadEventAttachment::Live)
+                .is_some_and(|channel| {
+                    channel.attachment() != ThreadEventAttachment::Live
+                        || (channel.history_may_be_incomplete
+                            && channel
+                                .backend_id
+                                .is_none_or(|owner| owner == target_session.backend_id))
+                })
         {
             return false;
         };

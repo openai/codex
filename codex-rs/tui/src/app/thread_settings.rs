@@ -199,17 +199,15 @@ impl App {
         &mut self,
         thread_id: ThreadId,
         notification: &ThreadSettingsUpdatedNotification,
-    ) {
+    ) -> bool {
         if !self.agents_overview.blank_sessions.contains_key(&thread_id)
             || self.thread_event_channels.contains_key(&thread_id)
         {
-            return;
+            return false;
         }
         self.apply_thread_settings_to_cached_session(thread_id, &notification.thread_settings)
             .await;
-        if let Some(input) = self.agents_overview.input_states.get_mut(&thread_id) {
-            input.pending_thread_settings = Some(notification.clone());
-        }
+        true
     }
 
     pub(super) async fn apply_thread_settings_to_cached_session(

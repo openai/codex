@@ -434,11 +434,20 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                         Ok(serde_json::json!({"thread": thread}))
                     }
                     ClientRequest::ThreadResume { params, .. } => {
-                        let thread = if params.thread_id == original.to_string() {
-                            &original_thread
+                        let mut thread = if params.thread_id == original.to_string() {
+                            original_thread.clone()
                         } else {
-                            &other_thread
+                            other_thread.clone()
                         };
+                        if params.thread_id == original.to_string()
+                            && resumed_threads.contains(&params.thread_id)
+                        {
+                            thread.turns.push(test_turn(
+                                "missed-turn",
+                                TurnStatus::Completed,
+                                vec![agent_item("missed-item", "Missed response", None)],
+                            ));
+                        }
                         resumed_threads.push(params.thread_id);
                         Ok(serde_json::json!({
                             "thread": thread,
@@ -557,7 +566,40 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
         /*replay_kind*/ None,
     );
     assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    let current_session = SessionSelection::Resume(SessionTarget {
+        backend_id,
+        path: None,
+        thread_id: original,
+        cwd: None,
+        history_mode: None,
+    });
+    app.chat_widget.thread_stream_disconnected = true;
+    app.handle_backend_event(
+        &server,
+        crate::app_server_session::AppServerSessionEvent {
+            backend_id,
+            event: AppServerEvent::ThreadStreamReconnected(original.to_string()),
+        },
+    )
+    .await;
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
     insta::assert_snapshot!(rendered_responses(&app), @"• Canonical response");
+
+    app.chat_widget
+        .apply_external_edit("Keep this draft".into());
+    app.apply_resume_picker_selection(&mut tui, &mut server, current_session.clone())
+        .await?;
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+    insta::assert_snapshot!(rendered_responses(&app), @"
+    • Canonical response
+    • Missed response
+    ");
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Keep this draft"
+    );
+    app.apply_resume_picker_selection(&mut tui, &mut server, current_session)
+        .await?;
 
     for notification in [
         ServerNotification::ItemStarted(ItemStartedNotification::new(
@@ -581,13 +623,21 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
     insta::assert_snapshot!(rendered_responses(&app), @"
     • Canonical response
+    • Missed response
     • New response
     ");
     assert!(
         !std::iter::from_fn(|| ops.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
     );
     server.shutdown().await?;
-    assert_eq!(serve.await?, [other.to_string(), original.to_string()]);
+    assert_eq!(
+        serve.await?,
+        [
+            other.to_string(),
+            original.to_string(),
+            original.to_string()
+        ]
+    );
     Ok(())
 }
 

@@ -123,6 +123,7 @@ async fn background_voice_closes_with_its_owner_not_the_visible_thread() -> Resu
             app.handle_polled_backend_event(
                 &source,
                 crate::backend_id::BackendId::new(),
+                &mut std::collections::HashMap::new(),
                 crate::app_server_session::AppServerSessionEvent {
                     backend_id: source.backend_id(),
                     event: codex_app_server_client::AppServerEvent::ServerNotification(Box::new(

@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 pub(super) struct UnsupportedOperation(pub(super) String);
 
 pub(super) struct Requests {
-    pub(super) client: cloud::Client,
+    pub(super) client: std::sync::Arc<cloud::Client>,
     pub(super) account: protocol::GetAccountResponse,
     pub(super) loaded: Option<Box<protocol::ThreadResumeResponse>>,
     pub(super) warned_partial_history: Option<String>,

@@ -62,7 +62,7 @@ async fn native_submission_uses_one_admission_and_keeps_preflight_guards() -> Re
     };
     let worker = tokio::spawn(async move {
         let mut requests = crate::cloud_backend::requests::Requests {
-            client: native,
+            client: std::sync::Arc::new(native),
             account,
             loaded: None,
             warned_partial_history: None,
@@ -186,8 +186,8 @@ async fn native_submission_uses_one_admission_and_keeps_preflight_guards() -> Re
             params: submission("closed"),
         })
         .await?
-        .expect_err("ordinary turn/start keeps its existing disconnected error");
-    assert_eq!(ordinary.code, -32000);
+        .expect_err("a disconnected turn/start must fail before dispatch");
+    assert_eq!(ordinary.code, -32602);
 
     client.shutdown().await?;
     worker.await?;
