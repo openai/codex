@@ -86,6 +86,28 @@ impl ResponseItemId {
         }
     }
 
+    /// Attach the request's reservation, preserving a matching suffix or the provider's opaque ID.
+    pub fn with_generation_prefix(self, reservation: &Self) -> Self {
+        let Some(allocation) = reservation.allocation() else {
+            return self;
+        };
+        let mut allocation = allocation.clone();
+        // Responses may prepend an item kind, as in `msg_item042_0`.
+        let (kind, handle) = match self.split_once('_') {
+            Some((kind, handle)) if !kind.is_empty() && kind != reservation.as_str() => {
+                (Some(kind), handle)
+            }
+            _ => (None, self.as_str()),
+        };
+        if let Some(suffix) = handle.strip_prefix(reservation.as_str())
+            && suffix.starts_with('_')
+        {
+            allocation.prefix = kind.map(str::to_owned);
+            allocation.suffix = Some(suffix.to_owned());
+        }
+        self.with_allocation(allocation)
+    }
+
     pub fn allocation(&self) -> Option<&ResponseItemIdAllocation> {
         match self {
             Self::Text(_) => None,
