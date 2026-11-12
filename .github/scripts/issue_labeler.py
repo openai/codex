@@ -148,12 +148,16 @@ class NoRedirects(HTTPRedirectHandler):
 
 
 def suggest_labels(issue):
+    api_key = os.environ["OPENAI_API_KEY"].strip()
+    if not api_key or not all("!" <= char <= "~" for char in api_key):
+        raise SystemExit("Invalid API key format")
+
     request = Request(
         "https://api.openai.com/v1/responses",
         data=json.dumps(build_request(issue)).encode(),
         headers={
             "Accept": "application/json",
-            "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"],
+            "Authorization": "Bearer " + api_key,
             "Content-Type": "application/json",
         },
     )
