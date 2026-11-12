@@ -13,6 +13,7 @@ mod platform_macos;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
+pub use credential::UserVerificationBiometricType;
 pub use credential::UserVerificationKeyCreation;
 pub use credential::UserVerificationKeyDeletion;
 pub use credential::UserVerificationKeyInfo;

@@ -3,6 +3,23 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn verification_response_accepts_older_servers_without_biometric_method() {
+    assert_eq!(
+        serde_json::from_value::<UserVerificationVerifyResponse>(json!({
+            "proof": {"credentialId": "credential", "signature": "signature"}
+        }))
+        .unwrap(),
+        UserVerificationVerifyResponse {
+            proof: UserVerificationProof {
+                credential_id: "credential".into(),
+                signature: "signature".into(),
+            },
+            biometric_type: None,
+        }
+    );
+}
+
+#[test]
 fn enrollment_response_accepts_older_servers_without_public_metadata() {
     for response in [
         json!({"credentialId": "credential"}),

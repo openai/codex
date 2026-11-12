@@ -2,6 +2,7 @@
 
 use super::error;
 use super::key_protection;
+use crate::UserVerificationBiometricType;
 use crate::UserVerificationError;
 use crate::UserVerificationFailureReason;
 use crate::UserVerificationKeyCreation;
@@ -274,6 +275,10 @@ impl UserVerificationProvider for NativeProvider {
         Ok(UserVerificationProof {
             credential_id: credential.credential_id,
             signature: URL_SAFE_NO_PAD.encode(signature?),
+            // The key's biometric-only policy authorized this successful signature.
+            // Reading hardware capability before successful signing is not sufficient.
+            biometric_type: (unsafe { context.biometryType() } == LABiometryType::TouchID)
+                .then_some(UserVerificationBiometricType::Fingerprint),
         })
     }
 }

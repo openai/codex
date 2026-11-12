@@ -70,6 +70,13 @@ pub struct UserVerificationProof {
     pub credential_id: String,
     /// Unpadded base64url of an ASN.1 DER ECDSA signature over the challenge, hashed once.
     pub signature: String,
+    /// Method that authorized this signing operation, when the provider can establish it.
+    pub biometric_type: Option<UserVerificationBiometricType>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserVerificationBiometricType {
+    Fingerprint,
 }
 
 impl std::fmt::Debug for UserVerificationProof {

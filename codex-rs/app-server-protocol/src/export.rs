@@ -59,6 +59,7 @@ const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
     "ThreadSearchOccurrence",
     "ThreadSearchTextRange",
     "TurnSettingsUpdateStatus",
+    "UserVerificationBiometricType",
     "UserVerificationProof",
     "UserVerificationCancellationReason",
     "UserVerificationErrorDetails",

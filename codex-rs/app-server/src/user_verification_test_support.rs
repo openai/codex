@@ -99,6 +99,7 @@ impl native::UserVerificationProvider for BlockingProvider {
         Ok(native::UserVerificationProof {
             credential_id: "credential".into(),
             signature: "signature".into(),
+            biometric_type: Some(native::UserVerificationBiometricType::Fingerprint),
         })
     }
 }

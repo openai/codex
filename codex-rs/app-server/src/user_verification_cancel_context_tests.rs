@@ -82,6 +82,7 @@ async fn user_verification_cancel_remains_effective_until_proof_enqueue_and_clea
         let cancellation = context.cancellation.clone();
         outgoing.register_request_context(context).await;
         let response = UserVerificationVerifyResponse {
+            biometric_type: None,
             proof: UserVerificationProof {
                 credential_id: "AQ".into(),
                 signature: "Ag".into(),

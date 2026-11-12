@@ -69,6 +69,7 @@ impl native::UserVerificationProvider for Provider {
         Ok(native::UserVerificationProof {
             credential_id: "credential".into(),
             signature: "signature".into(),
+            biometric_type: None,
         })
     }
 }
@@ -140,7 +141,7 @@ async fn signing_uses_decoded_bytes_without_a_pending_elicitation() {
     .unwrap();
     assert_eq!(
         serde_json::to_value(response.payload).unwrap(),
-        json!({"proof": {"credentialId": "credential", "signature": "signature"}})
+        json!({"proof": {"credentialId": "credential", "signature": "signature"}, "biometricType": null})
     );
     assert_eq!(*provider.signed.lock().unwrap(), vec![vec![1, 2, 3]]);
 }

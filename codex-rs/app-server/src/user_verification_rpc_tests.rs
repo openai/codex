@@ -12,6 +12,26 @@ use std::sync::atomic::Ordering;
 use tokio::time::timeout;
 
 #[tokio::test]
+async fn user_verification_rpc_reports_native_method_separately_from_proof() -> Result<()> {
+    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
+    h.initialize("test-local-ui", /*opt_in*/ true).await;
+    h.start_verify().await?;
+    h.provider.released.store(/*val*/ true, Ordering::Release);
+    let OutgoingMessage::Response(response) = h.response().await else {
+        panic!("successful native verification must return its proof")
+    };
+    assert_eq!(
+        serde_json::to_value(response.result)?,
+        json!({
+            "proof": {"credentialId": "credential", "signature": "signature"},
+            "biometricType": "fingerprint"
+        })
+    );
+    h.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn user_verification_rpc_enroll_returns_public_registration_metadata() -> Result<()> {
     let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
     h.initialize("test-local-ui", /*opt_in*/ true).await;
