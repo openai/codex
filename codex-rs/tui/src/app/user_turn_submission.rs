@@ -94,8 +94,16 @@ pub(super) async fn try_submit_user_turn(
 
     match result {
         Ok((admission, selection)) => {
-            if selection.is_some() {
-                app.chat_widget.cloud_picker_selection = selection;
+            if let Some(selection) = selection {
+                if selection.model.is_some() {
+                    app.chat_widget.cloud_picker_selection = selection.model;
+                }
+                let service_tier = selection
+                    .service_tier
+                    .or_else(|| app.chat_widget.configured_service_tier());
+                app.chat_widget.set_service_tier(service_tier);
+                app.sync_active_thread_service_tier_to_cached_session()
+                    .await;
             }
             if !matches!(&admission, UserMessageAdmission::Queued(_)) {
                 crate::startup_recovery::acknowledged(client_user_message_id);

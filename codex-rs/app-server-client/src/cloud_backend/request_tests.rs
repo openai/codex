@@ -76,6 +76,17 @@ fn user_input_uses_stable_id_and_the_existing_cloud_configuration() {
     );
     assert!(matches!(request.mode, cloud::SubmissionMode::StartIfIdle));
     assert!(!request.shared_access);
+    assert_eq!(request.service_tier, None);
+
+    for (tier, expected) in [("ultrafast", Some("ultrafast")), ("default", None)] {
+        let request = cloud_message(protocol::TurnStartParams {
+            turn_trigger: Some("user".into()),
+            service_tier: Some(Some(tier.into())),
+            ..message()
+        })
+        .unwrap();
+        assert_eq!(request.service_tier, Some(expected.map(str::to_owned)));
+    }
 
     for tier in ["default", "priority"] {
         assert!(

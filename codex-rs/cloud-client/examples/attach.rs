@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
             turn_trigger: None,
             model: None,
             effort: None,
+            service_tier: None,
             mode: SubmissionMode::StartIfIdle,
             shared_access: false,
         }),

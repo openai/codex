@@ -6,6 +6,7 @@ use super::send_notification;
 use crate::CloudUserMessageReceipt;
 use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ImageDetail;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::bail;
@@ -314,10 +315,21 @@ fn cloud_message(
         ))?;
     let input = std::mem::take(&mut params.input);
     let turn_trigger = params.turn_trigger.take();
-    let (model, effort) = if turn_trigger.as_deref() == Some("user") {
-        (params.model.take(), params.effort.take())
+    let (model, effort, service_tier) = if turn_trigger.as_deref() == Some("user") {
+        let tier = match params.service_tier.take() {
+            Some(Some(tier)) if tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => Some(None),
+            Some(Some(tier))
+                if !matches!(tier.as_str(), "fast" | "priority" | "flex" | "ultrafast") =>
+            {
+                return Err(PreflightRejection(
+                    "This service tier is unavailable in Cloud.",
+                ));
+            }
+            tier => tier,
+        };
+        (params.model.take(), params.effort.take(), tier)
     } else {
-        (None, None)
+        (None, None, None)
     };
     if params != protocol::TurnStartParams::default() {
         return Err(PreflightRejection(
@@ -392,6 +404,7 @@ fn cloud_message(
         turn_trigger,
         model,
         effort: effort.map(|effort| effort.to_string()),
+        service_tier,
         mode: cloud::SubmissionMode::StartIfIdle,
         shared_access: false,
     })

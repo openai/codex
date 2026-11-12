@@ -1002,7 +1002,7 @@ impl ChatWidget {
         self.model_catalog
             .models
             .iter()
-            .find(|preset| preset.model == self.current_model())
+            .find(|preset| preset.model == self.service_tier_model())
             .and_then(|preset| preset.service_tiers.iter().find(|tier| tier.id == id))
             .map(|tier| tier.name.as_str())
             .or_else(|| {

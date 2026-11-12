@@ -30,6 +30,8 @@ pub struct AddUserMessageRequest {
     /// Omit both to inherit the thread settings. A model alone uses its default effort.
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Omit to inherit the thread tier, or send an explicit null to clear it.
+    pub service_tier: Option<Option<String>>,
     pub mode: SubmissionMode,
     pub shared_access: bool,
 }
@@ -128,7 +130,9 @@ impl Client {
     ) -> Result<Admission, MutationError> {
         if request.thread_id.trim().is_empty()
             || request.client_user_message_id.trim().is_empty()
-            || ((request.model.is_some() || request.effort.is_some())
+            || ((request.model.is_some()
+                || request.effort.is_some()
+                || request.service_tier.is_some())
                 && matches!(request.mode, SubmissionMode::Queue))
             || !request.input.iter().any(|input| match input {
                 UserMessageInput::Text { text, .. } => !text.trim().is_empty(),
@@ -213,6 +217,15 @@ impl Client {
             }),
             model: request.model.clone(),
             effort: request.effort.clone(),
+            service_tier: request.service_tier.as_ref().map(|tier| {
+                use crate::activation_wire::nullable_string::Value;
+                crate::activation_wire::NullableString {
+                    value: Some(match tier {
+                        Some(tier) => Value::String(tier.clone()),
+                        None => Value::Null(crate::activation_wire::Empty {}),
+                    }),
+                }
+            }),
             thread_id: request.thread_id.clone(),
             turn_trigger: request.turn_trigger.clone(),
             access: request.shared_access.then_some(1),

@@ -11,6 +11,8 @@ pub(super) struct AddRequest {
     pub input: Option<Input>,
     #[prost(string, optional, tag = "12")]
     pub model: Option<String>,
+    #[prost(message, optional, tag = "20")]
+    pub service_tier: Option<crate::activation_wire::NullableString>,
     #[prost(string, tag = "23")]
     pub thread_id: String,
     #[prost(string, optional, tag = "25")]

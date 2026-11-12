@@ -554,6 +554,8 @@ pub(crate) struct ChatWidget {
     model_popup_request_id: Option<uuid::Uuid>,
     pub(crate) cloud_picker_selection:
         Option<crate::app_server_session::user_message_submission::CloudModelSelection>,
+    pub(crate) pending_cloud_turn_settings:
+        Option<crate::app_server_session::user_message_submission::PendingCloudTurnSettings>,
     /// An app event has been queued to open the permissions picker, but no view exists yet.
     pub(crate) permission_popup_pending: bool,
     permission_popup_request_id: Option<uuid::Uuid>,
@@ -570,6 +572,7 @@ pub(crate) struct ChatWidget {
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     /// Remote app servers cannot read image paths on the TUI host.
     pub(crate) snapshot_local_images: bool,
+    pub(crate) thread_settings_owner: crate::app_server_session::ThreadSettingsOwner,
     pending_image_submission: Option<image_submission::PendingImageSubmission>,
     pub(crate) local_worktree_operations: bool,
     pub(crate) windows_sandbox_local_server: bool,

@@ -3016,6 +3016,39 @@ impl App {
             AppEvent::PersistRealtimeVoiceSelection { voice } => {
                 self.persist_realtime_voice(app_server, voice).await;
             }
+            AppEvent::ToggleCloudServiceTier { thread_id, tier } => {
+                if self.active_thread_id == Some(thread_id)
+                    && self.chat_widget.thread_id() == Some(thread_id)
+                    && app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud
+                {
+                    if !self.chat_widget.current_model_service_tier_commands().iter()
+                        .any(|command| command.id == tier)
+                    {
+                        self.chat_widget.add_error_message(
+                            "The selected Cloud model does not support that speed.".into(),
+                        );
+                        return Ok(AppRunControl::Continue);
+                    }
+                    let current = self.chat_widget.config_ref().service_tier.as_deref();
+                    match app_server.toggle_cloud_service_tier(thread_id, current, tier) {
+                        Some(tier) => {
+                            let label = match tier.as_str() {
+                                codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE => "standard",
+                                "priority" => "fast",
+                                tier => tier,
+                            };
+                            self.chat_widget.add_info_message(
+                                format!("Selected {label} speed for the next new turn in this conversation"),
+                                /*hint*/ None,
+                            );
+                        }
+                        None => self.chat_widget.add_error_message(
+                            "The Cloud account changed. Reopen the conversation before choosing a speed."
+                                .into(),
+                        ),
+                    }
+                }
+            }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 self.config.service_tier = service_tier.clone();

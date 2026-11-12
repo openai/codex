@@ -13,6 +13,7 @@ fn request() -> AddUserMessageRequest {
         turn_trigger: None,
         model: None,
         effort: None,
+        service_tier: None,
         mode: SubmissionMode::StartIfIdle,
         shared_access: true,
     }
@@ -45,12 +46,21 @@ async fn submission_preserves_admission_variants_and_wire_identity() {
         let mut fixture = fixture(response(vec![frame(&payload)], tonic::Status::ok(""))).await;
         let has_selection = !matches!(mode, SubmissionMode::Queue);
         let turn_trigger = (mode_number == 3).then(|| "user".to_owned());
+        let (service_tier, wire_tier) = match (mode_number, outcome_number) {
+            (3, 1) => (
+                Some(Some("ultrafast".into())),
+                message(/*tag*/ 20, &message(/*tag*/ 1, b"ultrafast")),
+            ),
+            (1, 2) => (Some(None), message(/*tag*/ 20, &message(/*tag*/ 2, b""))),
+            _ => (None, Vec::new()),
+        };
         let result = fixture
             .client
             .add_user_message(&AddUserMessageRequest {
                 turn_trigger,
                 model: has_selection.then(|| "selected-model".into()),
                 effort: has_selection.then(|| "high".into()),
+                service_tier,
                 mode,
                 ..request()
             })
@@ -106,6 +116,7 @@ async fn submission_preserves_admission_variants_and_wire_identity() {
                 ),
             ),
             if has_selection { model } else { vec![] },
+            wire_tier,
             message(/*tag*/ 23, b"t"),
             if mode_number == 3 {
                 message(/*tag*/ 25, b"user")
@@ -293,6 +304,11 @@ async fn invalid_input_never_sends_and_diagnostics_redact() {
             mode: SubmissionMode::Queue,
             effort: Some("high".into()),
             model: Some("selected-model".into()),
+            ..request()
+        },
+        AddUserMessageRequest {
+            mode: SubmissionMode::Queue,
+            service_tier: Some(Some("ultrafast".into())),
             ..request()
         },
         AddUserMessageRequest {

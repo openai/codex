@@ -3,6 +3,7 @@
 use super::ChatWidget;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::app_server_session::ThreadSettingsOwner;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::service_tier_resolution;
 use codex_features::Feature;
@@ -48,15 +49,23 @@ impl ChatWidget {
         let Some(fast_tier) = self.current_model_fast_service_tier() else {
             return;
         };
-        let next_tier = if self.current_service_tier() == Some(fast_tier.id.as_str()) {
-            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
-        } else {
-            Some(fast_tier.id)
-        };
-        self.set_service_tier_selection(next_tier);
+        self.toggle_service_tier_from_ui(fast_tier);
     }
 
     pub(crate) fn toggle_service_tier_from_ui(&mut self, command: ServiceTierCommand) {
+        if self.thread_settings_owner == ThreadSettingsOwner::Server {
+            if let Some(thread_id) = self.thread_id {
+                self.app_event_tx.send(AppEvent::ToggleCloudServiceTier {
+                    thread_id,
+                    tier: command.id,
+                });
+            } else {
+                self.add_error_message(
+                    "Open the Cloud conversation before choosing a speed.".into(),
+                );
+            }
+            return;
+        }
         let next_tier = if self.current_service_tier() == Some(command.id.as_str()) {
             Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
         } else {
@@ -65,15 +74,20 @@ impl ChatWidget {
         self.set_service_tier_selection(next_tier);
     }
 
-    pub(super) fn sync_service_tier_commands(&mut self) {
+    pub(crate) fn sync_service_tier_commands(&mut self) {
         let commands = self.current_model_service_tier_commands();
         self.bottom_pane
             .set_service_tier_commands_enabled(!commands.is_empty());
         self.bottom_pane.set_service_tier_commands(commands);
     }
 
-    pub(super) fn current_model_service_tier_commands(&self) -> Vec<ServiceTierCommand> {
-        let model = self.current_model();
+    pub(crate) fn current_model_service_tier_commands(&self) -> Vec<ServiceTierCommand> {
+        let pending_model = self
+            .thread_id
+            .and_then(|id| self.pending_cloud_turn_settings.as_ref()?.model(id));
+        let model = pending_model
+            .as_deref()
+            .unwrap_or_else(|| self.service_tier_model());
         self.model_catalog
             .try_list_models()
             .ok()
@@ -122,11 +136,23 @@ impl ChatWidget {
             .find(|tier| tier.name.eq_ignore_ascii_case(SPEED_TIER_FAST))
     }
 
+    pub(super) fn service_tier_model(&self) -> &str {
+        self.cloud_picker_selection.as_ref().map_or_else(
+            || self.current_model(),
+            |selection| selection.model.as_str(),
+        )
+    }
+
     pub(super) fn refresh_effective_service_tier(&mut self) {
+        if self.thread_settings_owner == ThreadSettingsOwner::Server {
+            self.effective_service_tier
+                .clone_from(&self.config.service_tier);
+            return;
+        }
         self.effective_service_tier = service_tier_resolution::effective_service_tier(
             &self.config,
             &self.local_settings.notices,
-            self.current_model(),
+            self.service_tier_model(),
             &self.model_catalog.try_list_models().unwrap_or_default(),
         );
     }

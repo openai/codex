@@ -413,7 +413,7 @@ pub(crate) struct AppServerSession {
     pub(crate) model_provider_override: Option<String>,
     history_support: ThreadHistorySupport,
     pub(crate) thread_settings_update_supported: bool,
-    cloud_model_selections: HashMap<ThreadId, user_message_submission::CloudModelSelection>,
+    cloud_turn_settings: user_message_submission::PendingCloudTurnSettings,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
     prefetched_model_list: Option<RemoteHandle<Result<Vec<ModelPreset>>>>,
@@ -633,7 +633,7 @@ impl AppServerSession {
             model_provider_override: None,
             history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
-            cloud_model_selections: HashMap::new(),
+            cloud_turn_settings: Default::default(),
             default_model: None,
             available_models: Vec::new(),
             prefetched_model_list: None,
@@ -1865,7 +1865,7 @@ impl AppServerSession {
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         output_schema: Option<serde_json::Value>,
         cyber_access_program: Option<codex_app_server_protocol::CyberAccessProgram>,
-        cloud_selection: Option<&user_message_submission::CloudModelSelection>,
+        cloud_selection: Option<&user_message_submission::CloudTurnSettings>,
     ) -> Result<TurnStartResponse> {
         let mut params = TurnStartParams {
             thread_id: thread_id.to_string(),
@@ -1891,8 +1891,7 @@ impl AppServerSession {
             params.summary = summary;
             params.collaboration_mode = collaboration_mode;
         } else if let Some(selection) = cloud_selection {
-            params.model = Some(selection.model.clone());
-            params.effort.clone_from(&selection.effort);
+            selection.apply(&mut params);
         }
         let request_id = self.next_request_id();
         self.request_handle

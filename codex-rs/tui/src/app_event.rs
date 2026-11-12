@@ -1521,6 +1521,12 @@ pub(crate) enum AppEvent {
         voice: codex_protocol::protocol::RealtimeVoice,
     },
 
+    /// Toggle the service tier staged for the next Cloud submission.
+    ToggleCloudServiceTier {
+        thread_id: ThreadId,
+        tier: String,
+    },
+
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
         service_tier: Option<String>,

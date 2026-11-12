@@ -103,36 +103,44 @@ impl App {
                 );
                 return;
             };
-            if service_tier.is_some()
-                || model == crate::model_catalog::LUNA_RESERVE_MODEL
-                || !self.model_catalog.models.iter().any(|preset| {
-                    preset.model == model
-                        && effort.as_ref().is_none_or(|effort| {
-                            *effort == preset.default_reasoning_effort
-                                || preset
-                                    .supported_reasoning_efforts
-                                    .iter()
-                                    .any(|preset| &preset.effort == effort)
-                        })
-                        && preset.model_specialty.as_deref() != Some(MODEL_SPECIALTY_CYBER)
-                })
-            {
+            let preset = self.model_catalog.models.iter().find(|preset| {
+                preset.model == model
+                    && effort.as_ref().is_none_or(|effort| {
+                        *effort == preset.default_reasoning_effort
+                            || preset
+                                .supported_reasoning_efforts
+                                .iter()
+                                .any(|preset| &preset.effort == effort)
+                    })
+                    && preset.model_specialty.as_deref() != Some(MODEL_SPECIALTY_CYBER)
+            });
+            let Some(preset) = preset.filter(|_| {
+                service_tier.is_none() && model != crate::model_catalog::LUNA_RESERVE_MODEL
+            }) else {
                 self.chat_widget.add_error_message(
                     "Choose a supported Cloud model and effort at the current speed.".into(),
                 );
                 return;
-            }
+            };
             let label = Self::reasoning_label_for(&model, effort.as_ref())
                 .map_or_else(String::new, |label| format!(" {label}"));
             let message =
                 format!("Selected {model}{label} for the next new turn in this conversation");
-            if app_server.stage_cloud_model_selection(thread_id, model, effort) {
-                self.chat_widget.add_info_message(message, /*hint*/ None);
-            } else {
-                self.chat_widget.add_error_message(
+            match app_server.stage_cloud_model_selection(thread_id, preset, effort) {
+                Ok(dropped_tier) => {
+                    self.chat_widget.sync_service_tier_commands();
+                    self.chat_widget.add_info_message(message, /*hint*/ None);
+                    if let Some(tier) = dropped_tier {
+                        let tier = if tier == "priority" { "fast" } else { &tier };
+                        self.chat_widget.add_warning_message(format!(
+                            "{model} does not support {tier} speed. Cleared the pending speed change."
+                        ));
+                    }
+                }
+                Err(()) => self.chat_widget.add_error_message(
                     "The Cloud account changed. Reopen the conversation before choosing a model."
                         .into(),
-                );
+                ),
             }
             return;
         }

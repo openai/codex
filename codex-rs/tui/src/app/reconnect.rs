@@ -327,6 +327,8 @@ impl App {
         search_dir: PathBuf,
     ) {
         self.chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
+        self.chat_widget.thread_settings_owner = app_server.thread_params_mode().settings_owner();
+        self.chat_widget.pending_cloud_turn_settings = app_server.pending_cloud_turn_settings();
         self.chat_widget.set_local_worktree_operations(
             !crate::uses_remote_workspace_or_environment(
                 &self.app_server_target,
