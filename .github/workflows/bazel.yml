@@ -13,12 +13,19 @@ concurrency:
   group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
+env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+
 jobs:
   test:
+    permissions:
+      contents: read
+      id-token: write
     # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
     # pushes to main also run the native Windows test job for broader Windows
     # signal without putting PR latency back on the critical path.
-    timeout-minutes: 30
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -133,8 +140,11 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   test-windows-shard:
+    permissions:
+      contents: read
+      id-token: write
     # Build and test Windows shards on separate Windows runners.
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -159,7 +169,7 @@ jobs:
       - name: Test Bazel command wrapper
         if: matrix.shard == 1
         shell: pwsh
-        run: python .github/scripts/test_run_bazel_with_buildbuddy.py
+        run: python .github/scripts/test_run_bazel.py
 
       - name: Test Windows Bazel target selector
         if: matrix.shard == 1
@@ -255,11 +265,14 @@ jobs:
           fi
 
   test-windows-native-main:
+    permissions:
+      contents: read
+      id-token: write
     # Native Windows Bazel tests are slower and frequently approach the
     # 30-minute PR budget. Run this only for post-merge commits to main and give
     # it a larger timeout. Also allow manual runs for native toolchain changes.
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    timeout-minutes: 40
+    timeout-minutes: 90
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-windows-x64
@@ -341,7 +354,10 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   clippy:
-    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -446,7 +462,10 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   verify-release-build:
-    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

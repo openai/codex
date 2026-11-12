@@ -22,7 +22,7 @@ CANARY_PATH_PATTERNS = {
     ".bazelrc",
     ".github/actions/prepare-bazel-ci/**",
     ".github/actions/setup-ci/**",
-    ".github/scripts/run_bazel_with_buildbuddy.py",
+    ".github/scripts/run_bazel.py",
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
     ".github/scripts/setup-dev-drive.ps1",

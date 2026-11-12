@@ -8,6 +8,10 @@ on:
       - "**full-ci**"
   workflow_dispatch:
 
+env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
@@ -90,6 +94,9 @@ jobs:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
+    permissions:
+      contents: read
+      id-token: write
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 120
@@ -127,6 +134,7 @@ jobs:
       deployment: false
     permissions:
       contents: read
+      id-token: write
     timeout-minutes: 120
     strategy:
       fail-fast: false

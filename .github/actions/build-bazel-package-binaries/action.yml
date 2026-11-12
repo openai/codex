@@ -20,9 +20,9 @@ runs:
     - name: Install Cargo for workspace metadata
       uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
-    - name: Configure MSVC environment
+    - name: Prepare native Windows release dependencies
       if: ${{ runner.os == 'Windows' }}
-      uses: ./.github/actions/setup-msvc-env
+      uses: ./.github/actions/setup-bazel-windows
       with:
         target: ${{ inputs.target }}
 

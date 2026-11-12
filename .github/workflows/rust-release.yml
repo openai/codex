@@ -15,6 +15,8 @@ on:
       - "rust-v*.*.*"
 
 env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
   CODEX_REPO_ROOT: ${{ github.workspace }}
 
 # The launcher uses this per-tag group as the migration boundary. Keep shared
@@ -25,6 +27,12 @@ concurrency:
 
 jobs:
   tag-check:
+    outputs:
+      build-systems: >-
+        ${{ github.repository == 'openai/codex' && github.ref_protected &&
+            vars.CODEX_BAZEL_RELEASES == 'true' &&
+            secrets.CODEX_BAZEL_GCS_BUCKET != '' && secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER != '' &&
+            '["cargo","bazel"]' || '["cargo"]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -59,7 +67,6 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Release Cargo artifacts only while Bazel releases are disabled.
     runs-on: ${{ matrix.runner }}
     environment:
       name: bazel
@@ -83,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(needs.tag-check.outputs.build-systems) }}
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -325,7 +332,6 @@ jobs:
         shell: bash
         env:
           APP_TARGET: ${{ matrix.target }}
-          # Use local Bazel while BuildBuddy credentials are unavailable.
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -335,7 +341,7 @@ jobs:
             x86_64-unknown-linux-gnu) prefix=linux_x86_64 ;;
             *) exit 1 ;;
           esac
-          python3 .github/scripts/run_bazel_with_buildbuddy.py build --config=release \
+          python3 .github/scripts/run_bazel.py build --config=release \
             //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           source="bazel-bin/third_party/voice/native_runtime_${prefix}"
           output="${RUNNER_TEMP}/signed-voice/${APP_TARGET}"
@@ -577,6 +583,7 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -604,13 +611,12 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           PREFIX: ${{ matrix.prefix }}
-          # Use local Bazel while BuildBuddy credentials are unavailable.
         run: |
           set -euo pipefail
           # Release tags bump Cargo.toml without rewriting the workspace lockfile.
           # Refresh workspace versions before Bazel reads the Cargo dependency graph.
           (cd codex-rs && cargo update --workspace)
-          python3 .github/scripts/run_bazel_with_buildbuddy.py build --config=release \
+          python3 .github/scripts/run_bazel.py build --config=release \
             --macos_minimum_os=14.0 //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           runtime="bazel-bin/third_party/voice/native_runtime_${PREFIX}"
           PYTHONPATH=third_party/voice python3 - "$runtime" "$TARGET" <<'PY'
@@ -632,7 +638,7 @@ jobs:
           if-no-files-found: error
 
   sign-macos-binaries:
-    needs: [build, build-macos-voice]
+    needs: [tag-check, build, build-macos-voice]
     if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     runs-on: ubuntu-latest
@@ -650,7 +656,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(needs.tag-check.outputs.build-systems) }}
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -878,7 +884,7 @@ jobs:
           if-no-files-found: warn
 
   package-macos:
-    needs: sign-macos-binaries
+    needs: [tag-check, sign-macos-binaries]
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     runs-on: macos-15-xlarge
     timeout-minutes: 45
@@ -894,7 +900,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(needs.tag-check.outputs.build-systems) }}
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -1165,7 +1171,7 @@ jobs:
           if-no-files-found: error
 
   sign-macos-dmg:
-    needs: package-macos
+    needs: [tag-check, package-macos]
     name: Sign macOS DMG - ${{ matrix.target }} - ${{ matrix.build-system }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1182,7 +1188,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(needs.tag-check.outputs.build-systems) }}
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -1268,6 +1274,7 @@ jobs:
 
   finalize-macos:
     needs:
+      - tag-check
       - package-macos
       - sign-macos-dmg
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
@@ -1285,7 +1292,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(needs.tag-check.outputs.build-systems) }}
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -1533,17 +1540,24 @@ jobs:
   # Keep provisioned packages separate from the legacy CLI/npm/installer layout.
   # Desktop consumes the versioned codex-provisioned manifest from this release.
   provisioned-macos-candidate:
-    needs: finalize-macos
+    needs: [tag-check, finalize-macos]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') && vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/rust-release-provisioned-macos.yml
+    with:
+      build-systems: ${{ needs.tag-check.outputs.build-systems }}
     secrets: inherit
 
   build-windows:
+    permissions:
+      contents: read
+      id-token: write
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      build-systems: ${{ needs.tag-check.outputs.build-systems }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
@@ -1675,7 +1689,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
+          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}{,-bazel},*-symbols{,-bazel},argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
 
       - name: Download verified provisioned macOS packages
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'

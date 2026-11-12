@@ -2,14 +2,20 @@ name: rust-release-windows
 
 on:
   workflow_call:
+    inputs:
+      build-systems:
+        description: Release build systems selected during tag validation, as a JSON array.
+        type: string
+        default: '["cargo"]'
 
 env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
   WINDOWS_BINARIES: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner codex-app-server"
 
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Release Cargo artifacts only while Bazel releases are disabled.
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: bazel
@@ -19,6 +25,7 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         working-directory: codex-rs
@@ -29,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(inputs.build-systems) }}
         target:
           - x86_64-pc-windows-msvc
           - aarch64-pc-windows-msvc
@@ -117,7 +124,14 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Configure MSVC environment
+        if: matrix.build-system == 'cargo'
         uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Prepare native Windows release dependencies
+        if: matrix.build-system == 'bazel'
+        uses: ./.github/actions/setup-bazel-windows
         with:
           target: ${{ matrix.target }}
 
@@ -182,6 +196,7 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -250,7 +265,6 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
-          # Use local Bazel while BuildBuddy credentials are unavailable.
         run: |
           (cd codex-rs && cargo update --workspace)
           python .github/scripts/watch_voice_bazel.py "$(cygpath -w "$BASH")" ./.github/scripts/run-bazel-ci.sh \
@@ -318,7 +332,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(inputs.build-systems) }}
         target:
           - aarch64-pc-windows-msvc
           - x86_64-pc-windows-msvc
@@ -382,7 +396,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(inputs.build-systems) }}
         target:
           - x86_64-pc-windows-msvc
           - aarch64-pc-windows-msvc

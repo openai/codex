@@ -10,11 +10,17 @@ jobs:
   # Keep reusable workflow calls alphabetized. Each child retains its own
   # workflow_dispatch trigger so maintainers can rerun flaky suites directly.
   rust-ci-full:
+    permissions:
+      contents: read
+      id-token: write
     name: rust-ci-full
     uses: ./.github/workflows/rust-ci-full.yml
     secrets: inherit
 
   v8-canary:
+    permissions:
+      contents: read
+      id-token: write
     name: v8-canary
     uses: ./.github/workflows/v8-canary.yml
     secrets: inherit

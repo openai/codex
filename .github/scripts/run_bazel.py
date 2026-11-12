@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
 from collections.abc import Sequence
+from pathlib import Path
 
 
 # These configs select remote execution, which is unavailable on CI runners.
@@ -92,6 +94,41 @@ def bazel_args_with_remote_config(
             arg.startswith(option_prefix) for arg in configured_args[:separator_idx]
         )
     ]
+    # Ephemeral runners already retain active outputs in Bazel's output tree.
+    # Avoid storing a second copy while using the GCS action cache.
+    if env.get("GITHUB_ACTIONS") == "true":
+        cache_args.append("--disk_cache=")
+    bucket = env.get("CODEX_BAZEL_GCS_BUCKET")
+    credentials = env.get("CODEX_BAZEL_GCS_CREDENTIALS")
+    if (
+        bucket
+        and credentials
+        and args[command_idx] in {"build", "test", "run", "coverage"}
+    ):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]", bucket):
+            raise ValueError("Expected a GCS bucket name")
+        if not Path(credentials).is_absolute() or not Path(credentials).is_file():
+            raise ValueError(
+                "Missing GitHub workload identity credentials for the GCS cache"
+            )
+        cache_args.extend(
+            (
+                f"--remote_cache=https://storage.googleapis.com/{bucket}",
+                f"--google_credentials={credentials}",
+            )
+        )
+        # Bound HTTP socket pressure on macOS runners while reusing the GCS cache.
+        if env.get("RUNNER_OS") == "macOS" and not any(
+            arg == "--remote_max_connections"
+            or arg.startswith("--remote_max_connections=")
+            for arg in configured_args[:separator_idx]
+        ):
+            cache_args.append("--remote_max_connections=20")
+        if (
+            env.get("GITHUB_EVENT_NAME") != "push"
+            or env.get("GITHUB_REF") != "refs/heads/main"
+        ):
+            cache_args.append("--remote_upload_local_results=false")
     return [
         *configured_args[:separator_idx],
         *cache_args,

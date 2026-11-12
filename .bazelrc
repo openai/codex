@@ -64,9 +64,7 @@ common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
 
-# Opt-in remote configurations selected by
-# `.github/scripts/run_bazel_with_buildbuddy.py`. Plain Bazel commands do not
-# contact BuildBuddy unless a user selects one of these configurations.
+# These configurations are available for explicit use on the command line.
 # Use the generic host for cache, BES, and downloads without remote execution.
 common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
 common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/

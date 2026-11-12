@@ -11,9 +11,23 @@ jobs:
   # Keep reusable workflow calls alphabetized. The `required` job below is the
   # version-controlled list that the main-branch ruleset should require.
   bazel:
+    permissions:
+      contents: read
+      id-token: write
     name: Bazel
     uses: ./.github/workflows/bazel.yml
     secrets: inherit
+
+  bazel-result:
+    name: Bazel result
+    needs: bazel
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the Bazel workflow to succeed
+        env:
+          BAZEL_RESULT: ${{ needs.bazel.result }}
+        run: test "$BAZEL_RESULT" = success
 
   blob-size-policy:
     name: Blob size policy
@@ -36,11 +50,17 @@ jobs:
     secrets: inherit
 
   rust-ci:
+    permissions:
+      contents: read
+      id-token: write
     name: rust-ci
     uses: ./.github/workflows/rust-ci.yml
     secrets: inherit
 
   sdk:
+    permissions:
+      contents: read
+      id-token: write
     name: sdk
     uses: ./.github/workflows/sdk.yml
     secrets: inherit
@@ -50,8 +70,6 @@ jobs:
     # Without `always()`, GitHub skips this job after a failed dependency and a
     # required check can appear successful instead of reporting the failure.
     if: ${{ always() }}
-    # Bazel is advisory while the BuildBuddy key is revoked. Restore its dependency
-    # once the suite can run without BuildBuddy.
     needs:
       - blob-size-policy
       - cargo-deny

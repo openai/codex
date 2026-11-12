@@ -3,6 +3,10 @@ on:
   workflow_call:
   workflow_dispatch:
 
+env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+
 jobs:
   # --- Detect changed paths so the fast PR workflow only runs relevant jobs ---
   changed:
@@ -162,9 +166,11 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   argument_comment_lint_prebuilt:
+    permissions:
+      contents: read
+      id-token: write
     name: Argument comment lint - ${{ matrix.name }}
-    # This job runs through Bazel and is advisory while the BuildBuddy key is
-    # revoked. Restore blocking behavior once it can run without BuildBuddy.
+    # Keep this Bazel job advisory until the public build and cache rollout is verified.
     continue-on-error: true
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}

@@ -12,7 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from run_bazel_with_buildbuddy import bazel_command
+from run_bazel import bazel_command
 from rusty_v8_module_bazel import (
     RustyV8ChecksumError,
     check_module_bazel,

@@ -1,5 +1,5 @@
 <#
-BuildBuddy cache keys include the action and test environment, so Bazel should
+Bazel action cache keys include the action and test environment, so Bazel should
 not inherit the full hosted-runner PATH on Windows. That PATH includes volatile
 tool entries, such as Maven, that can change independently of this repo and
 cause avoidable cache misses.

@@ -24,6 +24,58 @@ runs:
     - id: setup_ci
       uses: ./.github/actions/setup-ci
 
+    - name: Authenticate the Bazel cache
+      id: gcs
+      if: >-
+        github.repository == 'openai/codex' && github.ref_protected &&
+        env.CODEX_BAZEL_GCS_BUCKET != '' && env.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER != '' &&
+        ((github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
+         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v')))
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ env.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+        export_environment_variables: false
+
+    - name: Configure Bazel cache credentials
+      if: ${{ always() && steps.gcs.outcome != 'skipped' }}
+      shell: bash
+      env:
+        CREDENTIALS_FILE: ${{ steps.gcs.outputs.credentials_file_path }}
+        AUTH_OUTCOME: ${{ steps.gcs.outcome }}
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          bazel_python=python
+        else
+          bazel_python=python3
+        fi
+        "$bazel_python" - <<'PYTHON'
+        import os
+        from pathlib import Path
+        import shutil
+
+        # auth creates the file in the checkout before it tests the token exchange.
+        # Keep it out of Bazel inputs, even when authentication failed.
+        if os.environ["CREDENTIALS_FILE"]:
+            source = Path(os.environ["CREDENTIALS_FILE"])
+            credentials = Path(os.environ["RUNNER_TEMP"]) / source.name
+            shutil.move(source, credentials)
+            credentials.chmod(0o600)
+            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+                print(f"GOOGLE_GHA_CREDS_PATH={credentials}", file=env)  # auth post-job cleanup
+                if os.environ["AUTH_OUTCOME"] == "success":
+                    print(f"CODEX_BAZEL_GCS_CREDENTIALS={credentials}", file=env)
+                    print("Bazel GCS cache credentials configured.")
+                else:
+                    print("Bazel GCS cache authentication failed. Credentials were moved for cleanup.")
+        else:
+            print("Bazel GCS authentication did not produce a credentials file.")
+        PYTHON
+
+    - name: Report skipped Bazel cache authentication
+      if: ${{ steps.gcs.outcome == 'skipped' }}
+      shell: bash
+      run: echo "Bazel GCS authentication skipped. Cache configuration is missing or this event is outside the allowed cache access policy."
+
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
       # Without an explicit Bazelisk version, setup-bazel leaves PATH unchanged

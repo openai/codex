@@ -20,7 +20,7 @@ The workflows in this directory are split so that pull requests get fast, review
 ## Post-Merge On `main`
 
 - `bazel.yml` also runs on pushes to `main`.
-  This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
+  This re-verifies the merged Bazel path and populates the public GCS cache.
 - `rust-ci-full.yml` is the full Cargo-native verification workflow.
   It keeps the heavier checks off the PR path while still validating them after merge:
   - the full Cargo `clippy` matrix
@@ -35,3 +35,21 @@ The workflows in this directory are split so that pull requests get fast, review
 - If a build/test/clippy check can be expressed in Bazel, prefer putting the PR-time version in `bazel.yml`.
 - Keep `rust-ci.yml` fast enough that it usually does not dominate PR latency.
 - Reserve `rust-ci-full.yml` for heavyweight Cargo-native coverage that Bazel does not replace yet.
+
+### Public Bazel action cache
+
+Set `CODEX_BAZEL_GCS_BUCKET` and `CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER`
+as GitHub Actions secrets in `openai/codex`. They identify the bucket and its
+GitHub OIDC provider. The job exchanges its identity for temporary Google
+credentials. Protected main pushes populate the cache. Protected main
+dispatches and Rust release tags can read it. Pull requests build without
+GCS credentials.
+
+After a main push populates the cache and a separate runner reports a remote
+cache hit, set the repository variable `CODEX_BAZEL_RELEASES` to `true` to
+build the additional Bazel artifacts on Rust release tags. The release
+workflow selects one build-system matrix for the build, signing, and
+packaging jobs. Cargo artifacts remain the default.
+
+Once public Bazel CI passes, require the `Bazel result` check in the main
+branch ruleset. It reports the result of the full Bazel workflow.

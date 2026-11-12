@@ -1,4 +1,4 @@
-# Verified Cargo side packages, published by rust-release.yml when enabled.
+# Verified side packages, published by rust-release.yml when enabled.
 # The legacy CLI, npm, installer and DMG packages are unchanged.
 # Required secrets in the codesigning environment:
 # - CODEX_CLI_PROVISIONING_PROFILE_BASE64: profile approved for public distribution.
@@ -11,6 +11,11 @@ name: Provisioned macOS CLI candidate
 
 on:
   workflow_call:
+    inputs:
+      build-systems:
+        description: Release build systems selected during tag validation, as a JSON array.
+        type: string
+        default: '["cargo"]'
 
 permissions:
   contents: read
@@ -32,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(inputs.build-systems) }}
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     env:
       TARGET: ${{ matrix.target }}
@@ -131,7 +136,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
+        build-system: ${{ fromJSON(inputs.build-systems) }}
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
         include:
           - target: aarch64-apple-darwin
