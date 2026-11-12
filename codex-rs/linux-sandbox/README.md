@@ -29,7 +29,8 @@ commands that would enter the bubblewrap path.
 
 **Current Behavior**
 
-- Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
+- Legacy `sandbox_mode` configs remain supported and are converted to
+  `PermissionProfile` before sandbox execution.
 - Bubblewrap is the default filesystem sandbox.
 - If `bwrap` is present on `PATH` outside the current working directory, the
   helper uses it.
@@ -47,9 +48,8 @@ commands that would enter the bubblewrap path.
 - Filesystem-restricted execution requires bubblewrap. The legacy Landlock
   option is rejected for these policies because it cannot isolate app-server
   Unix sockets. Disable `features.use_legacy_landlock` when upgrading.
-- Split-only filesystem policies that do not round-trip through the legacy
-  `SandboxPolicy` model stay on bubblewrap so nested read-only or denied
-  carveouts are preserved.
+- Bubblewrap preserves nested read-only and denied filesystem rules from
+  `PermissionProfile`.
 - When bubblewrap is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp filter in-process after establishing the filesystem view. Restricted
   network policies block network syscalls; filesystem-restricted policies with

@@ -1,8 +1,10 @@
 use super::agent;
 use crate::memory_root;
 use codex_model_provider::create_model_provider;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
@@ -60,13 +62,15 @@ async fn consolidation_rebinds_workspace_roots_to_memory_root() -> anyhow::Resul
             (&root, &vec![root.clone()], [root.clone()].as_slice(), true),
         );
         assert_eq!(
-            agent_config.legacy_sandbox_policy(),
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access: false,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            }
+            agent_config.permissions.permission_profile(),
+            &PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::workspace_write(
+                    std::slice::from_ref(&root),
+                    /*exclude_tmpdir_env_var*/ true,
+                    /*exclude_slash_tmp*/ true,
+                ),
+                NetworkSandboxPolicy::Restricted,
+            )
         );
         let filesystem = agent_config.permissions.file_system_sandbox_policy();
         assert!(filesystem.can_write_local_path_with_cwd(root.join("memory.md").as_path(), &root));

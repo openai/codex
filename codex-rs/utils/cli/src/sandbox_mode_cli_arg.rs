@@ -1,8 +1,7 @@
 //! Standard type to use with the `--sandbox` (`-s`) CLI option.
 //!
-//! This mirrors the variants of [`codex_protocol::protocol::SandboxPolicy`], but
-//! without any of the associated data so it can be expressed as a simple flag
-//! on the command-line. Users that need to tweak the advanced options for
+//! This mirrors [`codex_protocol::config_types::SandboxMode`] so built-in modes
+//! can be expressed as a simple flag on the command line. Users that need to tweak the advanced options for
 //! `workspace-write` can continue to do so via `-c` overrides or their
 //! `config.toml`.
 
