@@ -195,7 +195,12 @@ fn zero_width_fragments_do_not_style_the_ellipsis_or_add_row_gaps() {
         let node = tree(json!({"type":"text","children":children}));
         let expected = Buffer::with_lines([expected]);
         let mut buf = Buffer::empty(expected.area);
-        node.render(buf.area, &Theme::default(), &mut buf);
+        node.render(
+            buf.area,
+            &Theme::default(),
+            &mut buf,
+            /*plain_style*/ None,
+        );
         assert_eq!(buf, expected);
     }
 }
@@ -421,7 +426,7 @@ fn paint_semantic_samples() -> String {
                 .fg(TerminalColor::Yellow)
                 .bg(TerminalColor::Blue),
         );
-        node.render(area, &theme, &mut buffer);
+        node.render(area, &theme, &mut buffer, /*plain_style*/ None);
         samples.push(format!("{buffer:?}"));
     }
     samples.join("\n")
@@ -504,7 +509,7 @@ fn collapsed_space_keeps_the_first_whitespace_owners_link() {
 fn painted_rows(node: &PreparedUiTree, bounds: Size) -> Vec<String> {
     let area = Rect::from((ratatui::layout::Position::ORIGIN, bounds));
     let mut buf = Buffer::empty(area);
-    node.render(area, &Theme::default(), &mut buf);
+    node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
     (0..node.measure(bounds).height)
         .map(|y| {
             let mut text = String::new();
@@ -663,7 +668,12 @@ fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
         /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 4,
     );
     let mut buffer = Buffer::empty(area);
-    node.render(area, &Theme::default(), &mut buffer);
+    node.render(
+        area,
+        &Theme::default(),
+        &mut buffer,
+        /*plain_style*/ None,
+    );
     for (x, g) in "PR #42".chars().enumerate() {
         assert_eq!(
             buffer[(x as u16, 3)].symbol(),

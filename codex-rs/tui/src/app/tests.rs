@@ -5655,6 +5655,119 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 }
 
 #[tokio::test]
+async fn split_status_lines_reflow_across_focus_switches() -> Result<()> {
+    use crate::bottom_pane::StatusLineItem;
+    use ratatui::style::Modifier;
+    use ratatui::text::Line;
+
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let primary = server.start_thread(&app.config).await?;
+    let main = primary.session.thread_id;
+    app.enqueue_primary_thread_session(primary.session, primary.turns)
+        .await?;
+    let side = ThreadId::new();
+    let channel = ThreadEventChannel::new(/*capacity*/ 1);
+    channel.store.lock().await.set_session(
+        test_thread_session(side, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    );
+    app.thread_event_channels.insert(side, channel);
+    app.side_threads.insert(side, SideThreadState::new(main));
+    app.sidebar_mut().show(
+        sidebar::SidebarContent::Chat(side),
+        sidebar::PaneFocus::Main,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+
+    let main_status = "MainStatusSummaryForThePrimaryWorkspaceContext MainStatusDetailsForThePrimaryWorkspaceContext";
+    let side_status = "SideStatusSummaryText SideStatusDetails";
+    let mut frames = Vec::new();
+    for (index, (focused, width, height)) in [
+        (main, 100, 24),
+        (side, 100, 24),
+        (main, 100, 24),
+        (main, 130, 24),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if app.current_displayed_thread_id() != Some(focused) {
+            app.select_agent_thread(&mut tui, &mut server, focused)
+                .await?;
+            drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+        }
+        assert_eq!(app.current_displayed_thread_id(), Some(focused));
+        enable_side_retention(&mut app)?;
+        app.local_settings.tui.animations = false;
+        let size = Size::new(width, height);
+        // Resize refreshes the active native status, so install the fixture after reflow.
+        side_frame(&mut app, &mut tui, size)?;
+        let (name, draft, status) = if focused == main {
+            ("Main", "main draft", main_status)
+        } else {
+            ("Side", "side draft", side_status)
+        };
+        app.chat_widget.setup_status_line(
+            vec![StatusLineItem::ModelName],
+            /*use_theme_colors*/ false,
+        );
+        app.chat_widget
+            .set_status_line(Some(Line::from(status).into()));
+        app.chat_widget.apply_external_edit(draft.into());
+        if index == 0 {
+            // Seed the main conversation before focusing the side chat.
+            continue;
+        }
+
+        let frame = side_frame(&mut app, &mut tui, size)?;
+        assert!(
+            frame.contains("main draft") && frame.contains("side draft"),
+            "{frame}"
+        );
+        let divider = app.conversation_frame.divider_area().expect("split pane");
+        let buffer = tui.terminal.previous_buffer();
+        let mut rows = vec![format!("{name} focused at {width}x{height}")];
+        for (prefix, start, end) in [
+            ("MainStatus", 0, divider.x),
+            ("SideStatus", divider.right(), width),
+        ] {
+            for y in 0..height {
+                let text: String = (start..end).map(|x| buffer[(x, y)].symbol()).collect();
+                if text.trim_start().starts_with(prefix) {
+                    let muted = buffer[(start + 2, y)].modifier.contains(Modifier::DIM);
+                    let style = if muted { "muted" } else { "normal" };
+                    rows.push(format!("{style} {}", text.trim()));
+                }
+            }
+        }
+        frames.push(rows.join("\n"));
+    }
+    insta::assert_snapshot!(frames.join("\n\n"), @"
+    Side focused at 100x24
+    muted MainStatusSummaryForThePrimaryWorkspaceContext
+    muted MainStatusDetailsForThePrimaryWorkspaceContext
+    normal SideStatusSummaryText
+    normal SideStatusDetails
+
+    Main focused at 100x24
+    normal MainStatusSummaryForThePrimaryWorkspaceContext
+    normal MainStatusDetailsForThePrimaryWorkspaceContext
+    muted SideStatusSummaryText
+    muted SideStatusDetails
+
+    Main focused at 130x24
+    normal MainStatusSummaryForThePrimaryWorkspaceContext
+    normal MainStatusDetailsForThePrimaryWorkspaceContext
+    muted SideStatusSummaryText SideStatusDetails
+    ");
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn side_close_key_cannot_accept_a_replacing_approval() -> Result<()> {
     let mut app = make_test_app().await;
     enable_side_retention(&mut app)?;

@@ -266,7 +266,7 @@ fn status_rows_respect_host_budget_and_yield_to_the_draft() {
 }
 
 #[test]
-fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
+fn sidebar_focus_keeps_dim_extension_status_rows() {
     let mut composer = composer();
     composer.insert_str("draft");
     let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree\nfour""#.parse().unwrap();
@@ -283,6 +283,15 @@ fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
         if unfocused {
             assert_eq!(composer.footer.warning_notice_area.get(), None);
             assert!(!buffer.content.iter().any(|cell| cell.symbol() == "⚠"));
+            let status =
+                inset_footer_hint_area(composer.layout_with_options(buffer.area, options).status);
+            for y in status.y..status.bottom() {
+                assert!(
+                    buffer[(status.x, y)]
+                        .modifier
+                        .contains(ratatui::style::Modifier::DIM)
+                );
+            }
         }
         rows.join("\n")
     });
@@ -292,7 +301,9 @@ fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
     three
     four
     ---
-    one…
+    one
+    two
+    three…
     ---
     one
     two

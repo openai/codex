@@ -57,7 +57,7 @@ impl SideCompanion {
                 active: None,
                 auxiliary: Vec::new(),
                 draft: Box::default(),
-                status: None,
+                status_line: None,
                 work: None,
                 last_completed_agent_message: None,
                 cwd,

@@ -317,7 +317,7 @@ pub(crate) struct CapturedSideDisplay {
     pub(crate) active: Option<Box<dyn HistoryCell>>,
     pub(crate) auxiliary: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     pub(crate) draft: Box<crate::bottom_pane::TextArea>,
-    pub(crate) status: Option<String>,
+    pub(crate) status_line: Option<crate::bottom_pane::footer_content::FooterContent>,
     pub(crate) work: Option<CapturedSideWork>,
     pub(crate) last_completed_agent_message: Option<(String, String)>,
     pub(crate) cwd: AbsolutePathBuf,

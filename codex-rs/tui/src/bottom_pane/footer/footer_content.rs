@@ -1,22 +1,28 @@
 //! Native and extension status content measured and painted inside the status rectangle.
 
-use crate::line_truncation::line_width;
+use crate::line_truncation::truncate_line_with_ellipsis;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Line;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::render::highlight::with_syntax_theme;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::ui_tree::PreparedUiTree;
 use crate::ui_tree::UiTree;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusLineFocus {
+    Focused,
+    Unfocused,
+}
 
 /// Owned status content displayed below the composer.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FooterContent {
-    Line(Line<'static>),
-    HyperlinkLine(HyperlinkLine),
+    HyperlinkLine(Box<HyperlinkLine>),
     Extension { content: Arc<PreparedUiTree> },
 }
 
@@ -29,50 +35,48 @@ impl From<UiTree> for FooterContent {
 }
 
 impl FooterContent {
-    pub(crate) fn native_parts(&self) -> Option<(&Line<'static>, &[TerminalHyperlink])> {
-        match self {
-            Self::Line(line) => Some((line, &[])),
-            Self::HyperlinkLine(line) => Some((&line.line, &line.hyperlinks)),
-            Self::Extension { .. } => None,
-        }
-    }
-
     /// Natural display width in terminal cells.
     pub(crate) fn width(&self) -> u16 {
         let width = match self {
-            Self::Line(line) => line_width(line),
             Self::HyperlinkLine(line) => line.width(),
             Self::Extension { content } => return content.measure_natural().width,
         };
         u16::try_from(width).unwrap_or(u16::MAX)
     }
 
-    /// Paint only inside the final area supplied by the parent.
-    pub(crate) fn render(self, area: Rect, buf: &mut Buffer) {
+    /// Paint a focused preview in its allotted rectangle.
+    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_with_focus(area, buf, StatusLineFocus::Focused);
+    }
+
+    pub(in crate::bottom_pane) fn render_with_focus(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        focus: StatusLineFocus,
+    ) {
         match self {
             Self::Extension { content } => {
-                with_syntax_theme(|theme| content.render(area, theme, buf));
+                let plain_style =
+                    (focus == StatusLineFocus::Unfocused).then(|| Style::reset().dim());
+                with_syntax_theme(|theme| content.render(area, theme, buf, plain_style));
             }
-            native => {
-                let line = native.into_hyperlink_line();
-                let area = Rect {
+            Self::HyperlinkLine(line) => render_status_row(
+                line,
+                Rect {
                     height: area.height.min(1),
                     ..area
-                };
-                let width = usize::from(area.width);
-                if line.width() > width {
-                    line.render_with_ellipsis(area, buf);
-                } else {
-                    line.render_fitted(area, buf);
-                }
-            }
+                },
+                buf,
+                focus,
+                /*more_rows*/ false,
+            ),
         }
     }
 
     pub(crate) fn into_hyperlink_line(self) -> HyperlinkLine {
         match self {
-            Self::Line(line) => line.into(),
-            Self::HyperlinkLine(line) => line,
+            Self::HyperlinkLine(line) => *line,
             Self::Extension { content } => {
                 with_syntax_theme(|theme| content.render_line(u16::MAX, theme))
             }
@@ -80,21 +84,49 @@ impl FooterContent {
     }
 }
 
+pub(in crate::bottom_pane) fn render_status_row(
+    line: &HyperlinkLine,
+    area: Rect,
+    buf: &mut Buffer,
+    focus: StatusLineFocus,
+    more_rows: bool,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let mut line = Cow::Borrowed(line);
+    let width = usize::from(area.width);
+    if more_rows || line.width() > width {
+        let line = line.to_mut();
+        line.line = truncate_line_with_ellipsis(std::mem::take(&mut line.line), width);
+        line.clip_hyperlinks_to_width(line.width().saturating_sub(1));
+    }
+    if focus == StatusLineFocus::Unfocused {
+        let line = line.to_mut();
+        line.hyperlinks.clear();
+        line.line.style = Style::reset().dim();
+        for span in &mut line.line.spans {
+            span.style = Style::default();
+        }
+    }
+    line.render_fitted(area, buf);
+}
+
 impl From<HyperlinkLine> for FooterContent {
     fn from(line: HyperlinkLine) -> Self {
-        Self::HyperlinkLine(line)
+        Self::HyperlinkLine(Box::new(line))
     }
 }
 
 impl From<Line<'static>> for FooterContent {
     fn from(line: Line<'static>) -> Self {
-        Self::Line(line)
+        Self::from(HyperlinkLine::from(line))
     }
 }
 
 impl From<&'static str> for FooterContent {
     fn from(text: &'static str) -> Self {
-        Self::Line(Line::from(text))
+        Self::from(Line::from(text))
     }
 }
 

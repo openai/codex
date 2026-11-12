@@ -3,6 +3,7 @@
 //! Shortcut help grows above the input, preserving status and close rows below it even when clipped.
 
 use super::*;
+use crate::bottom_pane::footer_content::StatusLineFocus;
 
 use std::borrow::Cow;
 
@@ -14,8 +15,7 @@ impl ChatComposer {
         if matches!(status_line, Some(FooterContent::Extension { .. })) {
             self.effort_status_line_transition = None;
         }
-        self.footer.measured_status_line.set(None);
-        self.footer.wrapped_native_status.take();
+        self.footer.status_layout = Default::default();
         self.footer.status_line_value = status_line;
         true
     }
@@ -42,40 +42,18 @@ impl ChatComposer {
         available: u16,
         options: ComposerRenderOptions<'_>,
     ) -> u16 {
-        // The unfocused composer paints only the raw status, as one dim line.
-        let (available, status) = if options.unfocused {
-            let raw = self
-                .status_line_content()
-                .filter(|_| self.footer.status_line_enabled);
-            (available.min(1), raw.map(Cow::Borrowed))
-        } else {
-            (available, self.status_surface_content())
-        };
-        let bounds = inset_footer_hint_area(Rect::new(0, 0, width, available)).as_size();
-        if bounds.width == 0 || bounds.height == 0 {
-            return 0;
-        }
-        match status.as_deref() {
-            Some(FooterContent::Extension { content }) => {
-                let cache = &self.footer.measured_status_line;
-                if let Some((previous, height)) = cache.get()
-                    && previous == bounds
-                {
-                    return height;
-                }
-                let height = content.measure(bounds).height;
-                cache.set(Some((bounds, height)));
-                height
-            }
-            Some(native) if bounds.height > 1 && self.active_status_transition().is_none() => self
-                .wrapped_native_status(native, bounds.width)
-                .map_or_else(
-                    || u16::from(native.width() > 0),
-                    |rows| rows.height().min(bounds.height),
-                ),
-            Some(line) => u16::from(line.width() > 0),
-            None => 0,
-        }
+        let focus = options.status_line_focus();
+        let available =
+            if focus == StatusLineFocus::Focused && self.active_status_transition().is_some() {
+                available.min(1)
+            } else {
+                available
+            };
+        self.footer.status_layout.height(
+            self.status_surface_content(focus).as_deref(),
+            width,
+            available,
+        )
     }
 
     pub(super) fn hint_footer_props(&self) -> FooterProps {
@@ -88,13 +66,17 @@ impl ChatComposer {
         props
     }
 
-    pub(super) fn status_surface_content(&self) -> Option<Cow<'_, FooterContent>> {
+    pub(super) fn status_surface_content(
+        &self,
+        focus: StatusLineFocus,
+    ) -> Option<Cow<'_, FooterContent>> {
         if !self.footer.status_line_enabled {
             return None;
         }
         let status = self.footer.status_line_value.as_ref();
         if matches!(status, Some(FooterContent::Extension { .. }))
             || self.footer.active_agent_label.is_none()
+            || focus == StatusLineFocus::Unfocused
         {
             return status.map(Cow::Borrowed);
         }
@@ -120,36 +102,33 @@ impl ChatComposer {
         if area.is_empty() {
             return;
         }
-        if options.unfocused {
-            if let Some(content) = self.status_line_content() {
-                crate::bottom_pane::footer::render_unfocused_status(
-                    content.clone().into_hyperlink_line().line.to_string(),
-                    area,
-                    buf,
-                );
-            }
-            return;
-        }
-        let area = inset_footer_hint_area(area);
-        let line = self.status_surface_content();
-        if let Some(transition) = self.active_status_transition() {
-            if let Some(frame) = transition.render_line(
-                line.map(|line| line.into_owned().into_hyperlink_line()),
-                area.width,
-            ) {
-                FooterContent::HyperlinkLine(frame).render(area, buf);
-            }
+        let focus = options.status_line_focus();
+        let mut content = self.status_surface_content(focus);
+        if focus == StatusLineFocus::Focused
+            && let Some(transition) = self.active_status_transition()
+        {
+            content = transition
+                .render_line(
+                    content.map(|line| line.into_owned().into_hyperlink_line()),
+                    inset_footer_hint_area(area).width,
+                )
+                .map(|frame| Cow::Owned(frame.into()));
             if let Some(requester) = &self.frame_requester {
                 requester.schedule_frame_in(EFFORT_STATUS_LINE_FRAME_TICK);
             }
-        } else if let Some(line) = line {
-            if area.height > 1
-                && let Some(wrapped) = self.wrapped_native_status(&line, area.width)
-            {
-                wrapped.render(area, buf);
-            } else {
-                line.into_owned().render(area, buf);
-            }
+        }
+        self.footer
+            .status_layout
+            .render(content.as_deref(), area, buf, focus);
+    }
+}
+
+impl ComposerRenderOptions<'_> {
+    fn status_line_focus(self) -> StatusLineFocus {
+        if self.unfocused {
+            StatusLineFocus::Unfocused
+        } else {
+            StatusLineFocus::Focused
         }
     }
 }

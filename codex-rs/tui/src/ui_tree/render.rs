@@ -21,6 +21,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::text::Span;
 use std::ops::Range;
 use syntect::highlighting::Theme;
@@ -52,7 +53,14 @@ impl PreparedUiTree {
         layout(self.0.as_ref(), bounds, /*draw*/ None)
     }
 
-    pub(crate) fn render(&self, area: Rect, theme: &Theme, buf: &mut Buffer) {
+    /// A plain style paints the same layout with theme styling and hyperlinks suppressed.
+    pub(crate) fn render(
+        &self,
+        area: Rect,
+        theme: &Theme,
+        buf: &mut Buffer,
+        plain_style: Option<Style>,
+    ) {
         let area = area.intersection(buf.area);
         let mut theme = RenderTheme::new(theme);
         layout(
@@ -61,8 +69,15 @@ impl PreparedUiTree {
             Some(&mut |row, col, text, cells, paint| {
                 let x = area.x + col as u16;
                 let y = area.y + row as u16;
-                buf.set_string(x, y, text, paint.style(&mut theme));
-                if let Some(href) = &paint.href {
+                buf.set_string(
+                    x,
+                    y,
+                    text,
+                    plain_style.unwrap_or_else(|| paint.style(&mut theme)),
+                );
+                if plain_style.is_none()
+                    && let Some(href) = &paint.href
+                {
                     mark_hyperlink_cells(buf, Rect::new(x, y, cells as u16, 1), href);
                 }
             }),

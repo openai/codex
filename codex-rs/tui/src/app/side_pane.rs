@@ -7,7 +7,9 @@ use super::sidebar;
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::sidebar::SidebarLayout;
-use crate::bottom_pane::render_unfocused_status;
+use crate::bottom_pane::FooterLayout;
+use crate::bottom_pane::StatusLine;
+use crate::bottom_pane::footer_content::StatusLineFocus;
 use crate::custom_terminal::Frame;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
@@ -428,6 +430,13 @@ impl App {
     }
 }
 
+/// Allow up to two-thirds of the pane, or eight rows on short panes when they fit.
+pub(super) fn composer_height_limit(pane_height: u16) -> u16 {
+    ((u32::from(pane_height) * 2 / 3) as u16)
+        .max(8)
+        .min(pane_height)
+}
+
 impl SidePaneLayout {
     /// Paint the divider, retained transcript and draft without claiming the terminal cursor.
     pub(super) fn paint_companion(
@@ -440,11 +449,19 @@ impl SidePaneLayout {
         companion.flush_answer();
         let area = self.passive;
         // Keep the live composer's bottom hint row blank on the inactive side.
-        let available = area.height.saturating_sub(1);
-        let composer_height = available.min(3);
-        let status_height =
-            u16::from(companion.display.status.is_some() && available > composer_height);
-        let above = available - composer_height - status_height;
+        let hint_rows = 1;
+        let composer_height = area.height.saturating_sub(hint_rows).min(3);
+        let available = area.height - composer_height;
+        let footer = FooterLayout::new(
+            Some(composer_height_limit(area.height)),
+            hint_rows,
+            /*priority_hint_rows*/ hint_rows,
+        );
+        let status = companion.display.status_line.as_ref();
+        let status_line = StatusLine::default();
+        let wanted_status = status_line.height(status, area.width, footer.status_budget(available));
+        let footer = footer.allocate(available, wanted_status);
+        let above = available - footer.height();
         let mut transcript = Rect {
             height: above.saturating_sub(1),
             ..area
@@ -495,17 +512,12 @@ impl SidePaneLayout {
                 &mut Default::default(),
             );
         }
-        if let Some(status) = &companion.display.status {
-            render_unfocused_status(
-                status.clone(),
-                Rect {
-                    y: composer.bottom(),
-                    height: status_height,
-                    ..area
-                },
-                frame.buffer,
-            );
-        }
+        status_line.render(
+            status,
+            footer.status_area(area),
+            frame.buffer,
+            StatusLineFocus::Unfocused,
+        );
     }
 }
 

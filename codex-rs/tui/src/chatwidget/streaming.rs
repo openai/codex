@@ -269,7 +269,7 @@ impl ChatWidget {
                 draft.set_text_with_elements(&snapshot.text, &snapshot.text_elements);
                 draft
             },
-            status: self.status_line_text(),
+            status_line: self.status_line_content().cloned(),
             work: self
                 .last_turn_id()
                 .filter(|_| self.is_agent_turn_running())

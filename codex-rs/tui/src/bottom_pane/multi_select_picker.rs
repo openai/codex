@@ -621,7 +621,7 @@ impl Renderable for MultiSelectPicker {
                 Layout::vertical([Constraint::Length(1), Constraint::Length(hint_height)])
                     .areas(footer_area);
             let preview_area = preview_area.inset(Insets::vh(/*v*/ 0, /*h*/ 2));
-            preview_line.clone().render(preview_area, buf);
+            preview_line.render(preview_area, buf);
             hint_area
         } else {
             footer_area
@@ -711,9 +711,7 @@ impl MultiSelectPickerBuilder {
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
     {
-        self.on_preview_content(move |items| {
-            callback(items).map(|line| FooterContent::HyperlinkLine(line.into()))
-        })
+        self.on_preview_content(move |items| callback(items).map(FooterContent::from))
     }
 
     pub(crate) fn on_preview_content(

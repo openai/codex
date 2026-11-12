@@ -380,6 +380,7 @@ use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use super::voice_strip::VoiceStrip;
 use crate::bottom_pane::footer_content::FooterContent;
+use crate::bottom_pane::footer_content::StatusLineFocus;
 use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
@@ -401,7 +402,7 @@ use codex_protocol::user_input::TextElement;
 mod agents_navigation;
 mod attachment_state;
 mod completion_target;
-mod composer_layout;
+pub(super) mod composer_layout;
 mod draft_state;
 mod footer_state;
 mod history_search;
@@ -413,7 +414,6 @@ mod paste_input;
 mod popup_state;
 mod reconnect;
 pub(crate) use reconnect::RestrictedInputMode;
-mod native_status;
 mod slash_input;
 mod sparkle;
 mod status_surface;
@@ -795,8 +795,7 @@ impl ChatComposer {
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
-                measured_status_line: Default::default(),
-                wrapped_native_status: Default::default(),
+                status_layout: Default::default(),
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
@@ -909,7 +908,7 @@ impl ChatComposer {
             let style = IgnitionStyle::random(self.effort_animation_style);
             self.effort_ignition = Some(EffortIgnition::new(tier, style));
             self.effort_animation_style = Some(style);
-            if let Some(previous) = self.status_surface_content()
+            if let Some(previous) = self.status_surface_content(StatusLineFocus::Focused)
                 && !matches!(previous.as_ref(), FooterContent::Extension { .. })
             {
                 self.effort_status_line_transition = Some(EffortStatusLineTransition::new(

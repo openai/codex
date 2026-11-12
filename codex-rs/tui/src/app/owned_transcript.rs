@@ -581,10 +581,7 @@ impl App {
         // Painting those rows tells us whether newer activity is still hidden,
         // which can change the footer hint and the composer's measured height.
         let footer = view.footer_with_navigation(footer_width, motion, latest_navigation);
-        // Allow up to two-thirds of the pane, or eight rows on short panes when they fit.
-        let max_composer_height = ((u32::from(area.height) * 2 / 3) as u16)
-            .max(8)
-            .min(area.height);
+        let max_composer_height = side_pane::composer_height_limit(area.height);
         let unfocused = matches!(
             self.conversation_frame.sidebar,
             Some(sidebar::SidebarLayout::Chooser {

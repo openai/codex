@@ -384,10 +384,7 @@ pub(super) struct FooterState {
     pub(super) goal_status_indicator: Option<GoalStatusIndicator>,
     pub(super) ide_context_active: bool,
     pub(super) status_line_value: Option<FooterContent>,
-    // Measurement bounds and occupied height, shared by layout and cursor placement.
-    pub(super) measured_status_line: std::cell::Cell<Option<(ratatui::layout::Size, u16)>>,
-    pub(super) wrapped_native_status:
-        std::cell::RefCell<Option<super::native_status::WrappedNativeStatus>>,
+    pub(super) status_layout: crate::bottom_pane::status_line::StatusLine,
     pub(super) status_line_enabled: bool,
     pub(super) side_conversation_context_label: Option<String>,
     pub(super) active_agent_label: Option<String>,

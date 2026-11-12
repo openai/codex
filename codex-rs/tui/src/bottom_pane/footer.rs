@@ -712,15 +712,6 @@ pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'st
     }
 }
 
-pub(crate) fn render_unfocused_status(text: String, area: Rect, buf: &mut Buffer) {
-    let area = inset_footer_hint_area(area);
-    crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
-        text.dim().into(),
-        usize::from(area.width),
-    )
-    .render(area, buf);
-}
-
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
     if area.width > 2 {
         area.x += 2;
@@ -814,8 +805,7 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<FooterCo
         .as_ref()
         .filter(|_| props.status_line_enabled);
     let mut line = match status {
-        Some(FooterContent::Line(line)) => HyperlinkLine::from(line.clone()),
-        Some(FooterContent::HyperlinkLine(line)) => line.clone(),
+        Some(FooterContent::HyperlinkLine(line)) => line.as_ref().clone(),
         Some(content @ FooterContent::Extension { .. }) => return Some(content.clone()),
         None => HyperlinkLine::default(),
     };
@@ -828,7 +818,7 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<FooterCo
             .push_span(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
     }
     line.line.spans.extend(suffix.spans);
-    Some(FooterContent::HyperlinkLine(line))
+    Some(line.into())
 }
 
 fn passive_footer_suffix(props: &FooterProps, has_status: bool) -> Line<'static> {
