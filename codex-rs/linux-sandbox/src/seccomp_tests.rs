@@ -1,4 +1,6 @@
-//! Verify network policies select the expected seccomp enforcement mode.
+//! Verify network policies select and enforce the expected seccomp restrictions.
+
+#![cfg(test)]
 
 use super::NetworkSeccompMode;
 use super::network_seccomp_mode;
@@ -74,4 +76,125 @@ fn full_network_without_managed_proxy_skips_network_seccomp_mode() {
         ),
         None
     );
+}
+
+#[cfg(target_arch = "x86_64")]
+fn syscall_result(nr: i64, arg0: i64) -> std::result::Result<i64, i32> {
+    // Invalid remaining arguments keep the probes from accessing another process
+    // or opening a connection. Seccomp must reject denied calls before dispatch.
+    let result = unsafe { libc::syscall(nr, arg0, -1_i64, 0_i64, 0_i64, 0_i64, 0_i64) };
+    if result == -1 {
+        Err(std::io::Error::last_os_error()
+            .raw_os_error()
+            .expect("syscall failure has an errno"))
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test_case::test_case(NetworkSeccompMode::Restricted; "restricted")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted; "proxy_routed")]
+#[test_case::test_case(NetworkSeccompMode::VmSocketRestricted; "vm_socket_restricted")]
+fn x32_restricted_syscalls_are_denied(mode: NetworkSeccompMode) {
+    std::thread::spawn(move || {
+        super::install_network_seccomp_filter_on_current_thread(
+            mode, /*managed_network*/ None,
+        )
+        .expect("install seccomp filter on the disposable thread");
+
+        let mut denied = vec![
+            (libc::SYS_io_uring_setup, 425),
+            (libc::SYS_io_uring_enter, 426),
+            (libc::SYS_io_uring_register, 427),
+        ];
+        if mode != NetworkSeccompMode::VmSocketRestricted {
+            denied.extend([
+                (libc::SYS_ptrace, 521),
+                (libc::SYS_process_vm_readv, 539),
+                (libc::SYS_process_vm_writev, 540),
+            ]);
+        }
+        if mode == NetworkSeccompMode::Restricted {
+            denied.extend([
+                (libc::SYS_connect, 42),
+                (libc::SYS_accept, 43),
+                (libc::SYS_accept4, 288),
+                (libc::SYS_bind, 49),
+                (libc::SYS_listen, 50),
+                (libc::SYS_getpeername, 52),
+                (libc::SYS_getsockname, 51),
+                (libc::SYS_shutdown, 48),
+                (libc::SYS_sendto, 44),
+                (libc::SYS_recvmmsg, 537),
+                (libc::SYS_sendmmsg, 538),
+                (libc::SYS_setsockopt, 541),
+                (libc::SYS_getsockopt, 542),
+            ]);
+        }
+        for (native_nr, x32_nr) in denied {
+            for nr in [native_nr, native_nr | 0x4000_0000, x32_nr | 0x4000_0000] {
+                assert_eq!(
+                    syscall_result(nr, /*arg0*/ -1),
+                    Err(libc::EPERM),
+                    "syscall {nr:#x}"
+                );
+            }
+            if x32_nr != native_nr {
+                // These unflagged aliases were callable before Linux 5.4.
+                assert_eq!(syscall_result(x32_nr, /*arg0*/ -1), Err(libc::EPERM));
+            }
+        }
+    })
+    .join()
+    .expect("seccomp probe thread should succeed");
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test_case::test_case(NetworkSeccompMode::Restricted; "restricted")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted; "proxy_routed")]
+#[test_case::test_case(NetworkSeccompMode::VmSocketRestricted; "vm_socket_restricted")]
+fn x32_preserves_allowed_calls_and_socket_conditions(mode: NetworkSeccompMode) {
+    std::thread::spawn(move || {
+        let socket_domain = match mode {
+            NetworkSeccompMode::Restricted | NetworkSeccompMode::VmSocketRestricted => {
+                libc::AF_UNIX
+            }
+            NetworkSeccompMode::ProxyRouted => libc::AF_INET,
+        };
+        let allowed = [
+            (libc::SYS_getpid, 0),
+            (libc::SYS_socket, i64::from(socket_domain)),
+            (libc::SYS_socketpair, i64::from(libc::AF_UNIX)),
+        ];
+        let probes = allowed
+            .into_iter()
+            .flat_map(|(nr, arg0)| [(nr, arg0), (nr | 0x4000_0000, arg0)])
+            .collect::<Vec<_>>();
+        // On kernels without x32, permitted x32 calls must keep returning ENOSYS,
+        // not EPERM. On x32 kernels, getpid must still return the process ID.
+        let expected = probes
+            .iter()
+            .map(|&(nr, arg0)| syscall_result(nr, arg0))
+            .collect::<Vec<_>>();
+        super::install_network_seccomp_filter_on_current_thread(
+            mode, /*managed_network*/ None,
+        )
+        .expect("install seccomp filter on the disposable thread");
+        let actual = probes
+            .iter()
+            .map(|&(nr, arg0)| syscall_result(nr, arg0))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        for nr in [libc::SYS_socket, libc::SYS_socketpair] {
+            for nr in [nr, nr | 0x4000_0000] {
+                assert_eq!(
+                    syscall_result(nr, i64::from(libc::AF_VSOCK)),
+                    Err(libc::EPERM)
+                );
+            }
+        }
+    })
+    .join()
+    .expect("seccomp probe thread should succeed");
 }
