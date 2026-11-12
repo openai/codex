@@ -3276,6 +3276,7 @@ async fn check_dynamic_tool_requests(
         serde_json::json!({
             "name": "create_thread",
             "namespace": "codex_tui",
+            "retain": true,
             "output": format!(
                 "<codex_delegation>\n  <source_thread_id>{creation_source}</source_thread_id>\n  <input>Check &lt;main&gt; &amp; report</input>\n</codex_delegation>"
             )
@@ -3361,6 +3362,7 @@ async fn check_dynamic_tool_requests(
         serde_json::json!({
             "name": "send_message_to_thread",
             "namespace": "codex_tui",
+            "retain": true,
             "output": format!(
                 "<codex_delegation>\n  <source_thread_id>{thread_id}</source_thread_id>\n  <input>Follow &lt;up&gt; &amp; report</input>\n</codex_delegation>"
             )

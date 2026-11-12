@@ -1271,7 +1271,7 @@ async fn start_turn(
             // Older app-server/TUI versions are intentionally unsupported:
             // preserving tool authority takes precedence over legacy fallback.
             tool_output: Some(Box::new(TurnToolOutput {
-                retain: false,
+                retain: true,
                 name: tool.to_string(),
                 namespace: Some(NAMESPACE.to_string()),
                 output: FunctionCallOutputBody::Text(prompt),
