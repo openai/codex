@@ -6,6 +6,13 @@ use codex_app_server_protocol::PluginAvailability;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 
+#[track_caller]
+pub(crate) fn assert_pending_steers_unadmitted(input: &ThreadInputState) {
+    for steer in &input.pending_steers {
+        assert_eq!(steer.admitted_turn_id, None);
+    }
+}
+
 pub(super) async fn test_config() -> (tempfile::TempDir, Config) {
     // Start from the built-in defaults so tests do not inherit host/system config.
     let codex_home = tempfile::Builder::new()

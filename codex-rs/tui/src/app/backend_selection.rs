@@ -491,6 +491,8 @@ impl App {
                 Ok(prepared) => prepared,
                 Err(control) => return Ok(control),
             };
+            let handoff = self.chat_widget.pause_input_for_resume_handoff();
+            let _handoff = self.prepare_resume_handoff(tui, handoff).await?;
             self.switch_backend_context(
                 backends,
                 destination_slot,
@@ -500,35 +502,16 @@ impl App {
                 bootstrap,
             )
             .await;
-            let thread_id = target.thread_id;
-            let confirmed = super::thread_events::confirmed_user_message_ids(
-                &prepared.thread.turns,
-                std::iter::empty(),
-            );
-            let restored_blank_session = prepared.restored_blank_session;
-            let has_resumed_mode = prepared.thread.session.collaboration_mode.is_some();
+            backends.switch_displayed(destination_slot, &mut self.agents_overview.input_states);
             let destination = backends.session_at_mut(destination_slot);
             let control = self
-                .activate_prepared_session(tui, destination, prepared)
+                .activate_prepared_session_after_clear(
+                    tui,
+                    destination,
+                    prepared,
+                    /*switched_backend*/ true,
+                )
                 .await?;
-            backends.switch_displayed(destination_slot, &mut self.agents_overview.input_states);
-            if !restored_blank_session {
-                self.agents_overview.blank_sessions.remove(&thread_id);
-            }
-            if let Some(mut input) = self.agents_overview.input_states.remove(&thread_id) {
-                input.provider_error = None;
-                input
-                    .pending_steers
-                    .retain(|steer| !confirmed.contains(&steer.client_id));
-                if !restored_blank_session {
-                    self.chat_widget
-                        .update_input_collaboration_mode(&mut input, has_resumed_mode);
-                }
-                let settings = restored_blank_session
-                    .then(|| input.pending_thread_settings.take())
-                    .flatten();
-                self.restore_session_draft(thread_id, input, settings).await;
-            }
             tui.frame_requester().schedule_frame();
             Ok(control)
         })

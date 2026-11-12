@@ -331,13 +331,13 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         )
         .await?;
         let old_event_tx = app.app_event_tx.app_event_tx.clone();
-        app.finish_reconnect(
+        crate::boxed_future!(app.finish_reconnect(
             &mut tui,
             &mut session,
             &mut events,
             connected,
             CODEX_CLI_VERSION,
-        )
+        ))
         .await?;
         assert_eq!(app.app_server_backend_id, Some(session.backend_id()));
         assert!(old_event_tx.is_closed());
@@ -373,7 +373,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             while app.agents_overview.active_refresh.is_some() {
                 let event = events.recv().await.expect("inventory refresh event");
                 if matches!(event, AppEvent::AgentsOverviewThreadsLoaded { .. }) {
-                    Box::pin(app.handle_event(&mut tui, &mut session, event)).await?;
+                    crate::boxed_future!(app.handle_event(&mut tui, &mut session, event)).await?;
                 } else {
                     deferred.push(event);
                 }
@@ -507,8 +507,12 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 app.chat_widget.composer_text_with_pending(),
                 "latest draft!"
             );
-            Box::pin(app.handle_event(&mut tui, &mut session, AppEvent::OpenAgentsOverview))
-                .await?;
+            crate::boxed_future!(app.handle_event(
+                &mut tui,
+                &mut session,
+                AppEvent::OpenAgentsOverview
+            ))
+            .await?;
             assert!(app.chat_widget.has_active_view());
             app.handle_tui_event(
                 &mut tui,
@@ -554,7 +558,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 );
             }
             available.store(true, std::sync::atomic::Ordering::SeqCst);
-            Box::pin(app.handle_event(
+            crate::boxed_future!(app.handle_event(
                 &mut tui,
                 &mut session,
                 AppEvent::SelectAgentsOverviewThread { thread_id: id },
@@ -604,7 +608,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             .await?;
             while let Ok(event) = events.try_recv() {
                 if matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })) {
-                    Box::pin(app.handle_event(&mut tui, &mut session, event)).await?;
+                    crate::boxed_future!(app.handle_event(&mut tui, &mut session, event)).await?;
                 }
             }
             let channel = app.thread_event_channels.get(&id).unwrap();

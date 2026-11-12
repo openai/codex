@@ -799,7 +799,7 @@ pub(super) async fn drain_history(
                 | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                 | AppEvent::EndInitialHistoryReplayBuffer
         ) {
-            app.handle_event(tui, session, event).await?;
+            crate::boxed_future!(app.handle_event(tui, session, event)).await?;
         }
     }
     Ok(lines_to_single_string(

@@ -1199,6 +1199,9 @@ async fn check_retained_draft_handoff(
         let mode = server_mode.as_mut().expect("test has a mode to update");
         mode.mode = ModeKind::Plan;
         mode.settings.developer_instructions = Some("Instructions from the parked task".into());
+        if parked_policy.is_some() {
+            mode.settings.reasoning_effort = Some(ReasoningEffortConfig::High);
+        }
         Some(mode.clone())
     } else {
         None
@@ -1220,6 +1223,7 @@ async fn check_retained_draft_handoff(
         let settings = ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             collaboration_mode,
+            effort: parked_policy.map(|_| ReasoningEffortConfig::High),
             approval_policy: parked_policy,
             ..Default::default()
         };
@@ -1236,6 +1240,15 @@ async fn check_retained_draft_handoff(
             let (destination, parked_inputs) = backends.session_and_parked_inputs(destination_slot);
             app.handle_polled_backend_event(destination, outgoing, parked_inputs, event)
                 .await;
+        } else if saved_history && retained_blank {
+            // A formerly blank thread must ignore settings cached before it acquired history.
+            let mut stale_update = update;
+            stale_update.thread_settings.model = "old-model".into();
+            backends
+                .parked_inputs_mut(destination_slot)
+                .get_mut(&thread_id)
+                .unwrap()
+                .pending_thread_settings = Some(stale_update);
         }
     }
     let settings = app.backend_settings();

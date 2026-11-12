@@ -2581,13 +2581,99 @@ async fn resume_failure_keeps_command_center_available() {
 }
 
 #[tokio::test]
-async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
+async fn resume_round_trip_preserves_input_and_dispatches_idle_queue() -> Result<()> {
+    check_resume_round_trip(ResumeRoundTrip::CompleteWhileAway).await
+}
+
+#[tokio::test]
+async fn resume_round_trip_drains_buffered_completion_without_sending_on_other_thread() -> Result<()>
+{
+    check_resume_round_trip(ResumeRoundTrip::BufferCompletion).await
+}
+
+#[tokio::test]
+async fn resume_round_trip_keeps_buffered_esc_retry_on_original_thread() -> Result<()> {
+    check_resume_round_trip(ResumeRoundTrip::BufferInterruption).await
+}
+
+#[derive(PartialEq, Eq)]
+enum ResumeRoundTrip {
+    CompleteWhileAway,
+    BufferCompletion,
+    BufferInterruption,
+}
+
+async fn check_resume_round_trip(round_trip: ResumeRoundTrip) -> Result<()> {
+    use codex_app_server_protocol::RequestId;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
+    use codex_app_server_protocol::TurnStatus;
+    use codex_model_provider_info::ModelProviderInfo;
+    use core_test_support::responses;
+    use core_test_support::streaming_sse::StreamingSseChunk;
+    use core_test_support::streaming_sse::start_streaming_sse_server;
+
+    async fn wait_for_turn_status(
+        server: &mut AppServerSession,
+        outgoing: ThreadId,
+        status: TurnStatus,
+    ) -> Result<codex_app_server_protocol::Turn> {
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+            loop {
+                let thread = server.thread_read(outgoing, /*include_turns*/ true).await?;
+                if let Some(turn) = thread.turns.into_iter().last()
+                    && turn.status == status
+                {
+                    break Ok::<_, color_eyre::eyre::Report>(turn);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?
+    }
+
+    let interrupted = round_trip == ResumeRoundTrip::BufferInterruption;
+    let requests_before_return = if interrupted { 1 } else { 2 };
+    let steer_text = "Steer for the first task";
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (responses_server, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: responses::sse(vec![responses::ev_response_created("running")]),
+            },
+            StreamingSseChunk {
+                gate: Some(gate),
+                body: responses::sse(vec![responses::ev_completed("running")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_completed("steer")]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_completed("follow-up")]),
+        }],
+    ])
+    .await;
+    let (mut app, mut events, _ops) = Box::pin(make_test_app_with_channels()).await;
     trust_fixture_folders(&mut app);
-    std::fs::write(
-        app.config.codex_home.join("config.toml"),
-        "[tui]\nresume_cwd = \"current\"\n",
-    )?;
+    app.config.model = Some("gpt-5.2".into());
+    app.config.model_provider_id = "resume-test".into();
+    app.config.model_provider = ModelProviderInfo {
+        name: "Resume test".into(),
+        base_url: Some(format!("{}/v1", responses_server.uri())),
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        ..ModelProviderInfo::default()
+    };
+    app_test_support::MockResponsesConfig::new(responses_server.uri())
+        .with_model("gpt-5.2")
+        .with_model_provider("resume-test")
+        .with_provider_name("Resume test")
+        .with_extra_config("[tui]\nresume_cwd = \"current\"")
+        .write(app.config.codex_home.as_path())?;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let backend_id = server.backend_id();
     let mut targets = Vec::new();
@@ -2618,7 +2704,68 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
     }
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut expected_states = Vec::new();
+    let mut release = Some(release);
     for target in targets.iter().chain(&targets) {
+        if round_trip != ResumeRoundTrip::CompleteWhileAway
+            && expected_states.len() == targets.len()
+            && target.thread_id == targets[1].thread_id
+        {
+            let outgoing = targets[0].thread_id;
+            assert_eq!(app.chat_widget.thread_id(), Some(outgoing));
+            assert_eq!(
+                app.chat_widget
+                    .capture_thread_input_state()
+                    .unwrap()
+                    .pending_steers
+                    .len(),
+                1
+            );
+            tokio::time::timeout(
+                Duration::from_secs(/*secs*/ 5),
+                responses_server.wait_for_request_count(requests_before_return),
+            )
+            .await?;
+            assert_eq!(
+                responses_server.requests().await.len(),
+                requests_before_return
+            );
+            let status = if interrupted {
+                let turn_id = app
+                    .chat_widget
+                    .last_turn_id()
+                    .expect("running turn")
+                    .to_owned();
+                app.chat_widget
+                    .handle_key_event(KeyEvent::from(KeyCode::Esc));
+                assert!(
+                    std::iter::from_fn(|| events.try_recv().ok())
+                        .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::Interrupt)))
+                );
+                server.turn_interrupt(outgoing, turn_id).await?;
+                TurnStatus::Interrupted
+            } else {
+                release.take().unwrap().send(()).unwrap();
+                TurnStatus::Completed
+            };
+            let turn = wait_for_turn_status(&mut server, outgoing, status).await?;
+            drop(release.take());
+            // Route the real completion to A's receiver, leaving it buffered across the switch.
+            app.enqueue_thread_notification(
+                outgoing,
+                ServerNotification::TurnCompleted(
+                    codex_app_server_protocol::TurnCompletedNotification {
+                        thread_id: outgoing.to_string(),
+                        turn,
+                    },
+                ),
+            )
+            .await?;
+            assert!(
+                app.active_thread_rx
+                    .as_ref()
+                    .is_some_and(|rx| !rx.is_empty())
+            );
+        }
         let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
         app.chat_widget.show_bottom_pane_view(Box::new(view));
         Box::pin(app.apply_resume_picker_selection(
@@ -2631,11 +2778,35 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
         if expected_states.len() < targets.len() {
             assert_eq!(app.chat_widget.composer_text_with_pending(), "");
             assert!(app.chat_widget.queued_user_message_texts().is_empty());
+            let running_turn = if target.thread_id == targets[0].thread_id {
+                let response = server
+                    .request_handle()
+                    .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {
+                        request_id: RequestId::String(Uuid::new_v4().to_string()),
+                        params: TurnStartParams {
+                            thread_id: target.thread_id.to_string(),
+                            input: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "Keep working".into(),
+                                text_elements: Vec::new(),
+                            }],
+                            ..Default::default()
+                        },
+                    })
+                    .await?;
+                tokio::time::timeout(
+                    Duration::from_secs(/*secs*/ 5),
+                    responses_server.wait_for_request_count(/*count*/ 1),
+                )
+                .await?;
+                Some(response.turn)
+            } else {
+                None
+            };
             app.chat_widget.handle_server_notification(
                 ServerNotification::TurnStarted(
                     codex_app_server_protocol::TurnStartedNotification {
                         thread_id: target.thread_id.to_string(),
-                        turn: codex_app_server_protocol::Turn {
+                        turn: running_turn.unwrap_or_else(|| codex_app_server_protocol::Turn {
                             id: "turn-with-follow-up".to_string(),
                             root_turn_id: None,
                             items_view: codex_app_server_protocol::TurnItemsView::Full,
@@ -2645,7 +2816,7 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
                             started_at: None,
                             completed_at: None,
                             duration_ms: None,
-                        },
+                        }),
                     },
                 ),
                 /*replay_kind*/ None,
@@ -2657,15 +2828,17 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
             assert_eq!(app.chat_widget.queued_user_message_texts(), vec![follow_up]);
             app.chat_widget
                 .apply_external_edit(format!("Draft for {}", target.thread_id));
-            let mut input_state = app.chat_widget.capture_thread_input_state().unwrap();
-            // Recovered follow-ups stay paused until the user explicitly submits them.
-            input_state.recovered_queue = true;
-            app.chat_widget.restore_thread_input_state(
-                Some(input_state),
-                crate::chatwidget::ThreadInputStateRestoreMode {
-                    preserve_in_flight_turn: false,
-                },
-            );
+            if target.thread_id != targets[0].thread_id {
+                let mut input_state = app.chat_widget.capture_thread_input_state().unwrap();
+                // Recovered follow-ups stay paused until the user explicitly submits them.
+                input_state.recovered_queue = true;
+                app.chat_widget.restore_thread_input_state(
+                    Some(input_state),
+                    crate::chatwidget::ThreadInputStateRestoreMode {
+                        preserve_in_flight_turn: false,
+                    },
+                );
+            }
             expected_states.push(app.chat_widget.capture_thread_input_state());
         } else {
             let index = targets
@@ -2676,9 +2849,96 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
                 app.chat_widget.capture_thread_input_state(),
                 expected_states[index]
             );
+            if target.thread_id == targets[0].thread_id {
+                app.chat_widget.apply_external_edit(steer_text.to_string());
+                app.chat_widget
+                    .handle_key_event(KeyEvent::from(KeyCode::Enter));
+                let steer_event = std::iter::from_fn(|| events.try_recv().ok())
+                    .find(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+                    .expect("steer submission");
+                // Leave the steer uncommitted when exercising Esc's retry path.
+                if !interrupted {
+                    Box::pin(app.handle_event(&mut tui, &mut server, steer_event)).await?;
+                }
+                app.chat_widget
+                    .apply_external_edit(format!("Draft for {}", target.thread_id));
+            }
         }
     }
+    assert_eq!(app.chat_widget.thread_id(), Some(targets[1].thread_id));
+    if let Some(release) = release {
+        let outgoing = targets[0].thread_id;
+        assert_eq!(
+            app.agents_overview.input_states[&outgoing]
+                .pending_steers
+                .len(),
+            1
+        );
+        tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 5),
+            responses_server.wait_for_request_count(/*count*/ 2),
+        )
+        .await?;
+        // A is unsubscribed now. Leave the completion out of the TUI event queue so
+        // resuming must discover it from the server's thread history.
+        release.send(()).unwrap();
+        wait_for_turn_status(&mut server, outgoing, TurnStatus::Completed).await?;
+    }
+    assert_eq!(
+        responses_server.requests().await.len(),
+        requests_before_return
+    );
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(
+            event,
+            AppEvent::CodexOp(AppCommand::UserTurn { .. })
+        ));
+    }
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::ResumeSessionByIdOrName(targets[0].thread_id.to_string()),
+    ))
+    .await?;
+    assert_eq!(app.active_thread_id, Some(targets[0].thread_id));
+    let mut submitted = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let AppEvent::CodexOp(AppCommand::UserTurn { ref items, .. }) = event {
+            submitted.push(items.clone());
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        }
+    }
+    let follow_up = format!("Follow-up for {}", targets[0].thread_id);
+    let expected_text = if interrupted {
+        steer_text.to_string()
+    } else {
+        follow_up.clone()
+    };
+    assert_eq!(
+        submitted,
+        vec![vec![codex_app_server_protocol::UserInput::Text {
+            text: expected_text,
+            text_elements: Vec::new(),
+        }]]
+    );
+    tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 5),
+        responses_server.wait_for_request_count(requests_before_return + 1),
+    )
+    .await?;
+    assert_eq!(
+        responses_server.requests().await.len(),
+        requests_before_return + 1
+    );
+    if interrupted {
+        assert_eq!(app.chat_widget.queued_user_message_texts(), [follow_up]);
+    }
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        format!("Draft for {}", targets[0].thread_id)
+    );
     server.shutdown().await?;
+    responses_server.shutdown().await;
     Ok(())
 }
 

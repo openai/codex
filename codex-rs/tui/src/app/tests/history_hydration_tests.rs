@@ -222,7 +222,7 @@ async fn history_hydration_metadata_tracks_missing_turns_and_stale_completions_k
             backwards_cursor: None,
         }),
     ] {
-        app.handle_event(
+        crate::boxed_future!(app.handle_event(
             &mut tui,
             &mut server,
             AppEvent::OlderThreadHistoryLoaded {
@@ -230,7 +230,7 @@ async fn history_hydration_metadata_tracks_missing_turns_and_stale_completions_k
                 cursor: old_cursor.clone(),
                 result,
             },
-        )
+        ))
         .await?;
         assert!(server.is_older_history_page_pending(target.thread_id, &cursor));
         assert_eq!(

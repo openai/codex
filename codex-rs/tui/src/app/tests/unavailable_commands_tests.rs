@@ -5,6 +5,59 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn cloud_shell_command_reports_error_and_allows_next_prompt() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    app.app_server_target = AppServerTarget::Cloud;
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(thread_id, app.config.cwd.to_path_buf()));
+    let (client, mut requests, _server_events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut session = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Cloud,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while events.try_recv().is_ok() {}
+    while ops.try_recv().is_ok() {}
+
+    app.chat_widget
+        .restore_user_message_to_composer("First prompt".into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(ops.try_recv()?, Op::UserTurn { .. }));
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(thread_id, "turn-1"),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget.handle_server_notification(
+        turn_completed_notification(thread_id, "turn-1", TurnStatus::Completed),
+        /*replay_kind*/ None,
+    );
+    while events.try_recv().is_ok() {}
+
+    app.chat_widget
+        .restore_user_message_to_composer("! pwd".into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    let shell = ops.try_recv()?;
+    assert!(matches!(&shell, Op::RunUserShellCommand { command } if command == "pwd"));
+    let result = tokio::select! {
+        result = Box::pin(app.handle_event(&mut tui, &mut session, AppEvent::CodexOp(shell))) => result?,
+        _ = requests.recv() => panic!("Cloud shell command unexpectedly sent a request"),
+    };
+    assert!(matches!(result, AppRunControl::Continue));
+    assert_snapshot!(next_history_message(&mut events), @"■ Shell commands starting with ! are unavailable in Cloud conversations.");
+    assert_eq!(app.active_thread_id, Some(thread_id));
+
+    app.chat_widget
+        .restore_user_message_to_composer("Continue the conversation".into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(ops.try_recv()?, Op::UserTurn { .. }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn unavailable_thread_routes_local_and_recovery_commands() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let id = ThreadId::new();

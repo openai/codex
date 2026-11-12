@@ -50,6 +50,8 @@ pub(super) struct InputQueueState {
     /// fresh user turn instead of restoring them into the composer.
     pub(super) submit_pending_steers_after_interrupt: bool,
     pub(super) suppress_queue_autosend: bool,
+    /// Independent of settings suppression, which a drained event can set.
+    pub(super) resume_handoff: std::sync::Weak<()>,
     pub(super) transcript_copy: std::sync::Weak<crate::copy_input_guard::CopyInputGuard>,
     /// Hold submissions while a usage failure or backend-directed model fallback is resolved.
     pub(super) rate_limit_recovery_pending: bool,
@@ -67,7 +69,9 @@ impl InputQueueState {
     }
 
     pub(super) fn submissions_paused(&self) -> bool {
-        self.suppress_queue_autosend || self.transcript_copy.strong_count() > 0
+        self.suppress_queue_autosend
+            || self.transcript_copy.strong_count() > 0
+            || self.resume_handoff.strong_count() > 0
     }
 
     pub(super) fn has_unconfirmed_messages(&self) -> bool {

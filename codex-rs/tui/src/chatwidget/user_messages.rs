@@ -133,6 +133,7 @@ pub(super) enum QueueDrain {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(super) struct ThreadComposerState {
     pub(super) text: String,
+    pub(super) shell_mode: Option<bool>,
     pub(super) local_images: Vec<LocalImageAttachment>,
     pub(super) remote_image_urls: Vec<String>,
     pub(super) text_elements: Vec<TextElement>,
@@ -169,7 +170,7 @@ pub(crate) struct ThreadInputState {
     pub(super) queued_user_messages: VecDeque<QueuedUserMessage>,
     pub(super) queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     pub(crate) recovered_queue: bool,
-    /// Reconcile delivery after transport recovery, not after a fork or ordinary thread switch.
+    /// Reconcile delivery against resumed history after recovery or an idle thread switch.
     pub(crate) reconnect_pending: bool,
     pub(super) user_turn_pending_start: bool,
     pub(super) pending_user_message_client_id: Option<String>,
@@ -886,6 +887,7 @@ impl ThreadInputState {
     pub(crate) fn reconcile_confirmed_messages(&mut self, confirmed_ids: &[String]) {
         self.pending_steers
             .retain(|steer| !confirmed_ids.contains(&steer.client_id));
+        self.submit_pending_steers_after_interrupt &= !self.pending_steers.is_empty();
         remove_confirmed_queued_messages(
             &mut self.queued_user_messages,
             &mut self.queued_user_message_history_records,

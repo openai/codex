@@ -1055,6 +1055,8 @@ impl App {
             && self.active_turn_id_for_thread(thread_id).await.is_some();
         self.reconcile_saved_session_input(thread_id, &mut input)
             .await;
+        // Missing receipts must not turn a previously submitted steer into unsent input.
+        input.reconnect_pending |= !preserve_in_flight_turn && !input.pending_steers.is_empty();
         self.chat_widget.restore_thread_input_state(
             Some(input),
             ThreadInputStateRestoreMode {
