@@ -433,6 +433,7 @@ impl SessionConfiguration {
         }
     }
 
+    /// Applies fields normalized against this configuration at admission.
     pub(super) fn apply(
         &self,
         updates: &SessionSettingsUpdate,
@@ -481,20 +482,17 @@ impl SessionConfiguration {
         }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
-            let active_permission_profile =
-                updates.active_permission_profile.clone().or_else(|| {
-                    if permission_profile == self.permission_profile() {
-                        self.active_permission_profile()
-                    } else {
-                        None
-                    }
-                });
-            next_configuration.set_permission_profile_projection(
-                permission_profile,
-                active_permission_profile,
-                updates.profile_workspace_roots.clone().unwrap_or_default(),
-                Some(&current_file_system_sandbox_policy),
-            )?;
+            let snapshot = match updates.active_permission_profile.clone() {
+                Some(active) => PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                    permission_profile,
+                    active,
+                    updates.profile_workspace_roots.clone().unwrap_or_default(),
+                ),
+                None => PermissionProfileSnapshot::legacy(permission_profile),
+            };
+            next_configuration
+                .permission_profile_state
+                .set_permission_profile_snapshot(snapshot)?;
             if let Some(active_permission_profile) = next_configuration.active_permission_profile()
             {
                 let mut config = (*next_configuration.original_config_do_not_use).clone();
@@ -522,23 +520,6 @@ impl SessionConfiguration {
                     )?;
                 next_configuration.original_config_do_not_use = Arc::new(config);
             }
-        } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    &sandbox_policy,
-                    next_configuration.cwd(),
-                    &current_file_system_sandbox_policy,
-                );
-            let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            next_configuration
-                .permission_profile_state
-                .set_legacy_permission_profile(
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    ),
-                )?;
         } else if cwd_changed && file_system_policy_has_rebindable_project_root_write {
             // Compatibility projection can resolve filesystem paths. Only compute it
             // when a cwd-bound legacy policy might need rebinding.
@@ -624,42 +605,6 @@ impl SessionConfiguration {
         }
         Ok(next_configuration)
     }
-
-    fn set_permission_profile_projection(
-        &mut self,
-        permission_profile: PermissionProfile,
-        active_permission_profile: Option<ActivePermissionProfile>,
-        profile_workspace_roots: Vec<ProfileWorkspaceRoot>,
-        preserve_deny_reads_from: Option<&FileSystemSandboxPolicy>,
-    ) -> ConstraintResult<()> {
-        let enforcement = permission_profile.enforcement();
-        let (mut file_system_sandbox_policy, network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
-        if let Some(existing_file_system_policy) = preserve_deny_reads_from {
-            file_system_sandbox_policy
-                .preserve_deny_read_restrictions_from(existing_file_system_policy);
-        }
-        let effective_permission_profile =
-            PermissionProfile::from_runtime_permissions_with_enforcement(
-                enforcement,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
-
-        let permission_snapshot = match active_permission_profile {
-            Some(active_permission_profile) => {
-                PermissionProfileSnapshot::active_with_profile_workspace_roots(
-                    effective_permission_profile,
-                    active_permission_profile,
-                    profile_workspace_roots,
-                )
-            }
-            None => PermissionProfileSnapshot::legacy(effective_permission_profile),
-        };
-
-        self.permission_profile_state
-            .set_permission_profile_snapshot(permission_snapshot)
-    }
 }
 
 /// The configuration and public snapshot published by one settings commit.
@@ -679,6 +624,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) environments: Option<TurnEnvironmentSelections>,
     pub(crate) runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) profile_workspace_roots: Option<Vec<ProfileWorkspaceRoot>>,
+    /// Compatibility input consumed when normalizing settings at admission.
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
