@@ -437,9 +437,6 @@ fn materializing_legacy_home_relative_workspace_denials_removes_all_grants() {
                             &native_root,
                         )),
                 );
-                materialized.push(policy.with_materialized_project_roots_for_workspace_roots(
-                    std::slice::from_ref(&native_root),
-                ));
             }
             for policy in materialized {
                 assert_eq!(policy, FileSystemSandboxPolicy::restricted(Vec::new()));

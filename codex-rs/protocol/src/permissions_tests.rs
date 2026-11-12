@@ -1748,25 +1748,26 @@ fn materialize_project_roots_with_workspace_roots_expands_exact_and_glob_entries
 }
 
 #[test]
-fn with_additional_legacy_workspace_writable_roots_protects_metadata() {
+fn workspace_write_with_extra_root_protects_metadata() {
     let temp_dir = TempDir::new().expect("tempdir");
     let extra = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("extra"))
         .expect("resolve extra root");
     std::fs::create_dir_all(extra.join(".git")).expect("create .git dir");
-    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-        },
-        access: FileSystemAccessMode::Write,
-        missing_path_behavior: None,
-    }]);
-
-    let actual =
-        policy.with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&extra));
+    let actual = FileSystemSandboxPolicy::workspace_write(
+        std::slice::from_ref(&extra),
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
 
     assert_eq!(
         actual,
         FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root
+                },
+                FileSystemAccessMode::Read,
+            ),
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
@@ -1781,6 +1782,30 @@ fn with_additional_legacy_workspace_writable_roots_protects_metadata() {
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".git".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".agents".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".codex".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".aws".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
             FileSystemSandboxEntry::skip_missing_path(
                 FileSystemPath::Path {
                     path: extra.join(".git").into()

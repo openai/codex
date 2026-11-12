@@ -1339,19 +1339,6 @@ impl FileSystemSandboxPolicy {
         Some(self)
     }
 
-    /// Preserves symbolic `:workspace_roots` entries while also adding concrete
-    /// entries for each provided workspace root.
-    pub fn with_materialized_project_roots_for_workspace_roots(
-        self,
-        workspace_roots: &[AbsolutePathBuf],
-    ) -> Self {
-        let roots = workspace_roots
-            .iter()
-            .map(PathUri::from_abs_path)
-            .collect::<Vec<_>>();
-        self.with_materialized_project_roots_for_path_uris(&roots)
-    }
-
     pub fn with_additional_readable_roots(
         mut self,
         cwd: &Path,
@@ -1389,44 +1376,6 @@ impl FileSystemSandboxPolicy {
                 path.clone().into(),
                 FileSystemAccessMode::Write,
             ));
-        }
-
-        self
-    }
-
-    /// Add roots using legacy `WorkspaceWrite` behavior.
-    ///
-    /// Unlike [`Self::with_additional_writable_roots`], this mirrors legacy
-    /// writable-roots semantics by adding exact roots even when they are
-    /// already writable through `:workspace_roots`, and by adding the default
-    /// read-only protected subpaths for each new root.
-    pub fn with_additional_legacy_workspace_writable_roots(
-        mut self,
-        additional_writable_roots: &[AbsolutePathBuf],
-    ) -> Self {
-        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
-            return self;
-        }
-
-        for path in additional_writable_roots {
-            if !self.entries.iter().any(|entry| {
-                entry.access.can_write()
-                    && matches!(&entry.path, FileSystemPath::Path { path: existing } if existing == &PathUri::from_abs_path(path))
-            }) {
-                self.entries.push(FileSystemSandboxEntry::new(
-                    path.clone().into(),
-                    FileSystemAccessMode::Write,
-                ));
-            }
-
-            for protected_path in default_read_only_subpaths_for_writable_root(
-                path, /*protect_missing_dot_codex*/ false,
-            ) {
-                append_default_read_only_path_if_no_explicit_rule(
-                    &mut self.entries,
-                    protected_path,
-                );
-            }
         }
 
         self
