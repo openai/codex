@@ -17,9 +17,9 @@ pub enum NotificationDelivery {
 /// Board-scoped membership, clock and notification access supplied by the host.
 ///
 /// The host remains authoritative for membership even when runtimes are unloaded.
-/// Clock reads use the posting agent's configured source, including simulated
-/// time. Notifications follow the host's ordinary queue-only agent-message
-/// scheduling and wake policy, and may be buffered for an idle recipient.
+/// Clock reads use the posting agent's configured source.
+/// Notifications follow the host's ordinary queue-only agent-message scheduling
+/// and wake policy, and may be buffered for an idle recipient.
 /// Acceptance does not guarantee that the model has consumed the notification.
 /// Backends may implement these capabilities with local handles or remote RPCs.
 pub trait MessageBoardHost: Send + Sync {

@@ -4660,7 +4660,7 @@
     },
     "RemoteMessageBoardConfigToml": {
       "additionalProperties": false,
-      "description": "Connection to a board provisioned by the research host.",
+      "description": "Connection settings for a remote message board.",
       "properties": {
         "bearer_token": {
           "description": "Board credential supplied directly by a runtime config override.",

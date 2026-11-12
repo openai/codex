@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-/// Connection to a board provisioned by the research host.
+/// Connection settings for a remote message board.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteMessageBoardConfigToml {

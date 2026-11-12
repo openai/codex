@@ -275,7 +275,7 @@ impl CodexThread {
             .await
     }
 
-    /// Reads this thread's configured clock, including an external or simulated clock.
+    /// Reads this thread's configured clock.
     pub async fn current_time(&self) -> CodexResult<DateTime<Utc>> {
         self.session
             .services

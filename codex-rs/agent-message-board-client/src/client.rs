@@ -96,7 +96,7 @@ impl RemoteAgentMessageBoard {
         })
     }
 
-    /// Supply the runtime's configured clock for research's simulated time.
+    /// Use the calling thread's clock to timestamp new channels and posts.
     pub fn with_clock(
         mut self,
         clock: impl Fn(ThreadId) -> BoxFuture<'static, Result<DateTime<Utc>>> + Send + Sync + 'static,
