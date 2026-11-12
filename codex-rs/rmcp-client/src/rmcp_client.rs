@@ -90,6 +90,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::oauth::OAuthCredentialStore;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::OAuthRuntime;
+use crate::oauth::OAuthStreamableHttpClient;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::ResolvedOAuthTokens;
 use crate::oauth::StoredOAuthTokens;
@@ -134,7 +135,7 @@ enum PendingTransport {
         transport: StreamableHttpClientTransport<StreamableHttpClientAdapter>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
+        transport: StreamableHttpClientTransport<OAuthStreamableHttpClient>,
         oauth_runtime: OAuthRuntime,
     },
     StreamableHttpWithAccessTokenOnly {
@@ -2030,31 +2031,28 @@ async fn create_oauth_transport_and_runtime(
         McpOAuthRefreshMode::Legacy | McpOAuthRefreshMode::Coordinated => None,
     };
 
-    let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(
-            http_client,
-            default_headers,
-            /*auth_provider*/ None,
-            has_configured_headers,
-            redirect_mode,
-            initialize_deadline,
-        ),
-        manager,
-    );
-    let auth_manager = auth_client.auth_manager.clone();
-
-    let transport = StreamableHttpClientTransport::with_client(
-        auth_client,
-        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+    let http_client = StreamableHttpClientAdapter::new(
+        http_client,
+        default_headers,
+        /*auth_provider*/ None,
+        has_configured_headers,
+        redirect_mode,
+        initialize_deadline,
     );
 
     if use_stored_access_token_only {
         warn!(
             "stored OAuth refresh credentials could not be bound to their issuer for MCP server `{server_name}`; using the stored access token without refresh"
         );
-        return Ok(PendingTransport::StreamableHttpWithAccessTokenOnly { transport });
+        return Ok(PendingTransport::StreamableHttpWithAccessTokenOnly {
+            transport: StreamableHttpClientTransport::with_client(
+                AuthClient::new(http_client, manager),
+                StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+            ),
+        });
     }
 
+    let auth_manager = Arc::new(Mutex::new(manager));
     let runtime = match coordinated_store {
         Some(store) => OAuthRuntime::Coordinated {
             auth_manager,
@@ -2069,6 +2067,10 @@ async fn create_oauth_transport_and_runtime(
             oauth_config.cloned(),
         )),
     };
+    let transport = StreamableHttpClientTransport::with_client(
+        OAuthStreamableHttpClient::new(http_client, runtime.clone()),
+        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+    );
 
     Ok(PendingTransport::StreamableHttpWithOAuth {
         transport,

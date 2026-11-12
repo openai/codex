@@ -26,6 +26,7 @@ mod resolved_store;
 mod runtime;
 mod store_lock;
 mod telemetry;
+mod transport;
 
 #[cfg(test)]
 #[path = "oauth/test_support.rs"]
@@ -97,6 +98,7 @@ pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
 use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
 pub(crate) use self::runtime::OAuthRuntime;
+pub(crate) use self::transport::OAuthStreamableHttpClient;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
@@ -869,6 +871,28 @@ impl OAuthPersistor {
             return Err(AuthError::AuthorizationRequired);
         }
         Ok(guard)
+    }
+
+    pub(super) async fn fresh_access_token(
+        &self,
+        manager: &AuthorizationManager,
+    ) -> std::result::Result<Option<String>, AuthError> {
+        let (client_id, maybe_credentials) = manager.get_credentials().await?;
+        let Some(credentials) = maybe_credentials else {
+            return Ok(None);
+        };
+        let last_credentials = self.inner.last_credentials.lock().await;
+        let Some(last_credentials) = last_credentials.as_ref() else {
+            return Ok(None);
+        };
+        if last_credentials.client_id != client_id
+            || last_credentials.token_response != WrappedOAuthTokenResponse(credentials.clone())
+            || token_needs_refresh(last_credentials.expires_at)
+            || (last_credentials.expires_at.is_none() && credentials.expires_in().is_some())
+        {
+            return Ok(None);
+        }
+        Ok(Some(credentials.access_token().secret().to_string()))
     }
 
     async fn credentials_changed(&self, manager: &AuthorizationManager) -> Result<bool> {

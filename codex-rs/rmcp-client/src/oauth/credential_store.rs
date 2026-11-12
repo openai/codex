@@ -130,12 +130,38 @@ impl<K: KeyringStore + Clone + 'static> OAuthCredentialStore<K> {
         }
     }
 
+    pub(crate) async fn reuse_access_token(
+        &self,
+        manager: &mut AuthorizationManager,
+        cached_access_token: &str,
+    ) -> Result<String, AuthError> {
+        let guard = self
+            .acquire_transaction_guard_matching(Some(cached_access_token))
+            .await?;
+        // RMCP may refresh on expiry, so it must reuse the lock already held here.
+        manager.set_credential_store(Self {
+            inner: Arc::clone(&self.inner),
+            held_refresh_guard: Some(guard),
+        });
+        let result = manager.get_access_token().await;
+        manager.set_credential_store(self.clone());
+        result
+    }
+
     pub(crate) async fn stored_credentials(&self) -> Option<StoredOAuthTokens> {
         normalized_oauth_credentials(self.inner.last_credentials.lock().await.as_ref())
     }
 
     pub(crate) async fn acquire_transaction_guard(
         &self,
+    ) -> Result<Arc<RefreshCredentialLock>, AuthError> {
+        self.acquire_transaction_guard_matching(/*cached_access_token*/ None)
+            .await
+    }
+
+    async fn acquire_transaction_guard_matching(
+        &self,
+        cached_access_token: Option<&str>,
     ) -> Result<Arc<RefreshCredentialLock>, AuthError> {
         let guard = Arc::new(
             RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
@@ -153,8 +179,10 @@ impl<K: KeyringStore + Clone + 'static> OAuthCredentialStore<K> {
         .map_err(credential_store_error)?
         .map_err(credential_store_error)?
         .ok_or(AuthError::AuthorizationRequired)?;
-        if normalized_oauth_credentials(Some(&tokens))
-            == *self.inner.rejected_credentials.lock().await
+        if cached_access_token
+            .is_some_and(|cached| tokens.token_response.0.access_token().secret() != cached)
+            || normalized_oauth_credentials(Some(&tokens))
+                == *self.inner.rejected_credentials.lock().await
         {
             return Err(AuthError::AuthorizationRequired);
         }

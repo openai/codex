@@ -48,6 +48,7 @@ use crate::oauth::FallbackTokenEntry;
 use crate::oauth::OAuthCredentialStore;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::OAuthRuntime;
+use crate::oauth::OAuthStreamableHttpClient;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
@@ -171,6 +172,28 @@ async fn fresh_preparation_skips_storage_and_refresh_lock() -> Result<()> {
         drop(held_lock);
     }
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_access_token_honors_relative_expiry_without_an_absolute_deadline() -> Result<()> {
+    let (_env, _server, mut tokens) = test_context().await?;
+    tokens.expires_at = None;
+    tokens.token_response.0.set_refresh_token(None);
+    tokens.token_response.0.set_expires_in(None);
+    save_oauth_tokens_to_file(&tokens)?;
+
+    // Older Keyring records supplied only the relative lifetime to the manager.
+    for lifetime in [Duration::from_secs(/*secs*/ 3600), Duration::ZERO] {
+        tokens.token_response.0.set_expires_in(Some(&lifetime));
+        let runtime = runtime_for(&tokens, crate::McpOAuthRefreshMode::Legacy).await?;
+        let result = runtime.get_access_token().await;
+        if lifetime.is_zero() {
+            assert!(matches!(result, Err(AuthError::AuthorizationRequired)));
+        } else {
+            assert_eq!(result?, *tokens.token_response.0.access_token().secret());
+        }
+    }
     Ok(())
 }
 
@@ -633,12 +656,33 @@ async fn proactive_refresh_failure_with_unexpired_token_does_not_require_reautho
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn caller_cancellation_does_not_cancel_refresh_persistence() -> Result<()> {
-    assert_caller_cancellation(crate::McpOAuthRefreshMode::Legacy).await?;
-    assert_caller_cancellation(crate::McpOAuthRefreshMode::Coordinated).await
+    for mode in [
+        crate::McpOAuthRefreshMode::Legacy,
+        crate::McpOAuthRefreshMode::Coordinated,
+    ] {
+        for reactive in [false, true] {
+            assert_caller_cancellation(mode, reactive).await?;
+        }
+    }
+    Ok(())
 }
 
-async fn assert_caller_cancellation(mode: crate::McpOAuthRefreshMode) -> Result<()> {
-    let (_env, server, initial) = test_context().await?;
+async fn assert_caller_cancellation(
+    mode: crate::McpOAuthRefreshMode,
+    reactive: bool,
+) -> Result<()> {
+    let (_env, server, mut initial) = test_context().await?;
+    if reactive {
+        let fresh = sample_tokens();
+        initial.token_response = fresh.token_response;
+        initial.expires_at = fresh.expires_at;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer"))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
     let (request_received_tx, request_received_rx) = mpsc::channel();
     let (release_response_tx, release_response_rx) = mpsc::channel();
     let release_response_rx = Arc::new(std::sync::Mutex::new(release_response_rx));
@@ -657,6 +701,7 @@ async fn assert_caller_cancellation(mode: crate::McpOAuthRefreshMode) -> Result<
                 .expect("wait to release OAuth refresh response");
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "cancel-safe-access-token",
+                "refresh_token": "rotated-refresh-token",
                 "token_type": "Bearer",
                 "expires_in": 3600,
             }))
@@ -666,7 +711,38 @@ async fn assert_caller_cancellation(mode: crate::McpOAuthRefreshMode) -> Result<
         .await;
     save_oauth_tokens_to_file(&initial)?;
     let runtime = runtime_for(&initial, mode).await?;
-    let caller = tokio::spawn(async move { runtime.refresh_if_needed().await });
+    let uri: Arc<str> = initial.url.clone().into();
+    let caller = tokio::spawn(async move {
+        if reactive {
+            let client = OAuthStreamableHttpClient::new(
+                StreamableHttpClientAdapter::new(
+                    Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+                        OutboundProxyPolicy::ReqwestDefault,
+                    ))),
+                    HeaderMap::new(),
+                    /*auth_provider*/ None,
+                    /*has_configured_headers*/ false,
+                    StreamableHttpRedirectMode::Legacy,
+                    Arc::default(),
+                ),
+                runtime,
+            );
+            client
+                .post_message(
+                    uri,
+                    serde_json::from_value(
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"ping"}),
+                    )?,
+                    /*session_id*/ None,
+                    /*auth_token*/ None,
+                    Default::default(),
+                )
+                .await?;
+            Ok(())
+        } else {
+            runtime.refresh_if_needed().await
+        }
+    });
 
     tokio::task::spawn_blocking(move || {
         request_received_rx
@@ -699,6 +775,14 @@ async fn assert_caller_cancellation(mode: crate::McpOAuthRefreshMode) -> Result<
     assert_eq!(
         stored.token_response.0.access_token().secret(),
         "cancel-safe-access-token"
+    );
+    assert_eq!(
+        stored
+            .token_response
+            .0
+            .refresh_token()
+            .map(RefreshToken::secret),
+        Some(&"rotated-refresh-token".to_string())
     );
     server.verify().await;
     Ok(())
@@ -1037,6 +1121,100 @@ fn expired_tokens(url: &str) -> StoredOAuthTokens {
         .0
         .set_expires_in(Some(&Duration::ZERO));
     tokens
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_reactive_refreshes_recheck_token_and_expiry() -> Result<()> {
+    for mode in [
+        crate::McpOAuthRefreshMode::Legacy,
+        crate::McpOAuthRefreshMode::Coordinated,
+    ] {
+        for expired_replacement in [false, true] {
+            let (_env, server, mut initial) = test_context().await?;
+            let rejected = if expired_replacement {
+                // A late 401 for an older token must not reuse the already-expired replacement.
+                "previous-access-token".to_string()
+            } else {
+                let fresh = sample_tokens();
+                initial.token_response = fresh.token_response;
+                initial.expires_at = fresh.expires_at;
+                initial.token_response.0.access_token().secret().clone()
+            };
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .and(body_string_contains("grant_type=refresh_token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "refreshed-access-token",
+                    "refresh_token": "rotated-refresh-token",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            save_oauth_tokens_to_file(&initial)?;
+            let runtime = runtime_for(&initial, mode).await?;
+            let (first, second) = tokio::try_join!(
+                runtime.refresh_access_token(&rejected),
+                runtime.refresh_access_token(&rejected),
+            )?;
+            assert_eq!(first, "refreshed-access-token");
+            assert_eq!(second, first);
+            if mode == crate::McpOAuthRefreshMode::Coordinated && !expired_replacement {
+                delete_oauth_tokens(
+                    &initial.server_name,
+                    &initial.url,
+                    OAuthCredentialsStoreMode::File,
+                    AuthKeyringBackendKind::Direct,
+                )
+                .await?;
+                assert!(matches!(
+                    runtime.refresh_access_token(&rejected).await,
+                    Err(AuthError::AuthorizationRequired)
+                ));
+            }
+            server.verify().await;
+        }
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "hold the manager to exercise cancellable admission"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_reactive_waiter_never_exchanges_tokens() -> Result<()> {
+    for mode in [
+        crate::McpOAuthRefreshMode::Legacy,
+        crate::McpOAuthRefreshMode::Coordinated,
+    ] {
+        let (_env, server, initial) = test_context().await?;
+        save_oauth_tokens_to_file(&initial)?;
+        let runtime = runtime_for(&initial, mode).await?;
+        let manager = match &runtime {
+            OAuthRuntime::Legacy(persistor) => &persistor.inner.authorization_manager,
+            OAuthRuntime::Coordinated { auth_manager, .. } => auth_manager,
+        };
+        let guard = manager.lock().await;
+        let mut refresh = Box::pin(runtime.refresh_access_token("access-token"));
+        assert!(futures::poll!(refresh.as_mut()).is_pending());
+        drop(refresh);
+        drop(guard);
+        // The manager and credential lock must both be free once admission is cancelled.
+        let _manager = manager.try_lock().expect("no detached waiter");
+        let _credential = tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 2),
+            RefreshCredentialLock::acquire_for_server(&initial.server_name, &initial.url),
+        )
+        .await??;
+        assert_eq!(
+            load_oauth_tokens_from_file(&initial.server_name, &initial.url)?,
+            Some(initial)
+        );
+        server.verify().await;
+    }
+    Ok(())
 }
 
 #[expect(
