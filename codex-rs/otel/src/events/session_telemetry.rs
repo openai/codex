@@ -12,6 +12,8 @@ use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
 use crate::metrics::PLUGIN_INSTALL_SUGGESTION_METRIC;
+use crate::metrics::REASONING_ITEMS_REMOVED_METRIC;
+use crate::metrics::REASONING_REPLAY_COUNT_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
@@ -40,6 +42,7 @@ use crate::sanitize_metric_tag_value;
 use crate::tool_result::ToolResultEvent;
 use crate::tool_result::emit_tool_result;
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ReasoningRemovalReason;
 use codex_api::ResponseEvent;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -646,6 +649,37 @@ impl SessionTelemetry {
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
         handle_responses_span.record("otel.name", SessionTelemetry::responses_type(event));
+
+        if let ResponseEvent::Completed {
+            reasoning_removals, ..
+        } = event
+        {
+            let report = match reasoning_removals {
+                None => "unavailable",
+                Some(counts) if counts.is_empty() => "no_removals_reported",
+                Some(counts) if counts.contains_key(&ReasoningRemovalReason::PrefixMismatch) => {
+                    "prefix_mismatch_reported"
+                }
+                Some(_) => "removals_reported",
+            };
+            let mut tags = vec![("report", report)];
+            if let Some(product_sku) = self.metadata.product_sku {
+                tags.push(("product_sku", product_sku));
+            }
+            self.counter(REASONING_REPLAY_COUNT_METRIC, /*inc*/ 1, &tags);
+            if let Some(counts) = reasoning_removals {
+                for reason in ReasoningRemovalReason::ALL {
+                    let count = counts.get(&reason).copied().unwrap_or_default();
+                    tags[0] = ("reason", reason.as_str());
+                    self.histogram_with_boundaries(
+                        REASONING_ITEMS_REMOVED_METRIC,
+                        count,
+                        &[0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0],
+                        &tags,
+                    );
+                }
+            }
+        }
 
         match event {
             ResponseEvent::OutputItemDone(item) => {

@@ -1433,6 +1433,7 @@ mod tests {
             response_id: "resp-compact".into(),
             token_usage: Some(usage.clone()),
             usage_metadata: None,
+            reasoning_removals: None,
             end_turn: Some(true),
         })]);
         let result = collect_compaction_output(
@@ -1485,6 +1486,7 @@ mod tests {
                     amount: Some("0.125".to_string()),
                     metadata: Some(serde_json::json!({ "extra": { "label": "example" } })),
                 }),
+                reasoning_removals: None,
                 end_turn: Some(true),
             }),
         ]);

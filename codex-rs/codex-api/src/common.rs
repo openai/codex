@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -78,6 +79,40 @@ pub struct MemorySummarizeOutput {
 #[derive(Clone, Debug)]
 pub struct ResponseId(pub String);
 
+/// A bounded reason for removing a replayed reasoning item from model input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReasoningRemovalReason {
+    OrganizationMismatch,
+    EndUserMismatch,
+    ModelMismatch,
+    PrefixMismatch,
+    TurnBoundary,
+    Other,
+}
+
+impl ReasoningRemovalReason {
+    /// Every metric category, including unrecognized API reasons.
+    pub const ALL: [Self; 6] = [
+        Self::OrganizationMismatch,
+        Self::EndUserMismatch,
+        Self::ModelMismatch,
+        Self::PrefixMismatch,
+        Self::TurnBoundary,
+        Self::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OrganizationMismatch => "organization_mismatch",
+            Self::EndUserMismatch => "end_user_mismatch",
+            Self::ModelMismatch => "model_mismatch",
+            Self::PrefixMismatch => "prefix_mismatch",
+            Self::TurnBoundary => "turn_boundary",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created {
@@ -104,6 +139,9 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
         usage_metadata: Option<ResponseUsageMetadata>,
+        /// Reported reasoning removals by bounded reason. Missing or non-array
+        /// reports are unavailable; an empty map means no removals were reported.
+        reasoning_removals: Option<BTreeMap<ReasoningRemovalReason, i64>>,
         /// Did the model affirmatively end its turn? Some providers do not set this,
         /// so we rely on fallback logic when this is `None`.
         end_turn: Option<bool>,

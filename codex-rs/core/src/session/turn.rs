@@ -3178,7 +3178,7 @@ async fn try_run_sampling_request(
         let Some(event) = resampling.filter(event, &step_context.tool_router) else {
             continue;
         };
-        sess.services
+        step_context
             .session_telemetry
             .record_responses(&handle_responses, &event);
 
@@ -3532,6 +3532,7 @@ async fn try_run_sampling_request(
                 response_id,
                 token_usage,
                 usage_metadata,
+                reasoning_removals: _,
                 end_turn,
             } => {
                 if let Some(accepted) = pending_audio.take() {

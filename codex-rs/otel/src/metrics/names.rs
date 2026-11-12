@@ -34,6 +34,9 @@ pub const RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC: &str =
     "codex.responses_api_engine_iapi_tbt.duration_ms";
 pub const RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC: &str =
     "codex.responses_api_engine_service_tbt.duration_ms";
+pub const REASONING_REPLAY_COUNT_METRIC: &str = "codex.responses.reasoning_replay";
+/// Histogram of reported removals per sampling response and reason, including zeros.
+pub const REASONING_ITEMS_REMOVED_METRIC: &str = "codex.responses.reasoning_items_removed";
 pub const TURN_E2E_DURATION_METRIC: &str = "codex.turn.e2e_duration_ms";
 pub const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
 pub const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";
