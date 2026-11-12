@@ -6,6 +6,8 @@
 
 use super::footer::FooterProps;
 use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::ShortcutHint;
 use crate::multi_agents::next_agent_shortcut;
 use crate::multi_agents::previous_agent_shortcut;
 use crate::shortcut_help::Group;
@@ -23,122 +25,148 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
+struct Entry {
+    keys: [Option<ShortcutHint>; 2],
+    action: &'static str,
+    repeat_label: bool,
+}
+
+impl Entry {
+    fn hint(key: Option<ShortcutHint>, action: &'static str) -> Self {
+        Self {
+            keys: [key, None],
+            action,
+            repeat_label: false,
+        }
+    }
+
+    fn key(key: KeyBinding, action: &'static str) -> Self {
+        Self::hint(Some(key.into()), action)
+    }
+
+    fn pair(action: &'static str, keys: [KeyBinding; 2]) -> Self {
+        Self {
+            keys: keys.map(|key| Some(key.into())),
+            action,
+            repeat_label: false,
+        }
+    }
+}
+
+fn bindings(props: &FooterProps) -> [(&'static str, Vec<Entry>); 3] {
+    use KeyCode as K;
     let hints = props.key_hints;
-    let mut compose = Group {
-        title: "Compose",
-        entries: vec![
-            Shortcut::new(key_hint::plain(KeyCode::Char('/')), "Commands"),
-            Shortcut::new(key_hint::plain(KeyCode::Char('@')), "Mention files"),
-            Shortcut::new(key_hint::plain(KeyCode::Char('!')), "Shell command"),
-        ],
+    let paste = if props.is_wsl {
+        key_hint::ctrl_alt(K::Char('v'))
+    } else {
+        key_hint::ctrl(K::Char('v'))
     };
-    compose.push(hints.insert_newline, "New line");
-    compose.entries.push(Shortcut::new(
-        if props.is_wsl {
-            key_hint::ctrl_alt(KeyCode::Char('v'))
-        } else {
-            key_hint::ctrl(KeyCode::Char('v'))
-        },
-        "Paste image",
-    ));
-    compose.push(hints.external_editor, "External editor");
-    compose.push(hints.history_search, "Search history");
-    if let Some(key) = hints.edit_previous {
-        let label = key.display_label();
-        compose.entries.push(Shortcut {
-            key: if props.esc_backtrack_hint {
-                label
-            } else {
-                format!("{label} {label}")
-            },
+    let compose = vec![
+        Entry::key(key_hint::plain(K::Char('/')), "Commands"),
+        Entry::key(key_hint::plain(K::Char('@')), "Mention files"),
+        Entry::key(key_hint::plain(K::Char('!')), "Shell command"),
+        Entry::hint(hints.insert_newline, "New line"),
+        Entry::key(paste, "Paste image"),
+        Entry::hint(hints.external_editor, "External editor"),
+        Entry::hint(hints.history_search, "Search history"),
+        Entry {
+            keys: [hints.edit_previous, None],
             action: "Edit last message",
-        });
-    }
-
-    let mut session = Group {
-        title: "Session",
-        entries: Vec::new(),
-    };
-    session.push(
-        hints.queue,
-        if props.is_task_running || props.queue_submissions {
-            "Queue message"
-        } else {
-            "Send message"
+            repeat_label: !props.esc_backtrack_hint,
         },
-    );
-    if props.collaboration_modes_enabled {
-        session
-            .entries
-            .push(Shortcut::new(key_hint::shift(KeyCode::Tab), "Change mode"));
-    }
-    session.push(hints.reasoning_down, "Less reasoning");
-    session.push(hints.reasoning_up, "More reasoning");
-    session.push(hints.toggle_voice, "Voice");
-    session.push(hints.agents, "Agents (empty prompt)");
-    session.entries.push(Shortcut {
-        key: format!(
-            "{} / {}",
-            previous_agent_shortcut().display_label(),
-            next_agent_shortcut().display_label()
+    ];
+
+    let session = vec![
+        Entry::hint(
+            hints.queue,
+            if props.is_task_running || props.queue_submissions {
+                "Queue message"
+            } else {
+                "Send message"
+            },
         ),
-        action: "Subagents (empty prompt)",
-    });
-    session.push(hints.focus_activity, "Inspect activity");
-    session.entries.push(Shortcut::new(
-        key_hint::ctrl(KeyCode::Char('c')),
-        if props.is_task_running {
-            "Interrupt"
-        } else {
-            "Quit"
-        },
-    ));
+        Entry::hint(
+            props
+                .collaboration_modes_enabled
+                .then_some(key_hint::shift(K::Tab).into()),
+            "Change mode",
+        ),
+        Entry::hint(hints.reasoning_down, "Less reasoning"),
+        Entry::hint(hints.reasoning_up, "More reasoning"),
+        Entry::hint(hints.toggle_voice, "Voice"),
+        Entry::hint(hints.agents, "Agents (empty prompt)"),
+        Entry::pair(
+            "Subagents (empty prompt)",
+            [previous_agent_shortcut(), next_agent_shortcut()],
+        ),
+        Entry::hint(hints.focus_activity, "Inspect activity"),
+        Entry::key(
+            key_hint::ctrl(K::Char('c')),
+            if props.is_task_running {
+                "Interrupt"
+            } else {
+                "Quit"
+            },
+        ),
+    ];
 
-    let mut transcript = Group {
-        title: "Transcript (open first)",
-        entries: Vec::new(),
-    };
-    transcript.push(hints.show_transcript, "Open transcript");
-    transcript.push(hints.find_transcript, "Find text");
-    transcript.entries.extend([
-        Shortcut {
-            key: "pgup / pgdn".into(),
-            action: "Scroll",
-        },
-        Shortcut::new(key_hint::ctrl(KeyCode::Char(' ')), "Start selection"),
-        Shortcut {
-            key: format!(
-                "{} / {}",
-                key_hint::ctrl(KeyCode::Home).display_label(),
-                key_hint::ctrl(KeyCode::End).display_label()
-            ),
-            action: "Top / latest",
-        },
+    let alt_shift = KeyModifiers::ALT | KeyModifiers::SHIFT;
+    let transcript = vec![
+        Entry::hint(hints.show_transcript, "Open transcript"),
+        Entry::hint(hints.find_transcript, "Find text"),
+        Entry::pair(
+            "Scroll",
+            [key_hint::plain(K::PageUp), key_hint::plain(K::PageDown)],
+        ),
+        Entry::key(key_hint::ctrl(K::Char(' ')), "Start selection"),
+        Entry::pair(
+            "Top / latest",
+            [key_hint::ctrl(K::Home), key_hint::ctrl(K::End)],
+        ),
         // Keep both jump alternatives: the terminal may be on another OS over SSH.
-        Shortcut {
-            key: format!(
-                "{} / {}",
-                key_hint::KeyBinding::new(
-                    KeyCode::Char(','),
-                    KeyModifiers::ALT | KeyModifiers::SHIFT
-                )
-                .display_label(),
-                key_hint::KeyBinding::new(
-                    KeyCode::Char('.'),
-                    KeyModifiers::ALT | KeyModifiers::SHIFT
-                )
-                .display_label()
-            ),
-            action: "Top / latest",
-        },
-    ]);
+        Entry::pair(
+            "Top / latest",
+            [
+                KeyBinding::new(K::Char(','), alt_shift),
+                KeyBinding::new(K::Char('.'), alt_shift),
+            ],
+        ),
+    ];
 
+    [
+        ("Compose", compose),
+        ("Session", session),
+        ("Transcript (open first)", transcript),
+    ]
+}
+
+pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
+    let groups = bindings(props).map(|(title, entries)| {
+        let entries = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let mut keys = entry
+                    .keys
+                    .into_iter()
+                    .flatten()
+                    .map(ShortcutHint::display_label);
+                let key = keys.next()?;
+                Some(Shortcut {
+                    key: if entry.repeat_label {
+                        format!("{key} {key}")
+                    } else if let Some(alternative) = keys.next() {
+                        format!("{key} / {alternative}")
+                    } else {
+                        key
+                    },
+                    action: entry.action,
+                })
+            })
+            .collect();
+        Group { title, entries }
+    });
     let mut result = vec![Line::from("Keyboard shortcuts").bold(), Line::default()];
-    result.extend(crate::shortcut_help::group_lines(
-        [compose, session, transcript],
-        width,
-    ));
+    result.extend(crate::shortcut_help::group_lines(groups, width));
     let width = usize::from(width.max(/*other*/ 1));
     result.push(Line::default());
     result.extend(footer_lines(width));
