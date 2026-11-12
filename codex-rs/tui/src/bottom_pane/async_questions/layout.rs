@@ -52,7 +52,7 @@ impl AsyncQuestions {
         let mut spacer_after_input = 0;
         let progress_height;
         let footer_lines;
-        let notes_height;
+        let mut notes_height = 0;
 
         if has_options {
             let min_options_height = remaining.min(1);
@@ -71,7 +71,6 @@ impl AsyncQuestions {
             spacer_after_question = u16::from(remaining > 0);
             remaining -= spacer_after_question;
             options_height += remaining.min(full_options_height.saturating_sub(options_height));
-            notes_height = 0;
         } else {
             // Freeform answers take their preferred input height before hints and progress.
             let preferred_notes = self

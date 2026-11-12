@@ -16,12 +16,8 @@ fn microphone_selection_excludes_playback_channels() {
     plugged_in[3] = 0.7;
     let mut unplugged = plugged_in;
     unplugged[0] = 0.0;
-    let interleaved = [plugged_in, unplugged].concat();
-    let captured: Vec<_> = interleaved
-        .chunks_exact(/*chunk_size*/ 16)
-        .map(|frame| source.sample(frame))
-        .collect();
-    assert_eq!(captured, vec![0.25, 0.0]);
+    let captured = [source.sample(&plugged_in), source.sample(&unplugged)];
+    assert_eq!(captured, [0.25, 0.0]);
 }
 
 #[test]

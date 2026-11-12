@@ -92,7 +92,7 @@ where
             .iter()
             .map(|spec| longest_suffix_prefix_len(pending, spec.open))
             .max()
-            .map_or(0, std::convert::identity)
+            .unwrap_or(0)
     }
 
     fn push_visible_prefix(out: &mut StreamTextChunk<ExtractedInlineTag<T>>, pending: &str) {
