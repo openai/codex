@@ -58,6 +58,15 @@ pub(crate) struct ThreadSessionState {
 }
 
 impl ThreadSessionState {
+    pub(crate) fn set_fork_parent(&mut self, parent: Option<&str>) {
+        let parent = parent.and_then(|id| ThreadId::from_string(id).ok());
+        // The cached title belongs to the old parent. Drop it if the parent changes or is absent.
+        if self.forked_from_id != parent {
+            self.fork_parent_title = None;
+        }
+        self.forked_from_id = parent;
+    }
+
     pub(crate) fn set_cwd_retargeting_implicit_runtime_workspace_root(
         &mut self,
         cwd: AbsolutePathBuf,

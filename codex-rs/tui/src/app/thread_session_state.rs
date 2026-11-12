@@ -115,6 +115,7 @@ impl App {
         session.windows_sandbox_host =
             crate::windows_sandbox::host_from_environments(thread.environments.as_deref());
         session.thread_id = thread_id;
+        session.set_fork_parent(thread.forked_from_id.as_deref());
         session.daybreak_enabled = thread.daybreak_enabled.unwrap_or(false);
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
@@ -401,23 +402,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_read_fallback_uses_active_permission_settings() {
+    async fn reconstructed_session_uses_target_lineage_and_active_permissions() {
         let mut app = make_test_app().await;
         let primary_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000404").expect("valid thread");
         let read_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000405").expect("valid thread");
+        let other_parent = ThreadId::new();
         let primary_session = ThreadSessionState {
+            forked_from_id: Some(ThreadId::new()),
+            fork_parent_title: Some("Previous parent".into()),
             permission_profile: PermissionProfile::workspace_write(),
             ..test_thread_session(primary_thread_id, test_path_buf("/tmp/primary"))
         };
-        let read_thread = Thread {
+        let mut read_thread = Thread {
             originator: None,
             environments: None,
             id: read_thread_id.to_string(),
             extra: None,
             session_id: read_thread_id.to_string(),
-            forked_from_id: None,
+            forked_from_id: Some(other_parent.to_string()),
             attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "read thread".to_string(),
@@ -454,6 +458,10 @@ mod tests {
             .session_state_for_thread_read(read_thread_id, &read_thread)
             .await;
 
+        assert_eq!(
+            (session.forked_from_id, session.fork_parent_title),
+            (Some(other_parent), None)
+        );
         let expected_permission_profile = app
             .chat_widget
             .config_ref()
@@ -466,6 +474,27 @@ mod tests {
             app.config.permissions.permission_profile().clone(),
             "thread/read fallback must use the active widget permissions rather than stale app \
              config defaults"
+        );
+
+        read_thread.forked_from_id = None;
+        app.enqueue_thread_notification(
+            read_thread_id,
+            codex_app_server_protocol::ServerNotification::ThreadStarted(
+                codex_app_server_protocol::ThreadStartedNotification {
+                    thread: read_thread,
+                },
+            ),
+        )
+        .await
+        .expect("thread started");
+        let store = app.thread_event_channels[&read_thread_id]
+            .store
+            .lock()
+            .await;
+        let started = store.session.as_ref().expect("inferred session");
+        assert_eq!(
+            (started.forked_from_id, &started.fork_parent_title),
+            (None, &None)
         );
     }
 }

@@ -1422,6 +1422,8 @@ impl App {
     ) -> Option<ThreadSessionState> {
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
+        // The primary session supplies defaults. The new thread supplies its own fork parent.
+        session.set_fork_parent(notification.thread.forked_from_id.as_deref());
         session.daybreak_enabled = notification.thread.daybreak_enabled.unwrap_or(false);
         session.windows_sandbox_host = crate::windows_sandbox::host_from_environments(
             notification.thread.environments.as_deref(),
