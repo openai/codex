@@ -17,6 +17,7 @@ use codex_app_server_protocol::RequestId;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::fs_wait::wait_for_path_exists;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -51,10 +52,15 @@ fn write_marketplace_files(root: &Path, marketplace_name: &str, marker: &str) ->
     Ok(())
 }
 
-fn init_marketplace_repo(root: &Path, marketplace_name: &str, marker: &str) -> Result<String> {
+fn init_git_repo(root: &Path) -> Result<()> {
     run_git(root, &["init"])?;
     run_git(root, &["config", "user.email", "codex@example.com"])?;
     run_git(root, &["config", "user.name", "Codex Tests"])?;
+    Ok(())
+}
+
+fn init_marketplace_repo(root: &Path, marketplace_name: &str, marker: &str) -> Result<String> {
+    init_git_repo(root)?;
     write_marketplace_files(root, marketplace_name, marker)?;
     run_git(root, &["add", "."])?;
     run_git(root, &["commit", "-m", "initial marketplace"])?;
@@ -205,6 +211,108 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
     Ok(())
 }
 
+fn write_plugin_release(root: &Path, name: &str, version: &str, instructions: &str) -> Result<()> {
+    std::fs::create_dir_all(root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(root.join("skills/deploy"))?;
+    let manifest = serde_json::json!({ "name": name, "version": version });
+    std::fs::write(root.join(".codex-plugin/plugin.json"), manifest.to_string())?;
+    std::fs::write(root.join("skills/deploy/SKILL.md"), instructions)?;
+    Ok(())
+}
+
+fn publish_stable(repo: &Path) -> Result<()> {
+    // Git runs shell aliases with its own shell, including on Windows.
+    let publish = "alias.publish-stable=!set -e
+git add .
+git commit -qm release
+git tag -f -a stable -m release";
+    run_git(repo, &["-c", publish, "publish-stable"])?;
+    Ok(())
+}
+
+async fn list_local_plugins(server: &mut TestAppServer, force_refetch: bool) -> Result<()> {
+    let _: PluginListResponse = server
+        .request(|request_id| ClientRequest::PluginList {
+            request_id,
+            params: PluginListParams {
+                cwds: None,
+                marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
+                force_refetch,
+            },
+        })
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn first_full_plugin_list_installs_only_new_plugin_versions() -> Result<()> {
+    let home = TempDir::new()?;
+    let catalog = TempDir::new()?;
+    let repo = TempDir::new()?;
+    init_git_repo(repo.path())?;
+    let repo_url = url::Url::from_directory_path(repo.path()).expect("absolute plugin repo path");
+    let cache = home.path().join("plugins/cache/team");
+    let plugins = ["docs", "release-guide"];
+    for name in plugins {
+        write_plugin_release(&repo.path().join(name), name, "1.0.0", "production")?;
+        write_plugin_release(&cache.join(name).join("1.0.0"), name, "1.0.0", "production")?;
+    }
+    publish_stable(repo.path())?;
+    let entries = plugins.map(|name| serde_json::json!({
+        "name": name,
+        "source": { "source": "git-subdir", "url": repo_url.as_str(), "path": name, "ref": "stable" }
+    }));
+    std::fs::create_dir_all(catalog.path().join(".agents/plugins"))?;
+    std::fs::write(
+        catalog.path().join(".agents/plugins/marketplace.json"),
+        serde_json::json!({ "name": "team", "plugins": entries }).to_string(),
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+[plugins."docs@team"]
+enabled = true
+[plugins."release-guide@team"]
+enabled = true
+"#,
+    )?;
+    record_user_marketplace(
+        home.path(),
+        "team",
+        &configured_local_marketplace_update(
+            catalog.path().to_str().context("UTF-8 catalog path")?,
+        ),
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+
+    write_plugin_release(&repo.path().join("docs"), "docs", "1.0.0", "staging")?;
+    write_plugin_release(
+        &repo.path().join("release-guide"),
+        "release-guide",
+        "1.1.0",
+        "staging",
+    )?;
+    publish_stable(repo.path())?;
+    list_local_plugins(&mut server, /*force_refetch*/ false).await?;
+    // The worker processes docs before release-guide. Seeing the new release means it checked both.
+    let skill = "skills/deploy/SKILL.md";
+    let updated = wait_for_path_exists(
+        cache.join("release-guide/1.1.0").join(skill),
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    assert_eq!(std::fs::read_to_string(updated)?, "staging");
+    assert_eq!(
+        std::fs::read_to_string(cache.join("docs/1.0.0").join(skill))?,
+        "production"
+    );
+    Ok(())
+}
+
 #[test_case(false; "user config")]
 #[test_case(true; "invalid user config fallback")]
 #[tokio::test]
@@ -349,16 +457,7 @@ async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configu
     )?;
     run_git(plugin_source.path(), &["add", "."])?;
     run_git(plugin_source.path(), &["commit", "-qm", "upgrade plugin"])?;
-    let _: PluginListResponse = server
-        .request(|request_id| ClientRequest::PluginList {
-            request_id,
-            params: PluginListParams {
-                cwds: None,
-                marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
-                force_refetch: true,
-            },
-        })
-        .await?;
+    list_local_plugins(&mut server, /*force_refetch*/ true).await?;
     assert!(
         codex_home
             .path()

@@ -106,7 +106,7 @@ enum PluginLoadScope<'a> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum NonCuratedCacheRefreshMode {
+pub(crate) enum NonCuratedCacheRefreshMode {
     IfVersionChanged,
     ForceReinstall,
 }
@@ -534,67 +534,24 @@ pub(crate) fn refresh_non_curated_plugin_cache(
     additional_roots: &[AbsolutePathBuf],
     configured_plugin_keys: &[String],
 ) -> Result<bool, String> {
-    collapse_non_curated_cache_refresh(refresh_non_curated_plugin_cache_detailed(
+    collapse_non_curated_cache_refresh(refresh_non_curated_plugin_cache_with_mode(
         codex_home,
         additional_roots,
-        configured_plugin_keys,
-        PluginGitMode::Automatic,
-    ))
-}
-
-pub(crate) fn refresh_non_curated_plugin_cache_detailed(
-    codex_home: &Path,
-    additional_roots: &[AbsolutePathBuf],
-    configured_plugin_keys: &[String],
-    git_mode: PluginGitMode,
-) -> Result<NonCuratedCacheRefreshOutcome, String> {
-    refresh_non_curated_plugin_cache_with_mode(
-        codex_home,
-        additional_roots,
-        configured_plugin_keys,
+        configured_plugin_keys.iter().map(String::as_str),
         NonCuratedCacheRefreshMode::IfVersionChanged,
-        git_mode,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn refresh_non_curated_plugin_cache_force_reinstall(
-    codex_home: &Path,
-    additional_roots: &[AbsolutePathBuf],
-    configured_plugin_keys: &[String],
-) -> Result<bool, String> {
-    collapse_non_curated_cache_refresh(refresh_non_curated_plugin_cache_force_reinstall_detailed(
-        codex_home,
-        additional_roots,
-        configured_plugin_keys,
         PluginGitMode::Automatic,
     ))
 }
 
-pub(crate) fn refresh_non_curated_plugin_cache_force_reinstall_detailed(
+pub(crate) fn refresh_non_curated_plugin_cache_with_mode<'a>(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
-    configured_plugin_keys: &[String],
-    git_mode: PluginGitMode,
-) -> Result<NonCuratedCacheRefreshOutcome, String> {
-    refresh_non_curated_plugin_cache_with_mode(
-        codex_home,
-        additional_roots,
-        configured_plugin_keys,
-        NonCuratedCacheRefreshMode::ForceReinstall,
-        git_mode,
-    )
-}
-
-fn refresh_non_curated_plugin_cache_with_mode(
-    codex_home: &Path,
-    additional_roots: &[AbsolutePathBuf],
-    configured_plugin_keys: &[String],
+    configured_plugin_keys: impl IntoIterator<Item = &'a str>,
     mode: NonCuratedCacheRefreshMode,
     git_mode: PluginGitMode,
 ) -> Result<NonCuratedCacheRefreshOutcome, String> {
     let mut configured_non_curated_plugin_ids = configured_plugin_keys
-        .iter()
+        .into_iter()
         .filter_map(|plugin_key| match PluginId::parse(plugin_key) {
             Ok(plugin_id) if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) => {
                 Some(plugin_id)
