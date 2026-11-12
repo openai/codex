@@ -25,6 +25,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -35,6 +36,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -517,6 +519,186 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
     );
     assert_eq!(plan_delta.delta, "- Step 1\n- Step 2\n");
     assert_eq!(plan_completed.text, "- Step 1\n- Step 2\n");
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FirstPlanRequest {
+    Interrupted,
+    CompletedBeforeDisconnect,
+    ToolContinuation,
+}
+
+#[test_case::test_case(FirstPlanRequest::Interrupted; "unfinished_retry")]
+#[test_case::test_case(FirstPlanRequest::CompletedBeforeDisconnect; "completed_retry")]
+#[test_case::test_case(FirstPlanRequest::ToolContinuation; "tool_continuation")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_keeps_only_unfinished_ids_across_model_requests(
+    first_request: FirstPlanRequest,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    // The fixture owns the directories used by paginated history.
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+            config.model_provider.supports_websockets = false;
+            config.update_plan_enabled = true;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let codex = &test.codex;
+    let session_configured = &test.session_configured;
+
+    let first_text = "<proposed_plan>\nPlan A\n";
+    let first_complete = format!("{first_text}</proposed_plan>\n");
+    let mut first_events = vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta(first_text),
+    ];
+    if !matches!(first_request, FirstPlanRequest::Interrupted) {
+        first_events.push(ev_assistant_message("msg-1", &first_complete));
+    }
+    if matches!(first_request, FirstPlanRequest::ToolContinuation) {
+        first_events.push(ev_function_call(
+            "plan-tool",
+            "update_plan",
+            r#"{"plan":[]}"#,
+        ));
+        first_events.push(ev_completed("resp-1"));
+    }
+    // The other cases close the stream before response.completed and enter the real retry loop.
+    let second_text = "<proposed_plan>\nPlan B\n</proposed_plan>\n";
+    let second_message_id = if matches!(first_request, FirstPlanRequest::Interrupted) {
+        "msg-1"
+    } else {
+        "msg-2"
+    };
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(first_events),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_message_item_added(second_message_id, ""),
+                ev_output_text_delta(second_text),
+                ev_assistant_message(second_message_id, second_text),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .start_or_steer_turn(disabled_plan_turn(
+            "please plan",
+            session_configured.model.clone(),
+            CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        )?)
+        .await?;
+
+    let mut started = Vec::new();
+    let mut deltas = Vec::new();
+    let mut completed = Vec::new();
+    let mut retries = 0;
+    loop {
+        match wait_for_event(codex, |_| true).await {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::Plan(item),
+                turn_id,
+                ..
+            }) => started.push((turn_id, item)),
+            EventMsg::PlanDelta(event) => deltas.push(event),
+            EventMsg::ItemCompleted(event) if matches!(event.item, TurnItem::Plan(_)) => {
+                completed.push(event);
+            }
+            EventMsg::StreamError(_) => retries += 1,
+            EventMsg::TurnComplete(event) => {
+                assert!(
+                    event.error.is_none(),
+                    "unexpected turn error: {:?}",
+                    event.error
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(response_mock.requests().len(), 2);
+    assert_eq!(
+        retries,
+        usize::from(!matches!(first_request, FirstPlanRequest::ToolContinuation))
+    );
+    assert_eq!(started.len(), 2);
+    let (turn_id, first_plan) = &started[0];
+    let (second_turn_id, second_plan) = &started[1];
+    assert_eq!(turn_id, second_turn_id);
+    assert_eq!(
+        first_plan.id == second_plan.id,
+        matches!(first_request, FirstPlanRequest::Interrupted),
+    );
+    assert_eq!(
+        deltas
+            .iter()
+            .map(|event| (&event.turn_id, &event.item_id, event.delta.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (turn_id, &first_plan.id, "Plan A\n"),
+            (turn_id, &second_plan.id, "Plan B\n")
+        ],
+    );
+    let mut expected_completions = Vec::new();
+    if !matches!(first_request, FirstPlanRequest::Interrupted) {
+        expected_completions.push((&first_plan.id, "Plan A\n"));
+    }
+    expected_completions.push((&second_plan.id, "Plan B\n"));
+    assert_eq!(
+        completed
+            .iter()
+            .map(|event| {
+                assert_eq!(&event.turn_id, turn_id);
+                let TurnItem::Plan(item) = &event.item else {
+                    unreachable!()
+                };
+                (&item.id, item.text.as_str())
+            })
+            .collect::<Vec<_>>(),
+        expected_completions,
+    );
+
+    codex.flush_rollout().await?;
+    let rollout = std::fs::read_to_string(codex.rollout_path().expect("paginated rollout path"))?;
+    let saved_completions = rollout
+        .lines()
+        .map(codex_rollout::parse_rollout_line)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
+                if matches!(event.item, TurnItem::Plan(_)) =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(saved_completions)?,
+        serde_json::to_value(completed)?,
+    );
 
     Ok(())
 }
