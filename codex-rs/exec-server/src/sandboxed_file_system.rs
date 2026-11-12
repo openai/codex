@@ -91,9 +91,9 @@ impl SandboxedFileSystem {
         validate_native_path(path)?;
         let command = self
             .sandbox_runner
-            .sandbox_command(sandbox)
+            .prepare_command(sandbox)
+            .await
             .map_err(map_sandbox_error)?;
-        crate::run_integrity_checks(&command).await;
         crate::sandboxed_file_open::open(command, path.clone(), mode)
             .await
             .map_err(map_sandbox_error)
