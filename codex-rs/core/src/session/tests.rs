@@ -2,6 +2,7 @@ use crate::McpRefreshReason;
 use crate::agent::LocalAgentControl;
 use codex_mcp::McpServerKey;
 use codex_protocol::ContextWindowId;
+use codex_thread_store::ThreadPersistenceMetadata;
 #[path = "compaction_replay_tests.rs"]
 mod compaction_replay_tests;
 
@@ -6254,12 +6255,10 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
         .tx_event
         .send(Event {
             id: "occupied".into(),
-            msg: EventMsg::ThreadSettingsApplied(
-                codex_protocol::protocol::ThreadSettingsAppliedEvent {
-                    thread_id: Some(session.thread_id()),
-                    thread_settings: session.thread_settings_snapshot().await,
-                },
-            ),
+            msg: EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+                thread_id: Some(session.thread_id()),
+                thread_settings: session.thread_settings_snapshot().await,
+            }),
         })
         .await
         .expect("fill event channel");
@@ -6271,7 +6270,7 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
             id: "settings".into(),
             turn_extension_init: None,
             op: Op::ThreadSettings {
-                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides::default(),
+                thread_settings: ThreadSettingsOverrides::default(),
                 reply: Some(reply),
             },
             trace: None,
@@ -6356,7 +6355,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         }),
         previous_turn_settings: Some(previous_turn_settings),
     };
-    let expected_settings = codex_protocol::protocol::ThreadSettingsAppliedEvent {
+    let expected_settings = ThreadSettingsAppliedEvent {
         thread_id: Some(session.thread_id()),
         thread_settings: session.thread_settings_snapshot().await,
     };

@@ -587,7 +587,9 @@ impl CodexThread {
 
     /// Starts a new internal continuation turn when idle, including in Plan mode.
     /// Rejects if a newer task has started, even if it has already finished.
-    /// The input must be a response item; it is never treated as user authorization.
+    /// Supply an internal response item, or empty input to wake on a result already
+    /// saved in history. An empty wake inherits the preceding turn's attribution
+    /// and adds no message or user authorization.
     pub async fn continue_turn_if_idle(
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,

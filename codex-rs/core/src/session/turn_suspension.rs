@@ -1,10 +1,12 @@
 use super::handlers;
 use super::session::Session;
 use crate::state::TaskKind;
+use crate::thread_manager::AgentTreeShutdownFailure;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::turn_input::SuspendTurnOutcome;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,4 +121,40 @@ pub(super) async fn suspend_turn_and_shutdown(
         })
         .await;
     Ok(SuspendTurnOutcome::Suspended { turn_id })
+}
+
+pub(super) async fn stop_tree_member(session: &Arc<Session>) -> bool {
+    let runtime = &session.services.local_agent_runtime;
+    let submission_id = super::new_submission_id();
+    if let Some(root) = runtime.suspension_root()
+        && session.live_thread().is_some()
+        && (root == session.thread_id
+            || session.multi_agent_version() == Some(MultiAgentVersion::V2)
+                && session
+                    .state
+                    .lock()
+                    .await
+                    .session_configuration
+                    .session_source
+                    .get_agent_path()
+                    .is_some())
+    {
+        match suspend_turn_and_shutdown(session, submission_id.clone()).await {
+            Ok(SuspendTurnOutcome::Suspended { turn_id }) => {
+                runtime.record_suspended_turn(session.thread_id, turn_id);
+                return true;
+            }
+            Ok(SuspendTurnOutcome::NotActive | SuspendTurnOutcome::UnsupportedTask) => {}
+            Err(error) => {
+                runtime.record_shutdown_failure(AgentTreeShutdownFailure::operation_failed(
+                    "tree_suspension",
+                    "suspend_regular_turn",
+                    Some(session.thread_id),
+                    "suspension_failed",
+                ));
+                warn!(thread_id = %session.thread_id, %error, "failed to suspend agent turn");
+            }
+        }
+    }
+    handlers::shutdown(session, submission_id).await
 }

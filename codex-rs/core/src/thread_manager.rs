@@ -7,6 +7,8 @@ pub use shutdown::AgentTreeShutdown;
 pub use shutdown::AgentTreeShutdownFailure;
 pub use shutdown::AgentTreeShutdownFailureReason;
 pub use shutdown::AgentTreeShutdownReport;
+pub use shutdown::LoadedSuspendedAgent;
+pub use shutdown::SuspendedAgentTree;
 pub(crate) use shutdown::thread_store_error_kind;
 
 use crate::CodexAppsToolsCache;
@@ -2083,6 +2085,22 @@ impl ThreadManagerState {
             })
     }
 
+    pub(crate) async fn load_legacy_model_context(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> CodexResult<StoredModelContext> {
+        let history = self
+            .thread_store
+            .load_history(params)
+            .await
+            .map_err(thread_store_rollout_read_error)?;
+        Ok(StoredModelContext {
+            thread_id: history.thread_id,
+            revision: history.revision,
+            items: history.items,
+        })
+    }
+
     pub(crate) async fn load_latest_model_context(
         &self,
         params: LoadThreadHistoryParams,
@@ -2121,11 +2139,31 @@ impl ThreadManagerState {
         } else {
             None
         };
+        self.send_pinned_op(
+            &thread,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            residency_guard,
+            message_delivery,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_pinned_op(
+        &self,
+        thread: &CodexThread,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+        message_delivery: Option<crate::agent_communication::MessageDelivery>,
+    ) -> CodexResult<String> {
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
             && let Some(captured_op) = capture_test_op(&op)
         {
-            log.push((thread_id, captured_op));
+            log.push((thread.session.thread_id, captured_op));
         }
         thread
             .io
@@ -2461,7 +2499,16 @@ impl ThreadManagerState {
             .config_layer_stack
             .with_mcp_ema_cancellation(cancellation);
         let runtime = request.agent_control.runtime().clone();
-        let membership = runtime.admit_start()?;
+        let options = &request.options;
+        let source = options
+            .session_source
+            .as_ref()
+            .unwrap_or(&self.session_source);
+        request.parent_thread_id = request
+            .parent_thread_id
+            .or_else(|| options.initial_history.get_resumed_parent_thread_id())
+            .or_else(|| source.parent_thread_id());
+        let membership = runtime.admit_session(request.parent_thread_id)?;
         let owns_startup = request.startup.is_none();
         let startup_state = Arc::clone(
             request
@@ -2658,14 +2705,6 @@ impl ThreadManagerState {
             }
             (_, control) => control,
         };
-        let parent_thread_id = parent_thread_id
-            .or_else(|| initial_history.get_resumed_parent_thread_id())
-            .or(match &session_source {
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                    parent_thread_id, ..
-                }) => Some(*parent_thread_id),
-                _ => None,
-            });
         // Both resume entry points must restore identities before children can be loaded lazily.
         if let InitialHistory::Resumed(resumed) = &initial_history
             && initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2)

@@ -139,23 +139,31 @@ impl LocalAgentControl {
             }
         };
 
+        self.restore_agent_identities(config, &state, descendant_ids)
+            .await;
+    }
+
+    pub(super) async fn restore_agent_identities(
+        &self,
+        config: &Config,
+        state: &ThreadManagerState,
+        descendant_ids: Vec<ThreadId>,
+    ) {
+        let registry = &self.runtime.registry;
         // Overlap storage reads, but reserve paths and nicknames in graph order.
         let mut stored_threads = stream::iter(
             descendant_ids
                 .into_iter()
                 .filter(|thread_id| registry.agent_metadata_for_thread(*thread_id).is_none())
-                .map(|thread_id| {
-                    let state = &state;
-                    async move {
-                        let stored_thread = state
-                            .read_stored_thread(ReadThreadParams {
-                                thread_id,
-                                include_archived: true,
-                                include_history: false,
-                            })
-                            .await;
-                        (thread_id, stored_thread)
-                    }
+                .map(|thread_id| async move {
+                    let stored_thread = state
+                        .read_stored_thread(ReadThreadParams {
+                            thread_id,
+                            include_archived: true,
+                            include_history: false,
+                        })
+                        .await;
+                    (thread_id, stored_thread)
                 }),
         )
         .buffered(/*n*/ 8);
@@ -306,9 +314,8 @@ impl LocalAgentControl {
         let stored_reasoning_effort = stored_thread.reasoning_effort.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
-        let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
-            .await?
-            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
+        let history =
+            load_agent_model_context(&state, thread_id, stored_thread.history_mode).await?;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             history_revision: history.revision,
             conversation_id: thread_id,
@@ -568,9 +575,30 @@ impl LocalAgentControl {
             };
         // Reserving a slot can evict an idle nested parent. Capture its instructions and
         // analytics metadata alongside its authority before the live parent can disappear.
-        let residency_slot = self
-            .reserve_v2_residency_slot(&state, &config, &membership, Some(thread_id))
-            .await?;
+        let reserve =
+            || self.reserve_v2_residency_slot(&state, &config, &membership, Some(thread_id));
+        let residency_slot = match reserve().await {
+            Err(limit)
+                if matches!(limit.details(), CodexErrorDetails::AgentLimitReached { .. }) =>
+            {
+                // A cold parent can report PendingInit despite having spawned this stored child.
+                // Try that exact parent only after the ordinary eviction policy found no slot.
+                if let Some((parent, _)) = &parent
+                    && matches!(parent.agent_status().await, AgentStatus::PendingInit)
+                    && matches!(
+                        state
+                            .try_evict_v2_thread(Arc::clone(parent), &membership)
+                            .await,
+                        Ok(ThreadEvictionOutcome::Evicted | ThreadEvictionOutcome::NotCurrent)
+                    )
+                {
+                    reserve().await?
+                } else {
+                    return Err(limit);
+                }
+            }
+            result => result?,
+        };
 
         match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
@@ -1137,9 +1165,8 @@ impl LocalAgentControl {
             .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
         let resumed_agent_nickname = stored_thread.agent_nickname.clone();
         let resumed_agent_role = stored_thread.agent_role.clone();
-        let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
-            .await?
-            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
+        let history =
+            load_agent_model_context(&state, thread_id, stored_thread.history_mode).await?;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             history_revision: history.revision,
             conversation_id: thread_id,

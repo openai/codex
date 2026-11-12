@@ -1,26 +1,41 @@
 use assert_matches::assert_matches;
+use codex_core::CodexThread;
+use codex_core::RecoverTurnRequest;
 use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInputRequest;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
+use codex_extension_api::TurnStopInput;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_response_once;
+use core_test_support::responses::mount_response_handler;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_completed;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::json;
@@ -71,48 +86,92 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     codex.submit(Op::CleanBackgroundTerminals).await.unwrap();
 }
 
-/// Suspending a root preserves its unfinished turn and initiates child shutdown. The host
-/// separately waits for tree cleanup, including any child writer failure, before recovery.
-#[test_case(false; "recovers root after stopping child")]
-#[test_case(true; "reports child writer failure separately")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_writer: bool) {
-    let server = start_mock_server().await;
-    mount_sse_once(
-        &server,
+const CHILD_RESULT: &str = "the original worker found the issue";
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ChildHandoff {
+    #[default]
+    QueuedBeforeSuspend,
+    FinishesDuringSuspend,
+    ErrorsDuringSuspend,
+    WakesIdleRoot,
+    WakeReservedBeforeSuspend,
+    ParentWriterClosed,
+    GrandchildFinishes,
+    ParentEvicted,
+}
+
+impl ChildHandoff {
+    fn has_grandchild(self) -> bool {
+        matches!(self, Self::GrandchildFinishes | Self::ParentEvicted)
+    }
+    fn wakes_root(self) -> bool {
+        matches!(self, Self::WakesIdleRoot | Self::WakeReservedBeforeSuspend)
+    }
+}
+
+#[derive(Default)]
+struct ChildCompletionGate {
+    scenario: ChildHandoff,
+    child: std::sync::OnceLock<String>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl ChildCompletionGate {
+    fn pause_if(&self, selected: bool) -> ExtensionFuture<'_, ()> {
+        Box::pin(async move {
+            if selected {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        })
+    }
+}
+
+impl TurnLifecycleContributor for ChildCompletionGate {
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        let is_root = input.thread_store.level_id() == input.session_store.level_id();
+        self.pause_if(
+            is_root
+                && self.scenario == ChildHandoff::WakeReservedBeforeSuspend
+                && self.child.get().is_some(),
+        )
+    }
+
+    fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        self.pause_if(self.child.get().map(String::as_str) == Some(input.thread_store.level_id()))
+    }
+}
+
+async fn start_active_tree(
+    server: &wiremock::MockServer,
+    finishing: Option<&Arc<ChildCompletionGate>>,
+    history_mode: ThreadHistoryMode,
+) -> anyhow::Result<(TestCodex, String, Arc<CodexThread>, String)> {
+    let spawn = |name, message| {
         sse(vec![
-            ev_response_created("spawn_response"),
+            ev_response_created(name),
             ev_function_call_with_namespace(
-                "spawn_worker",
+                name,
                 "collaboration",
                 "spawn_agent",
-                &json!({
-                    "message": "keep working until shutdown",
-                    "task_name": "worker",
-                    "fork_turns": "none",
-                })
-                .to_string(),
+                &json!({"message": message, "task_name": name, "fork_turns": "none"}).to_string(),
             ),
-            ev_completed("spawn_response"),
-        ]),
-    )
-    .await;
-    // Waiting on the mocked response keeps the turn active on local and remote executors
-    // without requiring an OS-specific command or a working sandboxed child process.
-    for response_id in ["pending_child", "pending_root"] {
-        mount_response_once(
-            &server,
-            sse_response(sse(vec![
-                ev_response_created(response_id),
-                ev_completed(response_id),
-            ]))
-            .set_delay(Duration::from_secs(60)),
-        )
-        .await;
-    }
-    let test = test_codex()
+            ev_completed(name),
+        ])
+    };
+    mount_sse_once(server, spawn("worker", "keep working until shutdown")).await;
+    let wake_root = finishing.is_some_and(|gate| gate.scenario.wakes_root());
+    let mut builder = test_codex()
+        .with_history_mode(history_mode)
         .with_model("gpt-5.6-sol")
-        .with_config(|config| {
+        .with_config(move |config| {
+            config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+            config
+                .features
+                .set_enabled(Feature::WakeOnAgentMessages, wake_root)
+                .expect("configure root wake");
             config
                 .features
                 .enable(Feature::Collab)
@@ -121,10 +180,46 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("enable multi-agent v2 for the suspension test");
-        })
-        .build_with_auto_env(&server)
-        .await
-        .expect("start persistent root thread");
+        });
+    if let Some(gate) = finishing {
+        let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+        extensions.turn_lifecycle_contributor(gate.clone());
+        extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+        builder = builder.with_extensions(Arc::new(extensions.build()));
+    }
+    let test = builder.build_with_auto_env(server).await?;
+    let root_id = test.session_configured.thread_id.to_string();
+    let gate = finishing.cloned();
+    mount_response_handler(server, move |request| {
+        let done = sse_response(sse_completed("done"));
+        let Some(gate) = &gate else {
+            return done.set_delay(Duration::from_secs(60));
+        };
+        let metadata = &request.body_json()["client_metadata"];
+        let Some(parent) = metadata["x-codex-parent-thread-id"].as_str() else {
+            return done;
+        };
+        if gate.scenario.has_grandchild() && parent == root_id {
+            if request.inputs_of_type("function_call_output").is_empty() {
+                return sse_response(spawn("leaf", "investigate the leaf"));
+            }
+            return if gate.scenario == ChildHandoff::GrandchildFinishes {
+                done.set_delay(Duration::from_secs(60))
+            } else {
+                done
+            };
+        }
+        let id = metadata["thread_id"].as_str().expect("child ID");
+        gate.child.set(id.to_owned()).expect("one finishing child");
+        if gate.scenario == ChildHandoff::ErrorsDuringSuspend {
+            return sse_response(sse_failed("child", "insufficient_quota", "quota exceeded"));
+        }
+        sse_response(sse(vec![
+            ev_assistant_message("child", CHILD_RESULT),
+            ev_completed("child"),
+        ]))
+    })
+    .await;
     let codex = Arc::clone(&test.codex);
     let mut created_threads = test.thread_manager.subscribe_thread_created();
     let submitted = codex
@@ -132,25 +227,37 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
             text: "preserve this exact unfinished turn".into(),
             text_elements: Vec::new(),
         }]))
-        .await
-        .expect("start root turn");
+        .await?;
     let codex_core::TurnInputSubmission::Started { turn_id, .. } = submitted else {
         panic!("expected a started root turn");
     };
-    let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv())
-        .await
-        .expect("child creation notification must arrive")
-        .expect("spawned child");
-    let descendant = test
-        .thread_manager
-        .get_thread(child_id)
-        .await
-        .expect("loaded child");
-    wait_for_event(&descendant, |event| {
-        matches!(event, EventMsg::TurnStarted(_))
+    let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    let descendant = test.thread_manager.get_thread(child_id).await?;
+    let child_turn = wait_for_event_match(&descendant, |event| match event {
+        EventMsg::TurnStarted(turn) => Some(turn.turn_id.clone()),
+        _ => None,
     })
     .await;
+    if let Some(gate) = finishing {
+        ThreadIdle::wait(&test.codex).await;
+        tokio::time::timeout(Duration::from_secs(10), gate.entered.notified()).await?;
+    }
+    Ok((test, turn_id, descendant, child_turn))
+}
 
+/// Suspending a root preserves its unfinished turn and initiates child shutdown. The host
+/// separately waits for tree cleanup, including any child writer failure, before recovery.
+#[test_case(false; "recovers root after stopping child")]
+#[test_case(true; "reports child writer failure separately")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_writer: bool) {
+    let server = start_mock_server().await;
+    let (test, turn_id, descendant, _) =
+        start_active_tree(&server, /*finishing*/ None, ThreadHistoryMode::Legacy)
+            .await
+            .expect("start the root and worker");
+    let codex = Arc::clone(&test.codex);
+    let child_id = descendant.startup_metadata().thread_id;
     if fail_child_writer {
         test.thread_store
             .shutdown_thread(child_id)
@@ -267,6 +374,236 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
         vec![resumed.session_configured.thread_id],
         "root recovery must not automatically restart the interrupted child"
     );
+}
+
+#[test_case(ChildHandoff::QueuedBeforeSuspend; "result already queued")]
+#[test_case(ChildHandoff::FinishesDuringSuspend; "result arrives during suspend")]
+#[test_case(ChildHandoff::ErrorsDuringSuspend; "error arrives during suspend")]
+#[test_case(ChildHandoff::WakesIdleRoot; "result wakes idle root")]
+#[test_case(ChildHandoff::WakeReservedBeforeSuspend; "fence wins before wake registration")]
+#[test_case(ChildHandoff::ParentWriterClosed; "parent cannot save result")]
+#[test_case(ChildHandoff::GrandchildFinishes; "unfinished parent")]
+#[test_case(ChildHandoff::ParentEvicted; "evicted idle parent")]
+#[tokio::test]
+async fn graceful_suspend_preserves_a_finishing_child_result(
+    scenario: ChildHandoff,
+) -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let gate = Arc::new(ChildCompletionGate {
+        scenario,
+        ..Default::default()
+    });
+    let mode = if scenario.wakes_root() || scenario.has_grandchild() {
+        ThreadHistoryMode::Legacy
+    } else {
+        ThreadHistoryMode::Paginated
+    };
+    let (source, root_turn, worker, worker_turn) =
+        start_active_tree(&server, Some(&gate), mode).await?;
+    let worker_id = worker.startup_metadata().thread_id;
+    match scenario {
+        ChildHandoff::QueuedBeforeSuspend => {
+            gate.release.notify_one();
+            ThreadIdle::wait(&worker).await;
+        }
+        ChildHandoff::WakeReservedBeforeSuspend => {
+            gate.release.notify_one();
+            gate.entered.notified().await;
+        }
+        ChildHandoff::ParentEvicted => {
+            ThreadIdle::wait(&worker).await;
+            assert_eq!(
+                source
+                    .thread_manager
+                    .try_evict_v2_thread(Arc::clone(&worker))
+                    .await?,
+                codex_core::ThreadEvictionOutcome::Evicted
+            );
+        }
+        ChildHandoff::ParentWriterClosed => {
+            source
+                .thread_store
+                .shutdown_thread(source.session_configured.thread_id)
+                .await?;
+        }
+        _ => {}
+    }
+    let drain = source.thread_manager.suspend_agent_tree(&source.codex);
+    tokio::pin!(drain);
+    if scenario != ChildHandoff::QueuedBeforeSuspend {
+        assert!(futures::poll!(drain.as_mut()).is_pending());
+        gate.release.notify_one();
+    }
+    let outcome = tokio::time::timeout(Duration::from_secs(10), drain).await?;
+    if scenario == ChildHandoff::ParentWriterClosed {
+        assert!(outcome.is_err(), "the result could not be saved");
+        return Ok(());
+    }
+    let tree = outcome?.expect("durable root");
+    let child_turns = if scenario == ChildHandoff::GrandchildFinishes {
+        HashMap::from([(worker_id, worker_turn.clone())])
+    } else {
+        HashMap::new()
+    };
+    assert_eq!(
+        tree,
+        codex_core::SuspendedAgentTree {
+            root_turn_id: None,
+            wake_root_after: scenario.wakes_root().then(|| root_turn.clone()),
+            child_turns,
+        }
+    );
+    let (parent, sender) = if scenario.has_grandchild() {
+        (&worker, "/root/worker/leaf")
+    } else {
+        (&source.codex, "/root/worker")
+    };
+    let (history, _, _) = codex_rollout::RolloutRecorder::load_rollout_items(
+        &parent.rollout_path().expect("closed parent writer"),
+    )
+    .await?;
+    let messages: Vec<_> = history
+        .iter()
+        .filter_map(|entry| match entry {
+            RolloutItem::ResponseItem(item) => match &item.item {
+                ResponseItem::AgentMessage {
+                    author, content, ..
+                } if author == sender => {
+                    codex_protocol::models::plaintext_agent_message_content(content)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let [result] = messages.as_slice() else {
+        panic!("expected one result, got {messages:?}")
+    };
+    let payload = if scenario == ChildHandoff::ErrorsDuringSuspend {
+        "Agent errored:"
+    } else {
+        CHILD_RESULT
+    };
+    assert!(result.contains(payload), "{result}");
+
+    if !scenario.wakes_root() && !scenario.has_grandchild() {
+        return Ok(());
+    }
+    let server = start_mock_server().await;
+    let response = mount_sse_once(&server, sse(vec![ev_completed("received")])).await;
+    let replacement = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable V2");
+        })
+        .restart_with_auto_env(&server, &source)
+        .await?;
+    let root = replacement.codex.clone();
+    if scenario == ChildHandoff::ParentEvicted {
+        // The cold worker has one child slot. Load the grandchild through its real
+        // parent and release the parent's slot before admitting the grandchild.
+        let leaf_id =
+            codex_protocol::ThreadId::from_string(gate.child.get().expect("finishing leaf ID"))?;
+        let unrelated = replacement
+            .thread_manager
+            .start_thread(replacement.start_thread_options().await)
+            .await?;
+        assert!(
+            replacement
+                .thread_manager
+                .load_suspended_agent(&root, unrelated.thread_id)
+                .await
+                .is_err()
+        );
+        let leaf = replacement
+            .thread_manager
+            .load_suspended_agent(&root, leaf_id)
+            .await?;
+        assert_eq!(
+            leaf.thread.session_source().parent_thread_id(),
+            Some(worker_id)
+        );
+        assert!(
+            replacement
+                .thread_manager
+                .get_thread(worker_id)
+                .await
+                .is_err()
+        );
+        return Ok(());
+    }
+    let parent = if scenario == ChildHandoff::GrandchildFinishes {
+        let loaded = replacement
+            .thread_manager
+            .load_suspended_agent(&root, worker_id)
+            .await?;
+        assert_matches!(loaded.thread.recover_turn_if_idle(RecoverTurnRequest { turn_id: worker_turn.clone(), thread_settings: Default::default(), trace: None, prompt_cache_ttl: None, cyber_access_program: None }).await?,
+            codex_core::StartIfIdleSubmission::Started { turn_id, .. } if turn_id == worker_turn);
+        Arc::clone(&loaded.thread)
+    } else {
+        assert_eq!(
+            history
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))))
+                .count(),
+            1
+        );
+        assert_matches!(root.continue_turn_if_idle(TurnInputRequest::user_input(vec![]), root_turn.clone()).await?,
+            codex_core::TurnInputSubmission::Started { turn_id, .. } if turn_id != root_turn);
+        root
+    };
+    wait_for_event(&parent, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        response
+            .single_request()
+            .inputs_of_type("agent_message")
+            .into_iter()
+            .filter(|item| item["author"] == sender)
+            .map(|item| item["content"].clone())
+            .collect::<Vec<_>>(),
+        [json!([{"type":"input_text", "text":result}])]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn suspended_tree_records_the_original_unfinished_turns() -> anyhow::Result<()> {
+    use codex_core::SuspendedAgentTree;
+
+    let source_server = start_mock_server().await;
+    let (source, root_turn, child, child_turn) = start_active_tree(
+        &source_server,
+        /*finishing*/ None,
+        ThreadHistoryMode::Paginated,
+    )
+    .await?;
+    // A single poll establishes the writer fence. Dropping the caller on the
+    // current-thread runtime leaves all the actual teardown work to the sessions.
+    {
+        let pending = source.thread_manager.suspend_agent_tree(&source.codex);
+        tokio::pin!(pending);
+        assert!(futures::poll!(pending.as_mut()).is_pending());
+    }
+    let expected = SuspendedAgentTree {
+        root_turn_id: Some(root_turn.clone()),
+        wake_root_after: None,
+        child_turns: HashMap::from([(child.startup_metadata().thread_id, child_turn)]),
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                source.thread_manager.suspend_agent_tree(&source.codex)
+            )
+            .await??,
+            Some(expected.clone())
+        );
+    }
+    Ok(())
 }
 
 /// After an interrupt we expect the next request to the model to include both

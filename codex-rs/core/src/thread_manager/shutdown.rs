@@ -1,11 +1,19 @@
 //! Unloads locally controlled idle MAv2 children and exposes tracked agent-tree teardown.
 
 use super::ThreadManager;
+use super::ThreadManagerState;
+use crate::CodexThread;
 use crate::agent::control::AgentTreeShutdownState;
+use crate::state::TaskKind;
+use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_thread_store::LiveThread;
+use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadStoreError;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -128,7 +136,88 @@ impl AgentTreeShutdown {
     }
 }
 
+/// Work to resume or start after a successful tree suspension.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuspendedAgentTree {
+    /// Original ID of the root turn that was running when suspended.
+    pub root_turn_id: Option<String>,
+    /// Last real root turn when a saved result should wake an idle root. The
+    /// replacement starts a fresh turn only if this predecessor is still current.
+    pub wake_root_after: Option<String>,
+    pub child_turns: HashMap<ThreadId, String>,
+}
+
+/// Holds the restored child resident until the caller admits its turn.
+pub struct LoadedSuspendedAgent {
+    pub thread: Arc<CodexThread>,
+    pub(crate) _residency: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+}
+
 impl ThreadManager {
+    /// Stops this locally controlled tree and reports the original IDs of running regular
+    /// turns on the root and durable named V2 children, including turns without a recorded
+    /// model step. Returns None before installing the fence if the root lacks a durable
+    /// writer or has an unsupported active task.
+    /// Idle members and unsupported descendant tasks shut down normally. On success,
+    /// finished children have delivered their results to their parents' saved histories,
+    /// and every source writer has closed. Repeated calls on the same loaded root
+    /// return the same unfinished turns, even after caller cancellation.
+    pub async fn suspend_agent_tree(
+        &self,
+        root: &Arc<CodexThread>,
+    ) -> CodexResult<Option<SuspendedAgentTree>> {
+        self.check_local_agent_root(root).await?;
+        if root.session.live_thread().is_none() {
+            return Ok(None);
+        }
+        let id = root.startup_metadata().thread_id;
+        let shutdown = {
+            let active = root.session.active_turn.lock().await;
+            if active
+                .as_ref()
+                .and_then(|turn| turn.task.as_ref())
+                .is_some_and(|task| task.kind != TaskKind::Regular)
+            {
+                return Ok(None);
+            }
+            root.session
+                .services
+                .local_agent_runtime
+                .request_suspension(id)?
+        };
+        shutdown.suspended_tree().await.map(Some)
+    }
+
+    /// Loads the named V2 child and its recorded ancestors under the replacement root.
+    /// This restores the original local identities without starting any model turns.
+    pub async fn load_suspended_agent(
+        &self,
+        root: &Arc<CodexThread>,
+        child_id: ThreadId,
+    ) -> CodexResult<LoadedSuspendedAgent> {
+        self.check_local_agent_root(root).await?;
+        let runtime = &root.session.services.local_agent_runtime;
+        let _membership = runtime.admit_start()?;
+        runtime
+            .control(root.session.session_id())
+            .load_suspended_child(root, child_id)
+            .await
+    }
+
+    async fn check_local_agent_root(&self, root: &Arc<CodexThread>) -> CodexResult<()> {
+        if self.state.agent_control_factory.is_some()
+            || root.session_source().is_non_root_agent()
+            || !Arc::ptr_eq(
+                root,
+                &self.get_thread(root.startup_metadata().thread_id).await?,
+            )
+        {
+            return Err(CodexErr::InvalidRequest(
+                "agent tree recovery requires its loaded locally controlled root".into(),
+            ));
+        }
+        Ok(())
+    }
     /// Unloads this exact idle MAv2 child using the manager's local controller backend,
     /// preserving mail and environments for reloading. Host controllers own their eviction
     /// and recovery; managers configured with a host controller factory are rejected.
@@ -167,5 +256,55 @@ impl ThreadManager {
                 .local_agent_runtime
                 .request_shutdown(),
         })
+    }
+}
+
+impl ThreadManagerState {
+    /// An evicted parent has no session to consume queue-only mail. After the live
+    /// writers stop, reopen its writer long enough to save its unread results.
+    pub(crate) async fn save_evicted_parent_results(
+        &self,
+        parent: ThreadId,
+        config: &crate::config::Config,
+        history_mode: codex_protocol::protocol::ThreadHistoryMode,
+        results: &[crate::PendingAgentMessage],
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        let params = ResumeThreadParams {
+            thread_id: parent,
+            rollout_path: None,
+            history: None,
+            history_revision: None,
+            include_archived: false,
+            metadata: config.thread_persistence_metadata(),
+        };
+        let (writer, _) = LiveThread::resume(
+            Arc::clone(&self.thread_store),
+            history_mode,
+            params,
+            /*resume_preparation*/ None,
+        )
+        .await?;
+        let items = results
+            .iter()
+            .flat_map(|message| {
+                [
+                    RolloutItem::InterAgentCommunicationMetadata {
+                        trigger_turn: message.trigger_turn,
+                    },
+                    RolloutItem::ResponseItem(ResponseItemEnvelope::new(
+                        crate::session::session::Session::inter_agent_history_item(message, config),
+                    )),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let saved = writer.append_items(&items).await;
+        // Shutdown flushes pending items and always releases the acquired writer.
+        saved.and(writer.shutdown().await)?;
+        for result in results {
+            if let Some(write) = result.consumed(parent) {
+                write.confirm();
+            }
+        }
+        Ok(())
     }
 }

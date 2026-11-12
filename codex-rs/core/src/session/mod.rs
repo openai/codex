@@ -195,7 +195,6 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
-use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreResumePreparation;
 use codex_utils_audio::prepare_response_items as prepare_audio_response_items;
@@ -396,6 +395,7 @@ use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ModelRerouteEvent;
 use codex_protocol::protocol::ModelRerouteReason;
 use codex_protocol::protocol::ModelVerification;
@@ -2832,7 +2832,7 @@ impl Session {
         let reporter = self
             .outcome_reporting
             .as_ref()
-            .map(|reporting| &reporting.reporter);
+            .and_then(|reporting| reporting.reporter.as_ref());
         if !notify_native_parent && reporter.is_none() {
             return;
         }
@@ -4656,13 +4656,11 @@ impl Session {
         }))
     }
 
-    pub(crate) async fn record_inter_agent_communication(
-        &self,
-        turn_context: &TurnContext,
-        model_info: &ModelInfo,
-        communication: impl Into<crate::PendingAgentMessage>,
-    ) {
-        let communication = communication.into();
+    /// Builds the same history item whether the recipient is live or has been evicted.
+    pub(crate) fn inter_agent_history_item(
+        communication: &InterAgentCommunication,
+        config: &Config,
+    ) -> ResponseItem {
         let mut response_item = communication.to_model_input_item();
         if let ResponseItem::AgentMessage {
             content,
@@ -4676,8 +4674,7 @@ impl Session {
                 .get_or_insert_with(|| {
                     vec![
                         ContentItemMetadata::tool(Some(
-                            turn_context
-                                .config
+                            config
                                 .multi_agent_v2
                                 .tool_namespace
                                 .clone()
@@ -4688,6 +4685,17 @@ impl Session {
                     ]
                 });
         }
+        response_item
+    }
+
+    pub(crate) async fn record_inter_agent_communication(
+        &self,
+        turn_context: &TurnContext,
+        model_info: &ModelInfo,
+        communication: impl Into<crate::PendingAgentMessage>,
+    ) {
+        let communication = communication.into();
+        let response_item = Self::inter_agent_history_item(&communication, &turn_context.config);
         let (items, _) = self
             .prepare_conversation_items_for_history(
                 turn_context,
@@ -4728,16 +4736,21 @@ impl Session {
                 model_info.truncation_policy.into(),
             );
         }
-        if let Some(delivery) = &communication.delivery {
-            delivery.consumed(self.thread_id);
+        let result_write = communication.consumed(self.thread_id);
+        let saved = self
+            .persist_rollout_items(&[
+                RolloutItem::InterAgentCommunicationMetadata {
+                    trigger_turn: communication.trigger_turn,
+                },
+                RolloutItem::ResponseItem(response_item),
+            ])
+            .await;
+        if saved
+            && self.live_thread().is_some()
+            && let Some(write) = result_write
+        {
+            write.confirm();
         }
-        self.persist_rollout_items(&[
-            RolloutItem::InterAgentCommunicationMetadata {
-                trigger_turn: communication.trigger_turn,
-            },
-            RolloutItem::ResponseItem(response_item),
-        ])
-        .await;
         drop(boundary);
         self.send_raw_response_items(turn_context, &items).await;
     }
@@ -5394,6 +5407,21 @@ impl Session {
             && let Err(e) = live_thread.append_items(items).await
         {
             error!("failed to record rollout items: {e:#}");
+            if self
+                .services
+                .local_agent_runtime
+                .suspension_root()
+                .is_some()
+            {
+                self.services.local_agent_runtime.record_shutdown_failure(
+                    crate::thread_manager::AgentTreeShutdownFailure::operation_failed(
+                        "tree_suspension",
+                        "append_history",
+                        Some(self.thread_id),
+                        crate::thread_manager::thread_store_error_kind(&e),
+                    ),
+                );
+            }
             return false;
         }
         true

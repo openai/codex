@@ -107,7 +107,7 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .services
         .local_agent_runtime
         .mailboxes
-        .take(first.thread_id);
+        .take(first.thread_id, |_| true);
     assert_eq!(retained, vec![communication.into()]);
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);

@@ -306,13 +306,20 @@ pub(super) async fn handle(
         TurnInputMode::ContinueIfIdle {
             expected_previous_turn_id,
         } => {
-            if !matches!(
-                &request.request.input,
-                SubmittedTurnInput::ResponseItem(_) | SubmittedTurnInput::AnnotatedResponseItem(_)
-            ) {
-                return Err(CodexErr::InvalidRequest(
-                    "continuation requires internal response input".to_string(),
-                ));
+            let mut request = request;
+            match &request.request.input {
+                SubmittedTurnInput::ResponseItem(_)
+                | SubmittedTurnInput::AnnotatedResponseItem(_) => {}
+                SubmittedTurnInput::UserInput { content, .. } if content.is_empty() => {
+                    request.request.start = session.agent_message_wake_options().await;
+                }
+                SubmittedTurnInput::UserInput { .. }
+                | SubmittedTurnInput::InterAgentCommunication(_) => {
+                    return Err(CodexErr::InvalidRequest(
+                        "continuation requires internal response input or an empty wake"
+                            .to_string(),
+                    ));
+                }
             }
             start_if_idle(
                 session,
@@ -501,13 +508,9 @@ async fn start_or_steer(
                     .await,
                 );
             }
-            session
-                .spawn_task(Arc::clone(&turn_context), task_input, RegularTask::new())
-                .await;
-            Ok(TurnInputSubmission::Started {
-                turn_id: submission_id,
-                root_turn_id: turn_context.root_turn_id(),
-            })
+            Ok(session
+                .spawn_task(turn_context, task_input, RegularTask::new())
+                .await)
         }
         Err(reason) => Ok(TurnInputSubmission::NotSubmitted { reason }),
     }
@@ -537,7 +540,9 @@ async fn start_if_idle(
         responsesapi_client_metadata,
         ..
     } = request;
-    if session.input_queue.has_trigger_turn_mailbox_items().await {
+    if expected_previous_turn_id.is_none()
+        && session.input_queue.has_trigger_turn_mailbox_items().await
+    {
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PendingTriggerTurn,
         });
@@ -575,16 +580,21 @@ async fn start_if_idle(
 
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
+        if let Some(expected) = expected_previous_turn_id {
+            let state = session.state.lock().await;
+            // A registered successor already owns this work, even if it is still running.
+            // An unregistered reservation can still fail to start and must be retried.
+            if state.last_started_turn_id.as_ref() != Some(&expected)
+                && (state.last_started_turn_id.is_some() || active_turn.is_none())
+            {
+                return Ok(TurnInputSubmission::NotSubmitted {
+                    reason: NotSubmittedReason::Superseded,
+                });
+            }
+        }
         if active_turn.is_some() {
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::NotIdle,
-            });
-        }
-        if let Some(expected) = expected_previous_turn_id
-            && session.state.lock().await.last_started_turn_id.as_ref() != Some(&expected)
-        {
-            return Ok(TurnInputSubmission::NotSubmitted {
-                reason: NotSubmittedReason::Superseded,
             });
         }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
@@ -680,13 +690,9 @@ async fn start_if_idle(
             }
         }
     }
-    session
-        .start_task(Arc::clone(&turn_context), task_input, RegularTask::new())
-        .await;
-    Ok(TurnInputSubmission::Started {
-        turn_id: submission_id,
-        root_turn_id: turn_context.root_turn_id(),
-    })
+    Ok(session
+        .start_task(turn_context, task_input, RegularTask::new())
+        .await)
 }
 
 async fn steer(
@@ -814,7 +820,7 @@ impl Session {
         &self,
     ) -> Option<(Arc<tokio::sync::Mutex<TurnState>>, TurnStartOptions)> {
         let mut active_turn = self.active_turn.lock().await;
-        if active_turn.is_some() || self.outcome_handoffs_closed() {
+        if active_turn.is_some() || self.turn_starts_closed() {
             return None;
         }
         let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
@@ -828,15 +834,22 @@ impl Session {
         let previous_options = if has_trigger_turn {
             Default::default()
         } else {
-            self.state
-                .lock()
-                .await
-                .turn_attribution
-                .as_ref()
-                .map(codex_history::TurnAttribution::start_options)
-                .unwrap_or_default()
+            self.agent_message_wake_options().await
         };
         Some((Arc::clone(&active_turn.turn_state), previous_options))
+    }
+
+    async fn agent_message_wake_options(&self) -> TurnStartOptions {
+        let state = self.state.lock().await;
+        let mut options = state
+            .turn_attribution
+            .as_ref()
+            .map(codex_history::TurnAttribution::start_options)
+            .unwrap_or_default();
+        options.cyber_access_program = state
+            .reference_context_item()
+            .and_then(|context| context.cyber_access_program);
+        options
     }
 
     /// Revalidates a reserved wake and selects its settings before any mail is consumed.
@@ -871,11 +884,8 @@ impl Session {
         Some(configuration.clone())
     }
 
-    async fn should_wake_on_agent_messages(&self) -> bool {
-        if !self.features.enabled(Feature::WakeOnAgentMessages)
-            || self.is_interrupted()
-            || !self.input_queue.has_pending_mailbox_items().await
-        {
+    pub(crate) async fn should_wake_on_agent_messages(&self) -> bool {
+        if !self.features.enabled(Feature::WakeOnAgentMessages) || self.is_interrupted() {
             return false;
         }
 

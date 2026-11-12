@@ -179,7 +179,7 @@ impl AgentControl for LocalAgentControl {
     }
 
     fn take_mailbox(&self, agent: ThreadId) -> Vec<crate::PendingAgentMessage> {
-        self.runtime.mailboxes.take(agent)
+        self.runtime.mailboxes.take(agent, |_| true)
     }
 
     fn watch_mailbox(&self, agent: ThreadId) -> tokio::sync::watch::Receiver<bool> {

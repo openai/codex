@@ -1680,6 +1680,21 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
 }
 
 impl Config {
+    pub(crate) fn thread_persistence_metadata(
+        &self,
+    ) -> codex_thread_store::ThreadPersistenceMetadata {
+        use codex_protocol::protocol::ThreadMemoryMode;
+        codex_thread_store::ThreadPersistenceMetadata {
+            cwd: Some(self.cwd.to_path_buf()),
+            model_provider: self.model_provider_id.clone(),
+            memory_mode: if self.memories.generate_memories {
+                ThreadMemoryMode::Enabled
+            } else {
+                ThreadMemoryMode::Disabled
+            },
+        }
+    }
+
     /// Capture storage and sync preparation use one session-static rollout choice.
     pub(crate) fn guardian_context_budgeting(&self) -> codex_guardian_context::ContextBudgeting {
         if self.guardian_sync_elastic_budget.is_some() {

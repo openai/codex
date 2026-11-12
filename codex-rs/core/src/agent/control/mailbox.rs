@@ -45,18 +45,26 @@ impl Mailboxes {
             .ok_or_else(|| CodexErr::InvalidRequest("agent runtime is shutting down".into()))?
             .entry(agent)
             .or_default();
-        mailbox
-            .pending
-            .extend(messages.into_iter().map(|communication| StoredMail {
-                id: id.clone(),
-                communication,
-                _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
-            }));
+        let mail = messages.into_iter().map(|communication| StoredMail {
+            id: id.clone(),
+            communication,
+            _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+        });
+        if id.is_some() {
+            mailbox.pending.extend(mail);
+        } else {
+            // Mail returned by eviction predates results published while its writer closed.
+            mailbox.pending.splice(..0, mail);
+        }
         mailbox.state.send_replace(!mailbox.pending.is_empty());
         Ok(())
     }
 
-    pub(super) fn take(&self, agent: ThreadId) -> Vec<PendingAgentMessage> {
+    pub(super) fn take(
+        &self,
+        agent: ThreadId,
+        accept: impl Fn(&PendingAgentMessage) -> bool,
+    ) -> Vec<PendingAgentMessage> {
         let mut mailboxes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(mailbox) = mailboxes
             .as_mut()
@@ -66,8 +74,10 @@ impl Mailboxes {
         };
         let pending = std::mem::take(&mut mailbox.pending);
         mailbox.state.send_if_modified(std::mem::take);
+        drop(mailboxes);
         pending
             .into_iter()
+            .filter(|mail| accept(&mail.communication))
             .map(|mail| {
                 // Mail transferred during eviction was already received by the old session.
                 if let Some(id) = mail.id {

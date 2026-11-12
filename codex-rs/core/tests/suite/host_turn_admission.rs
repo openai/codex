@@ -306,6 +306,25 @@ async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn tree_suspension_leaves_an_ephemeral_turn_running() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let reply = responses::mount_sse_once(&server, responses::sse_completed("done")).await;
+    let builder = test_codex().with_config(|config| config.ephemeral = true);
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let prompt = "Keep working after the suspension attempt.";
+    let (_, grant) = start(&test, &mut attempts, prompt).await?;
+    assert_eq!(
+        test.thread_manager.suspend_agent_tree(&test.codex).await?,
+        None
+    );
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    assert!(reply.single_request().body_contains_text(prompt));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suspending_root_during_roster_read_preserves_the_recoverable_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));

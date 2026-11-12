@@ -316,6 +316,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(reporting) = &sess.outcome_reporting {
         reporting.handoffs.close();
     }
+    let runtime = &sess.services.local_agent_runtime;
+    let wakes_root = runtime.suspension_root() == Some(sess.thread_id)
+        && (sess.has_outstanding_durable_sleep() || sess.should_wake_on_agent_messages().await);
     let startup_prewarm = {
         let mut state = sess.state.lock().await;
         // Stop admission and take the current warmup together so resume cannot replace it.
@@ -329,6 +332,49 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     if let Some(reporting) = &sess.outcome_reporting {
         reporting.handoffs.wait().await;
+    }
+    if runtime.suspension_root().is_some() {
+        let pending: Vec<_> = sess
+            .input_queue
+            .drain_mailbox()
+            .await
+            .into_iter()
+            .map(|mail| mail.communication)
+            .filter(crate::PendingAgentMessage::is_terminal_result)
+            .collect();
+        if !pending.is_empty() && sess.live_thread().is_some() {
+            let turn_id = {
+                let state = sess.state.lock().await;
+                state.last_started_turn_id.clone().or_else(|| {
+                    state
+                        .turn_attribution
+                        .as_ref()
+                        .map(|turn| turn.turn_id.clone())
+                })
+            };
+            if wakes_root {
+                if let Some(turn_id) = turn_id.as_ref() {
+                    runtime.record_root_wake_after(turn_id.clone());
+                } else {
+                    runtime.record_shutdown_failure(AgentTreeShutdownFailure::operation_failed(
+                        "tree_suspension",
+                        "record_root_wake",
+                        Some(sess.thread_id),
+                        "missing_previous_turn",
+                    ));
+                }
+            }
+            let context = sess
+                .new_turn_with_default_settings(
+                    turn_id.unwrap_or_else(super::new_submission_id),
+                    Default::default(),
+                )
+                .await;
+            for result in pending {
+                sess.record_inter_agent_communication(&context, context.model_info(), result)
+                    .await;
+            }
+        }
     }
     super::async_compaction::shutdown(sess).await;
     let shell_snapshot_prewarm = sess.state.lock().await.shell_snapshot_prewarm.take();
@@ -491,7 +537,28 @@ pub(super) async fn submission_loop(
         let sub = tokio::select! {
             biased;
             _ = sess.services.local_agent_runtime.shutdown.cancelled() => {
-                shutdown_received = shutdown(&sess, super::new_submission_id()).await;
+                if sess.services.local_agent_runtime.suspension_root().is_some() {
+                    // Keep accepting results until all direct children stop, then drain
+                    // buffered submissions before deciding which parent work to hand off.
+                    let runtime = &sess.services.local_agent_runtime;
+                    tokio::join!(
+                        async {
+                            runtime.wait_for_children(sess.thread_id).await;
+                            rx_sub.close();
+                        },
+                        async {
+                            while let Ok(sub) = rx_sub.recv().await {
+                                if let Op::InterAgentCommunication { communication, start_options } = sub.op
+                                    && sub.message_delivery.as_ref().is_some_and(crate::agent_communication::MessageDelivery::awaits_result_write)
+                                {
+                                    let mail = crate::PendingAgentMessage::new(communication, sub.message_delivery);
+                                    inter_agent_communication(&sess, sub.id, mail, start_options).await;
+                                }
+                            }
+                        },
+                    );
+                }
+                shutdown_received = super::turn_suspension::stop_tree_member(&sess).await;
                 break;
             }
             update = async {

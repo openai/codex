@@ -42,6 +42,7 @@ struct ActiveAgents {
 /// Effective configuration and executor bindings retained while a child's runtime is unloaded.
 #[derive(Clone)]
 pub(crate) struct EvictedEnvironments {
+    pub(crate) history_mode: codex_protocol::protocol::ThreadHistoryMode,
     pub(crate) config: Arc<Config>,
     pub(crate) has_independent_service_tier: bool,
     pub(crate) selections: Vec<TurnEnvironmentSelection>,

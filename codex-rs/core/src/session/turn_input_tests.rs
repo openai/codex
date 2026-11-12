@@ -251,6 +251,29 @@ async fn start_only_rejects_active_turn_without_injecting() {
 }
 
 #[tokio::test]
+async fn saved_message_wake_checks_the_last_started_turn_during_admission() {
+    let (session, _, _rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    for (last_started, reason) in [
+        ("original", NotSubmittedReason::NotIdle),
+        ("successor", NotSubmittedReason::Superseded),
+    ] {
+        session.state.lock().await.last_started_turn_id = Some(last_started.into());
+        let result = handle(
+            &session,
+            TurnInputRequest::user_input(vec![]),
+            TurnInputMode::ContinueIfIdle {
+                expected_previous_turn_id: "original".into(),
+            },
+            "wake".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, TurnInputSubmission::NotSubmitted { reason });
+    }
+}
+
+#[tokio::test]
 async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let original_approval_policy = session
