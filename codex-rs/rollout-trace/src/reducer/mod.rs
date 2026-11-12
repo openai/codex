@@ -49,7 +49,7 @@ use self::tool::ObservedAgentResultEdge;
 use self::tool::PendingAgentInteractionEdge;
 use self::tool::ToolCallStarted;
 
-/// Replays a local trace bundle into a reduced rollout graph.
+/// Replays a trace bundle written by this executable into a reduced rollout graph.
 /// A valid prefix has `recording_complete = false`; malformed events or missing
 /// or invalid referenced payloads return an error.
 pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
@@ -57,10 +57,9 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     let manifest: TraceBundleManifest =
         serde_json::from_reader(File::open(bundle_dir.join(MANIFEST_FILE_NAME))?)
             .with_context(|| format!("read {}", bundle_dir.join(MANIFEST_FILE_NAME).display()))?;
-    // Earlier bundles cannot distinguish accepted output from transport output.
     ensure!(
         manifest.schema_version == TRACE_MANIFEST_SCHEMA_VERSION,
-        "trace schema {} cannot establish accepted history; use its matching reducer or record a new bundle",
+        "unsupported manifest schema {} (expected {TRACE_MANIFEST_SCHEMA_VERSION}). Run the exact Codex executable that recorded this bundle",
         manifest.schema_version
     );
     let mut reducer = TraceReducer {
@@ -112,7 +111,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
             .with_context(|| format!("parse trace event line {line_number}"))?;
         ensure!(
             event.schema_version == RAW_TRACE_EVENT_SCHEMA_VERSION,
-            "unsupported trace event schema {} at line {line_number}",
+            "unsupported trace event schema {} at line {line_number} (expected {RAW_TRACE_EVENT_SCHEMA_VERSION}). Run the exact Codex executable that recorded this bundle",
             event.schema_version,
         );
         event_count += 1;
@@ -472,12 +471,9 @@ impl TraceReducer {
                 model_visible_call_id,
                 source_js,
             } => {
-                let thread_id = self.code_cell_event_thread_id(
-                    event.thread_id,
-                    event.codex_turn_id.as_deref(),
-                    &runtime_cell_id,
-                    "code cell start",
-                )?;
+                let thread_id = event.thread_id.with_context(|| {
+                    format!("code cell start {runtime_cell_id} did not include a thread id")
+                })?;
                 let reduced_code_cell_id =
                     Self::reduced_code_cell_id_for_model_visible_call(&model_visible_call_id);
                 self.record_runtime_code_cell_id(
@@ -503,12 +499,11 @@ impl TraceReducer {
                 status,
                 response_payload,
             } => {
-                let thread_id = self.code_cell_event_thread_id(
-                    event.thread_id,
-                    event.codex_turn_id.as_deref(),
-                    &runtime_cell_id,
-                    "code cell initial response",
-                )?;
+                let thread_id = event.thread_id.with_context(|| {
+                    format!(
+                        "code cell initial response {runtime_cell_id} did not include a thread id"
+                    )
+                })?;
                 let code_cell_id = self.code_cell_id_for_runtime_cell_id(
                     &thread_id,
                     &runtime_cell_id,
@@ -528,12 +523,9 @@ impl TraceReducer {
                 status,
                 response_payload,
             } => {
-                let thread_id = self.code_cell_event_thread_id(
-                    event.thread_id,
-                    event.codex_turn_id.as_deref(),
-                    &runtime_cell_id,
-                    "code cell end",
-                )?;
+                let thread_id = event.thread_id.with_context(|| {
+                    format!("code cell end {runtime_cell_id} did not include a thread id")
+                })?;
                 let code_cell_id = self.code_cell_id_for_runtime_cell_id(
                     &thread_id,
                     &runtime_cell_id,

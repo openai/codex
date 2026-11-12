@@ -6,8 +6,9 @@
 //! `write_stdin`, can still form a terminal row from the canonical dispatch
 //! invocation/result payloads when those payloads carry the session join key.
 //! Runtime process handles are recyclable and thread-local. Each exec creates a
-//! distinct reduced session; stdin uses the runtime's resolved exec when recorded,
-//! falling back to the latest session for its handle in older traces.
+//! distinct reduced session. A stdin invocation initially joins by handle. Once
+//! the runtime resolves the target, that event identifies the exact exec. A
+//! partial recording can end between invocation and resolution.
 
 use anyhow::Context;
 use anyhow::Result;

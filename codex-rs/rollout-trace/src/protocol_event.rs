@@ -162,8 +162,7 @@ impl Serialize for ToolRuntimePayload<'_> {
 
 /// Rollout-trace representation of an exec begin event.
 ///
-/// Rollout traces share the rollout compatibility requirement that paths remain path-flavored
-/// strings on disk, even though live events carry `PathUri` internally.
+/// The trace records filesystem paths as strings. Live events carry `PathUri`.
 #[derive(Serialize)]
 struct ExecCommandBeginTracePayload<'a> {
     call_id: &'a str,

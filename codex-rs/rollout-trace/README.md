@@ -11,6 +11,18 @@ during a Codex session. It records raw runtime evidence into a local bundle on
 disk, then replays that bundle into a semantic graph that a debugger or UI can
 inspect.
 
+**Same-binary replay only.** The exact Codex executable that recorded a bundle
+must reduce it. Matching release or schema versions do not make a different
+binary compatible. The raw event log and payload formats are temporary
+implementation details and can change with the writer and reducer.
+
+Viewers and other consumers read `state.json`, the reduced trace API. They can
+use `manifest.json` for bundle discovery and identity, such as selecting a trace
+by `root_thread_id`. Payload references in the reduced state let consumers
+inspect the original evidence. Every change to the `state.json` schema bumps
+`REDUCED_TRACE_SCHEMA_VERSION`. Consider the impact on existing consumers.
+Breaking changes are allowed.
+
 The key design choice is: **observe first, interpret later**.
 
 Hot-path Codex code does not try to build the final graph while the session is
@@ -110,20 +122,20 @@ A trace bundle contains:
 - `trace.jsonl`: append-only raw events ordered by writer-assigned `seq`.
 - `payloads/*.json`: raw requests, responses, tool inputs/results, runtime
   events, terminal output, compaction data, and protocol snapshots.
-- `state.json`: optional reducer output written by `codex debug trace-reduce`.
+- `state.json`: reduced trace for consumers, written by `codex debug trace-reduce`.
 
 `trace_id` identifies this diagnostic artifact. `rollout_id` identifies the
 Codex rollout/session being observed. Keeping those separate lets us reason about
 the stored trace without confusing it with the product-level session identity.
 
-To reduce a bundle:
+Run the recording executable to reduce its bundle:
 
 ```bash
 codex debug trace-reduce <trace-bundle>
 ```
 
-By default this writes `<trace-bundle>/state.json`. Rust callers can also call
-`codex_rollout_trace::replay_bundle` directly.
+By default this writes `<trace-bundle>/state.json`. Within the recording binary,
+`codex_rollout_trace::replay_bundle` returns the same reduced graph in memory.
 
 ## Raw Evidence vs Reduced Graph
 

@@ -4,7 +4,8 @@
 //! small writer API here; semantic replay and viewer projections stay outside
 //! `codex-core`.
 //!
-//! See `README.md` for the system diagram and reducer model.
+//! Only the recording executable replays raw events. Consumers read the reduced
+//! `state.json` and use manifest metadata for bundle discovery. See `README.md`.
 
 mod bundle;
 mod code_cell;
@@ -20,7 +21,7 @@ mod thread;
 mod tool_dispatch;
 mod writer;
 
-/// Conventional reduced-state cache name written next to a raw trace bundle.
+/// Conventional file name for the consumer-facing reduced trace.
 pub use bundle::REDUCED_STATE_FILE_NAME;
 /// No-op-capable handle for recording one code-mode runtime cell.
 pub use code_cell::CodeCellTraceContext;
@@ -54,7 +55,7 @@ pub use raw_event::RawTraceEvent;
 pub use raw_event::RawTraceEventContext;
 /// Typed payload for one raw trace event.
 pub use raw_event::RawTraceEventPayload;
-/// Replay a raw trace bundle and write/read its reduced `RolloutTrace`.
+/// Replay a bundle recorded by this executable into a `RolloutTrace`.
 pub use reducer::replay_bundle;
 /// Raw payload captured when a child agent reports completion to its parent.
 pub use thread::AgentResultTracePayload;
