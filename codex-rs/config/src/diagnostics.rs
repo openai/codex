@@ -136,35 +136,39 @@ pub fn config_error_from_typed_toml<T: DeserializeOwned>(
     config_error_from_typed_toml_for_source::<T>(
         ConfigDiagnosticSource::Path(path.as_ref()),
         contents,
+        /*layer*/ None,
     )
 }
 
 fn config_error_from_typed_toml_for_source<T: DeserializeOwned>(
     source: ConfigDiagnosticSource<'_>,
     contents: &str,
+    layer: Option<&ConfigLayerSource>,
 ) -> Option<ConfigError> {
     let deserializer = match toml::de::Deserializer::parse(contents) {
         Ok(deserializer) => deserializer,
         Err(err) => return Some(config_error_from_toml_for_source(source, contents, err)),
     };
 
-    let result: Result<T, _> = serde_path_to_error::deserialize(deserializer);
-    match result {
-        Ok(_) => None,
-        Err(err) => {
-            let path_hint = err.path().clone();
-            let toml_err: toml::de::Error = err.into_inner();
-            let range = span_for_config_path(contents, &path_hint)
-                .or_else(|| toml_err.span())
-                .map(|span| text_range_from_span(contents, span))
-                .unwrap_or_else(default_range);
-            Some(ConfigError::new(
-                source.to_path_buf(),
-                range,
-                toml_err.message(),
-            ))
-        }
+    let mut err = serde_path_to_error::deserialize::<_, T>(deserializer).err()?;
+    // Diagnose the same effective fields against the text we just read from disk.
+    if let Some(layer) = layer
+        && let Ok(raw) = toml::from_str(contents)
+        && let std::borrow::Cow::Owned(effective) = layer.effective_values(&raw)
+    {
+        err = serde_path_to_error::deserialize::<_, T>(effective).err()?;
     }
+    let path_hint = err.path().clone();
+    let toml_err: toml::de::Error = err.into_inner();
+    let range = span_for_config_path(contents, &path_hint)
+        .or_else(|| toml_err.span())
+        .map(|span| text_range_from_span(contents, span))
+        .unwrap_or_else(default_range);
+    Some(ConfigError::new(
+        source.to_path_buf(),
+        range,
+        toml_err.message(),
+    ))
 }
 
 pub async fn first_layer_config_error<T: DeserializeOwned>(
@@ -211,6 +215,7 @@ where
             if let Some(error) = config_error_from_typed_toml_for_source::<T>(
                 ConfigDiagnosticSource::DisplayName(&source_name),
                 contents,
+                Some(&layer.name),
             ) {
                 return Some(error);
             }
@@ -234,7 +239,11 @@ where
             continue;
         };
         let _guard = AbsolutePathBufGuard::new(parent);
-        if let Some(error) = config_error_from_typed_toml::<T>(&path, &contents) {
+        if let Some(error) = config_error_from_typed_toml_for_source::<T>(
+            ConfigDiagnosticSource::Path(&path),
+            &contents,
+            Some(&layer.name),
+        ) {
             return Some(error);
         }
     }

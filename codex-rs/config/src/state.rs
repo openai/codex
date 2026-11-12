@@ -668,7 +668,7 @@ impl ConfigLayerStack {
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in self.layers_low_to_high() {
-            merge_toml_values(&mut merged, &layer.config);
+            merge_toml_values(&mut merged, &layer.name.effective_values(&layer.config));
         }
         if let Some(requirements) = &self.model_provider_requirements {
             crate::model_provider_requirements::apply(&mut merged, requirements);
@@ -699,7 +699,7 @@ impl ConfigLayerStack {
         let mut provider_paths = vec!["features.network_proxy.credentials.".to_string()];
 
         for layer in self.layers_low_to_high() {
-            let config = normalize_key_aliases(&layer.config);
+            let config = normalize_key_aliases(&layer.name.effective_values(&layer.config));
             if let Some(profiles) = config.get("profiles").and_then(TomlValue::as_table) {
                 provider_paths.extend(
                     profiles
@@ -716,9 +716,12 @@ impl ConfigLayerStack {
             );
         }
 
-        let is_credential_origin =
-            |path: &str| provider_paths.iter().any(|prefix| path.starts_with(prefix));
-        if origins.keys().any(|path| is_credential_origin(path))
+        let needs_effective_origin = |path: &str| {
+            path == "tui.status_line_provider"
+                || path.starts_with("tui.status_line_provider.")
+                || provider_paths.iter().any(|prefix| path.starts_with(prefix))
+        };
+        if origins.keys().any(|path| needs_effective_origin(path))
             && let Some(layer) = self.layers_low_to_high().next_back()
         {
             let effective = self.effective_config();
@@ -731,7 +734,7 @@ impl ConfigLayerStack {
                 &include,
             );
             origins.retain(|path, _| {
-                !is_credential_origin(path) || effective_origins.contains_key(path)
+                !needs_effective_origin(path) || effective_origins.contains_key(path)
             });
         }
 

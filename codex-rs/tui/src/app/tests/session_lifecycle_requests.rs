@@ -1879,7 +1879,7 @@ async fn cloud_resume_with_current_directory_needs_no_cwd_override() -> Result<(
 
     let (mut app, codex_home) = make_history_test_app().await?;
     std::fs::write(
-        codex_home.path().join("config.toml"),
+        &app.local_settings.user_config_path,
         "[tui]\nresume_cwd = 'current'\n",
     )?;
     app.launch_cwd = codex_home.path().to_path_buf();

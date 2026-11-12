@@ -54,6 +54,8 @@ impl App {
                     let mut config = self
                         .rebuild_config_for_cwd_from(
                             &settings.config,
+                            &settings.local_settings,
+                            &settings.target,
                             settings.config.cwd.to_path_buf(),
                         )
                         .await?;
@@ -161,6 +163,7 @@ impl App {
                 &config_current_cwd,
                 config_resume_cwd,
                 (&current_config, &local_settings),
+                &target,
             )
             .await
         {
@@ -295,7 +298,12 @@ impl App {
             *config = StartupDraftPump::run_with_optional_draft(
                 startup_draft.as_deref_mut(),
                 tui,
-                self.rebuild_config_for_cwd_from(config, config.cwd.to_path_buf()),
+                self.rebuild_config_for_cwd_from(
+                    config,
+                    local_settings,
+                    target,
+                    config.cwd.to_path_buf(),
+                ),
             )
             .await
             .map_err(|error| {

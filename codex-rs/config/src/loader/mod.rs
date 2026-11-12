@@ -1653,7 +1653,11 @@ pub fn resolve_relative_paths_in_config_toml(
     }
     // The typed round trip resolves AbsolutePathBuf fields against this layer's directory.
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    let Ok(resolved) = ConfigToml::try_from(value_from_config_toml.clone()) else {
+    // Provider identities contain no paths. An ignored malformed identity must not
+    // prevent an unrelated path in this layer from being resolved against its directory.
+    let path_input =
+        crate::config_layer_source::without_status_line_provider(&value_from_config_toml);
+    let Ok(resolved) = ConfigToml::try_from(path_input.into_owned()) else {
         return Ok(value_from_config_toml);
     };
     drop(_guard);

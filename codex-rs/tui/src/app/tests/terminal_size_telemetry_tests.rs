@@ -19,6 +19,7 @@ async fn terminal_size_telemetry_respects_reloaded_exporter_and_consent() -> Res
             &cwd,
             cwd.clone(),
             (&app.config, &app.local_settings),
+            &app.app_server_target,
         ))
         .await?;
         app.config = config;

@@ -609,6 +609,12 @@
       },
       "type": "object"
     },
+    "BuiltinStatusLine": {
+      "enum": [
+        "default"
+      ],
+      "type": "string"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -5005,6 +5011,34 @@
         }
       ]
     },
+    "StatusLineProviderId": {
+      "additionalProperties": false,
+      "description": "The configured MCP server and advertised tool name identify a status line provider.",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "StatusLineSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuiltinStatusLine"
+        },
+        {
+          "$ref": "#/definitions/StatusLineProviderId"
+        }
+      ],
+      "description": "An explicit default overrides an MCP provider from a lower configuration layer."
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5673,6 +5707,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "status_line_provider": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/StatusLineSelection"
+            }
+          ],
+          "description": "Local status line selection. Set to \"default\" for built-in items or specify an MCP server and tool."
         },
         "status_line_use_colors": {
           "default": true,

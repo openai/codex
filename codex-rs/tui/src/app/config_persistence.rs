@@ -96,19 +96,33 @@ impl App {
     }
 
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
-        self.rebuild_config_for_cwd_from(&self.config, cwd).await
+        self.rebuild_config_for_cwd_from(
+            &self.config,
+            &self.local_settings,
+            &self.app_server_target,
+            cwd,
+        )
+        .await
     }
 
     pub(super) fn rebuild_config_for_cwd_from(
         &self,
         base: &Config,
+        local: &crate::local_settings::LocalSettings,
+        target: &AppServerTarget,
         cwd: PathBuf,
     ) -> impl std::future::Future<Output = Result<Config>> + use<> {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
+        // A remote app server's execution config can name a home on another machine.
+        let codex_home = if target.uses_remote_workspace() {
+            &local.codex_home
+        } else {
+            &base.codex_home
+        };
         let builder = ConfigBuilder::default()
-            .codex_home(base.codex_home.to_path_buf())
+            .codex_home(codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .loader_overrides(self.loader_overrides.clone())
@@ -494,6 +508,8 @@ impl App {
         self.chat_widget.local_settings.tui.session_picker_view =
             self.local_settings.tui.session_picker_view;
         self.chat_widget.local_settings.tui.resume_cwd = self.local_settings.tui.resume_cwd;
+        self.chat_widget.local_settings.tui.status_line_provider =
+            self.local_settings.tui.status_line_provider.clone();
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
@@ -536,9 +552,10 @@ impl App {
         current_cwd: &Path,
         resume_cwd: PathBuf,
         fallback: (&Config, &crate::local_settings::LocalSettings),
+        target: &AppServerTarget,
     ) -> Result<(Config, crate::local_settings::LocalSettings)> {
         match self
-            .rebuild_config_for_cwd_from(fallback.0, resume_cwd.clone())
+            .rebuild_config_for_cwd_from(fallback.0, fallback.1, target, resume_cwd.clone())
             .await
         {
             Ok(config) => {
@@ -1994,6 +2011,10 @@ enabled = false
         expected_widget_settings.tui.session_picker_view =
             Some(codex_config::types::SessionPickerViewMode::Comfortable);
         expected_widget_settings.tui.resume_cwd = Some(codex_config::types::ResumeCwdMode::Current);
+        expected_widget_settings.tui.status_line_provider =
+            Some(Box::new(codex_config::types::StatusLineSelection::Builtin(
+                codex_config::types::BuiltinStatusLine::Default,
+            )));
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         std::fs::write(
@@ -2003,6 +2024,7 @@ enabled = false
 terminal_resize_reflow_max_rows = 9000
 session_picker_view = "comfortable"
 resume_cwd = "current"
+status_line_provider = "default"
 theme = "dracula"
 "#,
         )?;
@@ -2097,6 +2119,7 @@ theme = "dracula"
                 &current_cwd,
                 current_cwd.to_path_buf(),
                 (&app.config, &app.local_settings),
+                &app.app_server_target,
             )
             .await?;
 
@@ -2119,6 +2142,7 @@ theme = "dracula"
                 &current_cwd,
                 next_cwd,
                 (&app.config, &app.local_settings),
+                &app.app_server_target,
             )
             .await;
 

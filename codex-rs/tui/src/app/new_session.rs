@@ -85,7 +85,12 @@ impl App {
                 app_server.remote_cwd_override().unwrap_or(Path::new("."))
             }
         };
-        let refresh = self.rebuild_config_for_cwd_from(&settings.config, cwd.clone());
+        let refresh = self.rebuild_config_for_cwd_from(
+            &settings.config,
+            &settings.local_settings,
+            &settings.target,
+            cwd.clone(),
+        );
         let load = async {
             let defaults = crate::config_update::read_effective_config_if_supported(
                 app_server.request_handle(),

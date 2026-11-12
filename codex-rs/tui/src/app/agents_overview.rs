@@ -696,6 +696,7 @@ impl App {
                         &current_cwd,
                         config_cwd,
                         (&self.config, &self.local_settings),
+                        &self.app_server_target,
                     )
                     .await
                 {
