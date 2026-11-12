@@ -210,45 +210,33 @@ impl ReviewInput {
         }
     }
 
-    /// Assess the supplied request in a fresh reviewer without publishing a live approval.
+    /// Assess the recorded call in a Guardian session separate from the actor.
+    /// The parent can reuse that session across calls.
+    /// The caller enforces the deadline and cancellation during setup.
     pub(super) async fn assess_isolated(
         self,
         deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> Result<GuardianAssessment, GuardianReviewError> {
-        let review = async {
-            let (pool, config) = select_synchronous_reviewer(&self.session, &self.context)
-                .ok_or_else(|| {
-                    GuardianReviewError::session(anyhow::anyhow!(
-                        "Guardian reviewer is unavailable"
-                    ))
-                })?;
-            let config = config.await.map_err(GuardianReviewError::prompt_build)?;
-            let category = self.request.guardian_scope();
-            let params = self.into_params(
-                config,
-                category,
-                ReviewAttemptOptions {
-                    authorization: None,
-                    external_cancel: Some(cancellation.clone()),
-                    deadline,
-                },
-            );
-            let prepared = super::review_session::prepare_review(params)
-                .await
-                .map_err(GuardianReviewError::prompt_build)?;
-            Ok::<_, GuardianReviewError>(pool.review_isolated(&prepared).await.0)
-        };
-        let outcome = match run_before_review_deadline(
-            deadline,
-            Some(cancellation),
-            Box::pin(review),
-        )
-        .await
-        {
-            Ok(result) => result?,
-            Err(interruption) => interruption,
-        };
+        let (pool, config) =
+            select_synchronous_reviewer(&self.session, &self.context).ok_or_else(|| {
+                GuardianReviewError::session(anyhow::anyhow!("Guardian reviewer is unavailable"))
+            })?;
+        let config = config.await.map_err(GuardianReviewError::prompt_build)?;
+        let category = self.request.guardian_scope();
+        let params = self.into_params(
+            config,
+            category,
+            ReviewAttemptOptions {
+                authorization: None,
+                external_cancel: Some(cancellation.clone()),
+                deadline,
+            },
+        );
+        let (outcome, _) = Box::pin(super::review_session::run_guardian_review_session(
+            pool, params,
+        ))
+        .await;
         outcome.into_assessment()
     }
 }

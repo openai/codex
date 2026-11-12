@@ -52,13 +52,8 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     let mut call = ev_function_call("exec-review", "exec_command", arguments);
     call["item"]["encrypted_function_args"] = json!([]);
     call["item"]["encrypted_content"] = json!("cached-output-tokens");
-    let assessment = json!({
-        "risk_level": "low",
-        "user_authorization": "high",
-        "outcome": "allow",
-        "rationale": "The command is authorized."
-    });
-    let mock = responses::mount_sse_sequence(
+    let assessment = r#"{"outcome":"allow","risk_level":"low","user_authorization":"high","rationale":"The command is authorized."}"#;
+    let live_mock = responses::mount_sse_sequence(
         harness.server(),
         vec![
             sse(vec![call, ev_completed("parent-action")]),
@@ -70,10 +65,6 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
                 ev_assistant_message("parent-done", "Denied."),
                 ev_completed("parent-done"),
             ]),
-            sse(vec![
-                ev_assistant_message("direct-allow", &assessment.to_string()),
-                ev_completed("direct-review"),
-            ]),
         ],
     )
     .await;
@@ -81,6 +72,20 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     let prompt = "Check the command, but do not run it without approval.";
     test.submit_text_turn(prompt).await?;
 
+    let direct_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_assistant_message("direct-allow", assessment),
+                ev_completed("direct-review"),
+            ]),
+            sse(vec![
+                ev_assistant_message("follow-up-deny", r#"{"outcome":"deny"}"#),
+                ev_completed("follow-up-review"),
+            ]),
+        ],
+    )
+    .await;
     // Replay the recorded items, including the provenance attached to the user message.
     test.codex.flush_rollout().await?;
     let history = test.codex.load_history(/*include_archived*/ false).await?;
@@ -130,7 +135,7 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
         result,
         GuardianReviewResult {
             call_id: "exec-review".to_owned(),
-            assessment: Some(serde_json::from_value(assessment)?),
+            assessment: Some(serde_json::from_str(assessment)?),
         }
     );
     assert!(!harness.path_exists("guardian-direct.txt").await?);
@@ -151,6 +156,20 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
         error.details(),
         codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
     ));
+
+    direct
+        .thread
+        .inject_response_items(vec![serde_json::from_value(json!({
+            "type": "function_call", "call_id": "follow-up", "name": "exec_command",
+            "arguments": r#"{"cmd":"echo follow-up > guardian-follow-up.txt","sandbox_permissions":"require_escalated","justification":"Write the follow-up file."}"#,
+        }))?])
+        .await?;
+    let follow_up = direct
+        .thread
+        .guardian_review(&CancellationToken::new())
+        .await?;
+    assert_eq!(follow_up.call_id, "follow-up");
+    assert!(!harness.path_exists("guardian-follow-up.txt").await?);
 
     // The explicit allow rule skips review on every platform.
     direct
@@ -195,9 +214,13 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
             if message.contains("does not support replaying request_permissions")
     ));
 
-    let requests = mock.requests();
-    let [_, live, _, recorded] = requests.as_slice() else {
-        panic!("expected parent, live Guardian, parent, recorded Guardian");
+    let live_requests = live_mock.requests();
+    let [_, live, _] = live_requests.as_slice() else {
+        panic!("expected parent, live Guardian, parent");
+    };
+    let recorded_requests = direct_mock.requests();
+    let [recorded, _] = recorded_requests.as_slice() else {
+        panic!("expected two recorded Guardian reviews");
     };
     assert_eq!(
         model_input(recorded, direct.thread_id)?,
@@ -205,8 +228,8 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     );
 
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "Direct Guardian review of an injected exec call; an allow assessment does not execute it.",
-        std::slice::from_ref(recorded),
+        "Sequential direct Guardian reviews of recorded exec calls on the same thread.",
+        &recorded_requests,
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
     let environment_id = &test.executor_environment().selection().environment_id;
@@ -222,8 +245,8 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     for (pattern, replacement) in [
         (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
         (
-            r#""command": \[\s*(?:"[^"]*",\s*)*"echo should-not-run > guardian-direct.txt"\s*\]"#,
-            "\"command\": [\"<SHELL>\", \"echo should-not-run > guardian-direct.txt\"]",
+            r#""command": \[\s*(?:"[^"]*",\s*)*("echo [^"]+")\s*\]"#,
+            "\"command\": [\"<SHELL>\", $1]",
         ),
     ] {
         snapshot = regex_lite::Regex::new(pattern)?

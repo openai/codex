@@ -13,6 +13,9 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadClosedNotification;
+use codex_app_server_protocol::ThreadGuardianReviewParams;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -700,40 +703,107 @@ async fn inline_review_delegate_runs_strict_guardian_assessment() -> Result<()> 
 }
 
 #[tokio::test]
-async fn guardian_review_returns_assessment_for_injected_exec() -> Result<()> {
+async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Result<()> {
+    let rationale = "Guardian approved the recorded file write.";
+    let verdict = assistant_response(
+        &json!({
+            "outcome": "allow",
+            "risk_level": "medium",
+            "user_authorization": "high",
+            "rationale": rationale,
+        })
+        .to_string(),
+    )?;
     let server = responses::start_mock_server().await;
-    let verdict = r#"{"outcome":"allow","risk_level":"medium","user_authorization":"high","rationale":"User requested this command."}"#;
-    let requests = responses::mount_sse_once(&server, assistant_response(verdict)?).await;
+    let requests = responses::mount_sse_sequence(&server, vec![verdict; 3]).await;
     let codex_home = TempDir::new()?;
     sync_config(&server.uri()).write(codex_home.path())?;
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
-    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
-    let inject = app.send_raw_request("thread/inject_items", Some(json!({
-        "threadId": thread.id,
-        "items": [
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"Create guardian-direct.txt."}]},
-            {"type":"function_call","name":"exec_command","call_id":"exec-review",
-             "arguments":r#"{"cmd":"echo reviewed > guardian-direct.txt","sandbox_permissions":"require_escalated","justification":"Create the requested file."}"#}
-        ]
-    }))).await?;
-    let _: Value = app.read_response(inject).await?;
-    let review = app
-        .send_raw_request("thread/guardianReview", Some(json!({"threadId":thread.id})))
-        .await?;
-    let result: Value = app.read_response(review).await?;
-    assert_eq!(
-        result,
-        json!({
-            "callId":"exec-review",
-            "assessment":{"outcome":"allow","riskLevel":"medium","userAuthorization":"high","rationale":"User requested this command."}
-        })
+    let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let other = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    for (thread, call_id) in [(&parent, "a"), (&parent, "b"), (&other, "c")] {
+        let evidence = if call_id == "b" {
+            json!({
+                "type": "function_call_output",
+                "call_id": "a",
+                "output": "Recorded success.",
+            })
+        } else {
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Create the requested file."}],
+            })
+        };
+        let items = vec![
+            evidence,
+            json!({
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": call_id,
+                "arguments": r#"{"cmd":"echo reviewed > guardian-direct.txt","sandbox_permissions":"require_escalated","justification":"Create the requested file."}"#,
+            }),
+        ];
+        let _: ThreadInjectItemsResponse = app
+            .request(|request_id| ClientRequest::ThreadInjectItems {
+                request_id,
+                params: ThreadInjectItemsParams {
+                    thread_id: thread.id.clone(),
+                    items,
+                },
+            })
+            .await?;
+        let result: Value = app
+            .request(|request_id| ClientRequest::ThreadGuardianReview {
+                request_id,
+                params: ThreadGuardianReviewParams {
+                    thread_id: thread.id.clone(),
+                },
+            })
+            .await?;
+        assert_eq!(
+            result,
+            json!({
+                "callId": call_id,
+                "assessment": {
+                    "outcome": "allow",
+                    "riskLevel": "medium",
+                    "userAuthorization": "high",
+                    "rationale": rationale,
+                }
+            })
+        );
+    }
+
+    let requests = requests.requests();
+    let [a, b, c] = requests.as_slice() else {
+        anyhow::bail!("expected three Guardian requests, got {}", requests.len());
+    };
+    for request in [a, b, c] {
+        assert_eq!(
+            request.body_json()["client_metadata"]["x-openai-subagent"],
+            "guardian",
+        );
+    }
+    for (call_id, request) in [("a", a), ("c", c)] {
+        assert!(
+            !serde_json::to_string(&request.input())?.contains(rationale),
+            "unexpected prior rationale for call {call_id}",
+        );
+    }
+    assert!(
+        b.input().iter().any(|item| {
+            item["type"] == "message"
+                && item["role"] == "assistant"
+                && item["content"].to_string().contains(rationale)
+        }),
+        "B should receive A's private verdict",
     );
-    assert_eq!(
-        requests.single_request().body_json()["client_metadata"]["x-openai-subagent"],
-        "guardian"
-    );
+
+    app.shutdown_gracefully().await?;
     Ok(())
 }
