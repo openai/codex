@@ -627,6 +627,10 @@ pub(crate) enum CustomAnalyticsFact {
     TurnTokenUsage(Box<TurnTokenUsageFact>),
     TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),
+    AcceptedUserInput {
+        turn_id: String,
+        used_dictation: Option<bool>,
+    },
     ImagePreparation(Box<ImagePreparationFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

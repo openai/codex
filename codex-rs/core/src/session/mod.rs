@@ -6003,6 +6003,11 @@ impl Session {
             image_preparations,
         )
         .await;
+        if metadata.origin.is_user() {
+            self.services
+                .analytics_events_client
+                .track_accepted_user_input(&turn_context.sub_id, metadata.used_dictation);
+        }
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;

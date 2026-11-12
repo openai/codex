@@ -380,8 +380,20 @@ pub(super) async fn handle_recovery(
     result
 }
 
-fn user_input_metadata(request: &TurnInputRequest) -> UserInputMetadata {
+fn user_input_metadata(request: &mut TurnInputRequest) -> UserInputMetadata {
+    const DICTATION_KEY: &str = "codex_app_used_dictation";
+    // Capture provenance on this input before applying mutable turn metadata.
+    let metadata = &mut request.responsesapi_client_metadata;
+    let replacement = metadata
+        .replacement
+        .as_mut()
+        .and_then(|map| map.remove(DICTATION_KEY));
+    let patch = metadata
+        .patch
+        .as_mut()
+        .and_then(|map| map.remove(DICTATION_KEY));
     UserInputMetadata {
+        used_dictation: patch.or(replacement).and_then(|value| value.parse().ok()),
         origin: UserInputOrigin::from_turn_trigger(request.start.turn_trigger.as_deref()),
         response_item_uuid: request.user_item_uuid,
         extension_data: request.user_input_extension_data.clone(),
@@ -401,10 +413,10 @@ async fn start_or_steer(
         return agent::submit(session, request, submission_id).await;
     }
     let WithTurnExtensionData {
-        request,
+        mut request,
         turn_extension_init,
     } = request;
-    let input_metadata = user_input_metadata(&request);
+    let input_metadata = user_input_metadata(&mut request);
     let TurnInputRequest {
         mut input,
         thread_settings,
@@ -528,10 +540,10 @@ async fn start_if_idle(
     expected_previous_turn_id: Option<String>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
-        request,
+        mut request,
         turn_extension_init,
     } = request;
-    let input_metadata = user_input_metadata(&request);
+    let input_metadata = user_input_metadata(&mut request);
     let TurnInputRequest {
         mut input,
         thread_settings,
@@ -702,10 +714,10 @@ async fn steer(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
-        request,
+        mut request,
         turn_extension_init,
     } = request;
-    let input_metadata = user_input_metadata(&request);
+    let input_metadata = user_input_metadata(&mut request);
     let TurnInputRequest {
         mut input,
         thread_settings,

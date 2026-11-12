@@ -154,6 +154,7 @@ fn turn_event_serializes_expected_shape() {
             codex_error_http_status_code: None,
             usage_limit_window_minutes: None,
             steer_count: Some(0),
+            used_dictation: None,
             total_tool_call_count: None,
             shell_command_count: None,
             file_change_count: None,
@@ -787,6 +788,54 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         )
         .await;
     assert!(out.is_empty());
+}
+
+#[tokio::test]
+async fn turn_lifecycle_emits_dictation_from_accepted_inputs() {
+    for (inputs, expected) in [
+        (&[Some(false)][..], Some(false)),
+        (&[Some(false), None][..], None),
+        (&[None, Some(true), Some(false)][..], Some(true)),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+        ingest_turn_prerequisites(
+            &mut reducer,
+            &mut out,
+            /*include_initialize*/ true,
+            /*include_resolved_config*/ true,
+            /*include_started*/ true,
+            /*include_token_usage*/ false,
+        )
+        .await;
+        for &used_dictation in inputs {
+            reducer
+                .ingest(
+                    AnalyticsFact::Custom(CustomAnalyticsFact::AcceptedUserInput {
+                        turn_id: "turn-2".to_string(),
+                        used_dictation,
+                    }),
+                    &mut out,
+                )
+                .await;
+        }
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                    "thread-2",
+                    "turn-2",
+                    AppServerTurnStatus::Completed,
+                    /*codex_error_info*/ None,
+                ))),
+                &mut out,
+            )
+            .await;
+        let [event] = out.as_slice() else {
+            panic!("expected one turn event");
+        };
+        let payload = serde_json::to_value(event).expect("serialize turn event");
+        assert_eq!(payload["event_params"]["used_dictation"], json!(expected));
+    }
 }
 
 #[tokio::test]

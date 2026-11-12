@@ -745,6 +745,16 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    /// Record the provenance of one user input after it is added to turn history.
+    pub fn track_accepted_user_input(&self, turn_id: &str, used_dictation: Option<bool>) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::AcceptedUserInput {
+                turn_id: turn_id.to_owned(),
+                used_dictation,
+            },
+        ));
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {

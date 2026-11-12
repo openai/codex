@@ -1164,6 +1164,33 @@ async fn steer_preserves_request_origin(
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
+#[test]
+fn dictation_metadata_is_captured_per_input_and_removed_from_responses() {
+    use std::collections::HashMap;
+
+    let mut request = TurnInputRequest::user_input(Vec::new())
+        .with_responses_metadata(Some(HashMap::from([
+            ("source".to_owned(), "codex".to_owned()),
+            ("codex_app_used_dictation".to_owned(), "true".to_owned()),
+        ])))
+        .with_responses_metadata_patch(Some(HashMap::from([(
+            "codex_app_used_dictation".to_owned(),
+            "false".to_owned(),
+        )])));
+    assert_eq!(
+        user_input_metadata(&mut request).used_dictation,
+        Some(false)
+    );
+    assert_eq!(
+        request.responsesapi_client_metadata.replacement,
+        Some(HashMap::from([("source".to_owned(), "codex".to_owned())]))
+    );
+    assert_eq!(
+        request.responsesapi_client_metadata.patch,
+        Some(HashMap::new())
+    );
+}
+
 #[tokio::test]
 async fn scored_prompt_keeps_its_submission_item_id() {
     let (session, turn, events) = make_session_and_context_with_rx().await;

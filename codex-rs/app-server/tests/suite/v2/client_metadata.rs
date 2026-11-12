@@ -26,6 +26,7 @@ use codex_protocol::protocol::SubAgentSource;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -493,6 +494,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2(
 
     let start_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
+        ("codex_app_used_dictation".to_string(), "false".to_string()),
         ("source".to_string(), "snapshot-source".to_string()),
         ("start_only".to_string(), "start-value".to_string()),
         (
@@ -530,6 +532,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2(
 
     let steer_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-steer-456".to_string()),
+        ("codex_app_used_dictation".to_string(), "true".to_string()),
         ("origin".to_string(), "gaas".to_string()),
         ("source".to_string(), "steer-source".to_string()),
         (
@@ -579,6 +582,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2(
     assert_eq!(first_metadata["turn_id"].as_str(), Some(turn_id.as_str()));
     assert_eq!(first_metadata["turn_trigger"].as_str(), Some("user"));
     assert_eq!(first_metadata["source"].as_str(), Some("initial-source"));
+    assert!(first_metadata.get("codex_app_used_dictation").is_none());
 
     let second_metadata = requests[1]
         .header("x-codex-turn-metadata")
@@ -593,6 +597,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2(
     assert_eq!(second_metadata["turn_id"].as_str(), Some(turn_id.as_str()));
     assert_eq!(second_metadata["turn_trigger"].as_str(), Some("user"));
     assert_eq!(second_metadata["source"].as_str(), Some("steer-source"));
+    assert!(second_metadata.get("codex_app_used_dictation").is_none());
     assert_eq!(
         second_metadata["start_only"].as_str(),
         patch_steer.then_some("start-value")
@@ -603,12 +608,16 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2(
     );
 
     let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    let params = &event["event_params"];
     assert_eq!(
-        (
-            event["event_params"]["turn_trigger"].as_str(),
-            event["event_params"]["codex_turn_source"].as_str(),
-        ),
-        (Some("user"), Some("steer-source"))
+        json!([
+            params["thread_id"],
+            params["turn_id"],
+            params["turn_trigger"],
+            params["codex_turn_source"],
+            params["used_dictation"],
+        ]),
+        json!([thread.id, turn_id, "user", "steer-source", true]),
     );
 
     Ok(())

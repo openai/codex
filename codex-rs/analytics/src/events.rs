@@ -1174,6 +1174,9 @@ pub(crate) struct CodexTurnEventParams {
     /// The server-selected window responsible for a usage limit, when known.
     pub(crate) usage_limit_window_minutes: Option<u16>,
     pub(crate) steer_count: Option<usize>,
+    /// True when any accepted input used dictation. False requires known attribution for every input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) used_dictation: Option<bool>,
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
     pub(crate) file_change_count: Option<usize>,
