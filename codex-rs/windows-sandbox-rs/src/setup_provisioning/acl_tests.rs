@@ -1,5 +1,5 @@
 use super::DELETE;
-use super::DaclInheritance;
+use super::DirectoryAcl;
 use super::FILE_GENERIC_EXECUTE;
 use super::FILE_GENERIC_READ;
 use super::FILE_GENERIC_WRITE;
@@ -77,12 +77,45 @@ fn provision_only_locks_plain_directory_via_handle() {
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-        DaclInheritance::Protected,
+        DirectoryAcl::ApplyProtected,
         SetupMode::ProvisionOnly,
     )
     .expect("lock sandbox bin via no-reparse handle");
 
     assert!(sandbox_bin.is_dir());
+}
+
+#[test]
+fn repeated_registered_setup_keeps_existing_file_permissions() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let mut payload: Payload = serde_json::from_value(super::tests::payload_json())?;
+    payload.codex_home = home.path().to_owned();
+    payload.real_user = crate::runtime_ownership::current_setup_user()?;
+    payload.mode = SetupMode::ProvisionOnly;
+    payload.runtime = super::SetupRuntime::Registered;
+    let group = crate::winutil::sid_bytes_from_string("S-1-5-21-42-43-44-1000")?;
+    let configure = || super::lock_persistent_sandbox_dirs(&payload, &group);
+    configure()?;
+
+    let existing = home.path().join("existing");
+    fs::write(&existing, b"test")?;
+    let moved = home.path().join(".sandbox").join("existing");
+    fs::rename(existing, &moved)?;
+    let can_write = |file: &std::path::Path| {
+        path_mask_allows(
+            file,
+            &[group.as_ptr().cast_mut().cast()],
+            windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA,
+            /*require_all_bits*/ true,
+        )
+    };
+    assert!(!can_write(&moved)?);
+    configure()?;
+    assert!(!can_write(&moved)?);
+    let new_file = home.path().join(".sandbox").join("new");
+    fs::write(&new_file, b"test")?;
+    assert!(can_write(&new_file)?);
+    Ok(())
 }
 
 #[test]

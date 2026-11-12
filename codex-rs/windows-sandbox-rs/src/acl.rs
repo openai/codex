@@ -109,6 +109,14 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .with_context(|| format!("open ACL target {}", path.display()))?;
+    unsafe { fetch_dacl_from_handle(&handle, path) }
+}
+
+/// The returned descriptor owns the DACL and must be freed with LocalFree.
+pub(crate) unsafe fn fetch_dacl_from_handle(
+    handle: &impl AsRawHandle,
+    path: &Path,
+) -> Result<(*mut ACL, *mut c_void)> {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(

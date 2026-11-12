@@ -61,10 +61,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
+use windows::Win32::Foundation::BOOL;
+use windows::Win32::Foundation::HLOCAL as LocalAllocHandle;
+use windows::core::Owned;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
+use windows_sys::Win32::Security as security;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
@@ -157,9 +161,10 @@ impl SetupMode {
 }
 
 #[derive(Clone, Copy)]
-enum DaclInheritance {
-    Inherited,
-    Protected,
+enum DirectoryAcl {
+    VerifyInherited,
+    ApplyInherited,
+    ApplyProtected,
 }
 
 fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
@@ -349,7 +354,7 @@ fn lock_sandbox_dir(
     sandbox_group_access_mode: i32,
     sandbox_group_mask: u32,
     real_user_mask: u32,
-    dacl_inheritance: DaclInheritance,
+    policy: DirectoryAcl,
     setup_mode: SetupMode,
 ) -> Result<()> {
     // ProvisionOnly accepts another user's CODEX_HOME; keep its ACL mutation
@@ -358,6 +363,14 @@ fn lock_sandbox_dir(
         SetupMode::Full | SetupMode::InteractiveProvision | SetupMode::ReadAclsOnly => {
             std::fs::create_dir_all(dir)?;
             None
+        }
+        SetupMode::ProvisionOnly if matches!(policy, DirectoryAcl::VerifyInherited) => {
+            Some(open_directory_no_reparse(
+                dir,
+                READ_CONTROL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                DirectoryOpenDisposition::OpenExisting,
+            )?)
         }
         SetupMode::ProvisionOnly => Some(open_directory_no_reparse(
             dir,
@@ -371,10 +384,12 @@ fn lock_sandbox_dir(
     let admins_sid = resolve_sid("Administrators")?;
     let real_sid = resolve_sid(real_user)?;
     let modify = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
-    let (security_information, system_access) = match dacl_inheritance {
-        DaclInheritance::Inherited => (DACL_SECURITY_INFORMATION, modify),
+    let (security_information, system_access) = match policy {
+        DirectoryAcl::VerifyInherited | DirectoryAcl::ApplyInherited => {
+            (DACL_SECURITY_INFORMATION, modify)
+        }
         // The SYSTEM helper must be able to reapply the bin policy to existing children.
-        DaclInheritance::Protected => (
+        DirectoryAcl::ApplyProtected => (
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             modify | WRITE_DAC,
         ),
@@ -391,7 +406,7 @@ fn lock_sandbox_dir(
     ];
     unsafe {
         let mut eas: Vec<EXPLICIT_ACCESS_W> = Vec::new();
-        let mut sids: Vec<*mut c_void> = Vec::new();
+        let mut sids = Vec::new();
         for (sid_bytes, mask, access_mode) in entries.iter().map(|(s, m, a)| (s, *m, *a)) {
             let sid_str = string_from_sid_bytes(sid_bytes).map_err(anyhow::Error::msg)?;
             let sid_w = to_wide(OsStr::new(&sid_str));
@@ -402,7 +417,7 @@ fn lock_sandbox_dir(
                     GetLastError()
                 ));
             }
-            sids.push(psid);
+            sids.push(Owned::new(LocalAllocHandle(psid)));
             eas.push(EXPLICIT_ACCESS_W {
                 grfAccessPermissions: mask,
                 grfAccessMode: access_mode,
@@ -427,6 +442,17 @@ fn lock_sandbox_dir(
             return Err(anyhow::anyhow!(
                 "SetEntriesInAclW sandbox dir failed: {set}",
             ));
+        }
+        let _owned_acl = Owned::new(LocalAllocHandle(new_dacl.cast()));
+        if matches!(policy, DirectoryAcl::VerifyInherited) {
+            let handle = directory
+                .as_ref()
+                .context("verification requires a service directory handle")?;
+            anyhow::ensure!(
+                metadata_policy_matches(dir, handle, &*new_dacl)?,
+                "metadata directory permissions differ"
+            );
+            return Ok(());
         }
         let (res, api) = match directory.as_ref() {
             Some(directory) => (
@@ -460,16 +486,42 @@ fn lock_sandbox_dir(
         if res != 0 {
             return Err(anyhow::anyhow!("{api} sandbox dir failed: {res}"));
         }
-        if !new_dacl.is_null() {
-            LocalFree(new_dacl as HLOCAL);
-        }
-        for sid in sids {
-            if !sid.is_null() {
-                LocalFree(sid as HLOCAL);
-            }
-        }
     }
     Ok(())
+}
+
+// Compare complete ACEs so extra explicit permissions or a changed mask still require an update.
+fn metadata_policy_matches(
+    path: &Path,
+    directory: &impl AsRawHandle,
+    expected: &ACL,
+) -> Result<bool> {
+    unsafe fn entries(acl: &ACL) -> Result<Vec<&[u8]>> {
+        (0..u32::from(acl.AceCount))
+            .map(|index| {
+                let mut ace = std::ptr::null_mut();
+                unsafe {
+                    BOOL(security::GetAce(acl, index, &mut ace)).ok()?;
+                }
+                let size = unsafe { (*ace.cast::<security::ACE_HEADER>()).AceSize };
+                Ok(unsafe { std::slice::from_raw_parts(ace.cast(), usize::from(size)) })
+            })
+            .collect()
+    }
+    unsafe {
+        let (current, descriptor) = crate::acl::fetch_dacl_from_handle(directory, path)?;
+        let _descriptor = Owned::new(LocalAllocHandle(descriptor));
+        let Some(current) = current.as_ref() else {
+            return Ok(false);
+        };
+        let current = entries(current)?;
+        let explicit = entries(expected)?;
+        // Windows puts inherited rules after the directory's explicit policy.
+        Ok(current.starts_with(&explicit)
+            && current[explicit.len()..]
+                .iter()
+                .all(|ace| ace[1] & security::INHERITED_ACE as u8 != 0))
+    }
 }
 
 pub fn main() -> Result<()> {
@@ -816,7 +868,11 @@ fn configure_offline_sandbox_network(
     Ok(())
 }
 
-fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
+fn persistent_directory_policy(
+    payload: &Payload,
+    sandbox_group_sid: &[u8],
+    policy: DirectoryAcl,
+) -> Result<()> {
     lock_sandbox_dir(
         &sandbox_dir(&payload.codex_home),
         &payload.real_user,
@@ -824,7 +880,7 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        DaclInheritance::Inherited,
+        policy,
         payload.mode,
     )
     .map_err(|err| {
@@ -843,7 +899,7 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
         DENY_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        DaclInheritance::Inherited,
+        policy,
         payload.mode,
     )
     .map_err(|err| {
@@ -855,6 +911,18 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
             ),
         ))
     })?;
+    Ok(())
+}
+
+fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
+    // Only a complete match can skip both writes. On a mismatch the original write checks run in order.
+    let configured = payload.mode == SetupMode::ProvisionOnly
+        && payload.runtime == SetupRuntime::Registered
+        && persistent_directory_policy(payload, sandbox_group_sid, DirectoryAcl::VerifyInherited)
+            .is_ok();
+    if !configured {
+        persistent_directory_policy(payload, sandbox_group_sid, DirectoryAcl::ApplyInherited)?;
+    }
     let legacy_users = sandbox_dir(&payload.codex_home).join("sandbox_users.json");
     if legacy_users.exists() {
         let _ = std::fs::remove_file(&legacy_users);
@@ -874,7 +942,7 @@ fn lock_sandbox_bin_dir(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<(
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | WRITE_DAC,
-        DaclInheritance::Protected,
+        DirectoryAcl::ApplyProtected,
         payload.mode,
     )
     .map_err(|err| {
