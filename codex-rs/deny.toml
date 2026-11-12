@@ -87,6 +87,14 @@ ignore = [
     { id = "RUSTSEC-2026-0489", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; temporarily accepted until the Rust toolchain and Rama upgrade brings hickory-proto >=0.26.2" },
     { id = "RUSTSEC-2026-0490", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; temporarily accepted until the Rust toolchain and Rama upgrade brings hickory-proto >=0.26.2" },
     { id = "RUSTSEC-2026-0491", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; temporarily accepted until the Rust toolchain and Rama upgrade brings hickory-proto >=0.26.2" },
+    # DNSSEC-only advisories published 2026-11-12; DNSSEC is disabled even with
+    # all workspace features enabled. Reassess before enabling DNSSEC; remove
+    # after the tracked Rust/Rama upgrade replaces Hickory 0.25 with >=0.26.2.
+    { id = "RUSTSEC-2026-0504", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0505", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0511", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0512", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0514", reason = "hickory-resolver 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2" },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant 4.2.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },

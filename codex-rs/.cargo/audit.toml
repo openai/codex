@@ -16,6 +16,14 @@ ignore = [
     "RUSTSEC-2026-0489", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
     "RUSTSEC-2026-0490", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
     "RUSTSEC-2026-0491", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    # DNSSEC-only advisories published 2026-11-12; DNSSEC is disabled even with
+    # all workspace features enabled. Reassess before enabling DNSSEC; remove
+    # after the tracked Rust/Rama upgrade replaces Hickory 0.25 with >=0.26.2.
+    "RUSTSEC-2026-0504", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0505", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0511", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0512", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0514", # hickory-resolver 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
     "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
