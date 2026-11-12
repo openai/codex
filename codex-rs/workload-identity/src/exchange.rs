@@ -15,7 +15,6 @@ use url::Url;
 
 use crate::WorkloadIdentityConfig;
 use crate::WorkloadIdentityError;
-use crate::assertion::read_assertion;
 
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const JWT_BEARER_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
@@ -175,7 +174,7 @@ impl WorkloadIdentityExchange {
         let permit = self.network_policy.acquire(&self.token_url)?;
         permit
             .run(async {
-                let assertion = read_assertion(&self.config.assertion_file).await?;
+                let assertion = self.config.assertion_source.acquire().await?;
                 let body = {
                     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
                     serializer

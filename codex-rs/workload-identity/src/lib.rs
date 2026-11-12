@@ -1,5 +1,6 @@
 mod assertion;
 mod exchange;
+mod spiffe;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,12 +10,26 @@ pub use exchange::ChatgptTokenMetadata;
 pub use exchange::WorkloadIdentityExchange;
 pub use exchange::WorkloadIdentityMetadata;
 pub use exchange::WorkloadIdentityToken;
+pub use spiffe::SpiffeWorkloadApi;
 use thiserror::Error;
 
-/// The inputs needed to exchange a file-backed assertion for workload identity auth.
+/// The configured source of the assertion exchanged for workload identity auth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssertionSource {
+    File(PathBuf),
+    Spiffe(SpiffeWorkloadApi),
+}
+
+impl From<PathBuf> for AssertionSource {
+    fn from(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+}
+
+/// The inputs needed to exchange an assertion for workload identity auth.
 #[derive(Clone)]
 pub struct WorkloadIdentityConfig {
-    pub(crate) assertion_file: PathBuf,
+    pub(crate) assertion_source: AssertionSource,
     pub(crate) federation_rule_id: String,
     pub(crate) workload_identity_context: Option<String>,
 }
@@ -22,18 +37,21 @@ pub struct WorkloadIdentityConfig {
 impl WorkloadIdentityConfig {
     pub fn new(
         federation_rule_id: String,
-        assertion_file: PathBuf,
+        assertion_source: impl Into<AssertionSource>,
         workload_identity_context: Option<String>,
     ) -> Result<Self, WorkloadIdentityError> {
         let federation_rule_id = federation_rule_id.trim();
         if federation_rule_id.is_empty() {
             return Err(WorkloadIdentityError::InvalidFederationRuleId);
         }
-        if !assertion_file.is_absolute() {
+        let assertion_source = assertion_source.into();
+        if let AssertionSource::File(path) = &assertion_source
+            && !path.is_absolute()
+        {
             return Err(WorkloadIdentityError::AssertionFileMustBeAbsolute);
         }
         Ok(Self {
-            assertion_file,
+            assertion_source,
             federation_rule_id: federation_rule_id.to_string(),
             workload_identity_context,
         })
@@ -52,6 +70,20 @@ pub enum WorkloadIdentityError {
     InvalidAssertion,
     #[error("the workload identity assertion exceeds 16 KiB")]
     AssertionTooLarge,
+    #[error("the SPIFFE Workload API endpoint must be an absolute unix: socket URI")]
+    InvalidSpiffeEndpoint,
+    #[error("the SPIFFE JWT-SVID audience must not be empty or contain NUL")]
+    InvalidSpiffeAudience,
+    #[error("the requested SPIFFE ID is invalid")]
+    InvalidSpiffeId,
+    #[error("SPIFFE Workload API authentication requires a Unix platform")]
+    UnsupportedSpiffePlatform,
+    #[error("the SPIFFE Workload API is unavailable or timed out")]
+    SpiffeUnavailable,
+    #[error("the SPIFFE Workload API rejected the request with gRPC status {0}")]
+    SpiffeRejected(tonic::Code),
+    #[error("the SPIFFE Workload API returned multiple JWT-SVIDs; configure an explicit SPIFFE ID")]
+    AmbiguousSpiffeIdentity,
     #[error("could not read workload identity assertion file {path}")]
     AssertionFile {
         path: PathBuf,
@@ -81,12 +113,28 @@ impl WorkloadIdentityError {
                     | std::io::ErrorKind::TimedOut
                     | std::io::ErrorKind::WouldBlock
             ),
-            Self::ExchangeUnavailable | Self::ExchangeRejected(408 | 429 | 500..=599) => true,
+            Self::ExchangeUnavailable
+            | Self::SpiffeUnavailable
+            | Self::ExchangeRejected(408 | 429 | 500..=599) => true,
+            Self::SpiffeRejected(code) => matches!(
+                code,
+                tonic::Code::Unavailable
+                    | tonic::Code::DeadlineExceeded
+                    | tonic::Code::ResourceExhausted
+                    | tonic::Code::Aborted
+                    | tonic::Code::Cancelled
+                    | tonic::Code::Internal
+            ),
             Self::Policy(_)
             | Self::InvalidFederationRuleId
             | Self::AssertionFileMustBeAbsolute
             | Self::InvalidAssertion
             | Self::AssertionTooLarge
+            | Self::InvalidSpiffeEndpoint
+            | Self::InvalidSpiffeAudience
+            | Self::InvalidSpiffeId
+            | Self::UnsupportedSpiffePlatform
+            | Self::AmbiguousSpiffeIdentity
             | Self::HttpClientConfiguration
             | Self::InvalidTokenUrl
             | Self::ExchangeRejected(_)

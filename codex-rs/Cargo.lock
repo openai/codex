@@ -5834,13 +5834,20 @@ dependencies = [
 name = "codex-workload-identity"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "codex-http-client",
+ "hyper",
+ "hyper-util",
  "pretty_assertions",
+ "prost",
  "serde",
  "serde_json",
+ "spiffe",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "url",
  "wiremock",
 ]
@@ -14862,6 +14869,20 @@ checksum = "94bf565ee1681b4473aa5a9d71d807347c28021bd1d8947cb626b02f42a0141f"
 dependencies = [
  "itertools 0.14.0",
  "quickcheck",
+]
+
+[[package]]
+name = "spiffe"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "539d8f20779006e7e078d8ac7f30a7d7d77fdbbf1f343e1d4416c22772850fbf"
+dependencies = [
+ "hyper-util",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tower",
+ "url",
 ]
 
 [[package]]

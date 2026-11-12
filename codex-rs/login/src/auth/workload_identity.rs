@@ -10,7 +10,13 @@ use std::sync::atomic::Ordering;
 use codex_http_client::HttpClientFactory;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
 use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_SOURCE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_SPIFFE_AUDIENCE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_SPIFFE_ID_ENV_VAR;
 use codex_protocol::shell_environment::OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR;
+use codex_protocol::shell_environment::SPIFFE_ENDPOINT_SOCKET_ENV_VAR;
+use codex_workload_identity::AssertionSource;
+use codex_workload_identity::SpiffeWorkloadApi;
 use codex_workload_identity::WorkloadIdentityConfig;
 use codex_workload_identity::WorkloadIdentityError;
 use codex_workload_identity::WorkloadIdentityExchange;
@@ -51,7 +57,7 @@ impl WorkloadIdentityEnvironment {
 
 #[derive(Clone)]
 struct WorkloadIdentitySessionConfig {
-    assertion_file: PathBuf,
+    assertion_source: AssertionSource,
     environment: WorkloadIdentityEnvironment,
     federation_rule_id: String,
     http_client_factory: HttpClientFactory,
@@ -63,7 +69,7 @@ impl std::fmt::Debug for WorkloadIdentitySessionConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("WorkloadIdentitySessionConfig")
-            .field("assertion_file", &self.assertion_file)
+            .field("assertion_source", &self.assertion_source)
             .field("environment", &self.environment)
             .field("federation_rule_id", &self.federation_rule_id)
             .field("http_client_factory", &self.http_client_factory)
@@ -82,7 +88,7 @@ impl std::fmt::Debug for WorkloadIdentitySessionConfig {
 impl WorkloadIdentitySessionConfig {
     fn fingerprint(&self) -> WorkloadIdentityFingerprint {
         WorkloadIdentityFingerprint {
-            assertion_file: self.assertion_file.clone(),
+            assertion_source: self.assertion_source.clone(),
             environment: self.environment,
             federation_rule_id: self.federation_rule_id.trim().to_string(),
             token_url: self.token_url.to_string(),
@@ -93,7 +99,7 @@ impl WorkloadIdentitySessionConfig {
     fn into_exchange(self) -> Result<WorkloadIdentityExchange, WorkloadIdentityError> {
         let config = WorkloadIdentityConfig::new(
             self.federation_rule_id,
-            self.assertion_file,
+            self.assertion_source,
             self.workload_identity_context,
         )?;
         WorkloadIdentityExchange::new(config, self.token_url, self.http_client_factory)
@@ -102,7 +108,7 @@ impl WorkloadIdentitySessionConfig {
 
 #[derive(Clone, PartialEq, Eq)]
 struct WorkloadIdentityFingerprint {
-    assertion_file: PathBuf,
+    assertion_source: AssertionSource,
     environment: WorkloadIdentityEnvironment,
     federation_rule_id: String,
     token_url: String,
@@ -123,8 +129,8 @@ pub(super) enum WorkloadIdentitySessionError {
 
 /// Returns whether workload identity was selected through process configuration.
 ///
-/// Either marker selects workload identity. Partial configuration then fails validation rather
-/// than falling back to another credential source.
+/// OpenAI workload identity markers select this mode; an ambient SPIFFE socket alone does not.
+/// Partial configuration fails validation rather than falling back to another credential source.
 pub fn is_workload_identity_selected() -> bool {
     ProcessEnvironment::read().has_marker()
 }
@@ -142,10 +148,41 @@ fn resolve_config(
         environment.federation_rule_id,
         OPENAI_FEDERATION_RULE_ID_ENV_VAR,
     )?;
-    let assertion_file = required_path(
-        environment.identity_token_file,
-        OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+    let source = optional_unicode(
+        environment.identity_token_source,
+        OPENAI_IDENTITY_TOKEN_SOURCE_ENV_VAR,
     )?;
+    let assertion_source = match source.as_deref() {
+        None | Some("file") => {
+            if environment.spiffe_audience.is_some() || environment.spiffe_id.is_some() {
+                return Err(invalid_config(
+                    "SPIFFE settings require OPENAI_IDENTITY_TOKEN_SOURCE=spiffe",
+                ));
+            }
+            AssertionSource::File(required_path(
+                environment.identity_token_file,
+                OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+            )?)
+        }
+        Some("spiffe") => {
+            if environment.identity_token_file.is_some() {
+                return Err(invalid_config(
+                    "SPIFFE authentication cannot also set OPENAI_IDENTITY_TOKEN_FILE",
+                ));
+            }
+            let endpoint =
+                required_unicode(environment.spiffe_endpoint, SPIFFE_ENDPOINT_SOCKET_ENV_VAR)?;
+            let audience =
+                required_unicode(environment.spiffe_audience, OPENAI_SPIFFE_AUDIENCE_ENV_VAR)?;
+            let spiffe_id = optional_unicode(environment.spiffe_id, OPENAI_SPIFFE_ID_ENV_VAR)?;
+            AssertionSource::Spiffe(SpiffeWorkloadApi::new(&endpoint, audience, spiffe_id)?)
+        }
+        Some(_) => {
+            return Err(invalid_config(
+                "OPENAI_IDENTITY_TOKEN_SOURCE must be file or spiffe",
+            ));
+        }
+    };
     let workload_identity_context = optional_unicode(
         environment.workload_identity_context,
         OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR,
@@ -153,7 +190,7 @@ fn resolve_config(
     let auth_environment = classify_auth_environment(chatgpt_base_url)?;
 
     Ok(Some(WorkloadIdentitySessionConfig {
-        assertion_file,
+        assertion_source,
         environment: auth_environment,
         federation_rule_id,
         http_client_factory: auth_route_config
@@ -242,6 +279,10 @@ fn invalid_config(message: impl Into<String>) -> WorkloadIdentitySessionError {
 struct ProcessEnvironment {
     federation_rule_id: Option<OsString>,
     identity_token_file: Option<OsString>,
+    identity_token_source: Option<OsString>,
+    spiffe_endpoint: Option<OsString>,
+    spiffe_audience: Option<OsString>,
+    spiffe_id: Option<OsString>,
     workload_identity_context: Option<OsString>,
 }
 
@@ -250,12 +291,20 @@ impl ProcessEnvironment {
         Self {
             federation_rule_id: std::env::var_os(OPENAI_FEDERATION_RULE_ID_ENV_VAR),
             identity_token_file: std::env::var_os(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR),
+            identity_token_source: std::env::var_os(OPENAI_IDENTITY_TOKEN_SOURCE_ENV_VAR),
+            spiffe_endpoint: std::env::var_os(SPIFFE_ENDPOINT_SOCKET_ENV_VAR),
+            spiffe_audience: std::env::var_os(OPENAI_SPIFFE_AUDIENCE_ENV_VAR),
+            spiffe_id: std::env::var_os(OPENAI_SPIFFE_ID_ENV_VAR),
             workload_identity_context: std::env::var_os(OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR),
         }
     }
 
     fn has_marker(&self) -> bool {
-        self.federation_rule_id.is_some() || self.identity_token_file.is_some()
+        self.federation_rule_id.is_some()
+            || self.identity_token_file.is_some()
+            || self.identity_token_source.is_some()
+            || self.spiffe_audience.is_some()
+            || self.spiffe_id.is_some()
     }
 }
 

@@ -271,6 +271,159 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
 }
 
 #[test]
+fn ambient_spiffe_endpoint_does_not_select_or_change_file_auth() {
+    let endpoint = Some("unix:///run/spire/agent.sock".into());
+    assert!(
+        resolve_for_test(
+            ProcessEnvironment {
+                spiffe_endpoint: endpoint.clone(),
+                ..ProcessEnvironment::default()
+            },
+            "https://chatgpt.com/backend-api",
+        )
+        .unwrap()
+        .is_none()
+    );
+    let original = resolve_for_test(complete_environment(), "https://chatgpt.com/backend-api")
+        .unwrap()
+        .unwrap();
+    let configured = resolve_for_test(
+        ProcessEnvironment {
+            spiffe_endpoint: endpoint,
+            ..complete_environment()
+        },
+        "https://chatgpt.com/backend-api",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(original.assertion_source, configured.assertion_source);
+}
+
+#[cfg(unix)]
+fn spiffe_environment() -> ProcessEnvironment {
+    ProcessEnvironment {
+        federation_rule_id: Some("rule-one".into()),
+        identity_token_source: Some("spiffe".into()),
+        spiffe_endpoint: Some("unix:///run/spire/agent.sock".into()),
+        spiffe_audience: Some("codex-test".into()),
+        spiffe_id: Some("spiffe://example.org/workload".into()),
+        ..ProcessEnvironment::default()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn spiffe_requires_explicit_complete_configuration() {
+    let config = resolve_for_test(spiffe_environment(), "https://chatgpt.com/backend-api")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        config.assertion_source,
+        AssertionSource::Spiffe(_)
+    ));
+    for environment in [
+        ProcessEnvironment {
+            federation_rule_id: None,
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            identity_token_source: None,
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_endpoint: None,
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_audience: None,
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_audience: Some("".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_id: Some("invalid-id".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_endpoint: Some("tcp://127.0.0.1:8081".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_endpoint: Some("unix:relative.sock".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_endpoint: Some("unix:///run/spire/agent.sock?query".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            identity_token_source: Some("unknown".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            identity_token_file: complete_environment().identity_token_file,
+            ..spiffe_environment()
+        },
+    ] {
+        assert!(resolve_for_test(environment, "https://chatgpt.com/backend-api").is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn active_spiffe_sessions_reject_changes_to_any_source_setting() {
+    let registry = WorkloadIdentitySessionRegistry::default();
+    let config = resolve_for_test(spiffe_environment(), "https://chatgpt.com/backend-api")
+        .unwrap()
+        .unwrap();
+    let active = registry.session(config.clone()).unwrap();
+    assert!(Arc::ptr_eq(&active, &registry.session(config).unwrap()));
+    for environment in [
+        ProcessEnvironment {
+            spiffe_endpoint: Some("unix:///run/other/agent.sock".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_audience: Some("other-audience".into()),
+            ..spiffe_environment()
+        },
+        ProcessEnvironment {
+            spiffe_id: Some("spiffe://example.org/other".into()),
+            ..spiffe_environment()
+        },
+        complete_environment(),
+    ] {
+        let config = resolve_for_test(environment, "https://chatgpt.com/backend-api")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            registry.session(config),
+            Err(WorkloadIdentitySessionError::ConflictingConfiguration)
+        ));
+    }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn spiffe_reports_unsupported_platform_without_falling_back() {
+    let environment = ProcessEnvironment {
+        federation_rule_id: Some("rule-one".into()),
+        identity_token_source: Some("spiffe".into()),
+        spiffe_endpoint: Some("unix:///run/spire/agent.sock".into()),
+        spiffe_audience: Some("codex-test".into()),
+        ..ProcessEnvironment::default()
+    };
+    assert!(matches!(
+        resolve_for_test(environment, "https://chatgpt.com/backend-api"),
+        Err(WorkloadIdentitySessionError::Exchange(
+            WorkloadIdentityError::UnsupportedSpiffePlatform
+        ))
+    ));
+}
+
+#[test]
 fn app_environment_is_enforced() {
     for (chatgpt_base_url, expected_environment, expected_token_url) in [
         (
@@ -319,7 +472,7 @@ fn session_config(directory: &Path, server: &MockServer) -> WorkloadIdentitySess
     let assertion_file = directory.join("identity-token");
     std::fs::write(&assertion_file, "assertion-one").expect("write assertion");
     WorkloadIdentitySessionConfig {
-        assertion_file,
+        assertion_source: assertion_file.into(),
         environment: WorkloadIdentityEnvironment::Staging,
         federation_rule_id: "rule-one".to_string(),
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -421,8 +574,9 @@ async fn incompatible_process_session_settings_are_rejected() {
     let mut different_rule = base.clone();
     different_rule.federation_rule_id = "rule-two".to_string();
     let mut different_file = base.clone();
-    different_file.assertion_file = temp_dir.path().join("identity-token-two");
-    std::fs::write(&different_file.assertion_file, "assertion-two").expect("write assertion");
+    let path = temp_dir.path().join("identity-token-two");
+    std::fs::write(&path, "assertion-two").expect("write assertion");
+    different_file.assertion_source = path.into();
     let mut different_environment = base.clone();
     different_environment.environment = WorkloadIdentityEnvironment::Production;
     let mut different_context = base.clone();

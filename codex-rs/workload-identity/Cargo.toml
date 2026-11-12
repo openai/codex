@@ -13,15 +13,22 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 codex-http-client = { workspace = true }
+prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+spiffe = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 wiremock = { workspace = true }
