@@ -6,8 +6,10 @@ use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use http_body_util::BodyExt;
+use reqwest::StatusCode;
 use tonic::Status;
 use tonic::body::Body;
+use tonic::codegen::Bytes;
 use tonic::codegen::http::Request;
 use tonic::codegen::http::Response;
 use tonic::codegen::http::Uri;
@@ -18,6 +20,7 @@ use tower::service_fn;
 use tower::util::BoxCloneSyncService;
 
 use super::GrpcClient;
+use super::SessionAdmission;
 
 pub(super) type GrpcTransport = BoxCloneSyncService<Request<Body>, Response<Body>, Status>;
 
@@ -118,6 +121,7 @@ impl SharedTransport {
             let transport = service_fn(move |request: Request<Body>| {
                 let client = client.clone();
                 async move {
+                    let admission = request.extensions().get::<SessionAdmission>().is_some();
                     let request =
                         request.map(|body| reqwest::Body::wrap_stream(body.into_data_stream()));
                     let request = reqwest::Request::try_from(request)
@@ -141,6 +145,13 @@ impl SharedTransport {
                             status
                         })?
                         .into_http_response();
+                    if admission && response.status() == StatusCode::SERVICE_UNAVAILABLE {
+                        // A 503 cannot grant a lease. Leave headers and trailers for tonic
+                        // to read the gRPC status, or infer Unavailable when it is absent.
+                        return Ok(response.map(|body| {
+                            Body::new(body.map_frame(|frame| frame.map_data(|_| Bytes::new())))
+                        }));
+                    }
                     Ok::<_, Status>(response.map(Body::new))
                 }
             });

@@ -59,6 +59,9 @@ mod transport;
 
 type GrpcClient = CodeModeHostClient<GrpcTransport>;
 
+#[derive(Clone)]
+struct SessionAdmission;
+
 const SHUTDOWN_ERROR: &str = "code mode session is shutting down";
 const ROUTE_HEADER: &str = "x-code-mode-route";
 // Bound result-delivery RPCs, not running tools. A full completion burst can
@@ -184,6 +187,7 @@ impl GrpcCodeModeSessionProvider {
                         }
                     },
                 });
+                request.extensions_mut().insert(SessionAdmission);
                 inject_span_traceparent(&mut request, &open_session_span);
                 let result = async {
                     let response = client.as_ref().clone().open_session(request).await?;
