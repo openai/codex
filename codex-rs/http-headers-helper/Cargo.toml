@@ -1,0 +1,20 @@
+[package]
+name = "codex-http-headers-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-utils-process = { workspace = true }
+codex-utils-pty = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false

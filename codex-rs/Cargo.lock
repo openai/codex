@@ -3968,6 +3968,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-http-headers-helper"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-process",
+ "codex-utils-pty",
+ "http 1.4.0",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
@@ -4793,6 +4806,7 @@ dependencies = [
  "codex-config",
  "codex-exec-server",
  "codex-http-client",
+ "codex-http-headers-helper",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",

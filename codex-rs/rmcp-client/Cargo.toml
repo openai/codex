@@ -19,6 +19,7 @@ codex-api = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
+codex-http-headers-helper = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }

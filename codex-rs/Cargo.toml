@@ -55,6 +55,7 @@ members = [
     "hooks",
     "history",
     "http-client",
+    "http-headers-helper",
     "secrets",
     "exec",
     "file-system",
@@ -216,6 +217,7 @@ codex-code-mode-runtime = { path = "code-mode-runtime" }
 codex-plugin-host = { path = "plugin-host" }
 codex-home = { path = "codex-home" }
 codex-http-client = { path = "http-client" }
+codex-http-headers-helper = { path = "http-headers-helper" }
 codex-websocket-auth = { path = "websocket-auth" }
 codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
