@@ -1,0 +1,344 @@
+---
+source: core/tests/suite/scenarios_catalog_apps_instructions_tests.rs
+assertion_line: 144
+expression: "context_snapshot::format_request_history_snapshot(\"Apps wording follows the selected model, retires bundled guidance when an unavailable model selects an override, preserves literal bytes, and survives both custom and cleared restarts without duplication.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Apps wording follows the selected model, retires bundled guidance when an unavailable model selects an override, preserves literal bytes, and survives both custom and cleared restarts without duplication.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "apps-bundled"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (10; hash=9f8074d045f3bd93):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer[3]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Check with bundled guidance.
+
+## Window 2 (after request 1)
+Settings: relative to window 1
+  model: "apps-no-guidance"
+-- request 2 (turn) --
+00:message/developer[3]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Check with bundled guidance.
+03:message/developer:
+    <catalog_apps_instructions>
+    The previously provided Apps usage instructions no longer apply.
+    </catalog_apps_instructions>
+04:message/user:
+    Check while guidance is unavailable.
+
+## Window 3 (after request 2)
+Settings: relative to window 2
+  model: "apps-a"
+-- request 3 (turn) --
+00:message/developer[3]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Check with bundled guidance.
+03:message/developer:
+    <catalog_apps_instructions>
+    The previously provided Apps usage instructions no longer apply.
+    </catalog_apps_instructions>
+04:message/user:
+    Check while guidance is unavailable.
+05:message/developer:
+    <catalog_apps_instructions>  Calendar guidance A: {{literal}}.
+    </catalog_apps_instructions>
+06:message/user:
+    Check the calendar.
+
+## Window 4 (after request 3)
+Settings: relative to window 3
+  model: "apps-b"
+-- request 4 (turn) --
+00:message/developer[3]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Check with bundled guidance.
+03:message/developer:
+    <catalog_apps_instructions>
+    The previously provided Apps usage instructions no longer apply.
+    </catalog_apps_instructions>
+04:message/user:
+    Check while guidance is unavailable.
+05:message/developer:
+    <catalog_apps_instructions>  Calendar guidance A: {{literal}}.
+    </catalog_apps_instructions>
+06:message/user:
+    Check the calendar.
+07:message/developer:
+    <catalog_apps_instructions>
+    These Apps usage instructions replace all previously provided Apps usage instructions.
+
+    Calendar guidance B.</catalog_apps_instructions>
+08:message/user:
+    Check again with the new model.
+-- request 5 (turn) --
+09:message/user:
+    <environment_context>
+      <cwd><CWD 2></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="managed">...ntry></file_system></permission_profile></filesystem> [hash=8fc9d186c1133657]
+    </environment_context>
+10:message/user:
+    Check after restarting with the same guidance.
+
+## Window 5 (after request 5)
+Settings: relative to window 4
+  model: "apps-clear"
+-- request 6 (turn) --
+00:message/developer[3]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Check with bundled guidance.
+03:message/developer:
+    <catalog_apps_instructions>
+    The previously provided Apps usage instructions no longer apply.
+    </catalog_apps_instructions>
+04:message/user:
+    Check while guidance is unavailable.
+05:message/developer:
+    <catalog_apps_instructions>  Calendar guidance A: {{literal}}.
+    </catalog_apps_instructions>
+06:message/user:
+    Check the calendar.
+07:message/developer:
+    <catalog_apps_instructions>
+    These Apps usage instructions replace all previously provided Apps usage instructions.
+
+    Calendar guidance B.</catalog_apps_instructions>
+08:message/user:
+    Check again with the new model.
+09:message/user:
+    <environment_context>
+      <cwd><CWD 2></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="managed">...ntry></file_system></permission_profile></filesystem> [hash=8fc9d186c1133657]
+    </environment_context>
+10:message/user:
+    Check after restarting with the same guidance.
+11:message/developer:
+    <catalog_apps_instructions>
+    The previously provided Apps usage instructions no longer apply.
+    </catalog_apps_instructions>
+12:message/user:
+    Clear the guidance.
+-- request 7 (turn) --
+13:message/user:
+    Continue with cleared guidance.
+-- request 8 (turn) --
+14:message/user:
+    <environment_context>
+      <cwd><CWD 3></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 3></root></workspace_roots><permission_profile type="managed">...ntry></file_system></permission_profile></filesystem> [hash=1d8e57fdb1985164]
+    </environment_context>
+15:message/user:
+    Check after restarting with cleared guidance.

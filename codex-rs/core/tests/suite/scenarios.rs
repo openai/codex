@@ -144,6 +144,9 @@ mod catalog_settings;
 #[path = "scenarios_catalog_approval_instructions_tests.rs"]
 mod catalog_approval_instructions;
 
+#[path = "scenarios_catalog_apps_instructions_tests.rs"]
+mod catalog_apps_instructions;
+
 #[path = "scenarios_managed_human_approval_tests.rs"]
 mod managed_human_approval;
 

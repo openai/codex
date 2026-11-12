@@ -13,6 +13,7 @@ use codex_protocol::openai_models::ToolMessage;
 use permissions::ResolvedApprovalMessages;
 use permissions::ResolvedPermissionMessages;
 
+mod apps;
 mod collaboration;
 mod guardian;
 mod incremental_tools;
@@ -20,6 +21,7 @@ mod multi_agent;
 pub(crate) mod permissions;
 mod plugins;
 
+pub use apps::ResolvedAppsInstructions;
 pub use collaboration::ResolvedCollaborationModeMessages;
 pub use guardian::ResolvedAutoReviewMessages;
 pub use incremental_tools::ResolvedIncrementalToolMessages;
@@ -92,6 +94,15 @@ impl<'a> ResolvedModelMessages<'a> {
     pub fn instructions_template(&self) -> Option<&'a str> {
         self.catalog_messages
             .and_then(|messages| messages.instructions_template.as_deref())
+    }
+
+    /// Resolves bounded literal Apps wording; callers retain availability and feature gates.
+    pub fn apps_usage_instructions(&self, mcp_server_name: &str) -> ResolvedAppsInstructions {
+        ResolvedAppsInstructions::new(
+            self.catalog_messages
+                .and_then(|messages| messages.apps.as_ref()),
+            mcp_server_name,
+        )
     }
 
     /// Resolves approval messages and their bundled alternatives.
@@ -283,6 +294,10 @@ impl<'a> ResolvedModelMessages<'a> {
             .unwrap_or(CONTENT_FILTER_GUIDANCE)
     }
 }
+
+#[cfg(test)]
+#[path = "model_messages/apps_tests.rs"]
+mod apps_tests;
 
 #[cfg(test)]
 #[path = "model_messages/plugins_tests.rs"]

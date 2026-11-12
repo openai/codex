@@ -2277,6 +2277,9 @@ async fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         developer_msg(&format!(
             "{APPS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_APPS_INSTRUCTIONS"
         )),
+        developer_msg(
+            "<catalog_apps_instructions>Retired Apps guidance</catalog_apps_instructions>",
+        ),
         developer_msg(&format!(
             "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_PLUGIN_INSTRUCTIONS"
         )),

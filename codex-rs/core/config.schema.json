@@ -884,6 +884,9 @@
             "browser_use_full_cdp_access": {
               "type": "boolean"
             },
+            "catalog_apps_instructions": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -8008,6 +8011,9 @@
           "type": "boolean"
         },
         "browser_use_full_cdp_access": {
+          "type": "boolean"
+        },
+        "catalog_apps_instructions": {
           "type": "boolean"
         },
         "chronicle": {

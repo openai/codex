@@ -11,6 +11,8 @@
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::CATALOG_APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::InterAgentCommunication;
 use std::borrow::Borrow;
 
@@ -89,7 +91,8 @@ fn is_known_contextual_developer_message_content(content: &[ContentItem]) -> boo
             "<permissions instructions>",
             "<model_switch>",
             "<managed_developer_instructions>",
-            "<apps_instructions>",
+            APPS_INSTRUCTIONS_OPEN_TAG,
+            CATALOG_APPS_INSTRUCTIONS_OPEN_TAG,
             "<collaboration_mode>",
             "<multi_agent_mode>",
             "<environments_instructions>",
