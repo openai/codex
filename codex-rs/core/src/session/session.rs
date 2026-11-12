@@ -42,8 +42,6 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::openai_models::CatalogModel;
-use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -285,12 +283,6 @@ impl SessionConfiguration {
             .file_system_sandbox_policy()
     }
 
-    pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile_state
-            .permission_profile()
-            .network_sandbox_policy()
-    }
-
     pub(super) fn thread_config_snapshot(
         &self,
         environment_selections: Vec<TurnEnvironmentSelection>,
@@ -446,21 +438,6 @@ impl SessionConfiguration {
         if let Some(disabled_plugin_ids) = &updates.disabled_plugin_ids {
             next_configuration.disabled_plugin_ids = disabled_plugin_ids.clone();
         }
-        let current_file_system_sandbox_policy =
-            self.file_system_sandbox_policy(current_environments);
-        let file_system_policy_has_rebindable_project_root_write =
-            current_file_system_sandbox_policy
-                .entries
-                .iter()
-                .any(|entry| {
-                    entry.access.can_write()
-                        && matches!(
-                            &entry.path,
-                            FileSystemPath::Special {
-                                value: FileSystemSpecialPath::ProjectRoots { subpath: None },
-                            }
-                        )
-                });
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
@@ -519,37 +496,6 @@ impl SessionConfiguration {
                         ),
                     )?;
                 next_configuration.original_config_do_not_use = Arc::new(config);
-            }
-        } else if cwd_changed && file_system_policy_has_rebindable_project_root_write {
-            // Compatibility projection can resolve filesystem paths. Only compute it
-            // when a cwd-bound legacy policy might need rebinding.
-            let current_sandbox_policy = self.sandbox_policy(current_environments);
-            if current_file_system_sandbox_policy.is_semantically_equivalent_to(
-                &FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    &current_sandbox_policy,
-                    self.cwd(),
-                    &current_file_system_sandbox_policy,
-                ),
-                self.cwd(),
-            ) {
-                // Preserve richer split policies across cwd-only updates; only
-                // rederive when the session is already using a structurally
-                // cwd-bound legacy bridge.
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                        &current_sandbox_policy,
-                        next_configuration.cwd(),
-                        &current_file_system_sandbox_policy,
-                    );
-                next_configuration
-                    .permission_profile_state
-                    .set_legacy_permission_profile(
-                        PermissionProfile::from_runtime_permissions_with_enforcement(
-                            SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
-                            &file_system_sandbox_policy,
-                            self.network_sandbox_policy(),
-                        ),
-                    )?;
             }
         }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
