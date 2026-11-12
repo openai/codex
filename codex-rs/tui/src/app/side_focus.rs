@@ -155,7 +155,7 @@ impl App {
             if tui.shortcut_hud_contains(*mouse) {
                 return false;
             }
-            let chooser = frame.chooser_area();
+            let chooser = frame.panel_area();
             let pane = self.sidebar();
             if ((matches!(mouse.kind, MouseEventKind::Down(_))
                 && chooser.is_some_and(|area| area.contains(point)))
@@ -212,7 +212,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
                 let Some(area) = self
                     .conversation_frame
-                    .chooser_area()
+                    .panel_area()
                     .filter(|area| area.contains((mouse.column, mouse.row).into()))
                 else {
                     self.sidebar_mut()
@@ -257,7 +257,7 @@ impl App {
                 let Some(list_action) = self.keymap.list.action_for(*key) else {
                     return true;
                 };
-                let area = self.conversation_frame.chooser_area();
+                let area = self.conversation_frame.panel_area();
                 let pane = self.sidebar_mut();
                 if new_chat == sidebar_chooser::NewChatState::WaitingForMainMessage
                     && list_action != ListAction::Cancel
@@ -302,7 +302,7 @@ impl App {
         // Fast keyboard navigation is safe until an asynchronous update changes its target.
         if activation.is_some()
             && open
-            && frame.chooser_area().is_some()
+            && frame.panel_area().is_some()
             && self.sidebar().is_some_and(|pane| {
                 let current = pane.input_state();
                 pane.creation.is_none()
@@ -449,8 +449,9 @@ impl App {
             bindings.focus_main_composer.is_pressed(key) && self.main_composer_shortcut_available();
         let sidebar = bindings.focus_sidebar_content.is_pressed(key);
         let tabs = bindings.focus_sidebar_tabs.is_pressed(key) && self.sidebar_chooser_available();
+        let panel_focus = self.panel_focus();
         let hide = bindings.hide_pane.is_pressed(key)
-            || (self.chooser_focus() == Some(PaneFocus::Sidebar)
+            || (panel_focus == Some(PaneFocus::Sidebar)
                 && crate::key_hint::ctrl(KeyCode::Char('c')).is_press(key));
         let width_change = if bindings.move_divider_left.is_pressed(key) {
             2
@@ -493,9 +494,8 @@ impl App {
             return false;
         }
         let child = self.switchable_side_child();
-        let chooser = self.chooser_focus();
         if child.is_none()
-            && ((hide && chooser != Some(PaneFocus::Sidebar))
+            && ((hide && panel_focus != Some(PaneFocus::Sidebar))
                 || (sidebar && !self.sidebar_chooser_available()))
         {
             return false;
@@ -531,8 +531,8 @@ impl App {
             self.zoomed_thread = (self.zoomed_thread != Some(target)).then_some(target);
             tui.frame_requester().schedule_frame();
             Ok(())
-        } else if chooser.is_some() {
-            if hide || (sidebar && chooser == Some(PaneFocus::Sidebar)) {
+        } else if panel_focus.is_some() {
+            if hide || (sidebar && panel_focus == Some(PaneFocus::Sidebar)) {
                 self.focus_current_parent_view(tui);
                 self.sidebar_mut().hide();
             } else {
@@ -544,7 +544,10 @@ impl App {
                 } else {
                     PaneFocus::Sidebar
                 };
-                self.sidebar_mut().show(SidebarContent::Chooser, focus);
+                let pane = self.sidebar_mut();
+                if let Some(content) = pane.visible_content() {
+                    pane.show(content, focus);
+                }
             }
             tui.frame_requester().schedule_frame();
             Ok(())
@@ -579,7 +582,7 @@ impl App {
         }
         let view_changed = leaves_transcript
             || self.current_displayed_thread_id() != previous_thread
-            || ((main || hide) && chooser == Some(PaneFocus::Sidebar));
+            || ((main || hide) && panel_focus == Some(PaneFocus::Sidebar));
         let suppression = if view_changed && !direct_tab_switch {
             ActivationKeySuppression::ViewTransition
         } else {

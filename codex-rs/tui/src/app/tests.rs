@@ -4578,7 +4578,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .collect::<Vec<_>>()
             .join("\n")
     );
-    let sidebar_x = app.conversation_frame.chooser_area().unwrap().x;
+    let sidebar_x = app.conversation_frame.panel_area().unwrap().x;
     app.local_settings.tui.animations = true;
     keys!(KeyCode::Enter.into());
     assert!(!tui.has_deferred_thread_switch_clear());
@@ -5552,7 +5552,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 
     keys!(prefix, chooser_key, prefix, KeyCode::Char('=').into());
     side_frame(&mut app, &mut tui, even)?;
-    assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 100);
+    assert_eq!(app.conversation_frame.panel_area().unwrap().width, 100);
     keys!(prefix, KeyCode::Char('r').into(), KeyCode::Left.into());
     let frame = side_frame(&mut app, &mut tui, even)?;
     let (_, hint) = frame
@@ -5586,12 +5586,12 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert_eq!(strip.divider_area(), Some(Rect::new(target, 0, 1, 1)));
     keys!(prefix, chooser_key);
     side_frame(&mut app, &mut tui, even)?;
-    assert!(app.conversation_frame.chooser_area().is_some());
+    assert!(app.conversation_frame.panel_area().is_some());
     assert_eq!(divider_at(&tui, 4), target);
 
     // Closing from the chooser must not switch to the tab before confirmation.
     let chooser_focus = app.chooser_focus();
-    let chooser = app.conversation_frame.chooser_area().unwrap();
+    let chooser = app.conversation_frame.panel_area().unwrap();
     let close_x = (chooser.x..chooser.right())
         .rfind(|&x| tui.terminal.previous_buffer()[(x, chooser.y)].symbol() == "×")
         .expect("close button on the second tab");

@@ -25,7 +25,7 @@ impl App {
             return pending.guide(&self.keymap.chords, |_| true);
         }
         let side = self.sidebar_has_focus();
-        let can_switch = self.chooser_focus().is_some() || self.switchable_side_child().is_some();
+        let can_switch = self.panel_focus().is_some() || self.switchable_side_child().is_some();
         let can_size = super::side_pane::split_layout(self, tui, area).is_some();
         let can_resize = can_size && side && self.zoomed_thread.is_none();
         let mut groups = [

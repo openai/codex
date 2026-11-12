@@ -97,7 +97,7 @@ pub(super) struct SidePaneLayout {
 pub(super) fn layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
     match visible_split(app, tui, area)? {
         SidebarLayout::Chat(panes) => Some(panes),
-        SidebarLayout::Chooser { .. } => None,
+        SidebarLayout::Panel { .. } => None,
     }
 }
 
@@ -119,7 +119,7 @@ pub(super) fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidebarLa
     sidebar::content_layout(
         app,
         content,
-        app.chooser_focus().unwrap_or(PaneFocus::Main),
+        app.panel_focus().unwrap_or(PaneFocus::Main),
         sidebar_areas(app, tui, area, /*fraction*/ 1.0)?,
     )
 }

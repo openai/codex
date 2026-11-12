@@ -1261,7 +1261,7 @@ async fn sidebar_chooser_resize_survives_startup_thread_assignment() -> Result<(
     }
     app.activate_thread_channel(ThreadId::new()).await;
     let frame = super::side_frame(&mut app, &mut tui, size)?;
-    assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 55);
+    assert_eq!(app.conversation_frame.panel_area().unwrap().width, 55);
     let (_, footer) = frame.lines().last().unwrap().split_once('│').unwrap();
     insta::assert_snapshot!(footer.trim(), @"←/→ resize · Enter/Esc done");
     assert!(
@@ -1344,7 +1344,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
         for (elapsed, width) in [0, 90, 90].into_iter().zip(widths) {
             tokio::time::advance(std::time::Duration::from_millis(elapsed)).await;
             super::side_frame(&mut app, &mut tui, size)?;
-            assert_eq!(app.conversation_frame.chooser_area().unwrap().width, width);
+            assert_eq!(app.conversation_frame.panel_area().unwrap().width, width);
             if key == KeyCode::Esc && elapsed == 90 && width == 20 {
                 let divider = app.conversation_frame.divider_area().unwrap();
                 for kind in [
@@ -1405,7 +1405,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             // Navigation can request a fresh backend sample between keystrokes.
             tui.terminal = terminal_at(narrow);
             super::side_frame(&mut app, &mut tui, narrow)?;
-            assert!(app.conversation_frame.chooser_area().is_none());
+            assert!(app.conversation_frame.panel_area().is_none());
             let prefix = KeyEvent::from(KeyCode::F(12));
             assert_eq!(app.route_key_chord_event(&mut tui, prefix), Some(prefix));
             for code in [KeyCode::End, KeyCode::Char('8'), KeyCode::End] {
@@ -1443,7 +1443,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             super::side_frame(&mut app, &mut tui, size)?;
             tokio::time::advance(std::time::Duration::from_millis(90)).await;
             super::side_frame(&mut app, &mut tui, size)?;
-            assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 20);
+            assert_eq!(app.conversation_frame.panel_area().unwrap().width, 20);
         }
     }
     let first_prompt = crate::chatwidget::UserMessage {
