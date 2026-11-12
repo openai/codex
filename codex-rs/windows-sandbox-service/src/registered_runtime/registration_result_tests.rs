@@ -19,7 +19,7 @@ fn retains_different_async_and_deployment_errors_with_activity() {
             activity_id: Ok(activity_id),
         }),
     }
-    .check()
+    .check(|| false)
     .unwrap_err();
     assert_eq!(
         error.to_string(),
@@ -44,7 +44,7 @@ fn get_results_errors_keep_original_hresult_and_phase() {
             async_error: Ok(code),
             result: Err(windows::core::Error::from_hresult(code)),
         }
-        .check()
+        .check(|| false)
         .unwrap_err();
         assert_eq!(
             error.to_string(),
@@ -72,7 +72,7 @@ fn diagnostic_getter_failures_do_not_mask_completion_or_leak_text() {
                 activity_id: Err(private_error()),
             }),
         }
-        .check();
+        .check(|| false);
         if code.is_err() {
             let error = result.unwrap_err();
             assert_eq!(
@@ -89,5 +89,30 @@ fn diagnostic_getter_failures_do_not_mask_completion_or_leak_text() {
         } else {
             assert_eq!(result.unwrap(), ());
         }
+    }
+}
+
+#[test]
+fn only_reconciles_a_terminal_service_privilege_error_for_the_registered_target() {
+    for (status, code, registered, expected) in [
+        (AsyncStatus::Error, DEPLOYMENT_FAILURE, true, true),
+        (AsyncStatus::Error, DEPLOYMENT_FAILURE, false, false),
+        (AsyncStatus::Canceled, DEPLOYMENT_FAILURE, true, false),
+        (AsyncStatus::Error, ACCESS_DENIED, true, false),
+    ] {
+        let completion = RegistrationResult {
+            status,
+            async_error: Ok(ASYNC_FAILURE),
+            result: Ok(DeploymentDetails {
+                extended_error: Ok(code),
+                activity_id: Ok(GUID::zeroed()),
+            }),
+        };
+        let result = completion.check(|| {
+            assert_eq!(status, AsyncStatus::Error);
+            assert_eq!(code, DEPLOYMENT_FAILURE);
+            registered
+        });
+        assert_eq!(result.is_ok(), expected);
     }
 }

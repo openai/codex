@@ -39,7 +39,7 @@ impl RegistrationResult {
         }
     }
 
-    pub(super) fn check(self) -> Result<()> {
+    pub(super) fn check(self, registered_for_target: impl FnOnce() -> bool) -> Result<()> {
         let Self {
             status,
             async_error,
@@ -69,6 +69,18 @@ impl RegistrationResult {
             );
             anyhow::Error::new(error).context(summary)
         })?;
+        // Windows can report the service privilege error after another deployment
+        // registered this same version for the target account. Trust that exact
+        // postcondition only for this error. The runner still verifies its image
+        // and package identity before accepting a command.
+        if status == AsyncStatus::Error
+            && extended_error == HRESULT::from_win32(
+                windows_sys::Win32::Foundation::ERROR_PACKAGED_SERVICE_REQUIRES_ADMIN_PRIVILEGES,
+            )
+            && registered_for_target()
+        {
+            return Ok(());
+        }
         extended_error.ok().with_context(|| {
             format!("{context} phase=deployment extended_error={extended_error:?}")
         })
