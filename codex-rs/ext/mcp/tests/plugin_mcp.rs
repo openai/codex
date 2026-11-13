@@ -768,6 +768,7 @@ async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
                         locations: vec![PluginSourceLocation::Cloud {
                             resource_uri: "plugin://plugin_notes".into(),
                             bundle_uri: None,
+                            release_id: None,
                         }],
                     }],
                     ..Default::default()

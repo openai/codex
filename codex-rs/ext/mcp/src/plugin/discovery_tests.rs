@@ -33,6 +33,7 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
         locations: vec![PluginSourceLocation::Cloud {
             resource_uri: "plugin://plugin_example".to_string(),
             bundle_uri: None,
+            release_id: None,
         }],
     };
     let projections = v2_metadata_from_catalog(&entry, &config.features);

@@ -25,6 +25,7 @@ fn cloud_plugin(remote_id: &str) -> PluginCatalogEntry {
         locations: vec![PluginSourceLocation::Cloud {
             resource_uri: format!("plugin://{remote_id}"),
             bundle_uri: None,
+            release_id: Some("release-1".to_string()),
         }],
     }
 }

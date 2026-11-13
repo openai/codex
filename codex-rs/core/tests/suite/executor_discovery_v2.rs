@@ -1155,6 +1155,7 @@ impl PluginProvider for Cloud {
                         locations: vec![PluginSourceLocation::Cloud {
                             resource_uri: "plugin://plugin_demo".into(),
                             bundle_uri: None,
+                            release_id: None,
                         }],
                     }]
                 },

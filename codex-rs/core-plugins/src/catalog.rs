@@ -77,6 +77,8 @@ pub enum PluginSourceLocation {
     Cloud {
         resource_uri: String,
         bundle_uri: Option<String>,
+        /// Opaque release ID selected by the cloud catalog for this declaration.
+        release_id: Option<String>,
     },
     Executor {
         /// Executor environment that owns `root`.

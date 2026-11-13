@@ -458,6 +458,7 @@ fn cloud_catalog() -> PluginCatalog {
             locations: vec![codex_core_plugins::PluginSourceLocation::Cloud {
                 resource_uri: "plugin://plugin_remote".to_string(),
                 bundle_uri: None,
+                release_id: None,
             }],
         }],
         ..Default::default()
