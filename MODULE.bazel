@@ -880,7 +880,11 @@ engine_repository(
 
 # All V8 inputs are owned here, including the pinned Python generator inputs.
 pip.parse(
-    extra_pip_args = ["--require-hashes"],
+    envsubst = ["PIP_INDEX_URL"],
+    extra_pip_args = [
+        "--require-hashes",
+        "--index-url=${PIP_INDEX_URL:-https://pypi.org/simple}",
+    ],
     hub_name = "v8_python_deps",
     python_version = "3.11",
     requirements_lock = "@v8//:bazel/requirements.txt",
