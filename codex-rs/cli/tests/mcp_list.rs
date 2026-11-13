@@ -11,6 +11,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
 use codex_login::CODEX_API_KEY_ENV_VAR;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -416,6 +417,56 @@ async fn list_and_get_render_expected_output() -> Result<()> {
         .assert()
         .success()
         .stdout(contains("\"name\": \"docs\"").and(contains("\"enabled\": true")));
+
+    Ok(())
+}
+
+#[test]
+fn get_reports_removal_scope_for_profile_servers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let profile_path = AbsolutePathBuf::from_absolute_path(codex_home.path().canonicalize()?)?
+        .join("work.config.toml");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[mcp_servers.shadowed]\ncommand = \"basecmd\"\n\n[mcp_servers.inherited]\ncommand = \"basecmd\"\n",
+    )?;
+    std::fs::write(
+        profile_path.as_path(),
+        "[mcp_servers.shadowed]\ncommand = \"profilecmd\"\n\n[mcp_servers.profile_only]\ncommand = \"profilecmd\"\n",
+    )?;
+
+    for name in ["shadowed", "profile_only"] {
+        let output = codex_command(codex_home.path())?
+            .current_dir(codex_home.path())
+            .args(["-p", "work", "mcp", "get", name])
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let stdout = stdout.replace(
+            profile_path.as_path().to_string_lossy().as_ref(),
+            "<profile file>",
+        );
+        let (_, details) = stdout.split_once('\n').expect("expected server details");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(details, @r"
+              enabled: true
+              transport: stdio
+              command: profilecmd
+              args: -
+              cwd: -
+              env: -
+              profile settings: <profile file>
+              removal scope: `codex mcp remove` only edits the global config.
+            ");
+        }
+    }
+
+    codex_command(codex_home.path())?
+        .current_dir(codex_home.path())
+        .args(["-p", "work", "mcp", "get", "inherited"])
+        .assert()
+        .success()
+        .stdout(contains("remove: codex mcp remove inherited"));
 
     Ok(())
 }
