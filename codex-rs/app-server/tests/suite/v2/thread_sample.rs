@@ -1348,6 +1348,95 @@ async fn sample_rejects_invalid_sources_and_prompts() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn sample_uses_the_parent_catalog_after_a_default_provider_switch() -> Result<()> {
+    let alpha = wiremock::MockServer::start().await;
+    let beta = wiremock::MockServer::start().await;
+    let mut model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled reasoning model");
+    for (provider, supports_updates) in [(&alpha, false), (&beta, true)] {
+        model.supports_reasoning_effort_updates = supports_updates;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [&model]})))
+            .mount(provider)
+            .await;
+    }
+    let replies = ["parent", "sample"].map(|id| {
+        responses::sse(vec![
+            responses::ev_assistant_message(id, "Ready."),
+            responses::ev_completed(id),
+        ])
+    });
+    let alpha_requests = responses::mount_sse_sequence(&alpha, replies.to_vec()).await;
+    let beta_requests = responses::mount_sse_sequence(&beta, replies.to_vec()).await;
+    let home = TempDir::new()?;
+    let alpha_url = alpha.uri();
+    let beta_url = beta.uri();
+    MockResponsesConfig::new(&alpha_url)
+        .with_model_provider("alpha")
+        .with_provider_name("OpenAI")
+        .with_model(&model.slug)
+        .with_root_config("model_reasoning_effort = 'medium'")
+        .enable_feature(Feature::ApiKeyModelDiscovery)
+        .enable_feature(Feature::ReasoningEffortOverride)
+        .with_provider_config(&format!(
+            "env_key = 'TEST_CATALOG_KEY'\nmodel_catalog_url = '{alpha_url}/v1/models'"
+        ))
+        .with_extra_config(&format!(
+            r#"[model_providers.beta]
+name = "OpenAI"
+base_url = "{beta_url}/v1"
+model_catalog_url = "{beta_url}/v1/models"
+env_key = "TEST_CATALOG_KEY""#
+        ))
+        .write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("TEST_CATALOG_KEY", Some("test-key"))])
+        .build_initialized_with_timeout(WAIT)
+        .await?;
+    let alpha_parent = ready_parent(&mut client, ThreadStartParams::default()).await?;
+    let id = client
+        .send_raw_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "beta"})),
+        )
+        .await?;
+    let write: codex_app_server_protocol::ConfigWriteResponse = client.read_response(id).await?;
+    assert_eq!(write.status, codex_app_server_protocol::WriteStatus::Ok);
+    let beta_parent = ready_parent(&mut client, ThreadStartParams::default()).await?;
+    for ((thread_id, expected_turn_id), requests, supports_updates) in [
+        (alpha_parent, alpha_requests, false),
+        (beta_parent, beta_requests, true),
+    ] {
+        sample(
+            &mut client,
+            ThreadSampleParams {
+                thread_id,
+                expected_turn_id,
+                prompt: "Predict".into(),
+                effort: Some(ReasoningEffort::High),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let requests = requests.requests();
+        assert_eq!(requests.len(), 2);
+        let updates = requests[1].inputs_of_type("configuration_update");
+        assert_eq!(
+            updates
+                .iter()
+                .any(|item| item["reasoning"]["effort"] == "high"),
+            supports_updates
+        );
+    }
+    Ok(())
+}
+
 #[test_case(false; "unsupported model")]
 #[test_case(true; "unsupported provider")]
 #[tokio::test]

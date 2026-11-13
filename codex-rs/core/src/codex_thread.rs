@@ -25,6 +25,7 @@ use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_models_manager::ModelsManagerConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
@@ -41,6 +42,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
@@ -1203,6 +1205,15 @@ impl CodexThread {
     /// Resolves the model selected for future turns using this thread's catalog and settings.
     pub async fn selected_model_info(&self) -> Arc<ModelInfo> {
         self.session.selected_model_info().await
+    }
+
+    /// Looks up a named model in the catalog selected for this thread's provider and credentials.
+    pub async fn model_info(&self, model: &str, config: &ModelsManagerConfig) -> CatalogModel {
+        self.session
+            .services
+            .models_manager
+            .get_model_info(model, config)
+            .await
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {

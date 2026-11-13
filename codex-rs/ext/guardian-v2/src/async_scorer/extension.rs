@@ -68,8 +68,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 input.config.config_layer_stack.requirements(),
             );
             let scoring_enabled = policy.scoring_enabled();
-            let sampler_config =
-                super::startup::sampler_config(&input, self.thread_manager.upgrade()).await;
+            let sampler_config = super::startup::sampler_config(&input).await;
 
             if scoring_enabled && guardian_config.transcript.include_images {
                 input

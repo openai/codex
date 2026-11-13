@@ -291,9 +291,8 @@ impl MemoryStartupContext {
     ) -> StageOneRequestContext {
         let config_snapshot = self.thread.config_snapshot().await;
         let model_info = self
-            .thread_manager
-            .get_models_manager()
-            .get_model_info(model_name, &config.to_models_manager_config())
+            .thread
+            .model_info(model_name, &config.to_models_manager_config())
             .await;
         let reasoning_summary = config
             .model_reasoning_summary

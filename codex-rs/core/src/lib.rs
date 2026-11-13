@@ -42,6 +42,8 @@ mod compact_remote_v2;
 mod compact_retained_tool_outputs;
 mod compact_token_budget;
 mod thread_startup_metadata;
+/// Catalog handle installed in each thread's extension data before startup callbacks.
+pub use codex_models_manager::manager::SharedModelsManager;
 pub use codex_network_proxy::EnvironmentNetworkPolicy;
 pub use codex_network_proxy::NetworkDomainPermission;
 pub use codex_network_proxy::NetworkDomainPermissionEntry;

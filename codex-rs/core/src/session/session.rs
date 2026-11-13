@@ -1054,6 +1054,7 @@ impl Session {
         thread_extension_init.insert(codex_extension_api::ThreadOriginator(
             session_configuration.originator.clone(),
         ));
+        thread_extension_init.insert(Arc::clone(&models_manager));
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
         thread_extension_init.insert(Arc::unwrap_or_clone(model_info.model));

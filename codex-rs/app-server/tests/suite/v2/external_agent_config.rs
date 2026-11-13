@@ -1918,7 +1918,39 @@ async fn external_agent_config_import_sends_completion_notification_after_pendin
 async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("follow-up answer").await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let url = server.uri();
+    let instructions = "Instructions from the destination provider.";
+    let mut model = codex_models_manager::model_info::model_info_from_slug("mock-model");
+    model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+    model.model_messages = Some(codex_protocol::openai_models::ModelMessages {
+        instructions_template: Some(instructions.into()),
+        ..Default::default()
+    });
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/models"))
+        .and(wiremock::matchers::header(
+            "originator",
+            "codex_work_desktop",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"models": [model]})),
+        )
+        // The responses fixture also registers a default empty catalog.
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    MockResponsesConfig::new(&url)
+        .enable_feature(codex_features::Feature::ApiKeyModelDiscovery)
+        .with_extra_config(&format!(
+            r#"[model_providers.destination]
+name = "Destination"
+base_url = "{url}/v1"
+model_catalog_url = "{url}/v1/models"
+http_headers = {{ originator = "unscoped-test" }}
+env_key = "TEST_CATALOG_KEY""#
+        ))
+        .write(codex_home.path())?;
     let project_root = codex_home.path().join("repo");
     let source_created_at_text = "2024-01-02T03:04:05Z";
     let source_updated_at_text = "2024-03-01T04:05:06Z";
@@ -1979,9 +2011,39 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
-        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .with_env_overrides(&[
+            ("HOME", Some(home_dir.as_str())),
+            ("TEST_CATALOG_KEY", Some("test-key")),
+        ])
+        .build()
         .await?;
+
+    mcp.initialize_with_client_info(codex_app_server_protocol::ClientInfo {
+        name: "codex_work_desktop".into(),
+        title: None,
+        version: "0.1.0".into(),
+    })
+    .await?;
+    let id = mcp
+        .send_raw_request(
+            "modelProvider/default/set",
+            Some(serde_json::json!({"providerId": "destination"})),
+        )
+        .await?;
+    let write: codex_app_server_protocol::ConfigWriteResponse = mcp.read_response(id).await?;
+    assert_eq!(write.status, codex_app_server_protocol::WriteStatus::Ok);
+    // Warm the partition the imported chat will use on resume.
+    let id = mcp
+        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let started: codex_app_server_protocol::ThreadStartResponse = mcp.read_response(id).await?;
+    assert_eq!(
+        started.thread.originator.as_deref(),
+        Some("codex_work_desktop")
+    );
 
     let request_id = mcp
         .send_raw_request(
@@ -2077,7 +2139,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             limit: None,
             sort_key: None,
             sort_direction: None,
-            model_providers: None,
+            model_providers: Some(vec!["destination".into()]),
             source_kinds: None,
             archived: None,
             section_id: None,
@@ -2097,6 +2159,18 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .expect("expected imported thread")
         .clone();
     assert_eq!(imported_thread_id, thread.id.to_string());
+    assert_eq!(thread.model_provider, "destination");
+    let meta =
+        codex_rollout::read_session_meta_line(thread.path.as_deref().expect("imported rollout"))
+            .await?;
+    assert_eq!(meta.meta.originator, "codex_work_desktop");
+    assert_eq!(
+        meta.meta
+            .base_instructions
+            .expect("imported instructions")
+            .text,
+        instructions
+    );
     assert_eq!(thread.preview, control_request);
     assert_eq!(thread.name.as_deref(), Some("Fix auth flow"));
     assert_eq!(thread.created_at, source_created_at);

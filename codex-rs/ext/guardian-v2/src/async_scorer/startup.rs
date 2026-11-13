@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use codex_core::ThreadManager;
+use codex_core::SharedModelsManager;
 use codex_core::config::Config;
 use codex_core::cyber_access_program::ApiKeyCyberAccessPrograms;
 use codex_extension_api::ThreadOriginator;
@@ -107,21 +107,13 @@ pub(super) fn valid_implicit_decisions_key(key: &str) -> bool {
     !key.is_empty() && key.trim() == key && !codex_login::auth::is_fedramp_api_key(key)
 }
 
-pub(super) async fn sampler_config(
-    input: &ThreadStartInput<'_, Config>,
-    manager: Option<Arc<ThreadManager>>,
-) -> LunaSamplerConfig {
+pub(super) async fn sampler_config(input: &ThreadStartInput<'_, Config>) -> LunaSamplerConfig {
     let inherit_parent_cyber_access_program =
         codex_core::RequiredCyberAccessPrograms::for_thread(input.thread_store).is_none();
-    let luna_model = if let Some(thread_manager) = manager {
+    let luna_model = if let Some(catalog) = input.thread_store.get::<SharedModelsManager>() {
         let mut model_config = input.config.to_models_manager_config();
         model_config.model_context_window = None;
-        Some(
-            thread_manager
-                .get_models_manager()
-                .get_model_info(MODEL, &model_config)
-                .await,
-        )
+        Some(catalog.get_model_info(MODEL, &model_config).await)
     } else {
         None
     };

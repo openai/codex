@@ -436,8 +436,10 @@ async fn host_model_info_uses_the_thread_catalog(source: SessionSource) -> Resul
     assert_eq!(selected.comp_hash.as_deref(), Some("thread-revision"));
     assert_eq!(selected.context_window, Some(32_000));
 
+    let model_config = options.config.to_models_manager_config();
     let thread = test.thread_manager.start_thread(options).await?.thread;
     assert_eq!(thread.selected_model_info().await, selected);
+    let other_model = thread.model_info("after-update", &model_config).await.model;
     thread
         .update_thread_settings(ThreadSettingsOverrides {
             model: Some("after-update".into()),
@@ -445,6 +447,7 @@ async fn host_model_info_uses_the_thread_catalog(source: SessionSource) -> Resul
         })
         .await?;
     let next = thread.selected_model_info().await;
+    assert_eq!(next, other_model);
     assert_eq!(next.slug, "after-update");
     assert_eq!(next.comp_hash.as_deref(), Some("thread-revision"));
     Ok(())

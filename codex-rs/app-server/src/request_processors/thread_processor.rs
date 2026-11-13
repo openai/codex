@@ -5435,10 +5435,8 @@ impl ThreadRequestProcessor {
                     .items()
                     .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
                 && let Some(model) = options.config.model.as_deref()
-                && self
-                    .thread_manager
-                    .get_models_manager()
-                    .get_model_info(model, &options.config.to_models_manager_config())
+                && parent
+                    .model_info(model, &options.config.to_models_manager_config())
                     .await
                     .use_responses_lite
             {

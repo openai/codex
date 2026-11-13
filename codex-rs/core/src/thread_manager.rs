@@ -1107,6 +1107,8 @@ impl ThreadManager {
         Arc::clone(&self.state.git_root_discovery)
     }
 
+    /// Returns the startup catalog. Use [`CodexThread::model_info`] for a live chat or
+    /// [`Self::models_manager_for_config`] for a new destination.
     pub fn get_models_manager(&self) -> SharedModelsManager {
         self.state.model_catalog.manager.clone()
     }
