@@ -1339,6 +1339,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
 async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
+    chat.thread_id = Some(ThreadId::new());
+
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: Some("codex".to_string()),
@@ -1348,7 +1350,11 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             window_duration_mins: Some(300),
             resets_at: Some(100),
         }),
-        secondary: None,
+        secondary: Some(RateLimitWindow {
+            used_percent: 8,
+            window_duration_mins: Some(10_080),
+            resets_at: None,
+        }),
         credits: Some(CreditsSnapshot {
             has_credits: true,
             unlimited: false,
@@ -1377,6 +1383,15 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         rate_limit_reached_type: None,
     }));
 
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["account"]["rate_limits"],
+        serde_json::json!([{
+            "limit_id": "codex", "limit_name": "codex",
+            "primary_limit": {"used_percent": 20.0, "window_minutes": 300, "resets_at": 100},
+            "secondary_limit": {"used_percent": 8.0, "window_minutes": 10_080, "resets_at": null}
+        }])
+    );
     let codex = chat
         .rate_limit_snapshots_by_limit_id
         .get("codex")
@@ -3983,10 +3998,8 @@ async fn status_line_workspace_headline_renders_cached_value() {
     );
     let state = serde_json::to_value(chat.statusline_state()).unwrap();
     assert_eq!(
-        state["account"],
-        serde_json::json!({
-            "workspace": {"headline": "Workspace maintenance starts at 5pm"}
-        })
+        state["account"]["workspace"],
+        serde_json::json!({"headline": "Workspace maintenance starts at 5pm"})
     );
     assert!(
         drain_insert_history(&mut rx).is_empty(),

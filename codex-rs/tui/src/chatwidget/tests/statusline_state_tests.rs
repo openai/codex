@@ -30,7 +30,7 @@ async fn statusline_state_projects_the_displayed_settings() {
     assert_eq!(
         serde_json::to_value(chat.statusline_state()).unwrap(),
         json!({
-            "account": {},
+            "account": {"rate_limits": []},
             "app": {"cli_version": CODEX_CLI_VERSION, "display_mode": "standard"},
             "config": {"statusline_items": ["run-state"]},
             "thread": {
