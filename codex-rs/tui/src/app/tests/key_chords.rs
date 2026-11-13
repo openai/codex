@@ -161,6 +161,10 @@ async fn vim_buffer_jumps_route_default_chords_in_normal_and_operator_contexts()
 #[tokio::test]
 async fn global_chord_keeps_hints_and_completes_before_deadline() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
+    // This test exercises the legacy inline HUD as well as the owned-screen HUD.
+    app.config
+        .features
+        .disable(codex_features::Feature::TuiWorkspace)?;
 
     let config = toml::from_str(
         r#"
