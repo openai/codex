@@ -694,7 +694,9 @@ impl Session {
         step_context: &StepContext,
         request_kind: CodexResponsesRequestKind,
     ) -> CodexResponsesMetadata {
-        let (window_id, window_number, context_window_id) = self.current_window().await;
+        let state = self.state.lock().await;
+        let (window_id, window_number, context_window_id) = self.current_window_from_state(&state);
+        drop(state);
         let mut responses_metadata = step_context.turn.turn_metadata_state.to_responses_metadata(
             self.installation_id.clone(),
             window_id,
@@ -911,9 +913,10 @@ impl Session {
         // writer has validated or refreshed the history snapshot.
         let new_thread_ids = (!matches!(initial_history, InitialHistory::Resumed(_)))
             .then(|| prepare_ids(&initial_history));
+        let reset_fork_window = config.features.enabled(Feature::TokenBudget);
         let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
             && session_configuration.session_source.is_non_root_agent()
-            && config.features.enabled(Feature::TokenBudget);
+            && reset_fork_window;
         if let (InitialHistory::Forked(records), Some(ids)) =
             (&mut initial_history, &new_thread_ids)
         {

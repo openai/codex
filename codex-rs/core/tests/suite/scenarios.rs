@@ -103,9 +103,11 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
+use core_test_support::test_codex::TestEnv;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
@@ -3667,6 +3669,7 @@ async fn async_compaction_test(
     builder: TestCodexBuilder,
     responses_uri: &str,
     features: Vec<Feature>,
+    environment: TestEnv,
     configure: impl Fn(&mut Config) + Send + Sync + 'static,
 ) -> Result<(wiremock::MockServer, TestCodex)> {
     let config_server = start_mock_server().await;
@@ -3694,7 +3697,7 @@ async fn async_compaction_test(
             configure(config);
         })
         .with_model("gpt-6-astra")
-        .build_with_auto_env(&config_server)
+        .build_with_environment(&config_server, environment)
         .await?;
     Ok((config_server, test))
 }
@@ -3910,14 +3913,19 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         extensions.prompt_contributor(reminders.clone());
         builder = builder.with_extensions(Arc::new(extensions.build()));
     }
-    let (_config_server, test) =
-        async_compaction_test(builder, streaming.uri(), features, move |config| {
+    let (_config_server, test) = async_compaction_test(
+        builder,
+        streaming.uri(),
+        features,
+        test_env().await?,
+        move |config| {
             if over_budget {
                 config.async_compaction_threshold_percent = 1;
                 config.model_auto_compact_token_limit = Some(5_000);
             }
-        })
-        .await?;
+        },
+    )
+    .await?;
     test.codex.ensure_rollout_materialized().await;
     let compaction_event = |event: &EventMsg| match event {
         EventMsg::ItemStarted(event) if matches!(event.item, TurnItem::ContextCompaction(_)) => {
@@ -4177,6 +4185,7 @@ async fn astra_async_compaction_preserves_exec_catalog(change: ExecCatalogRefres
             Feature::IncrementalExecTools,
             Feature::ViewImage,
         ],
+        test_env().await?,
         move |config| {
             config
                 .features
@@ -4426,7 +4435,10 @@ async fn async_compaction_reuses_pending_work(
     const BACKGROUND_TOKENS: i64 = 3_001;
 
     skip_if_no_network!(Ok(()));
-    let over_budget = outcome == PendingCompactionOutcome::SuccessOverBudget;
+    let over_budget = match outcome {
+        PendingCompactionOutcome::SuccessOverBudget => true,
+        _ => false,
+    };
     let retained_output = format!("LATE_OUTPUT {}", "x ".repeat(12_000));
     let manual = matches!(trigger, CompactionTrigger::Manual);
     let has_background = outcome != PendingCompactionOutcome::Absent;
@@ -4499,6 +4511,7 @@ async fn async_compaction_reuses_pending_work(
         extensions.thread_lifecycle_contributor(accounting.clone());
         builder = builder.with_extensions(Arc::new(extensions.build()));
     }
+    let env = test_env().await?;
     let (_config_server, test) = async_compaction_test(
         builder,
         streaming.uri(),
@@ -4507,6 +4520,7 @@ async fn async_compaction_reuses_pending_work(
         } else {
             vec![]
         },
+        env,
         move |config| {
             if over_budget {
                 config.async_compaction_threshold_percent = 1;
