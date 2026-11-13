@@ -258,14 +258,9 @@ child.on("error", (err) => {
   process.exit(1);
 });
 
-// Forward common termination signals to the child so that it shuts down
-// gracefully. In the handler we temporarily disable the default behavior of
-// exiting immediately; once the child has been signaled we simply wait for
-// its exit event which will in turn terminate the parent (see below).
+// Keep forwarding signals until the child exits so a second signal can
+// interrupt a graceful shutdown.
 const forwardSignal = (signal) => {
-  if (child.killed) {
-    return;
-  }
   try {
     child.kill(signal);
   } catch {
