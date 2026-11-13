@@ -1,7 +1,7 @@
 //! Resolve globally advertised statusline tools and read them on the displayed thread.
 
 mod descriptor;
-#[cfg_attr(not(test), expect(dead_code, reason = "staged provider discovery"))]
+pub(crate) mod discovery;
 mod inventory;
 #[cfg(test)]
 mod test_support;
@@ -21,9 +21,20 @@ use color_eyre::eyre::bail;
 pub(crate) use descriptor::StatuslineProvider;
 use serde_json::Value;
 use std::collections::HashMap;
+use tokio::time::Duration;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProviderLookupError {
+    #[error("statusline provider lookup timed out after 5 seconds")]
+    TimedOut,
+    #[error(transparent)]
+    Request(#[from] color_eyre::Report),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct McpServerName(String);
 
 impl McpServerName {
@@ -70,6 +81,19 @@ pub(crate) struct ResolvedStatuslineProvider {
 #[cfg_attr(not(test), expect(dead_code, reason = "staged resource reader"))]
 impl ResolvedStatuslineProvider {
     pub(crate) async fn lookup(
+        client: &AppServerRequestHandle,
+        thread: ThreadId,
+        cwd: &PathUri,
+        selection: ProviderSelection<'_>,
+    ) -> Result<Option<Self>, ProviderLookupError> {
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep(LOOKUP_TIMEOUT) => Err(ProviderLookupError::TimedOut),
+            result = Self::resolve(client, thread, cwd, selection) => Ok(result?),
+        }
+    }
+
+    async fn resolve(
         client: &AppServerRequestHandle,
         thread: ThreadId,
         cwd: &PathUri,
