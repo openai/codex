@@ -182,6 +182,9 @@ mod host_turn_admission;
 #[path = "scenarios_partial_answers.rs"]
 mod partial_answers;
 
+#[path = "scenarios_guardian_async_elastic.rs"]
+mod guardian_async_elastic;
+
 #[path = "scenarios_guardian_sender_context.rs"]
 mod guardian_sender_context;
 

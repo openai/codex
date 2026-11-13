@@ -196,9 +196,9 @@ pub struct SectionInput<'a> {
     pub is_selected_exec_output: Option<&'a SelectedExecOutputPredicate<'a>>,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
-    /// Sync originals retained until request preparation; preferred over the bounded view.
+    /// Originals retained until request preparation; preferred over the bounded view.
     pub root_conversation_candidates: Option<&'a RootConversationInput>,
-    /// Role-labeled sync answer candidates or already-bounded answers from other consumers.
+    /// Role-labeled original answer candidates or already-bounded answers from other consumers.
     pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,

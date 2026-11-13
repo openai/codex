@@ -58,6 +58,7 @@ pub(crate) struct ContextInput<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptConfig {
     pub(crate) format: TranscriptFormat,
+    pub(crate) elastic: Option<codex_guardian_context::ElasticBudgetConfig>,
     pub(crate) sources: Vec<TranscriptSource>,
     pub(crate) include_images: bool,
     pub(crate) max_message_entry_tokens: usize,
@@ -71,6 +72,7 @@ impl Default for TranscriptConfig {
     fn default() -> Self {
         Self {
             format: TranscriptFormat::Line,
+            elastic: None,
             sources: vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs],
             include_images: ContextProfile::asynchronous().include_images,
             max_message_entry_tokens: MAX_MESSAGE_ENTRY_TOKENS,
@@ -149,6 +151,7 @@ impl TranscriptConfig {
             context,
             profile,
             history_version,
+            elastic: self.elastic.clone(),
         })
     }
 }
@@ -158,6 +161,7 @@ pub(super) struct CollectedTranscript {
     context: CollectedContext,
     profile: ContextProfile,
     history_version: u64,
+    pub(super) elastic: Option<codex_guardian_context::ElasticBudgetConfig>,
 }
 
 impl CollectedTranscript {
@@ -186,10 +190,16 @@ impl CollectedTranscript {
             &self.profile,
             offset,
             presentation,
-            ContextBudgeting::Fixed,
+            if self.elastic.is_some() {
+                ContextBudgeting::Elastic
+            } else {
+                ContextBudgeting::Fixed
+            },
             reviewer_history,
         )?;
-        context.retain_new_native_messages(reviewer_history)?;
+        if self.elastic.is_none() {
+            context.retain_new_native_messages(reviewer_history)?;
+        }
         Ok((context, next))
     }
 }

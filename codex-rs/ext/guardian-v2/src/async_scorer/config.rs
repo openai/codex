@@ -74,6 +74,7 @@ impl GuardianV2Config {
 
         configured.transcript_mode = Some(config.guardian_transcript_mode);
         let mut resolved = Self::from_overrides(configured.clone())?;
+        resolved.transcript.elastic = config.guardian_async_elastic_budget.clone();
         // Config.features can be changed after loading, including for reviewer threads.
         let legacy = FeatureToml::Config(GuardianV2ConfigToml {
             enabled: Some(config.features.enabled(codex_features::Feature::GuardianV2)),
@@ -173,6 +174,7 @@ impl GuardianV2Config {
 
         let mut resolved = Self::from_overrides(configured)?;
         resolved.local_overrides = self.local_overrides.clone();
+        resolved.transcript.elastic = self.transcript.elastic.clone();
         resolved.policy = self.policy.clone();
         resolved.review_multi_agent_calls = self.review_multi_agent_calls;
         resolved.multi_agent_namespace = self.multi_agent_namespace.clone();
@@ -291,6 +293,7 @@ impl GuardianV2Config {
             max_parent_compaction_tokens,
             policy,
             transcript: TranscriptConfig {
+                elastic: None,
                 format: configured.transcript_mode.unwrap_or_default(),
                 sources: transcript_config
                     .and_then(|transcript| transcript.sources.clone())

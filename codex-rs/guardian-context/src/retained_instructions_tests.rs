@@ -377,7 +377,7 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
     let history_tokens = original.estimated_tokens();
     assert!(
         capped
-            .prepare_sync_delivery(&delivered)
+            .prepare_delivery(&delivered)
             .unwrap()
             .enforce_budget(
                 crate::RequestBudget {
@@ -679,7 +679,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
     let prepared = transcript_context(&history, &profile)
         .prepare_elastic_entries(&config)
         .unwrap()
-        .prepare_sync_delivery(&[])
+        .prepare_delivery(&[])
         .unwrap();
     let admitted = prepared
         .clone()
@@ -788,7 +788,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             assert!(prepared.estimated_tokens() > full_proof.estimated_tokens() + MINIMUM_TOKENS);
         }
         let admitted = prepared
-            .prepare_sync_delivery(&[])
+            .prepare_delivery(&[])
             .unwrap()
             .enforce_budget(
                 crate::RequestBudget {

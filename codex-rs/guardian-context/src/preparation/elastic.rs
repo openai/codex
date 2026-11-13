@@ -1,6 +1,6 @@
 //! Applies configured section text caps exactly once before allocation.
 //! Supporting records remain candidates after truncation. Framing, exact actions,
-//! images and opaque native payloads stay whole. Verified answers that exceed their
+//! permissions, images and opaque native payloads stay whole. Verified answers that exceed their
 //! entry cap are omitted whole. Selection cannot change prepared bytes.
 
 use crate::ComposedContext;
@@ -52,6 +52,7 @@ impl ComposedContext {
                         )));
                     }
                     for item in items {
+                        item.protected |= section.id == "permissions";
                         let maximum = limit(item.retention)?;
                         let original_tokens = section_content_tokens(&item.content);
                         if item.protected

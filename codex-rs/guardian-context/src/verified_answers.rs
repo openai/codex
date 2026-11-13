@@ -99,7 +99,7 @@ impl From<&str> for TrustedUserAnswer {
     }
 }
 
-/// Collects originals for sync preparation without applying the per-answer request limit.
+/// Collects originals for request preparation without applying the per-answer request limit.
 pub fn collect_verified_answer_candidates(context: &RetainedContext) -> Vec<TrustedUserAnswer> {
     let mut items = Vec::new();
     if !context.verified_answers_complete() {

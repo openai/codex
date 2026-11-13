@@ -24,6 +24,7 @@ codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-guardian-context = { workspace = true }
 codex-guardian-v2 = { workspace = true }
 codex-home = { workspace = true }
 codex-features = { workspace = true }
@@ -50,6 +51,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "test-util", "time"] }
 tokio-rustls = { workspace = true }
 tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }

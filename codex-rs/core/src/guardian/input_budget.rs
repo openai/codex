@@ -55,7 +55,7 @@ impl<'a> PreparedReviewContext<'a> {
             Some(config) => Ok(Self::Elastic(
                 context
                     .prepare_elastic_entries(config)?
-                    .prepare_sync_delivery(history)?,
+                    .prepare_delivery(history)?,
             )),
             None => {
                 codex_guardian_context::prepare_sync_delivery(&mut context, history)?;

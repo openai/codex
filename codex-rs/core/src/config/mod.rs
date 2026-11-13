@@ -748,6 +748,8 @@ pub struct Config {
     pub guardian_transcript_mode: codex_protocol::TranscriptFormat,
     /// Frozen section policy for sync Guardian; absence keeps fixed budgeting.
     pub guardian_sync_elastic_budget: Option<codex_guardian_context::ElasticBudgetConfig>,
+    /// Frozen section policy for async Guardian; absence keeps fixed budgeting.
+    pub guardian_async_elastic_budget: Option<codex_guardian_context::ElasticBudgetConfig>,
 
     /// Optional replacement for the gated history-retrieval instructions.
     /// Blank config values are treated as unset, like other Guardian policy overrides.
@@ -4298,6 +4300,9 @@ impl Config {
                     let section = codex_guardian_context::ElasticSection::deserialize(name.as_str().into_deserializer())
                         .map_err(|error: serde::de::value::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
                     if section == codex_guardian_context::ElasticSection::TranscriptSelectedExecResults {
+                        if prefix == "async" {
+                            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "transcript_selected_exec_results is only supported for sync elastic budgeting"));
+                        }
                         if limits.nested_tool_names.is_empty() || limits.nested_tool_names.iter().any(|name| name.trim().is_empty()) {
                             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
                                 "transcript_selected_exec_results requires nonempty nested_tool_names"));
@@ -4332,6 +4337,10 @@ impl Config {
         let guardian_sync_elastic_budget = guardian
             .filter(|guardian| guardian.sync_elastic_budgeting == Some(true))
             .map(|guardian| resolve_elastic_budget(guardian.sync_elastic_sections.as_ref(), "sync"))
+            .transpose()?;
+        let guardian_async_elastic_budget = guardian
+            .filter(|guardian| guardian.async_elastic_budgeting == Some(true))
+            .map(|guardian| resolve_elastic_budget(guardian.async_elastic_sections.as_ref(), "async"))
             .transpose()?;
         let guardian_conversation_history_prompt = cfg.auto_review.as_ref().and_then(|auto_review| {
             normalize_guardian_policy_config(
@@ -4712,6 +4721,7 @@ impl Config {
             guardian_policy_template: None,
             guardian_transcript_mode,
             guardian_sync_elastic_budget,
+            guardian_async_elastic_budget,
             guardian_conversation_history_prompt,
             guardian_conversation_history_max_output_tokens,
             guardian_review_timeout: cfg

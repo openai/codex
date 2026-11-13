@@ -12,6 +12,7 @@ use crate::async_scorer::sampler::tests::sampler_config;
 use crate::async_scorer::score::PendingScore;
 use crate::async_scorer::transcript::ContextInput;
 use codex_extension_api::ThreadStopInput;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextTarget;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::SnapshotEntry;
@@ -79,17 +80,23 @@ async fn pending_request(
     ))
 }
 
+#[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidence() -> Result<()> {
+async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidence(
+    budgeting: ContextBudgeting,
+) -> Result<()> {
     use crate::async_scorer::decisions::DecisionsSampler;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
 
     skip_if_no_network!(Ok(()));
+    let elastic = budgeting == ContextBudgeting::Elastic;
     for (limit, reused) in [(1, false), (100_000, true)] {
         let server = responses::start_mock_server().await;
         let fixture = GuardianFailureFixture::with_config(&format!(
-            "[features]\nguardianv2_decisions_comparison = true\n[features.guardianv2]\nasync_classifier_mode = 'conversation'\nasync_classifier_conversation_token_limit = {limit}"
+            "[features]\nguardianv2_decisions_comparison = true\n[features.guardianv2]\nasync_classifier_mode = 'conversation'\nasync_classifier_conversation_token_limit = {limit}\nasync_elastic_budgeting = {elastic}\n{}",
+            core_test_support::guardian::async_elastic_sections_toml(),
         ))
         .await?;
         let store = fixture.test.codex.thread_extension_data();

@@ -8960,8 +8960,10 @@ async fn load_config_uses_auto_review_guardian_policy_config(
     Ok(())
 }
 
+#[test_case::test_case("sync")]
+#[test_case::test_case("async")]
 #[tokio::test]
-async fn sync_elastic_budget_is_opt_in_and_validated() {
+async fn elastic_budget_is_opt_in_and_validated(target: &str) {
     let excessive_minimum = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS + 1;
     let minimum_mismatch = format!(
         r#"[features.guardianv2.sync_elastic_sections.root_conversation_messages]
@@ -8980,6 +8982,7 @@ max_total_section_tokens = 0
 min_total_section_tokens = 1
 max_section_entry_tokens = 0
 "#,
+        "",
         maximum_below_minimum,
         minimum_mismatch.as_str(),
         r#"[features.guardianv2.sync_elastic_sections.root_messages]
@@ -8990,10 +8993,11 @@ min_total_section_tokens = 1
 max_section_entry_tokens = 1
 "#,
     ] {
+        let sections = sections.replace("sync_", &format!("{target}_"));
         for enabled in [false, true] {
             let result = Config::load_from_base_config_with_overrides(
                 toml::from_str(&format!(
-                    "[features.guardianv2]\nenabled = false\nsync_elastic_budgeting = {enabled}\n{sections}"
+                    "[features.guardianv2]\nenabled = false\n{target}_elastic_budgeting = {enabled}\n{sections}"
                 ))
                 .unwrap(),
                 ConfigOverrides {
@@ -9006,6 +9010,17 @@ max_section_entry_tokens = 1
             assert_eq!(result.is_err(), enabled);
         }
     }
+}
+
+#[tokio::test]
+async fn async_elastic_opt_in_preserves_fixed_capture() {
+    let mut config = super::test_config().await;
+    config.guardian_async_elastic_budget =
+        Some(core_test_support::guardian::elastic_budget_config());
+    assert_eq!(
+        config.guardian_context_budgeting(),
+        codex_guardian_context::ContextBudgeting::Fixed,
+    );
 }
 
 #[tokio::test]

@@ -3,6 +3,7 @@ use crate::async_scorer::transcript::CollectedTranscript;
 use crate::async_scorer::transcript::ContextInput;
 use crate::async_scorer::transcript::TranscriptConfig;
 use codex_extension_api::ConversationHistorySnapshot;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextTarget;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::PlannedActionKind;
@@ -32,7 +33,11 @@ impl ConversationHistorySnapshot for History {
     }
 }
 
-fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
+fn collect(
+    history: &History,
+    images: &[ContentItem],
+    mode: ContextBudgeting,
+) -> CollectedTranscript {
     let action = PlannedAction {
         tool_descriptions: None,
         kind: PlannedActionKind::Command {
@@ -46,7 +51,12 @@ fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
             fragment: "Approved reading README.md only.".to_owned(),
         }])
         .unwrap();
-    TranscriptConfig::default()
+    let config = TranscriptConfig {
+        elastic: (mode == ContextBudgeting::Elastic)
+            .then(core_test_support::guardian::elastic_budget_config),
+        ..TranscriptConfig::default()
+    };
+    config
         .collect_context(ContextInput {
             target: ContextTarget::Async,
             history,
@@ -63,8 +73,11 @@ fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
         .unwrap()
 }
 
-#[test]
-fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_images() {
+#[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
+fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_images(
+    mode: ContextBudgeting,
+) {
     let native = ResponseItem::AgentMessage {
         id: Some(ResponseItemId::from_server("amsg_parent".to_owned())),
         author: "/root".to_owned(),
@@ -115,8 +128,9 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     }
     let mut state = ConversationState::default();
     let config = sample_request("parent");
+    let evidence = collect(&history, &images[..1], mode);
     let first = config
-        .prepare_retained(&collect(&history, &images[..1]), &mut state, INPUT_BUDGET)
+        .prepare_retained(&evidence, &mut state, INPUT_BUDGET)
         .unwrap();
     assert_eq!(
         input_images(&first.input),
@@ -155,12 +169,13 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
             *detail = Some(ImageDetail::High);
         }
     }
-    let evidence = collect(&history, &new_images);
+    let evidence = collect(&history, &new_images, mode);
     // Fits three distinct images, but not another copy of the two retained images.
     let second = config
         .prepare_retained(&evidence, &mut state, /*max_input_tokens*/ 40_000)
         .unwrap();
     assert_eq!(&second.input[..committed.len()], committed);
+    assert!(second.truncations.is_empty());
     assert!(state.snapshot().is_none());
     assert_eq!(
         second.input_tokens,
@@ -192,6 +207,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     )
     .unwrap();
     assert!(delta.contains("TRANSCRIPT DELTA START"));
+    assert!(!delta.contains("<guardian_context_omission>"));
     assert!(delta.contains("[4] user: Inspect LICENSE next."));
     assert!(!delta.contains("[1] user: Inspect README.md."));
     assert!(delta.contains("Do not write files."));
@@ -216,8 +232,9 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     );
 }
 
-#[test]
-fn rejected_preparation_preserves_committed_history_and_cursor() {
+#[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
+fn rejected_preparation_preserves_committed_history_and_cursor(mode: ContextBudgeting) {
     let mut history = History {
         items: vec![responses::user_message_item("Inspect README.md.")],
         version: 1,
@@ -225,7 +242,7 @@ fn rejected_preparation_preserves_committed_history_and_cursor() {
     let mut state = ConversationState::default();
     let config = sample_request("parent");
     let first = config
-        .prepare_retained(&collect(&history, &[]), &mut state, INPUT_BUDGET)
+        .prepare_retained(&collect(&history, &[], mode), &mut state, INPUT_BUDGET)
         .unwrap();
     let limit = first.input_tokens + 256;
     let mut committed = first.input;
@@ -234,14 +251,14 @@ fn rejected_preparation_preserves_committed_history_and_cursor() {
     state.commit_snapshot(committed.clone());
     assert!(
         config
-            .prepare_retained(&collect(&history, &[]), &mut state, limit)
+            .prepare_retained(&collect(&history, &[], mode), &mut state, limit)
             .is_none()
     );
     assert_eq!(state.cursor(), Some(first.cursor));
     assert_eq!(state.snapshot().unwrap().history(), &committed);
     config
         .prepare_retained(
-            &collect(&history, &[]),
+            &collect(&history, &[], mode),
             &mut ConversationState::default(),
             limit,
         )
@@ -249,20 +266,21 @@ fn rejected_preparation_preserves_committed_history_and_cursor() {
     history.version += 1;
     assert!(
         config
-            .prepare_retained(&collect(&history, &[]), &mut state, INPUT_BUDGET)
+            .prepare_retained(&collect(&history, &[], mode), &mut state, INPUT_BUDGET)
             .is_none()
     );
     state.reset_transcript();
     assert!(
         config
-            .prepare_retained(&collect(&history, &[]), &mut state, INPUT_BUDGET)
+            .prepare_retained(&collect(&history, &[], mode), &mut state, INPUT_BUDGET)
             .is_none()
     );
     assert_eq!(state.snapshot().unwrap().history(), &committed);
 }
 
-#[test]
-fn complete_budget_counts_setup_checkpoint_images_and_trusted_evidence() {
+#[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
+fn complete_budget_counts_setup_checkpoint_images_and_trusted_evidence(mode: ContextBudgeting) {
     let history = History {
         items: vec![responses::user_message_item("Inspect README.md.")],
         version: 1,
@@ -280,7 +298,7 @@ fn complete_budget_counts_setup_checkpoint_images_and_trusted_evidence() {
         detail: None,
     }];
     let mut state = ConversationState::default();
-    let evidence = collect(&history, &images);
+    let evidence = collect(&history, &images, mode);
     let request = config
         .prepare_retained(&evidence, &mut state, INPUT_BUDGET)
         .unwrap();

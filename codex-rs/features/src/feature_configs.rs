@@ -163,6 +163,12 @@ pub struct GuardianElasticSectionConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV2ConfigToml {
+    /// Enable elastic allocation for asynchronous Guardian requests. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub async_elastic_budgeting: Option<bool>,
+    /// Section limits validated when asynchronous elastic budgeting is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub async_elastic_sections: Option<BTreeMap<String, GuardianElasticSectionConfigToml>>,
     /// Enable elastic allocation for synchronous Guardian requests. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_elastic_budgeting: Option<bool>,

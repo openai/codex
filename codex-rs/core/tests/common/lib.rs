@@ -30,6 +30,7 @@ pub mod apps_test_server;
 pub mod code_mode_host;
 pub mod context_snapshot;
 pub mod exec_server;
+pub mod guardian;
 pub mod hooks;
 pub mod network_policy_mcp;
 pub mod oauth;

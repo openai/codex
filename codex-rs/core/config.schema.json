@@ -2294,6 +2294,17 @@
           ],
           "description": "Deprecated and ignored; asynchronous classification always uses conversations."
         },
+        "async_elastic_budgeting": {
+          "description": "Enable elastic allocation for asynchronous Guardian requests. Defaults to false.",
+          "type": "boolean"
+        },
+        "async_elastic_sections": {
+          "additionalProperties": {
+            "$ref": "#/definitions/GuardianElasticSectionConfigToml"
+          },
+          "description": "Section limits validated when asynchronous elastic budgeting is enabled.",
+          "type": "object"
+        },
         "classifier_instructions": {
           "type": "string"
         },

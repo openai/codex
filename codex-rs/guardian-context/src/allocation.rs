@@ -167,7 +167,7 @@ pub struct PreparedElasticContext<'a> {
 impl PreparedElasticContext<'_> {
     /// Removes history-delivered instructions and deduplicates native deliveries.
     /// Pending instruction proof waits for Required selection.
-    pub fn prepare_sync_delivery(
+    pub fn prepare_delivery(
         mut self,
         history: &[ResponseItemEnvelope],
     ) -> Result<Self, SectionError> {

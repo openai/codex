@@ -134,7 +134,7 @@ fn native_agent_admission_uses_current_history_and_preserves_identity() {
         let admitted = pending
             .prepare_elastic_entries(&config)
             .unwrap()
-            .prepare_sync_delivery(&[])
+            .prepare_delivery(&[])
             .unwrap()
             .enforce_budget(
                 RequestBudget {
@@ -557,6 +557,9 @@ fn image_accounting_preserves_later_eviction_policy() {
         })),
         ImageReference::File { .. } => Some(Cow::Borrowed(image)),
     });
+    let mut rejected = context.clone();
+    rejected.retain_new_images(&[], |_, _| None);
+    assert_eq!(rejected.truncations.len(), 1);
     let mut continued = context.clone();
     let completed = context.clone().into_messages();
     continued.retain_new_images(&completed, |image, _| Some(Cow::Borrowed(image)));
