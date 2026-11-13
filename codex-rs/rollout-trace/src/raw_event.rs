@@ -179,6 +179,11 @@ pub enum RawTraceEventPayload {
         tool_call_id: ToolCallId,
         exec_tool_call_id: ToolCallId,
     },
+    /// Live Code Mode cell reached by a wait or terminate call.
+    CodeCellWaitTargetResolved {
+        tool_call_id: ToolCallId,
+        runtime_cell_id: String,
+    },
     ToolCallRuntimeStarted {
         tool_call_id: ToolCallId,
         /// Executed handler, which may differ from the requested callable.
@@ -283,6 +288,7 @@ impl RawTraceEventPayload {
             | RawTraceEventPayload::CodeCellStarted { .. }
             | RawTraceEventPayload::McpToolCallCorrelationAssigned { .. }
             | RawTraceEventPayload::StdinTargetResolved { .. }
+            | RawTraceEventPayload::CodeCellWaitTargetResolved { .. }
             | RawTraceEventPayload::AgentResultObserved {
                 carried_payload: None,
                 ..

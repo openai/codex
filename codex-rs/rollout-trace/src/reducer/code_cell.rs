@@ -16,7 +16,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use serde_json::Value;
+use anyhow::ensure;
 
 use super::TraceReducer;
 use crate::model::CodeCell;
@@ -54,6 +54,7 @@ pub(super) struct PendingCodeCellStart {
     pub(super) wall_time_unix_ms: i64,
     pub(super) thread_id: String,
     pub(super) codex_turn_id: Option<String>,
+    pub(super) wait_tool_call_ids: Vec<ToolCallId>,
     pub(super) started: StartedCodeCell,
 }
 
@@ -136,6 +137,7 @@ impl TraceReducer {
             wall_time_unix_ms,
             thread_id,
             codex_turn_id,
+            wait_tool_call_ids,
             started,
         } = pending;
         if self.rollout.code_cells.contains_key(&started.code_cell_id) {
@@ -201,7 +203,7 @@ impl TraceReducer {
                 yielded_seq: None,
                 source_js: started.source_js,
                 nested_tool_call_ids,
-                wait_tool_call_ids: Vec::new(),
+                wait_tool_call_ids,
             },
         );
 
@@ -479,57 +481,52 @@ impl TraceReducer {
         Ok(())
     }
 
-    /// Records that a model-visible wait call is waiting on a runtime code cell.
-    ///
-    /// Wait calls are not nested JavaScript tools, so the relationship is inferred
-    /// from the runtime cell id inside the function arguments.
-    pub(super) fn link_wait_tool_call_from_request_payload(
+    /// Links only a host-confirmed wait, using the cell binding from this activation.
+    pub(super) fn link_confirmed_wait(
         &mut self,
         thread_id: &str,
-        tool_call_id: &ToolCallId,
-        request_payload: Option<&RawPayloadRef>,
+        turn_id: &str,
+        tool_call_id: ToolCallId,
+        runtime_cell_id: String,
     ) -> Result<()> {
-        let Some(request_payload) = request_payload else {
-            return Ok(());
-        };
-        let payload = self.payload_reader.read_json(request_payload)?;
-        if payload.get("tool_name").and_then(Value::as_str) != Some("wait") {
+        let wait = self
+            .rollout
+            .tool_calls
+            .get_mut(&tool_call_id)
+            .with_context(|| {
+                format!("confirmed wait referenced unknown dispatch {tool_call_id}")
+            })?;
+        ensure!(
+            wait.thread_id == thread_id
+                && wait.started_by_codex_turn_id.as_deref() == Some(turn_id),
+            "confirmed wait target has wrong dispatch context"
+        );
+        ensure!(
+            wait.resolved_wait_runtime_cell_id.is_none(),
+            "duplicate confirmed wait target for {tool_call_id}"
+        );
+        wait.resolved_wait_runtime_cell_id = Some(runtime_cell_id.clone());
+
+        // Retain the host observation but do not bind an older dispatch to a
+        // potentially recycled handle if it was recorded after thread reload.
+        if self
+            .last_thread_resume_seq
+            .get(thread_id)
+            .is_some_and(|seq| *seq > wait.execution.started_seq)
+        {
             return Ok(());
         }
-        // `wait` is a normal model-visible function call, not a nested JS tool
-        // request. The only stable edge back to the code cell is the runtime
-        // `cell_id` inside the function arguments.
-        let Some(arguments) = payload
-            .get("payload")
-            .and_then(|payload| payload.get("arguments"))
-            .and_then(Value::as_str)
-        else {
-            bail!(
-                "wait tool request payload {} did not contain function arguments",
-                request_payload.raw_payload_id
-            );
-        };
-        let arguments: Value = serde_json::from_str(arguments).with_context(|| {
-            format!(
-                "wait tool request payload {} had invalid JSON arguments",
-                request_payload.raw_payload_id
-            )
-        })?;
-        let Some(runtime_cell_id) = arguments.get("cell_id").and_then(Value::as_str) else {
-            bail!(
-                "wait tool request payload {} did not contain cell_id",
-                request_payload.raw_payload_id
-            );
-        };
-        let Some(code_cell_id) =
-            self.code_cell_id_for_runtime_cell_id_if_known(thread_id, runtime_cell_id)
+        let Some(cell_id) =
+            self.code_cell_id_for_runtime_cell_id_if_known(thread_id, &runtime_cell_id)
         else {
             return Ok(());
         };
-        let Some(cell) = self.rollout.code_cells.get_mut(&code_cell_id) else {
-            return Ok(());
-        };
-        push_unique(&mut cell.wait_tool_call_ids, tool_call_id);
+        if let Some(cell) = self.rollout.code_cells.get_mut(&cell_id) {
+            cell.wait_tool_call_ids.push(tool_call_id);
+        } else if let Some(start) = self.pending_code_cell_starts.get_mut(&cell_id) {
+            // The runtime is known; its model-visible exec source may arrive later.
+            start.wait_tool_call_ids.push(tool_call_id);
+        }
         Ok(())
     }
 

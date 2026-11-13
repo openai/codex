@@ -105,7 +105,7 @@ impl TraceReducer {
     }
 
     /// Reopens a known thread after eviction, preserving its identity and history.
-    pub(super) fn resume_thread(&mut self, thread_id: &str) -> Result<()> {
+    pub(super) fn resume_thread(&mut self, thread_id: &str, seq: RawEventSeq) -> Result<()> {
         let thread = self.thread_mut(thread_id).with_context(|| {
             format!(
                 "cannot resume thread {thread_id}: it was not started in this trace; resuming threads from an earlier trace is not supported"
@@ -120,6 +120,8 @@ impl TraceReducer {
         thread.execution.status = ExecutionStatus::Running;
         // Reload creates fresh cell and process namespaces. Historical objects
         // remain, but their runtime handles must not resolve in the new session.
+        self.last_thread_resume_seq
+            .insert(thread_id.to_owned(), seq);
         self.code_cell_ids_by_runtime
             .retain(|(owner, _), _| owner != thread_id);
         self.terminal_ids_by_process

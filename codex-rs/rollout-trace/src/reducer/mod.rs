@@ -75,6 +75,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         thread_conversation_snapshots: BTreeMap::new(),
         pending_compaction_replacement_item_ids: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
+        last_thread_resume_seq: BTreeMap::new(),
         pending_code_cell_starts: BTreeMap::new(),
         pending_code_cell_lifecycle_events: BTreeMap::new(),
         pending_agent_interaction_edges: Vec::new(),
@@ -229,6 +230,8 @@ struct TraceReducer {
     /// tools, and `wait` calls arrive with the runtime-local `cell_id`, so this
     /// index is the one intentional bridge between those namespaces.
     code_cell_ids_by_runtime: BTreeMap<(String, String), String>,
+    /// A late observation from an older dispatch cannot identify a cell in the new runtime.
+    last_thread_resume_seq: BTreeMap<String, crate::RawEventSeq>,
     /// Code-cell starts whose model-visible `custom_tool_call` item has not
     /// been reduced yet.
     ///
@@ -316,7 +319,7 @@ impl TraceReducer {
                 self.end_thread(event.seq, event.wall_time_unix_ms, thread_id, status)?;
             }
             RawTraceEventPayload::ThreadResumed { thread_id } => {
-                self.resume_thread(&thread_id)?;
+                self.resume_thread(&thread_id, event.seq)?;
             }
             RawTraceEventPayload::CodexTurnStarted {
                 codex_turn_id,
@@ -436,6 +439,23 @@ impl TraceReducer {
             } => {
                 self.resolve_stdin_target(&tool_call_id, &exec_tool_call_id)?;
             }
+            RawTraceEventPayload::CodeCellWaitTargetResolved {
+                tool_call_id,
+                runtime_cell_id,
+            } => {
+                self.link_confirmed_wait(
+                    event
+                        .thread_id
+                        .as_deref()
+                        .context("confirmed wait missing thread")?,
+                    event
+                        .codex_turn_id
+                        .as_deref()
+                        .context("confirmed wait missing turn")?,
+                    tool_call_id,
+                    runtime_cell_id,
+                )?;
+            }
             RawTraceEventPayload::ToolCallRuntimeStarted {
                 tool_call_id,
                 kind,
@@ -495,6 +515,7 @@ impl TraceReducer {
                     wall_time_unix_ms: event.wall_time_unix_ms,
                     thread_id,
                     codex_turn_id: event.codex_turn_id,
+                    wait_tool_call_ids: Vec::new(),
                     started: StartedCodeCell {
                         code_cell_id: reduced_code_cell_id,
                         runtime_cell_id,

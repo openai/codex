@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -25,7 +27,8 @@ use crate::reducer::test_support::trace_context_for_thread;
 use crate::replay_bundle;
 
 #[test]
-fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<()> {
+fn code_cell_lifecycle_links_nested_tools_and_outputs_without_inferring_legacy_wait()
+-> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -184,7 +187,8 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
     assert_eq!(cell.execution.status, ExecutionStatus::Completed);
     assert_eq!(cell.runtime_cell_id, Some("1".to_string()));
     assert_eq!(cell.nested_tool_call_ids, vec!["nested-tool-1"]);
-    assert_eq!(cell.wait_tool_call_ids, vec!["wait-tool-1"]);
+    // The legacy request alone does not establish that the host resolved a target.
+    assert!(cell.wait_tool_call_ids.is_empty());
     assert_eq!(cell.output_item_ids, vec![output_item_id.clone()]);
     assert_eq!(
         rollout.conversation_items[output_item_id].produced_by,
@@ -405,7 +409,7 @@ fn cancelled_turn_terminates_unfinished_code_cell() -> anyhow::Result<()> {
 #[test]
 fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
-    let writer = create_started_writer(&temp)?;
+    let writer = Arc::new(create_started_writer(&temp)?);
     writer.append(RawTraceEventPayload::ThreadStarted {
         thread_id: "thread-child".to_string(),
         agent_path: "/root/child".to_string(),
@@ -451,6 +455,39 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
                 source_js: "text('hi')".to_string(),
             },
         )?;
+        let waits: &[(&str, Option<&str>, &str)] = match turn_id {
+            "turn-root" => &[("rejected", None, "{")],
+            "turn-child" => &[
+                ("confirmed", None, r#"{"cell_id":"1"}"#),
+                ("late", None, r#"{"cell_id":"1"}"#),
+            ],
+            _ => &[("foreign", Some("fixture"), r#"{"cell_id":"1"}"#)],
+        };
+        for &(wait_id, namespace, arguments) in waits {
+            let dispatch = crate::ToolDispatchTraceContext::start(
+                Arc::clone(&writer),
+                crate::ToolDispatchInvocation {
+                    thread_id: thread_id.into(),
+                    codex_turn_id: turn_id.into(),
+                    tool_call_id: wait_id.into(),
+                    tool_name: "wait".into(),
+                    tool_namespace: namespace.map(str::to_owned),
+                    requester: crate::ToolDispatchRequester::Model {
+                        model_visible_call_id: wait_id.into(),
+                    },
+                    payload: crate::ToolDispatchPayload::Function {
+                        arguments: arguments.into(),
+                    },
+                },
+            );
+            if wait_id == "rejected" {
+                dispatch.record_failed("invalid wait arguments");
+            } else if wait_id == "confirmed" {
+                // The source item is still pending. No registry return is required for this edge.
+                crate::CodeCellTraceContext::enabled(Arc::clone(&writer), thread_id, turn_id, "1")
+                    .record_wait_target(wait_id);
+            }
+        }
         let response = writer.write_json_payload(
             RawPayloadKind::InferenceResponse,
             &json!({
@@ -469,6 +506,11 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
             upstream_request_id: None,
             response_payload: response,
         })?;
+        if turn_id == "turn-resumed" {
+            // The pre-resume wait is confirmed after the new cell has reused its handle.
+            crate::CodeCellTraceContext::enabled(Arc::clone(&writer), thread_id, "turn-child", "1")
+                .record_wait_target("late");
+        }
         writer.append_with_context(
             trace_context_for_thread(thread_id, turn_id),
             RawTraceEventPayload::CodeCellEnded {
@@ -502,6 +544,37 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
         rollout.code_cells[&resumed_cell_id].runtime_cell_id,
         Some("1".to_string())
     );
+    assert_eq!(
+        rollout.code_cells[&child_cell_id].wait_tool_call_ids,
+        ["confirmed"]
+    );
+    assert!(
+        rollout.code_cells[&root_cell_id]
+            .wait_tool_call_ids
+            .is_empty()
+    );
+    assert!(
+        rollout.code_cells[&resumed_cell_id]
+            .wait_tool_call_ids
+            .is_empty()
+    );
+    for id in ["confirmed", "late"] {
+        assert_eq!(
+            rollout.tool_calls[id]
+                .resolved_wait_runtime_cell_id
+                .as_deref(),
+            Some("1")
+        );
+    }
+    assert!(
+        rollout.tool_calls["confirmed"]
+            .execution
+            .ended_seq
+            .is_none()
+    );
+    for id in ["rejected", "foreign"] {
+        assert_eq!(rollout.tool_calls[id].resolved_wait_runtime_cell_id, None);
+    }
 
     Ok(())
 }
