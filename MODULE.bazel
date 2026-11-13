@@ -4,6 +4,9 @@ bazel_dep(name = "bazel_lib", version = "3.2.2")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 
+bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
+use_repo(bazel_lib_toolchains, "coreutils_toolchains")
+
 # Expose rules_rs's existing dependency for the openssl-sys replacement's SBOM.
 bazel_dep(name = "package_metadata", version = "0.0.7")
 

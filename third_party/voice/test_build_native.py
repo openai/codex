@@ -85,6 +85,21 @@ class NativeBuildTests(unittest.TestCase):
             NativeBuild(self.args, self.environment)
         self.assertFalse(self.args.output.exists())
 
+    @unittest.skipIf(os.name == "nt", "Exercises a Unix generator shebang")
+    def test_generator_uses_the_recipe_interpreter(self):
+        python = self.root / "runtime" / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.symlink_to(sys.executable)
+        with patch("sys.executable", str(python)):
+            build = NativeBuild(self.args, self.environment)
+        generator = self.root / "generator"
+        generator.write_text(
+            "#!/usr/bin/env python3\nimport sys\nprint(sys.executable)\n"
+        )
+        generator.chmod(0o755)
+        result = subprocess.check_output([generator], env=build.environment, text=True)
+        self.assertEqual(result.strip(), str(python))
+
     @unittest.skipIf(os.name == "nt", "Exercises the Unix clang++ driver symlink")
     def test_bootstrap_links_cpp_runtime_through_compiler_symlink(self):
         tools = {name: shutil.which(name) for name in ("clang", "cmake", "make")}

@@ -135,14 +135,12 @@ class NativeBuild:
         }
         if windows_inputs is not None:
             self.environment.pop("LIBPATH", None)
-        paths = [
-            str(self.tools / "bin"),
-            *(
-                []
-                if windows_inputs is not None
-                else [str(p.parent) for p in self.toolchain.values()]
-            ),
-        ]
+        paths = [str(self.tools / "bin")]
+        if not self.windows:
+            # GLib generators use /usr/bin/env python3 even when Meson runs under Bazel.
+            paths.append(str(Path(sys.executable).parent))
+        if windows_inputs is None:
+            paths.extend(str(p.parent) for p in self.toolchain.values())
         paths += (
             inherited_environment.get("PATH", "").split(os.pathsep)
             if self.windows
