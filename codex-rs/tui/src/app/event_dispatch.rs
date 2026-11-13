@@ -6,6 +6,7 @@
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::trailing_run_start;
+use super::session_lifecycle::FreshSessionStart;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::CapturedSideStream;
@@ -264,7 +265,7 @@ impl App {
             | AppEvent::NewSession { name }
             | AppEvent::NewSessionInCurrentWorktree { name } => {
                 self.start_fresh_session(
-                    tui, app_server, /*session_start_source*/ None,
+                    tui, app_server, FreshSessionStart::NewConversation,
                     /*initial_user_message*/ None, name,
                 )
                 .await;
@@ -293,7 +294,7 @@ impl App {
                     self.start_fresh_session(
                         tui,
                         app_server,
-                        /*session_start_source*/ None,
+                        FreshSessionStart::PreserveCurrentView(None),
                         /*initial_user_message*/ None,
                         /*new_thread_name*/ None,
                     )
@@ -557,7 +558,7 @@ impl App {
                 self.start_fresh_session(
                     tui,
                     app_server,
-                    Some(ThreadStartSource::Clear),
+                    FreshSessionStart::PreserveCurrentView(Some(ThreadStartSource::Clear)),
                     /*initial_user_message*/ None,
                     name,
                 )

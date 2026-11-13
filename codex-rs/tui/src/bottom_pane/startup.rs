@@ -131,6 +131,10 @@ impl BottomPane {
         self.composer.paste_handoff_deadline()
     }
 
+    pub(crate) fn has_startup_paste_window(&self, now: Instant) -> bool {
+        self.composer.has_paste_window(now)
+    }
+
     pub(crate) fn flush_handoff_paste_if_due(&mut self) -> bool {
         self.composer
             .flush_handoff_paste(tokio::time::Instant::now().into_std())

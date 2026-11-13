@@ -47,7 +47,7 @@ fn new_startup_decoration_tracks_draft_and_session_action() {
         ("", StartupDraftSessionAction::New, true),
         ("", StartupDraftSessionAction::Resume, false),
         ("", StartupDraftSessionAction::Fork, false),
-        ("", StartupDraftSessionAction::NewFromCommandCenter, false),
+        ("", StartupDraftSessionAction::NewWhileRunning, false),
     ] {
         pump.session_action = action;
         pump.submission_pending = pending;

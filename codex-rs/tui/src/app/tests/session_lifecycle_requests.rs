@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::session_lifecycle::FreshSessionStart;
 use crate::app_event::TranscriptExportDestination;
 use crate::bottom_pane::BottomPaneView;
 use crate::test_support::boxed_future;
@@ -4833,7 +4834,7 @@ model_reasoning_effort = "low"
     app.start_fresh_session(
         &mut tui,
         &mut server,
-        /*session_start_source*/ None,
+        FreshSessionStart::PreserveCurrentView(None),
         /*initial_user_message*/ None,
         /*new_thread_name*/ None,
     )
@@ -5197,7 +5198,7 @@ terminal_visualization_instructions = true
     app.start_fresh_session(
         &mut tui,
         &mut server,
-        /*session_start_source*/ None,
+        FreshSessionStart::PreserveCurrentView(None),
         /*initial_user_message*/ None,
         /*new_thread_name*/ None,
     )
@@ -5372,9 +5373,14 @@ async fn change_directory_scenario() -> Result<()> {
         start_recording_app_server(&app.config, no_list, background).await?;
     let (rec, plain, req) = (recorded_params, crate::key_hint::plain, &requests);
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    let (source, message, name) = (None, None, Some("Previous project".to_string()));
-    app.start_fresh_session(&mut tui, &mut server, source, message, name)
-        .await;
+    app.start_fresh_session(
+        &mut tui,
+        &mut server,
+        FreshSessionStart::PreserveCurrentView(None),
+        /*initial_user_message*/ None,
+        Some("Previous project".to_string()),
+    )
+    .await;
     let original = app.chat_widget.thread_id().expect("original thread");
     let rollout = app.chat_widget.rollout_path().expect("original rollout");
     let json = r#"{"type":"message","role":"assistant","content":[{"type":"output_text","text":"saved history"}]}"#;
@@ -5781,7 +5787,7 @@ fn fresh_session_keeps_its_name_and_draft_when_cycling_backends() -> Result<()> 
                 app.start_fresh_session(
                     &mut tui,
                     &mut app_server,
-                    /*session_start_source*/ None,
+                    FreshSessionStart::PreserveCurrentView(None),
                     /*initial_user_message*/ None,
                     /*new_thread_name*/ Some("Add User".to_string()),
                 )
@@ -5919,6 +5925,7 @@ fn fresh_session_keeps_its_name_and_draft_when_cycling_backends() -> Result<()> 
                         .contains_key(&destination_thread)
                 );
                 assert!(!app.thread_event_channels.contains_key(&destination_thread));
+                tui.pause_events();
                 // An automatic fresh session may use another connection without changing
                 // the user's last explicit choice.
                 app.start_new_session_on_other_backend(
@@ -6087,7 +6094,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 app.start_fresh_session(
                     &mut tui,
                     &mut app_server,
-                    /*session_start_source*/ None,
+                    FreshSessionStart::PreserveCurrentView(None),
                     /*initial_user_message*/ None,
                     /*new_thread_name*/ None,
                 )

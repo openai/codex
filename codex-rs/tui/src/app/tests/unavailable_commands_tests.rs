@@ -232,6 +232,7 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
             .set_local_worktree_operations(/*enabled*/ false);
         let mut session = start_config_write_test_app_server(&app).await?;
         let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.pause_events();
         while events.try_recv().is_ok() {}
         app.chat_widget
             .restore_user_message_to_composer(command.into());

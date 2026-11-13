@@ -3,6 +3,7 @@
 use super::session_lifecycle_requests::HistoryCapabilities;
 use super::session_lifecycle_requests::start_recording_app_server_with_history;
 use super::*;
+use crate::app::session_lifecycle::FreshSessionStart;
 use codex_context_fragments::side_conversation_boundary;
 use pretty_assertions::assert_eq;
 
@@ -52,7 +53,7 @@ sandbox = "unelevated"
     app.start_fresh_session(
         &mut tui,
         &mut server,
-        /*session_start_source*/ None,
+        FreshSessionStart::PreserveCurrentView(None),
         /*initial_user_message*/ None,
         /*new_thread_name*/ None,
     )

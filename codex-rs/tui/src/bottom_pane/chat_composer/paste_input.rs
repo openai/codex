@@ -109,6 +109,14 @@ impl ChatComposer {
         self.draft.paste_burst.handoff_deadline()
     }
 
+    pub(in crate::bottom_pane) fn has_paste_window(&self, now: Instant) -> bool {
+        !self.draft.disable_paste_burst
+            && self
+                .draft
+                .paste_burst
+                .newline_should_insert_instead_of_submit(now)
+    }
+
     /// Display flushed text without losing the window for its trailing paste keys.
     pub(in crate::bottom_pane) fn flush_handoff_paste(&mut self, now: Instant) -> bool {
         let deadline = self.paste_handoff_deadline();

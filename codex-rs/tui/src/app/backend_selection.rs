@@ -9,6 +9,7 @@ use super::resume_preparation::ResumeSource;
 use super::session_lifecycle::PreparedFreshSession;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::startup_draft::StartupDraftPump;
 use futures::TryFutureExt;
 
 pub(super) enum NewBackendSession {
@@ -126,6 +127,33 @@ impl App {
         owner: crate::backend_id::BackendId,
         session: NewBackendSession,
     ) -> Result<(), String> {
+        let previous_thread = self.current_displayed_thread_id();
+        let mut fresh_draft = None;
+        let result = Box::pin(self.switch_to_new_backend_session(
+            tui,
+            backends,
+            owner,
+            session,
+            &mut fresh_draft,
+        ))
+        .await;
+        if let Some(draft) = fresh_draft {
+            let opened_new_session = self.current_displayed_thread_id() != previous_thread;
+            draft
+                .handoff_after_navigation(tui, &mut self.chat_widget, opened_new_session)
+                .await;
+        }
+        result
+    }
+
+    async fn switch_to_new_backend_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        backends: &mut BackendSessions,
+        owner: crate::backend_id::BackendId,
+        session: NewBackendSession,
+        fresh_draft: &mut Option<StartupDraftPump>,
+    ) -> Result<(), String> {
         let slot = backends
             .listening_slot(owner)
             .ok_or("That connection is unavailable. Choose another and try again.")?;
@@ -166,7 +194,14 @@ impl App {
         let responsive_cloud_switch = settings.target == AppServerTarget::Cloud
             && matches!(session, NewBackendSession::CarryDraft);
         let (name, mut draft) = match session {
-            NewBackendSession::Fresh { name } => (name, None),
+            NewBackendSession::Fresh { name } => {
+                *fresh_draft = Some(StartupDraftPump::for_new_session(
+                    tui,
+                    &settings.local_settings,
+                    settings.config.cwd.as_path(),
+                ));
+                (name, None)
+            }
             NewBackendSession::CarryDraft => (
                 self.chat_widget.thread_name(),
                 (!responsive_cloud_switch).then(|| self.chat_widget.composer_draft_snapshot()),
@@ -186,7 +221,7 @@ impl App {
             let events = tui.event_stream();
             wait_for_cloud_switch(self, tui, bootstrap, events, clipboard_after_bootstrap).await
         } else {
-            bootstrap.await
+            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, bootstrap).await
         }?;
         let destination_cwd = settings.config.cwd.to_path_buf();
         if let Err(control) = self
@@ -202,7 +237,7 @@ impl App {
                         .map(|_| crate::onboarding::TrustCancelAction::CurrentTask),
                     ..Default::default()
                 },
-                /*startup_draft*/ None,
+                fresh_draft.as_mut(),
             )
             .await
         {
@@ -215,15 +250,32 @@ impl App {
             }
             return Ok(());
         }
-        let (config, local_settings) = self
-            .load_new_session_config_from(
+        let loaded = if fresh_draft.is_some() {
+            StartupDraftPump::run_during_navigation(
+                fresh_draft.as_mut(),
+                tui,
+                Box::pin(self.load_new_session_config_from(
+                    destination,
+                    &settings,
+                    destination_cwd,
+                    /*cloud_switch*/ None,
+                )),
+            )
+            .await
+        } else {
+            self.load_new_session_config_from(
                 destination,
                 &settings,
                 destination_cwd,
                 responsive_cloud_switch.then_some(&mut *tui),
             )
             .await
-            .map_err(|error| format!("Failed to read new session defaults: {error}"))?;
+        };
+        let (config, local_settings) =
+            loaded.map_err(|error| format!("Failed to read new session defaults: {error}"))?;
+        if let Some(draft) = fresh_draft.as_mut() {
+            draft.apply_settings(&local_settings, config.cwd.as_path());
+        }
         let host_project_cwd = self.backend_preference_context.local_cwd.clone();
         let start = destination
             .start_thread_with_session_start_source(
@@ -246,7 +298,7 @@ impl App {
             )
             .await
         } else {
-            start.await
+            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, start).await
         }?;
         if responsive_cloud_switch {
             draft = Some(self.chat_widget.composer_draft_snapshot());

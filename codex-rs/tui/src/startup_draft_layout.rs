@@ -63,7 +63,7 @@ impl Renderable for OwnedStartupLayout<'_> {
         };
         paragraph.render(header, buf);
         let message = match self.pump.session_action {
-            StartupDraftSessionAction::New | StartupDraftSessionAction::NewFromCommandCenter => {
+            StartupDraftSessionAction::New | StartupDraftSessionAction::NewWhileRunning => {
                 let composer = (!self.pump.submission_pending)
                     .then(|| self.pump.bottom_pane.empty_state_composer())
                     .flatten();
