@@ -49,11 +49,12 @@ async fn remote_plugin_list_routes_the_complete_query_url() {
 }
 
 #[tokio::test]
-async fn recommended_plugins_requests_codex_suggestions_endpoint() {
+async fn recommended_plugins_requests_uninstalled_codex_suggestions() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
+        .and(query_param("includeInstalled", "false"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "enabled": true,
             "plugins": [],
@@ -78,7 +79,7 @@ async fn recommended_plugins_requests_codex_suggestions_endpoint() {
     assert_eq!(
         recorded_http_client_urls(&selected_urls),
         vec![format!(
-            "{}/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+            "{}/backend-api/ps/plugins/suggested/codex?scope=GLOBAL&includeInstalled=false",
             server.uri()
         )]
     );

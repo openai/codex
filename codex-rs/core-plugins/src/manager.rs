@@ -70,7 +70,6 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces_with_mode;
 use crate::remote::CODEX_PRODUCT_SKU;
 use crate::remote::InstalledPluginDisplayAssets;
-use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemoteInstalledPluginBundleSyncError;
@@ -295,7 +294,6 @@ pub struct EffectivePluginsChange {
 /// Inputs used to select endpoint-backed plugin install candidates.
 pub struct RecommendedPluginCandidatesInput<'a> {
     pub plugins_config: &'a PluginsConfigInput,
-    pub loaded_plugins: &'a PluginLoadOutcome,
     pub auth: Option<&'a CodexAuth>,
     pub disabled_tools: &'a [ToolSuggestDisabledTool],
     pub app_server_client_name: Option<&'a str>,
@@ -2201,28 +2199,6 @@ impl PluginsManager {
             return Some(Vec::new());
         }
 
-        let installed_plugin_ids = input
-            .loaded_plugins
-            .plugins()
-            .iter()
-            .map(|plugin| plugin.config_name.as_str())
-            .collect::<HashSet<_>>();
-        let installed_remote_plugin_ids = {
-            let cache = match self.remote_installed_plugins_cache.read() {
-                Ok(cache) => cache,
-                Err(err) => err.into_inner(),
-            };
-            let plugins = self
-                .remote_installed_plugins_cache_matches_current_auth(&cache)
-                .then_some(cache.plugins.as_deref())
-                .flatten()
-                .unwrap_or_default();
-            plugins
-                .iter()
-                .filter(|plugin| plugin.marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
-                .map(|plugin| plugin.id.clone())
-                .collect::<HashSet<_>>()
-        };
         let disabled_plugin_ids = input
             .disabled_tools
             .iter()
@@ -2232,11 +2208,7 @@ impl PluginsManager {
 
         let candidates = plugins
             .into_iter()
-            .filter(|plugin| {
-                !installed_plugin_ids.contains(plugin.config_id.as_str())
-                    && !installed_remote_plugin_ids.contains(plugin.remote_plugin_id.as_str())
-                    && !disabled_plugin_ids.contains(plugin.config_id.as_str())
-            })
+            .filter(|plugin| !disabled_plugin_ids.contains(plugin.config_id.as_str()))
             .map(|plugin| {
                 DiscoverableTool::from(DiscoverablePluginInfo {
                     id: plugin.config_id,

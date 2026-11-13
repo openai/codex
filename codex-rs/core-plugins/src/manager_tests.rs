@@ -6351,7 +6351,7 @@ async fn recommended_plugins_cache_clear_rejects_stale_fetch_completion() {
 }
 
 #[tokio::test]
-async fn recommended_plugin_candidates_filter_installed_and_disabled_plugins() {
+async fn recommended_plugin_candidates_use_endpoint_results_and_filter_disabled_tools() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
@@ -6374,11 +6374,6 @@ plugins = true
                     "id": "plugin_github",
                     "name": "github",
                     "display_name": "GitHub"
-                },
-                {
-                    "id": "plugin_slack",
-                    "name": "slack",
-                    "display_name": "Slack"
                 }
             ]
         })))
@@ -6396,12 +6391,9 @@ plugins = true
     let disabled_tools = [ToolSuggestDisabledTool::plugin(
         "github@openai-curated-remote",
     )];
-    let loaded_plugins = manager.plugins_for_config(&config).await;
-
     let candidates = manager
         .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
             plugins_config: &config,
-            loaded_plugins: &loaded_plugins,
             auth: Some(&auth),
             disabled_tools: &disabled_tools,
             app_server_client_name: None,
@@ -6411,9 +6403,9 @@ plugins = true
     assert_eq!(
         candidates,
         Some(vec![DiscoverableTool::from(DiscoverablePluginInfo {
-            id: "slack@openai-curated-remote".to_string(),
-            remote_plugin_id: Some("plugin_slack".to_string()),
-            name: "Slack".to_string(),
+            id: "linear@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugin_linear".to_string()),
+            name: "Linear".to_string(),
             description: None,
             has_skills: false,
             mcp_server_names: Vec::new(),

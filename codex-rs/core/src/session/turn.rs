@@ -2105,12 +2105,6 @@ pub(crate) async fn prepare_tool_recommendations(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> PreparedToolRecommendations {
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await
-        .without_plugins(&turn_context.disabled_plugin_ids);
     let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
     let auth = if tool_suggest_is_enabled {
         sess.services.auth_manager.auth().await
@@ -2123,7 +2117,6 @@ pub(crate) async fn prepare_tool_recommendations(
             .plugins_manager
             .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
                 plugins_config: &plugins_config,
-                loaded_plugins: &loaded_plugins,
                 auth: auth.as_ref(),
                 disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
                 app_server_client_name: turn_context.app_server_client_name.as_deref(),

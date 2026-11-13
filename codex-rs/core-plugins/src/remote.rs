@@ -1156,7 +1156,9 @@ pub async fn fetch_recommended_plugins(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let mut url = Url::parse(&format!("{base_url}/ps/plugins/suggested/codex"))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
-    url.query_pairs_mut().append_pair("scope", "GLOBAL");
+    url.query_pairs_mut()
+        .append_pair("scope", "GLOBAL")
+        .append_pair("includeInstalled", "false");
     let url = url.to_string();
     let request = authenticated_request(config, Method::GET, &url, auth)
         .await?

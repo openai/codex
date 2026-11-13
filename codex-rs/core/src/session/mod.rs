@@ -5134,12 +5134,6 @@ impl Session {
             developer_sections
                 .push(DeveloperInstructions::new(developer_instructions).render_fragment());
         }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config.plugins_config_input())
-            .await
-            .without_plugins(&turn_context.disabled_plugin_ids);
         let recommended_plugin_candidates = if turn_context
             .config
             .features
@@ -5151,7 +5145,6 @@ impl Session {
                 .plugins_manager
                 .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
                     plugins_config: &plugins_config,
-                    loaded_plugins: &loaded_plugins,
                     auth: auth.as_ref(),
                     disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
                     app_server_client_name: turn_context.app_server_client_name.as_deref(),

@@ -452,6 +452,7 @@ async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) 
             },
             "enabled": true
         })]))
+        .expect(1..)
         .with_priority(1)
         .mount(server)
         .await;
@@ -1615,12 +1616,6 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
             .is_some(),
         completed,
         "the resumed router should reflect the refreshed Apps tools"
-    );
-    assert!(
-        !tool_names(&requests[1].body_json())
-            .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "the refreshed installed-plugin cache should filter the cached recommendation"
     );
     drop(requests);
     let current_config = test.codex.config().await;
