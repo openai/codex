@@ -18,7 +18,7 @@ pub(crate) fn workspace_headline_from_response(
     }
 
     WorkspaceHeadlineFetchResult::Available(response.messages.into_iter().find_map(|message| {
-        (message.message_type == WorkspaceMessageType::Headline)
+        (message.archived_at.is_none() && message.message_type == WorkspaceMessageType::Headline)
             .then(|| message.message_body.trim().to_string())
             .filter(|headline| !headline.is_empty())
     }))

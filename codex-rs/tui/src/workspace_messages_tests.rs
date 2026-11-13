@@ -8,6 +8,13 @@ fn workspace_headline_from_response_uses_first_non_empty_headline() {
         feature_enabled: true,
         messages: vec![
             WorkspaceMessage {
+                message_id: "archived-headline".to_string(),
+                message_type: WorkspaceMessageType::Headline,
+                message_body: "Previous announcement".to_string(),
+                created_at: None,
+                archived_at: Some(1_700_000_000),
+            },
+            WorkspaceMessage {
                 message_id: "announcement-id".to_string(),
                 message_type: WorkspaceMessageType::Announcement,
                 message_body: "Announcement body".to_string(),

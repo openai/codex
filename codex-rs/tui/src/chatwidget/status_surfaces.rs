@@ -665,10 +665,7 @@ impl ChatWidget {
         if !self.status_line_workspace_headline_should_fetch(now) {
             return;
         }
-        let request_id = self.next_status_line_workspace_headline_request_id;
-        self.next_status_line_workspace_headline_request_id = self
-            .next_status_line_workspace_headline_request_id
-            .wrapping_add(/*rhs*/ 1);
+        let request_id = uuid::Uuid::new_v4();
         self.status_line_workspace_headline_pending_request_id = Some(request_id);
         self.status_line_workspace_headline_last_requested_at = Some(now);
         self.app_event_tx
@@ -704,12 +701,16 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn is_pending_workspace_headline(&self, request_id: uuid::Uuid) -> bool {
+        self.status_line_workspace_headline_pending_request_id == Some(request_id)
+    }
+
     pub(crate) fn set_status_line_workspace_headline(
         &mut self,
-        request_id: u64,
+        request_id: uuid::Uuid,
         result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
     ) -> bool {
-        if self.status_line_workspace_headline_pending_request_id != Some(request_id) {
+        if !self.is_pending_workspace_headline(request_id) {
             return false;
         }
         self.status_line_workspace_headline_pending_request_id = None;
