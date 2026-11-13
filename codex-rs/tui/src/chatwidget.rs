@@ -552,6 +552,7 @@ pub(crate) struct ChatWidget {
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
     model_popup_request_id: Option<uuid::Uuid>,
+    /// Cloud settings accepted for future turns. Serving model metadata comes from the session.
     pub(crate) cloud_picker_selection:
         Option<crate::app_server_session::user_message_submission::CloudModelSelection>,
     pub(crate) pending_cloud_turn_settings:

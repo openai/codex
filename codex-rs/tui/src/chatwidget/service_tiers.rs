@@ -87,7 +87,7 @@ impl ChatWidget {
             .and_then(|id| self.pending_cloud_turn_settings.as_ref()?.model(id));
         let model = pending_model
             .as_deref()
-            .unwrap_or_else(|| self.service_tier_model());
+            .unwrap_or_else(|| self.selected_model());
         self.model_catalog
             .try_list_models()
             .ok()
@@ -136,7 +136,7 @@ impl ChatWidget {
             .find(|tier| tier.name.eq_ignore_ascii_case(SPEED_TIER_FAST))
     }
 
-    pub(super) fn service_tier_model(&self) -> &str {
+    pub(super) fn selected_model(&self) -> &str {
         self.cloud_picker_selection.as_ref().map_or_else(
             || self.current_model(),
             |selection| selection.model.as_str(),
@@ -152,7 +152,7 @@ impl ChatWidget {
         self.effective_service_tier = service_tier_resolution::effective_service_tier(
             &self.config,
             &self.local_settings.notices,
-            self.service_tier_model(),
+            self.selected_model(),
             &self.model_catalog.try_list_models().unwrap_or_default(),
         );
     }

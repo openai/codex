@@ -122,10 +122,8 @@ impl App {
                 );
                 return;
             };
-            let label = Self::reasoning_label_for(&model, effort.as_ref())
-                .map_or_else(String::new, |label| format!(" {label}"));
             let message =
-                format!("Selected {model}{label} for the next new turn in this conversation");
+                session_model_confirmation(&model, effort.as_ref(), service_tier.as_deref());
             match app_server.stage_cloud_model_selection(thread_id, preset, effort) {
                 Ok(dropped_tier) => {
                     self.chat_widget.sync_service_tier_commands();
@@ -227,22 +225,7 @@ impl App {
         }
         self.sync_active_thread_service_tier_to_cached_session()
             .await;
-        let mut message = format!("Model changed to {model}");
-        if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
-            message.push(' ');
-            message.push_str(&label);
-        }
-        if let Some(service_tier) = service_tier {
-            message.push(' ');
-            message.push_str(if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE {
-                "standard"
-            } else if service_tier == ServiceTier::Fast.request_value() {
-                "fast"
-            } else {
-                &service_tier
-            });
-        }
-        message.push_str(" for this session only");
+        let message = session_model_confirmation(&model, effort.as_ref(), service_tier.as_deref());
         self.chat_widget.add_info_message(message, /*hint*/ None);
     }
 
@@ -260,4 +243,28 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn session_model_confirmation(
+    model: &str,
+    effort: Option<&ReasoningEffort>,
+    service_tier: Option<&str>,
+) -> String {
+    let mut message = format!("Model changed to {model}");
+    if let Some(label) = App::reasoning_label_for(model, effort) {
+        message.push(' ');
+        message.push_str(&label);
+    }
+    if let Some(service_tier) = service_tier {
+        message.push(' ');
+        message.push_str(if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE {
+            "standard"
+        } else if service_tier == ServiceTier::Fast.request_value() {
+            "fast"
+        } else {
+            service_tier
+        });
+    }
+    message.push_str(" for this session only");
+    message
 }

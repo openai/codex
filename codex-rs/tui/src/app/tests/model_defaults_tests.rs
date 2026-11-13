@@ -442,6 +442,10 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
 
         app.app_server_target = crate::AppServerTarget::Cloud;
         app.bind_backend_workspace(&server, app.config.cwd.to_path_buf());
+        app.chat_widget.setup_status_line(
+            vec![crate::bottom_pane::StatusLineItem::ModelWithReasoning],
+            /*use_theme_colors*/ false,
+        );
         app.chat_widget
             .set_feature_enabled(Feature::UltrafastMode, /*enabled*/ true);
         app.chat_widget.open_model_popup();
@@ -456,6 +460,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
             .iter_mut()
             .find(|model| model.model == "gpt-5.6-terra")
             .expect("Cloud model");
+        selected.display_name = "Cloud Terra".into();
         selected.default_service_tier = Some("ultrafast".into());
         selected.service_tiers = vec![codex_protocol::openai_models::ModelServiceTier {
             id: "ultrafast".into(),
@@ -465,6 +470,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
         assert!(app.chat_widget.on_models_loaded(request_id, Ok(models)));
         app.chat_widget.handle_key_event(KeyCode::Esc.into());
         while events.try_recv().is_ok() {}
+        let original_status_line = app.chat_widget.status_line_text();
 
         let event = AppEvent::ApplyModelSelection {
             model: "gpt-5.6-terra".into(),
@@ -473,6 +479,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
         Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
         assert!(commands.try_recv().is_err());
         assert!(app.chat_widget.cloud_picker_selection.is_none());
+        assert_eq!(app.chat_widget.status_line_text(), original_status_line);
         let messages = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|event| match event {
                 AppEvent::InsertHistoryCell(cell) => {
@@ -484,7 +491,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
         insta::allow_duplicates! {
             insta::assert_snapshot!(
                 messages.join("\n"),
-                @"• Selected gpt-5.6-terra high for the next new turn in this conversation"
+                @"• Model changed to gpt-5.6-terra high for this session only"
             );
         }
         app.chat_widget.apply_external_edit("continue".into());
@@ -542,6 +549,45 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
             admitted.then_some(("gpt-5.6-terra", Some(ReasoningEffortConfig::High))),
         );
         if accepted.is_some() {
+            let status_line = app.chat_widget.status_line_text().expect("status line");
+            while events.try_recv().is_ok() {}
+            app.chat_widget
+                .dispatch_command(crate::slash_command::SlashCommand::Status);
+            let AppEvent::InsertHistoryCell(status) = events.try_recv()? else {
+                panic!("expected /status output");
+            };
+            let status = lines_to_single_string(&status.display_lines(/*width*/ 120));
+            let model = status
+                .lines()
+                .find_map(|line| line.split_once("Model:"))
+                .expect("model row in /status")
+                .1
+                .trim()
+                .trim_end_matches('│')
+                .trim_end();
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(format!("{status_line}\nModel: {model}"), @r"
+                Cloud Terra high
+                Model: Cloud Terra (reasoning high)
+                ");
+            }
+            app.chat_widget
+                .apply_external_edit("/model --reasoning=medium".into());
+            app.chat_widget.handle_key_event(KeyCode::Esc.into());
+            app.chat_widget.handle_key_event(KeyCode::Enter.into());
+            let mut messages = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = &event {
+                    messages.push(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)));
+                }
+                Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+            }
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(
+                    messages.join("\n"),
+                    @"• Model changed to gpt-5.6-terra medium for this session only"
+                );
+            }
             app.chat_widget.open_model_popup();
             let popup = render_bottom_popup(&app.chat_widget, /*width*/ 80);
             let label = popup.lines().find(|line| line.contains("Accepted for"));
@@ -554,6 +600,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
             ));
             assert!(app.chat_widget.cloud_picker_selection.is_none());
         }
+        assert_eq!(app.chat_widget.status_line_text(), original_status_line);
     }
     Ok(())
 }

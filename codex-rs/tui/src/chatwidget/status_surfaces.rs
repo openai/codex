@@ -725,7 +725,7 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value_for_item(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
-            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
+            StatusLineItem::ModelName => Some(self.status_model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => {
                 let service_tier = self.processing_tier_display_name().map(str::to_lowercase);
                 Some(self.model_with_reasoning_display_name(service_tier.as_deref()))
@@ -972,7 +972,7 @@ impl ChatWidget {
                 self.status_line_value_for_item(StatusLineItem::Daybreak)
             }
             TerminalTitleItem::Model => Some(Self::truncate_terminal_title_part(
-                self.model_display_name().to_string(),
+                self.status_model_display_name().to_string(),
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::ModelWithReasoning => Some(Self::truncate_terminal_title_part(
@@ -987,17 +987,32 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn status_model_display_name(&self) -> &str {
+        self.cloud_picker_selection.as_ref().map_or_else(
+            || self.model_display_name(),
+            |selection| self.model_catalog.display_name(&selection.model),
+        )
+    }
+
+    pub(super) fn status_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.cloud_picker_selection.as_ref().map_or_else(
+            || self.effective_reasoning_effort(),
+            |selection| selection.effort.clone(),
+        )
+    }
+
     fn reasoning_display_name(&self) -> String {
-        let effort = self.effective_reasoning_effort();
+        let effort = self.status_reasoning_effort();
         Self::status_line_reasoning_effort_label(effort.as_ref())
     }
 
     fn model_with_reasoning_display_name(&self, service_tier: Option<&str>) -> String {
+        let model = self.status_model_display_name();
         let label = self.reasoning_display_name();
         let service_tier_label = service_tier
             .map(|tier| format!(" {tier}"))
             .unwrap_or_default();
-        format!("{} {label}{service_tier_label}", self.model_display_name())
+        format!("{model} {label}{service_tier_label}")
     }
 
     fn processing_tier_display_name(&self) -> Option<&str> {
@@ -1005,7 +1020,7 @@ impl ChatWidget {
         self.model_catalog
             .models
             .iter()
-            .find(|preset| preset.model == self.service_tier_model())
+            .find(|preset| preset.model == self.selected_model())
             .and_then(|preset| preset.service_tiers.iter().find(|tier| tier.id == id))
             .map(|tier| tier.name.as_str())
             .or_else(|| {
