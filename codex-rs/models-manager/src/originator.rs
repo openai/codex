@@ -7,6 +7,10 @@ pub enum ModelCatalogOriginator {
     WorkDesktop,
     WorkMobile,
     Chat,
+    Orbit,
+    OrbitWeb,
+    OrbitDesktop,
+    OrbitMobile,
 }
 
 impl ModelCatalogOriginator {
@@ -17,6 +21,10 @@ impl ModelCatalogOriginator {
             "codex_work_desktop" => Some(Self::WorkDesktop),
             "codex_work_mobile" => Some(Self::WorkMobile),
             "chatgpt_cca" => Some(Self::Chat),
+            "orbit_cca" => Some(Self::Orbit),
+            "orbit_cca_web" => Some(Self::OrbitWeb),
+            "orbit_cca_desktop" => Some(Self::OrbitDesktop),
+            "orbit_cca_mobile" => Some(Self::OrbitMobile),
             _ => None,
         }
     }
@@ -28,6 +36,10 @@ impl ModelCatalogOriginator {
             Self::WorkDesktop => "codex_work_desktop",
             Self::WorkMobile => "codex_work_mobile",
             Self::Chat => "chatgpt_cca",
+            Self::Orbit => "orbit_cca",
+            Self::OrbitWeb => "orbit_cca_web",
+            Self::OrbitDesktop => "orbit_cca_desktop",
+            Self::OrbitMobile => "orbit_cca_mobile",
         }
     }
 }

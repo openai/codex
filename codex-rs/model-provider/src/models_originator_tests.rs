@@ -92,7 +92,7 @@ async fn originator_managers_share_api_key_discovery_policy() {
     server.verify().await;
 }
 
-/// Work, Chat, and legacy callers retain their own catalogs across concurrent access and restarts.
+/// Concurrent reads and restarts reuse each originator's own model catalog.
 #[tokio::test]
 async fn originator_catalogs_are_isolated_and_reused_from_disk() {
     let server = MockServer::start().await;
@@ -107,15 +107,21 @@ async fn originator_catalogs_are_isolated_and_reused_from_disk() {
             "us".into(),
         ),
     ]));
-    let mut catalogs = Vec::new();
-    for originator in [
-        "provider-default",
-        "codex_work_cca",
+    let surface_originators = [
+        // A single account can see different models in each client.
         "codex_work_web",
         "codex_work_desktop",
         "codex_work_mobile",
-        "chatgpt_cca",
-    ] {
+        "orbit_cca",
+        "orbit_cca_web",
+        "orbit_cca_desktop",
+        "orbit_cca_mobile",
+    ];
+    let mut catalogs = Vec::new();
+    for originator in ["provider-default", "codex_work_cca", "chatgpt_cca"]
+        .into_iter()
+        .chain(surface_originators)
+    {
         let mut model = model_info_from_slug("gpt-5.5");
         model.visibility = codex_protocol::openai_models::ModelVisibility::List;
 
@@ -126,7 +132,11 @@ async fn originator_catalogs_are_isolated_and_reused_from_disk() {
         Mock::given(method("GET"))
             .and(path("/models"))
             .and(header("originator", originator))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("etag", format!("\"{originator}\""))
+                    .set_body_json(&catalog),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -144,30 +154,29 @@ async fn originator_catalogs_are_isolated_and_reused_from_disk() {
         let manager = OpenAiModelsManager::new(home.path().to_path_buf(), endpoint, Some(auth));
         let work = manager.for_originator("codex_work_cca").unwrap();
         let chat = manager.for_originator("chatgpt_cca").unwrap();
-        assert!(Arc::ptr_eq(
-            &work,
-            &manager.for_originator("codex_work_cca").unwrap()
-        ));
-        assert!(Arc::ptr_eq(
-            &chat,
-            &manager.for_originator("chatgpt_cca").unwrap()
-        ));
+        for (originator, scoped) in [("codex_work_cca", &work), ("chatgpt_cca", &chat)] {
+            assert!(Arc::ptr_eq(
+                scoped,
+                &manager.for_originator(originator).unwrap()
+            ));
+        }
         let (default_catalog, work_catalog, chat_catalog) = tokio::join!(
             manager.raw_model_catalog(RefreshStrategy::OnlineIfUncached, client.clone()),
             work.raw_model_catalog(RefreshStrategy::OnlineIfUncached, client.clone()),
             chat.raw_model_catalog(RefreshStrategy::OnlineIfUncached, client.clone()),
         );
-        let mut actual = vec![default_catalog, work_catalog];
-        for originator in ["codex_work_web", "codex_work_desktop", "codex_work_mobile"] {
+        let mut actual = vec![default_catalog, work_catalog, chat_catalog];
+        for originator in surface_originators {
+            let scoped = manager.for_originator(originator).unwrap();
             actual.push(
-                manager
-                    .for_originator(originator)
-                    .unwrap()
+                scoped
                     .raw_model_catalog(RefreshStrategy::OnlineIfUncached, client.clone())
                     .await,
             );
+            scoped
+                .refresh_if_new_etag(format!("\"{originator}\""), client.clone())
+                .await;
         }
-        actual.push(chat_catalog);
         assert_eq!(actual, catalogs);
         for originator in [
             "",
