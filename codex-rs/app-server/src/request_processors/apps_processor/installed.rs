@@ -4,6 +4,7 @@ use codex_connectors::ConnectorRuntimeTool;
 use codex_connectors::connector_runtime_context_key;
 use codex_connectors::connector_tool_is_synthetic;
 use codex_connectors::installed_connector_runtime;
+use codex_extension_api::McpServerContributionContext;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpRuntime;
@@ -79,7 +80,7 @@ impl AppsRequestProcessor {
                         snapshot_age = Some(Duration::ZERO);
                         return Ok(snapshot.tools);
                     }
-                    let mcp_config = mcp_manager.runtime_config(&config).await;
+                    let mcp_config = mcp_manager.runtime_config(McpServerContributionContext::global(&config)).await;
                     let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
                     let codex_apps_server = codex_mcp::McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME);
                     mcp_servers.retain(|key, _| key == &codex_apps_server);

@@ -4,6 +4,7 @@ use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use codex_config::types::McpServerAuth;
 use codex_core::McpRefreshReason;
+use codex_extension_api::McpServerContributionContext;
 use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::ema_auth_scope;
@@ -156,7 +157,7 @@ impl McpRequestProcessor {
                 let mcp_config = self
                     .thread_manager
                     .mcp_manager()
-                    .runtime_config(&config)
+                    .runtime_config(McpServerContributionContext::global(&config))
                     .await;
                 let runtime_context = McpRuntimeContext::new(
                     self.thread_manager.environment_manager(),
@@ -458,7 +459,9 @@ impl McpRequestProcessor {
             let (mcp_config, runtime_context) = match thread.as_ref() {
                 Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
                 None => (
-                    mcp_manager.runtime_config(&config).await,
+                    mcp_manager
+                        .runtime_config(McpServerContributionContext::global(&config))
+                        .await,
                     McpRuntimeContext::new(
                         self.thread_manager.environment_manager(),
                         config.cwd.to_path_buf(),
@@ -744,7 +747,9 @@ impl McpRequestProcessor {
 
         let config = self.load_global_config().await?;
         let mcp_manager = self.thread_manager.mcp_manager();
-        let mcp_config = mcp_manager.runtime_config(&config).await;
+        let mcp_config = mcp_manager
+            .runtime_config(McpServerContributionContext::global(&config))
+            .await;
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let tool_catalog_cache = mcp_manager.tool_catalog_cache();
         self.thread_manager

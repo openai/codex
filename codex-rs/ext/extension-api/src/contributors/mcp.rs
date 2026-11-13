@@ -66,6 +66,21 @@ impl<'a, C> McpServerContributionContext<'a, C> {
         }
     }
 
+    /// Creates host-only context with thread identity but no live extension state or discovery.
+    pub fn for_host(
+        config: &'a C,
+        thread_init: Option<&'a ExtensionDataInit>,
+        originator: Option<&'a str>,
+        session_source: Option<&'a SessionSource>,
+    ) -> Self {
+        Self {
+            thread_init,
+            originator,
+            session_source,
+            ..Self::global(config)
+        }
+    }
+
     /// Creates context for one model step using only currently available environments.
     pub fn for_step(
         config: &'a C,
