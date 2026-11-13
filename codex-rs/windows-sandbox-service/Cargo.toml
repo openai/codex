@@ -37,6 +37,8 @@ features = [
     "Foundation_Collections",
     "Management_Deployment",
     "Storage",
+    "Win32_Security",
+    "Win32_System_EventLog",
     "Win32_System_WinRT",
 ]
 

@@ -2,6 +2,8 @@
 //! Diagnostic getters never replace the completion error or turn success into failure.
 //! Free-form Windows ErrorText stays in Windows deployment diagnostics, not this summary.
 
+mod appx_events;
+
 use anyhow::Context;
 use anyhow::Result;
 use windows::Foundation::AsyncStatus;
@@ -57,7 +59,7 @@ impl RegistrationResult {
             let summary = format!("{context} phase=GetResults get_results={:?}", error.code());
             anyhow::Error::new(error).context(summary)
         })?;
-        let activity_id = match details.activity_id {
+        let activity_id = match &details.activity_id {
             Ok(id) => format!("{id:?}"),
             Err(error) => format!("unavailable({:?})", error.code()),
         };
@@ -82,7 +84,14 @@ impl RegistrationResult {
             return Ok(());
         }
         extended_error.ok().with_context(|| {
-            format!("{context} phase=deployment extended_error={extended_error:?}")
+            let mut summary =
+                format!("{context} phase=deployment extended_error={extended_error:?}");
+            if let Ok(activity) = details.activity_id
+                && let Some(ids) = appx_events::failure_event_ids(activity)
+            {
+                summary.push_str(&format!(" appx_event_ids={ids}"));
+            }
+            summary
         })
     }
 }
