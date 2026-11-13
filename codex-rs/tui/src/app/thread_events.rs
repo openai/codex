@@ -746,6 +746,7 @@ mod tests {
         ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,

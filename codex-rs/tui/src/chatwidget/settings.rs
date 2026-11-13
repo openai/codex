@@ -529,6 +529,10 @@ impl ChatWidget {
     fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
         self.invalidate_permission_discovery();
         let cwd_changed = self.config.cwd != settings.cwd;
+        if let Some(environments) = &settings.environments {
+            self.primary_environment_cwd =
+                crate::session_state::primary_environment_cwd(environments);
+        }
         self.apply_thread_settings_cwd(settings.cwd.clone());
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_daybreak_enabled(self.daybreak_enabled);

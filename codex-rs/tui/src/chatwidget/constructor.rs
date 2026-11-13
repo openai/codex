@@ -276,6 +276,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             current_cwd,
+            primary_environment_cwd: None,
             workspace_command_runner,
             instruction_source_paths: Vec::new(),
             session_network_proxy: None,

@@ -4,5 +4,5 @@ expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&chat, 40)"
 ---
 › Ask Codex to do anything
 
-  GPT-5.5 default · /tmp/project
+  GPT-5.5 default · /executor/work
               Plan mode (⇧tab to cycle)

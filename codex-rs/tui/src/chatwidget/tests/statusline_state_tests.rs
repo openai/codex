@@ -13,6 +13,7 @@ async fn statusline_state_projects_the_displayed_settings() {
     let mut session = configured_thread_session(id);
     session.model = "gpt-5.5".into();
     session.thread_name = Some("Saved carts".into());
+    let expected_cwd = session.cwd.to_path_buf();
     chat.handle_thread_session(session);
     chat.local_settings.tui.status_line = Some(vec!["status".into()]);
     let mut model = get_available_model(&chat, "gpt-5.5");
@@ -32,6 +33,7 @@ async fn statusline_state_projects_the_displayed_settings() {
             "app": {"cli_version": CODEX_CLI_VERSION, "display_mode": "standard"},
             "config": {"statusline_items": ["run-state"]},
             "thread": {
+                "workspace": {"cwd": expected_cwd},
                 "id": id, "name": "Saved carts", "agent": {"state": "ready"},
                 "model": {"id": "gpt-5.5", "display_name": "Test model", "provider": "openai",
                     "reasoning_level": "none", "service_tier": "acme-priority", "service_tier_display_name": "Turbo"},

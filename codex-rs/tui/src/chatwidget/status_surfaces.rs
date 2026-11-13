@@ -509,6 +509,31 @@ impl ChatWidget {
             .unwrap_or(self.config.cwd.as_path())
     }
 
+    pub(super) fn status_line_workspace_cwd(&self) -> &Path {
+        self.primary_environment_cwd
+            .as_ref()
+            .map(|cwd| Path::new(cwd.path.as_str()))
+            .unwrap_or_else(|| self.status_line_cwd())
+    }
+
+    fn workspace_directory_display(&self) -> String {
+        let cwd = self.status_line_workspace_cwd();
+        // Only a server-local path on a local connection shares the TUI's home.
+        if self
+            .remote_connection
+            .as_ref()
+            .is_none_or(|connection| connection.is_local_daemon)
+            && self
+                .primary_environment_cwd
+                .as_ref()
+                .is_none_or(|cwd| cwd.is_server_local)
+        {
+            format_directory_display(cwd, /*max_width*/ None)
+        } else {
+            cwd.display().to_string()
+        }
+    }
+
     /// Resolves the project root associated with `cwd`.
     ///
     /// Git repository root wins when available. Otherwise we fall back to the
@@ -735,12 +760,7 @@ impl ChatWidget {
             StatusLineItem::Provider => self
                 .thread_id
                 .map(|_| format!("provider: {}", self.config.model_provider_id)),
-            StatusLineItem::CurrentDir => {
-                Some(format_directory_display(
-                    self.status_line_cwd(),
-                    /*max_width*/ None,
-                ))
-            }
+            StatusLineItem::CurrentDir => Some(self.workspace_directory_display()),
             StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
             StatusLineItem::Hostname => os_host_name(),
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
@@ -909,7 +929,7 @@ impl ChatWidget {
             TerminalTitleItem::AppName => Some("codex".to_string()),
             TerminalTitleItem::Project => self.terminal_title_project_name(),
             TerminalTitleItem::CurrentDir => Some(Self::truncate_terminal_title_part(
-                format_directory_display(self.status_line_cwd(), /*max_width*/ None),
+                self.workspace_directory_display(),
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),

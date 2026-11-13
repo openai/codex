@@ -1273,6 +1273,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
     let configured = crate::session_state::ThreadSessionState {
         read_only_history: false,
         thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,

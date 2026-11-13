@@ -43,10 +43,16 @@ struct StatuslineStateThread {
     name: Option<String>,
     agent: StatuslineStateAgent,
     model: StatuslineStateModel,
+    workspace: StatuslineStateWorkspace,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval: Option<StatuslineStateApproval>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permissions: Option<StatuslineStatePermissions>,
+}
+
+#[derive(Serialize)]
+struct StatuslineStateWorkspace {
+    cwd: codex_utils_path_uri::LegacyAppPathString,
 }
 
 #[derive(Serialize)]
@@ -242,6 +248,11 @@ impl ChatWidget {
                 name,
                 agent,
                 model,
+                workspace: StatuslineStateWorkspace {
+                    cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
+                        self.status_line_workspace_cwd(),
+                    ),
+                },
                 approval,
                 permissions,
             },
