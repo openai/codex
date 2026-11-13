@@ -2601,14 +2601,18 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
     for (cloud_skill_enabled, has_cloud_provider) in [(false, true), (true, true), (true, false)] {
         let list_calls = Arc::new(AtomicUsize::new(0));
         let mut providers = SkillProviders::new();
         if has_cloud_provider {
             providers = providers.with_cloud_provider(Arc::new(StaticSkillProvider {
-                catalog: SkillCatalog::default(),
+                catalog: SkillCatalog {
+                    is_partial: true,
+                    warnings: vec!["catalog diagnostic".to_string()],
+                    ..SkillCatalog::default()
+                },
                 read_requests: Arc::new(Mutex::new(Vec::new())),
                 list_calls: Some(Arc::clone(&list_calls)),
                 fail_first_list: true,
@@ -2729,6 +2733,13 @@ async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
         assert_eq!(warning.thread_id, thread_store.level_id());
         assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
         assert!(warning.message.contains("temporary cloud failure"));
+
+        tokio::time::advance(std::time::Duration::from_secs(30)).await;
+        start_registered_turn(&registry, &session_store, &thread_store, "turn-2").await;
+        start_registered_turn(&registry, &session_store, &thread_store, "turn-3").await;
+        assert_eq!(list_calls.load(Ordering::Relaxed), 2);
+        start_registered_turn(&registry, &session_store, &thread_store, "turn-4").await;
+        assert_eq!(list_calls.load(Ordering::Relaxed), 2);
     }
     Ok(())
 }

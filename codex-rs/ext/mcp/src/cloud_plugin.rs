@@ -1,6 +1,6 @@
-//! Reuses complete, warning-free cloud plugins until auth or Apps resources change.
-//! Hosts must invalidate Apps resources when the remote plugin catalog changes.
-//! Partial catalogs retry next turn; failures use thread-owned exponential backoff.
+//! Reuses complete, warning-free cloud plugins until their auth or Apps resources change.
+//! Partial catalogs and catalogs with warnings remain usable and retry with thread-owned exponential backoff.
+//! Accepted complete and partial catalogs replace prior entries; failures retain same-auth fallback.
 
 use crate::PluginListQuery;
 use crate::PluginsThreadState;
@@ -22,15 +22,11 @@ use codex_extension_api::TurnStartPhase;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
-use codex_mcp::McpResourceClientAuthKey;
 use std::collections::HashSet;
 
 const MAX_PROJECTED_CLOUD_PLUGINS: usize = 100;
 pub(crate) const MAX_PLUGIN_DISPLAY_NAME_CHARS: usize = 64;
 pub(crate) const MAX_CONNECTOR_IDS_PER_PLUGIN: usize = 64;
-
-/// Auth scope of the latest catalog accepted for this turn.
-struct LatestCloudPluginAuth(Option<McpResourceClientAuthKey>);
 
 impl PluginContributor {
     #[expect(
@@ -45,10 +41,7 @@ impl PluginContributor {
             return false;
         };
         // Wait without holding catalog state or the MCP runtime permit, then recheck the cache.
-        let (mut refresh_succeeded, waited) = match state.cloud_refresh_lock.try_lock() {
-            Ok(guard) => (guard, false),
-            Err(_) => (state.cloud_refresh_lock.lock().await, true),
-        };
+        let _refresh = state.cloud_refresh_lock.lock().await;
         let query = PluginListQuery {
             thread_id: input.thread_store.level_id().to_string(),
             turn_id: input.turn_id.to_string(),
@@ -69,44 +62,28 @@ impl PluginContributor {
                     .mcp_resources
                     .as_ref()
                     .and_then(|client| client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME));
-                if input
-                    .turn_store
-                    .get::<LatestCloudPluginAuth>()
-                    .is_some_and(|previous| previous.0 == auth)
-                    && state
-                        .cloud_generation
-                        .as_ref()
-                        .is_some_and(|generation| generation.auth_cache_key == auth)
-                    && state.cloud_catalog().is_some()
-                {
-                    return false;
-                }
                 if state.cloud_retry.as_ref().is_some_and(|retry| {
                     retry.is_pending(auth.as_ref(), resource_cache_key.as_ref())
                 }) {
                     return false;
                 }
-                input.turn_store.remove::<LatestCloudPluginAuth>();
-                if let Some(generation) = &state.cloud_generation
-                    && generation.auth_cache_key == auth
-                    && generation.is_auth_current()
-                    && generation.resource_cache_key == resource_cache_key
-                    && generation.catalog.as_ref().is_some_and(|catalog| {
-                        (waited && *refresh_succeeded)
-                            || (!catalog.is_partial && catalog.warnings.is_empty())
-                    })
-                {
-                    state.cloud_retry = None;
-                    input.turn_store.insert(LatestCloudPluginAuth(auth));
-                    return false;
-                }
-                // Waiting callers must not reuse a failed or cancelled refresh.
-                *refresh_succeeded = false;
                 let previous_catalog_auth = state
                     .cloud_generation
                     .as_ref()
                     .filter(|generation| generation.catalog.is_some())
                     .map(|generation| generation.auth_cache_key.clone());
+                if let Some(generation) = &state.cloud_generation
+                    && previous_catalog_auth.as_ref() == Some(&auth)
+                    && generation.is_auth_current()
+                    && generation.resource_cache_key == resource_cache_key
+                    && generation
+                        .catalog
+                        .as_ref()
+                        .is_some_and(|catalog| !catalog.is_partial && catalog.warnings.is_empty())
+                {
+                    state.cloud_retry = None;
+                    return false;
+                }
                 let auth_cache_key =
                     state.prepare_cloud_generation(query.mcp_resources.as_deref().cloned());
                 let catalog_cleared =
@@ -117,17 +94,22 @@ impl PluginContributor {
         let mut state = state.contributor_state();
         let catalog_published = match result {
             Ok(catalog) => {
+                let needs_retry = catalog.is_partial || !catalog.warnings.is_empty();
                 let published = state.publish_cloud_catalog(
                     auth_cache_key.as_ref(),
-                    resource_cache_key,
+                    resource_cache_key.clone(),
                     catalog,
                 );
                 if published {
-                    state.cloud_retry = None;
-                    input
-                        .turn_store
-                        .insert(LatestCloudPluginAuth(auth_cache_key));
-                    *refresh_succeeded = true;
+                    state.cloud_retry = if needs_retry {
+                        Some(CatalogRefreshBackoff::after_failure(
+                            auth_cache_key,
+                            resource_cache_key,
+                            state.cloud_retry.as_ref(),
+                        ))
+                    } else {
+                        None
+                    };
                 } else {
                     tracing::debug!(
                         "cloud plugin discovery finished after auth or resources changed"
@@ -215,7 +197,6 @@ impl TurnLifecycleContributor for PluginContributor {
 
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            input.turn_store.remove::<LatestCloudPluginAuth>();
             self.refresh_cloud_catalog(CatalogRefreshInput {
                 turn_id: input.turn_id,
                 session_store: input.session_store,

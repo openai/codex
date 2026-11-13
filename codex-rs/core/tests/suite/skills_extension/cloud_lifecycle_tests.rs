@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicUsize;
 struct CloudTurnProvider {
     reply: Mutex<Result<Option<(&'static str, u32)>, ()>>,
     lists: AtomicUsize,
+    partial: AtomicBool,
     reads: AtomicUsize,
     resource_key: Mutex<Option<codex_mcp::McpResourceServerCacheKey>>,
 }
@@ -41,7 +42,7 @@ impl SkillProvider for CloudTurnProvider {
                 })
                 .collect();
             Ok(SkillCatalog {
-                is_partial: false,
+                is_partial: self.partial.load(Ordering::SeqCst),
                 entries,
                 warnings: Vec::new(),
             })
@@ -101,6 +102,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
     let provider = Arc::new(CloudTurnProvider {
         reply: Mutex::new(Ok(Some(calendar))),
         lists: AtomicUsize::new(0),
+        partial: AtomicBool::new(false),
         reads: AtomicUsize::new(0),
         resource_key: Mutex::new(None),
     });
@@ -154,9 +156,25 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             1,
         ),
         (
+            "partial-replaces-complete",
+            Ok(Some(("calendar", 3))),
+            Some(("calendar", 3)),
+            None,
+            1,
+            1,
+        ),
+        (
+            "partial-cached",
+            Ok(Some(("calendar", 4))),
+            Some(("calendar", 3)),
+            None,
+            0,
+            0,
+        ),
+        (
             "same-account-failure",
             Err(()),
-            Some(updated_calendar),
+            Some(("calendar", 3)),
             None,
             1,
             0,
@@ -208,9 +226,14 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         let previous_lists = provider.lists.load(Ordering::SeqCst);
         let previous_reads = provider.reads.load(Ordering::SeqCst);
         *provider.reply.lock().expect("cloud reply lock") = next_reply;
+        provider.partial.store(
+            matches!(turn, "partial-replaces-complete" | "partial-cached"),
+            Ordering::SeqCst,
+        );
         let previous_connection_scope = if matches!(
             turn,
             "refreshed"
+                | "partial-replaces-complete"
                 | "same-account-failure"
                 | "removed"
                 | "restored"

@@ -932,14 +932,5 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
     assert!(skill_fragments[0].contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragments[0].contains(SKILL_MARKER));
     assert!(skill_fragments[0].contains(SKILL_REFERENCE_URI));
-    // Partial discovery retries on the next turn without an MCP or auth invalidation.
-    assert_eq!(
-        *provider.reads.lock().await,
-        vec![
-            SKILL_MAIN_PROMPT_URI,
-            SKILL_REFERENCE_URI,
-            SKILL_MAIN_PROMPT_URI
-        ]
-    );
     Ok(())
 }

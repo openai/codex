@@ -109,7 +109,7 @@ fn executor_snapshot(
 }
 
 #[test]
-fn partial_refresh_retains_entries_without_excluding_new_executor_plugins() -> anyhow::Result<()> {
+fn partial_refresh_replaces_entries_and_merges_executor_plugins() -> anyhow::Result<()> {
     let mut state = PluginContributorState::default();
     let auth_key = state.prepare_cloud_generation(/*mcp_resources*/ None);
     let original = PluginCatalog {
@@ -119,19 +119,18 @@ fn partial_refresh_retains_entries_without_excluding_new_executor_plugins() -> a
     assert!(state.publish_cloud_catalog(
         auth_key.as_ref(),
         /*resource_cache_key*/ None,
-        original.clone()
+        original
     ));
+    let expected = PluginCatalog {
+        entries: vec![cloud_plugin("plugin_a")],
+        is_partial: true,
+        ..Default::default()
+    };
     assert!(state.publish_cloud_catalog(
         auth_key.as_ref(),
         /*resource_cache_key*/ None,
-        PluginCatalog {
-            entries: vec![cloud_plugin("plugin_a")],
-            is_partial: true,
-            ..Default::default()
-        },
+        expected.clone(),
     ));
-    let mut expected = original;
-    expected.is_partial = true;
     assert_eq!(state.cloud_catalog(), Some(&expected));
 
     state.update_executor_catalog(&[executor_snapshot("executor-a")?]);

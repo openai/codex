@@ -5,7 +5,7 @@ use codex_mcp::McpResourceServerCacheKey;
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// Store per catalog and thread; clear on success or configuration reset.
+/// Store per catalog and thread; clear on a complete, warning-free result or configuration reset.
 #[derive(Clone)]
 pub struct CatalogRefreshBackoff {
     auth: Option<McpResourceClientAuthKey>,
@@ -42,7 +42,7 @@ impl CatalogRefreshBackoff {
     ) -> Self {
         let delay = previous
             .filter(|previous| previous.auth == auth && previous.resources == resources)
-            .map_or(Duration::from_secs(30), |previous| {
+            .map_or(Duration::from_secs(5), |previous| {
                 (previous.delay * 2).min(Duration::from_secs(300))
             });
         Self {

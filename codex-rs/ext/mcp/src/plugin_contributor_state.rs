@@ -1,5 +1,5 @@
 //! Thread-owned catalogs, reused within their auth and resource scope, and selected-root metadata.
-//! A short-lived mutex guards publication; incomplete refreshes preserve same-auth fallback data.
+//! A short-lived mutex guards publication; failed refreshes preserve same-auth fallback data.
 
 use crate::catalog_observability::record_catalog;
 use codex_core_plugins::PluginCatalog;
@@ -24,8 +24,8 @@ use tokio::sync::Mutex as AsyncMutex;
 /// Plugin configuration and caches owned by one thread; mutable state stays extension-private.
 #[derive(Default)]
 pub struct PluginsThreadState {
-    /// Serializes discovery; true only when the last refresh published successfully.
-    pub(crate) cloud_refresh_lock: AsyncMutex<bool>,
+    /// Serializes discovery before checking freshness and publishing the next catalog.
+    pub(crate) cloud_refresh_lock: AsyncMutex<()>,
     state: Mutex<PluginContributorState>,
 }
 
@@ -144,13 +144,13 @@ impl PluginContributorState {
         auth_cache_key
     }
 
-    /// Accepts current-auth results, retaining prior complete entries as partial after an incomplete refresh.
+    /// Replaces the catalog with each accepted complete or partial result.
     /// Returns false when auth or resource identity changed during discovery.
     pub(crate) fn publish_cloud_catalog(
         &mut self,
         auth_cache_key: Option<&McpResourceClientAuthKey>,
         resource_cache_key: Option<McpResourceServerCacheKey>,
-        mut catalog: PluginCatalog,
+        catalog: PluginCatalog,
     ) -> bool {
         let Some(generation) = self
             .cloud_generation
@@ -161,18 +161,6 @@ impl PluginContributorState {
         else {
             return false;
         };
-        if catalog.is_partial
-            && let Some(previous) = generation
-                .catalog
-                .as_ref()
-                .filter(|previous| !previous.is_partial)
-        {
-            catalog = previous.clone();
-            catalog.is_partial = true;
-            tracing::warn!(
-                "cloud plugin discovery was partial; retaining prior auth-scoped entries as partial"
-            );
-        }
         record_catalog(self.extension_metrics.as_deref(), "cloud", &catalog);
         generation.catalog = Some(catalog);
         generation.resource_cache_key = resource_cache_key;

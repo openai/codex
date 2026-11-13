@@ -1,4 +1,4 @@
-//! Refreshes cloud skills at turn start and after auth changes.
+//! Refreshes cloud skills at turn start and through step freshness checks.
 
 use codex_extension_api::CatalogRefreshInput;
 use codex_extension_api::ExtensionData;
@@ -9,7 +9,6 @@ use codex_extension_api::TurnStartPhase;
 
 use super::SkillsExtension;
 use crate::provider::SkillListQuery;
-use crate::state::LatestCloudSkillsAuth;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 
@@ -38,9 +37,7 @@ impl<C: Send + Sync + 'static> SkillsExtension<C> {
             executor_capability_discovery: None,
             executor_capability_discovery_v2: None,
         };
-        if let Err(error) = state
-            .refresh_cloud_catalog(&self.providers, query, input.turn_store)
-            .await
+        if let Err(error) = state.refresh_cloud_catalog(&self.providers, query).await
             && input
                 .turn_store
                 .insert(CloudDiscoveryWarningEmitted)
@@ -75,7 +72,6 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
 
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            input.turn_store.remove::<LatestCloudSkillsAuth>();
             self.refresh_cloud_catalog(CatalogRefreshInput {
                 turn_id: input.turn_id,
                 session_store: input.session_store,

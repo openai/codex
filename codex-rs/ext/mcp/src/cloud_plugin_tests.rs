@@ -249,7 +249,92 @@ async fn account_change_clears_hosted_plugins_before_waiting_for_executor() -> a
 }
 
 #[tokio::test(start_paused = true)]
-async fn cloud_refresh_serializes_waiters_and_retries() {
+async fn partial_or_warning_cloud_catalogs_retry_with_backoff_and_recover() {
+    for (is_partial, warnings) in [
+        (true, Vec::new()),
+        (false, vec!["catalog diagnostic".to_string()]),
+        (true, vec!["catalog diagnostic".to_string()]),
+    ] {
+        for initial_client in [
+            None,
+            Some(McpResourceClient::new(Arc::new(
+                codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
+            ))),
+        ] {
+            let provider = Arc::new(CloudProvider::default());
+            let retryable = PluginCatalog {
+                is_partial,
+                warnings: warnings.clone(),
+                ..cloud_catalog()
+            };
+            provider.set_reply(Ok(retryable.clone()));
+            let contributor = PluginContributor {
+                providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+                    EnvironmentManager::default_for_tests(),
+                ))))
+                .with_cloud_provider(provider.clone()),
+            };
+            let session = ExtensionData::new("session");
+            if let Some(client) = initial_client {
+                session.insert(client);
+            }
+            let thread = ExtensionData::new("thread");
+            let turn = ExtensionData::new("turn");
+            let input = CatalogRefreshInput {
+                turn_id: "turn",
+                session_store: &session,
+                thread_store: &thread,
+                turn_store: &turn,
+            };
+            let next_turn = ExtensionData::new("next turn");
+            let next_input = CatalogRefreshInput {
+                turn_id: "next turn",
+                turn_store: &next_turn,
+                ..input
+            };
+            let state = thread.get_or_init(PluginsThreadState::default);
+            state.contributor_state().plugins_enabled = true;
+            for (index, delay) in [5, 10, 20, 40, 80, 160, 300, 300].into_iter().enumerate() {
+                assert!(contributor.refresh_catalog_for_step(input).await);
+                assert_eq!(state.cloud_catalog(), Some(retryable.clone()));
+                assert_eq!(provider.calls.load(Ordering::SeqCst), index + 1);
+                tokio::time::advance(Duration::from_secs(delay - 1)).await;
+                assert!(!contributor.refresh_catalog_for_step(next_input).await);
+                assert_eq!(provider.calls.load(Ordering::SeqCst), index + 1);
+                tokio::time::advance(Duration::from_secs(1)).await;
+            }
+            let complete = PluginCatalog {
+                warnings: Vec::new(),
+                ..cloud_catalog()
+            };
+            provider.set_reply(Ok(complete.clone()));
+            assert!(contributor.refresh_catalog_for_step(input).await);
+            assert_eq!(state.cloud_catalog(), Some(complete.clone()));
+            assert!(state.contributor_state().cloud_retry.is_none());
+            tokio::time::advance(Duration::from_secs(600)).await;
+            assert!(!contributor.refresh_catalog_for_step(input).await);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 9);
+
+            // A new auth scope bypasses a retry cooldown immediately.
+            provider.set_reply(Ok(retryable));
+            session.insert(McpResourceClient::new(Arc::new(
+                codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
+            )));
+            assert!(contributor.refresh_catalog_for_step(input).await);
+            assert!(!contributor.refresh_catalog_for_step(input).await);
+            session.insert(McpResourceClient::new(Arc::new(
+                codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
+            )));
+            provider.set_reply(Ok(complete.clone()));
+            assert!(contributor.refresh_catalog_for_step(input).await);
+            assert_eq!(state.cloud_catalog(), Some(complete));
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 11);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cloud_refresh_reuses_catalogs_and_retries() {
     let new_catalog = PluginCatalog::default();
     for (reply, cancelled) in [
         (Ok(cloud_catalog()), false),
@@ -257,7 +342,7 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
         (Ok(cloud_catalog()), true),
     ] {
         let succeeded = reply.is_ok() && !cancelled;
-        let mut expected_catalog = if succeeded {
+        let expected_catalog = if succeeded {
             cloud_catalog()
         } else {
             new_catalog.clone()
@@ -273,7 +358,7 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
         let session = ExtensionData::new("session");
         let thread = ExtensionData::new("thread");
         let turn = ExtensionData::new("turn");
-        let prewarm_turn = ExtensionData::new("prewarm");
+        let next_turn = ExtensionData::new("next turn");
         let input = CatalogRefreshInput {
             turn_id: "turn",
             session_store: &session,
@@ -283,76 +368,53 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
         let state = thread.get_or_init(PluginsThreadState::default);
         state.contributor_state().plugins_enabled = true;
 
-        // A delayed prewarm waits without superseding the real turn's request.
+        // Concurrent preparation waits for discovery before checking freshness.
         provider.pause_discovery.store(true, Ordering::SeqCst);
-        let mut turn_start = contributor.refresh_catalog_for_step(input);
-        assert!(futures::poll!(&mut turn_start).is_pending());
-        let prewarm_input = CatalogRefreshInput {
-            turn_id: "prewarm",
-            turn_store: &prewarm_turn,
+        let mut discovery = contributor.refresh_catalog_for_step(input);
+        assert!(futures::poll!(&mut discovery).is_pending());
+        let next_input = CatalogRefreshInput {
+            turn_id: "next turn",
+            turn_store: &next_turn,
             ..input
         };
-        let mut prewarm = contributor.refresh_catalog_for_step(prewarm_input);
-        assert!(futures::poll!(&mut prewarm).is_pending());
-        let mut cancelled_waiter = contributor.refresh_catalog_for_step(prewarm_input);
-        assert!(futures::poll!(&mut cancelled_waiter).is_pending());
-        drop(cancelled_waiter);
+        let mut waiting = contributor.refresh_catalog_for_step(next_input);
+        assert!(futures::poll!(&mut waiting).is_pending());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
         provider.set_reply(Ok(new_catalog.clone()));
         if cancelled {
-            drop(turn_start);
+            drop(discovery);
         } else {
             provider.resume_discovery.notify_one();
-            assert_eq!(turn_start.await, succeeded);
+            assert_eq!(discovery.await, succeeded);
         }
-        // Waiting turns share failure cooldowns; cancellation still allows immediate retry.
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), prewarm)
-                .await
-                .expect("waiting discovery should complete after its predecessor stops"),
-            cancelled,
-        );
+        // Later turns share failure cooldowns; cancellation still allows immediate retry.
+        assert_eq!(waiting.await, cancelled);
         if !succeeded && !cancelled {
             assert_eq!(state.cloud_catalog(), None);
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
-            tokio::time::advance(Duration::from_secs(30)).await;
-            assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+            tokio::time::advance(Duration::from_secs(5)).await;
+            assert!(contributor.refresh_catalog_for_step(next_input).await);
         }
         assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
-        assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert!(!contributor.refresh_catalog_for_step(next_input).await);
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
             1 + usize::from(!succeeded),
         );
 
-        // Retained partial catalogs do not need MCP rebuilding after failed retries.
-        prewarm_turn.remove::<LatestCloudPluginAuth>();
-        expected_catalog.is_partial = true;
-        state
-            .contributor_state()
-            .cloud_generation
-            .as_mut()
-            .unwrap()
-            .catalog = Some(expected_catalog.clone());
         provider.set_reply(Err("discovery failed".to_string()));
-        let previous_calls = provider.calls.load(Ordering::SeqCst);
-        for _ in 0..2 {
-            assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
-            assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
-        }
-        assert_eq!(provider.calls.load(Ordering::SeqCst), previous_calls + 1);
 
         // Clearing an old auth scope still requires rebuilding, even on failure.
         session.insert(McpResourceClient::new(Arc::new(
             codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
         )));
-        assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert!(contributor.refresh_catalog_for_step(next_input).await);
         assert_eq!(state.cloud_catalog(), None);
-        assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert!(!contributor.refresh_catalog_for_step(next_input).await);
         provider.set_reply(Ok(new_catalog.clone()));
-        tokio::time::advance(Duration::from_secs(30)).await;
-        assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(contributor.refresh_catalog_for_step(next_input).await);
     }
 }
 
@@ -567,6 +629,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             None,
         ),
         (
+            "partial-cached",
+            Ok(cloud_catalog()),
+            Some("plugin_gmail"),
+            None,
+            None,
+        ),
+        (
             "partial-replaces-partial",
             Ok(PluginCatalog {
                 is_partial: true,
@@ -579,6 +648,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         (
             "partial-empty-replaces-partial",
             Ok(partial_empty_catalog.clone()),
+            None,
+            None,
+            None,
+        ),
+        (
+            "partial-empty-cached",
+            Ok(cloud_catalog()),
             None,
             None,
             None,
@@ -601,7 +677,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         (
             "partial-after-complete-empty",
             Ok(partial_catalog.clone()),
-            None,
+            Some("plugin_gmail"),
             None,
             None,
         ),
@@ -622,9 +698,9 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         (
             "partial-refresh",
             Ok(partial_catalog.clone()),
-            Some("plugin_remote"),
+            Some("plugin_gmail"),
             None,
-            Some(calendar),
+            None,
         ),
         (
             "partial-empty-refresh",
@@ -650,10 +726,11 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             None,
             None,
         ),
+        ("warning-cached", Ok(cloud_catalog()), None, None, None),
         (
             "partial-after-disable",
             Ok(partial_catalog.clone()),
-            None,
+            Some("plugin_gmail"),
             None,
             None,
         ),
@@ -687,6 +764,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             Some(gmail),
         ),
         (
+            "new-account-partial-cached",
+            Ok(PluginCatalog::default()),
+            Some("plugin_gmail"),
+            None,
+            Some(gmail),
+        ),
+        (
             "new-account-discovered",
             Ok(gmail_catalog),
             Some("plugin_gmail"),
@@ -702,20 +786,19 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         ),
     ] {
         let previous_discoveries = provider.calls.load(Ordering::SeqCst);
-        let cached = matches!(turn, "cached" | "empty-cached");
+        let cached = matches!(
+            turn,
+            "cached"
+                | "empty-cached"
+                | "partial-cached"
+                | "partial-empty-cached"
+                | "warning-cached"
+                | "new-account-partial-cached"
+        );
         let in_flight_change =
             matches!(turn, "in-flight-auth-change" | "in-flight-resource-change");
-        let retry_discovery = in_flight_change;
-        // Complete catalogs refresh only after invalidation, just like cloud skills.
-        if matches!(
-            turn,
-            "in-flight-resource-change"
-                | "partial-after-complete-empty"
-                | "partial-refresh"
-                | "removed"
-                | "restored"
-                | "in-flight-auth-change"
-        ) {
+        // Invalidation bypasses retry cooldowns; clean catalogs await invalidation.
+        if !cached && turn != "initial-partial" && new_account.is_none() {
             test.codex.submit(Op::RefreshMcpServers).await?;
         }
         if let Some(account) = new_account {
@@ -757,15 +840,11 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             .await?;
             assert_eq!(provider.calls.load(Ordering::SeqCst), previous_discoveries);
         }
-        if matches!(
-            turn,
-            "complete-with-warning-disables-plugin" | "new-account-partial"
-        ) {
-            // Reconnecting permits recovery before the thread's cooldown expires.
-            test.codex
-                .submit(codex_protocol::protocol::Op::RefreshMcpServers)
-                .await?;
-        }
+        let expected_catalog = if cached {
+            None
+        } else {
+            reply.as_ref().ok().cloned()
+        };
         provider.set_reply(reply);
         let previous_calls = recorded_apps_tool_calls(&server).await.len();
         let call_id = format!("{turn}-call");
@@ -852,6 +931,17 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             assert_eq!(state.cloud_catalog(), expected);
         } else {
             test.submit_turn("What capabilities are available?").await?;
+            if let Some(expected_catalog) = expected_catalog {
+                assert_eq!(
+                    test.codex
+                        .thread_extension_data()
+                        .get::<PluginsThreadState>()
+                        .context("plugin state missing")?
+                        .cloud_catalog(),
+                    Some(expected_catalog),
+                    "turn {turn}"
+                );
+            }
         }
         let requests = response.requests();
         let request = &requests[0];
@@ -912,11 +1002,50 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         );
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
-            previous_discoveries
-                + usize::from(!cached)
-                + if retry_discovery { requests.len() } else { 0 },
+            previous_discoveries + usize::from(!cached) + usize::from(in_flight_change),
             "turn {turn}"
         );
     }
+    // Re-enabling a server-filtered plugin can change Apps resources within one turn.
+    let resources = provider.resources.lock().unwrap().clone().unwrap();
+    let session = ExtensionData::new("same-turn-session");
+    session.insert(resources.as_ref().clone());
+    let thread = ExtensionData::new("same-turn-thread");
+    let turn = ExtensionData::new("same-turn");
+    let state = thread.get_or_init(PluginsThreadState::default);
+    state.contributor_state().plugins_enabled = true;
+    let contributor = PluginContributor {
+        providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+            EnvironmentManager::default_for_tests(),
+        ))))
+        .with_cloud_provider(provider.clone()),
+    };
+    let input = CatalogRefreshInput {
+        turn_id: "same-turn",
+        session_store: &session,
+        thread_store: &thread,
+        turn_store: &turn,
+    };
+    provider.set_reply(Ok(PluginCatalog::default()));
+    assert!(contributor.refresh_catalog_for_step(input).await);
+    provider.set_reply(Ok(cloud_catalog()));
+    assert!(!contributor.refresh_catalog_for_step(input).await);
+    assert_eq!(state.cloud_catalog(), Some(PluginCatalog::default()));
+    let key = resources.server_cache_key(CODEX_APPS_MCP_SERVER_NAME);
+    let auth = resources.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME);
+    test.codex.submit(Op::RefreshMcpServers).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while resources.server_cache_key(CODEX_APPS_MCP_SERVER_NAME) == key {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(resources.server_cache_key(CODEX_APPS_MCP_SERVER_NAME) != key);
+    assert!(resources.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME) == auth);
+    assert!(contributor.refresh_catalog_for_step(input).await);
+    assert_eq!(state.cloud_catalog(), Some(cloud_catalog()));
+    let calls = provider.calls.load(Ordering::SeqCst);
+    assert!(!contributor.refresh_catalog_for_step(input).await);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), calls);
     Ok(())
 }
