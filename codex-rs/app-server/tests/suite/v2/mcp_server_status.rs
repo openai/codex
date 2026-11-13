@@ -86,9 +86,7 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Selected status reads return the thread's tools without repeating MCP discovery.
-#[tokio::test]
-async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
+async fn recording_widget_server() -> (MockServer, serde_json::Value) {
     let server = MockServer::start().await;
     let tool = json!({
         "name": "open_widget",
@@ -100,7 +98,8 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/mcp"))
         .respond_with(move |request: &wiremock::Request| {
-            let request: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let request: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("valid MCP request");
             let result = match request["method"].as_str() {
                 Some("initialize") => json!({
                     "protocolVersion": "2025-11-25",
@@ -118,6 +117,13 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
         })
         .mount(&server)
         .await;
+    (server, tool)
+}
+
+/// Selected status reads return the thread's tools without repeating MCP discovery.
+#[tokio::test]
+async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
+    let (server, tool) = recording_widget_server().await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -181,6 +187,63 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
         .filter(|method| matches!(method.as_str(), "initialize" | "tools/list"))
         .collect();
     assert_eq!(discovery_methods, ["initialize", "tools/list"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_discovers_only_the_requested_page() -> Result<()> {
+    let (server, _) = recording_widget_server().await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!(
+            "[mcp_servers.first]\nurl = \"{0}/mcp\"\n[mcp_servers.last]\nurl = \"{0}/mcp\"",
+            server.uri()
+        ))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    for (cursor, expected_name, next, initialize_count) in [
+        (None, Some("first"), Some("1"), 1),
+        (Some("1"), Some("last"), None, 2),
+        (Some("2"), None, None, 2),
+    ] {
+        let response: ListMcpServerStatusResponse = app
+            .request(|request_id| ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    environment_id: None,
+                    thread_id: None,
+                    server_name: None,
+                    cursor: cursor.map(str::to_owned),
+                    limit: Some(1),
+                    detail: Some(McpServerStatusDetail::Full),
+                },
+            })
+            .await?;
+        assert_eq!(
+            response
+                .data
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            expected_name.into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(response.next_cursor.as_deref(), next);
+        let initialize = body_partial_json(json!({"method": "initialize"}));
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| initialize.matches(request))
+                .count(),
+            initialize_count
+        );
+    }
+
     Ok(())
 }
 
@@ -1677,6 +1740,31 @@ async fn mcp_server_status_keeps_same_named_environment_inventory_separate() -> 
             ),
         ],
     );
+    for (index, next_cursor) in [(0, Some("1")), (1, None)] {
+        let page: ListMcpServerStatusResponse = app
+            .request(|request_id| ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    environment_id: None,
+                    thread_id: Some(thread.id.clone()),
+                    server_name: None,
+                    detail: Some(McpServerStatusDetail::Full),
+                    cursor: (index != 0).then(|| index.to_string()),
+                    limit: Some(1),
+                },
+            })
+            .await?;
+        let [row] = page.data.as_slice() else {
+            anyhow::bail!("expected one MCP registration on page {index}");
+        };
+        let expected = &response.data[index];
+        assert_eq!(row.name, expected.name);
+        assert_eq!(row.environment_id, expected.environment_id);
+        assert_eq!(row.http_origin, expected.http_origin);
+        assert_eq!(row.auth_status, expected.auth_status);
+        assert_eq!(row.tools, expected.tools);
+        assert_eq!(page.next_cursor.as_deref(), next_cursor);
+    }
     for (environment_id, expected) in [
         (Some("env-a"), &response.data[0]),
         (Some("env-b"), &response.data[1]),

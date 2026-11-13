@@ -527,7 +527,7 @@ pub async fn read_mcp_resource(
     result
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct McpServerStatusSnapshot {
     pub server_infos: HashMap<McpServerKey, McpServerInfo>,
     pub server_capabilities: HashMap<McpServerKey, serde_json::Value>,
@@ -553,22 +553,10 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     tool_catalog_cache: crate::McpToolCatalogCache,
     detail: McpSnapshotDetail,
-    server: Option<&McpServerKey>,
+    mcp_servers: HashMap<McpServerKey, EffectiveMcpServer>,
 ) -> McpServerStatusSnapshot {
-    let mut mcp_servers = effective_mcp_servers(config, auth);
-    mcp_servers.retain(|key, _| server.is_none_or(|selected| key == selected));
     if mcp_servers.is_empty() {
-        return McpServerStatusSnapshot {
-            server_infos: HashMap::new(),
-            server_capabilities: HashMap::new(),
-            tool_list_meta: HashMap::new(),
-            tools_by_server: HashMap::new(),
-            tools_errors: HashMap::new(),
-            resources: HashMap::new(),
-            resource_templates: HashMap::new(),
-            auth_statuses: HashMap::new(),
-            server_keys: Vec::new(),
-        };
+        return McpServerStatusSnapshot::default();
     }
 
     let auth_status_entries = compute_auth_statuses(

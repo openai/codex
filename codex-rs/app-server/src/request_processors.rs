@@ -421,7 +421,6 @@ use codex_login::oauth_client_id;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
 use codex_mcp::McpRuntimeContext;
-use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::discover_supported_scopes;
