@@ -125,7 +125,7 @@ async fn next_call_result(
                 return Ok(event);
             }
         }
-        color_eyre::eyre::bail!("app event channel closed during call startup")
+        color_eyre::eyre::bail!("app event channel closed during call startup");
     })
     .await?
 }
