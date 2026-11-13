@@ -4141,9 +4141,9 @@ mod tests {
             let parsed: ResponseItem = serde_json::from_str(json_literal)?;
             let expected = ResponseItem::WebSearchCall {
                 encrypted_content: None,
-                id: expected_id.clone(),
-                status: expected_status.clone(),
-                action: expected_action.clone(),
+                id: expected_id,
+                status: expected_status,
+                action: expected_action,
                 internal_chat_message_metadata_passthrough: None,
             };
             assert_eq!(parsed, expected);

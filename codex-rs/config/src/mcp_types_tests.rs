@@ -539,7 +539,7 @@ fn serialize_round_trips_server_config_with_omitted_tool_exposure_surfaces() {
         let config = format!("command = \"echo\"\nomit_tools_from = [{serialized_surfaces}]\n");
         let cfg: McpServerConfig =
             toml::from_str(&config).expect("should deserialize omitted MCP exposure surfaces");
-        assert_eq!(cfg.omit_tools_from, Some(omitted_surfaces.clone()));
+        assert_eq!(cfg.omit_tools_from, Some(omitted_surfaces));
 
         let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
         assert!(serialized.contains(&format!("omit_tools_from = [{serialized_surfaces}]")));
