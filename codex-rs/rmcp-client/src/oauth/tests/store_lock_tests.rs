@@ -28,6 +28,7 @@ use super::OAuthStore;
 use super::OAuthStoreLock;
 use super::OAuthStoreLockFailure;
 use super::OAuthStoreLockMode;
+use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthCredentialSnapshot;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
@@ -41,6 +42,8 @@ use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
 use crate::oauth::stored_oauth_credential_snapshot;
+use crate::oauth::test_support::GatedKeyringStore;
+use crate::oauth::test_support::ReadOutcome;
 use crate::oauth::test_support::TempCodexHome;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -594,6 +597,60 @@ fn file_store_load_and_delete_observe_aggregate_lock() -> Result<()> {
     )?;
     assert!(removed);
     assert!(load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn secrets_reads_release_the_file_lock_before_keyring_access() -> Result<()> {
+    let home = TempCodexHome::new();
+    let keyring = MockKeyringStore::default();
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Secrets);
+    let tokens = sample_tokens();
+    store.save(&keyring, &tokens.server_name, &tokens)?;
+
+    for load in [
+        ResolvedOAuthCredentialStore::load,
+        ResolvedOAuthCredentialStore::try_load,
+    ] {
+        let (gated, entered, release) = GatedKeyringStore::new(keyring.clone());
+        let expected = tokens.clone();
+        let reader = tokio::task::spawn_blocking(move || {
+            load(store, &gated, &expected.server_name, &expected.url)
+        });
+        tokio::time::timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT, entered).await??;
+        let _writer = OAuthStoreLock::acquire_in_with_mode(
+            home.path(),
+            OAuthStore::Secrets,
+            Duration::ZERO,
+            OAuthStoreLockMode::Exclusive,
+        )?;
+        release.send(ReadOutcome::Stored)?;
+        let result = reader.await??.expect("read captured the stored credential");
+        assert_tokens_match_without_expiry(&result, &tokens);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn updating_an_existing_secret_requires_one_keyring_lookup() -> Result<()> {
+    let _home = TempCodexHome::new();
+    let keyring = MockKeyringStore::default();
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Secrets);
+    let mut updated = sample_tokens();
+    store.save(&keyring, &updated.server_name, &updated)?;
+    updated
+        .token_response
+        .0
+        .set_access_token(AccessToken::new("updated".into()));
+    let (gated, _entered, release) = GatedKeyringStore::new(keyring.clone());
+    release.send(ReadOutcome::Stored)?;
+    release.send(ReadOutcome::BackendError)?;
+    let write = updated.clone();
+    tokio::task::spawn_blocking(move || store.save(&gated, &write.server_name, &write)).await??;
+    let stored = store
+        .load(&keyring, &updated.server_name, &updated.url)?
+        .expect("updated credential was persisted");
+    assert_tokens_match_without_expiry(&stored, &updated);
     Ok(())
 }
 

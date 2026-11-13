@@ -39,6 +39,7 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_otel::auth_storage::Operation;
 use codex_otel::auth_storage::Store;
+use codex_secrets::LocalSecretsBackend;
 use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
@@ -407,7 +408,8 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore + Clone + 'static>(
                 .map_err(OAuthKeyringLoadError::Backend)
         }
         AuthKeyringBackendKind::Secrets => {
-            load_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
+            let guard = OAuthStoreLock::acquire_for_read(OAuthStore::Secrets)?;
+            load_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url, guard)
         }
     }
 }
@@ -434,25 +436,25 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     url: &str,
-) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
-    let _store_lock = OAuthStoreLock::acquire_for_read(OAuthStore::Secrets)?;
-    load_oauth_tokens_from_secrets_keyring_with_lock_held(keyring_store, server_name, url)
-}
-
-fn load_oauth_tokens_from_secrets_keyring_with_lock_held<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    server_name: &str,
-    url: &str,
+    guard: impl std::borrow::Borrow<OAuthStoreLock>,
 ) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
-    let manager = SecretsManager::new_with_keyring_store_and_namespace(
+    let backend = LocalSecretsBackend::new_with_namespace(
         codex_home.to_path_buf(),
-        SecretsBackendKind::Local,
         Arc::new(keyring_store.clone()),
         LocalSecretsNamespace::McpOAuth,
     );
+    let snapshot = backend
+        .read_snapshot()
+        .context("failed to load MCP OAuth tokens from encrypted storage")?;
+    // Readers own their shared guard. Conditional writers lend their exclusive
+    // guard so it remains held across the comparison and the subsequent write.
+    drop(guard);
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
     let secret_name = compute_secret_name(server_name, url)?;
-    match manager
+    match snapshot
         .get(&SecretScope::Global, &secret_name)
         .context("failed to load MCP OAuth tokens from encrypted storage")?
     {

@@ -40,6 +40,9 @@ fn cached_reads_check_file_presence_key_rotation_and_keyring_errors() -> Result<
         assert_eq!(backend.get(&scope, &name)?, Some("original".to_string()));
 
         // Neither a changed encryption key nor a keyring error may reuse plaintext.
+        keyring.delete(keyring_service(), &account)?;
+        assert!(backend.get(&scope, &name).is_err());
+        assert_eq!(keyring.load(keyring_service(), &account)?, None);
         let replacement_key = generate_passphrase()?;
         keyring.save(keyring_service(), &account, replacement_key.expose_secret())?;
         assert!(backend.get(&scope, &name).is_err());
@@ -58,6 +61,11 @@ fn cached_reads_check_file_presence_key_rotation_and_keyring_errors() -> Result<
         assert!(backend.get(&scope, &name).is_err());
         fs::write(backend.secrets_path(), &ciphertext)?;
         assert_eq!(backend.get(&scope, &name)?, Some("original".to_string()));
+
+        let snapshot = backend.read_snapshot()?.expect("stored ciphertext");
+        backend.set(&scope, &name, "replacement")?;
+        assert_eq!(snapshot.get(&scope, &name)?, Some("original".to_string()));
+        assert_eq!(backend.get(&scope, &name)?, Some("replacement".to_string()));
     }
     Ok(())
 }
@@ -152,7 +160,11 @@ fn saves_cache_committed_contents_and_preserve_them_after_a_failed_commit() -> R
         fs::rename(&path, &backup)?;
         fs::create_dir(&path)?;
         let attempted = SecretsFile::new_empty();
-        assert!(backend.save_file(&attempted).is_err());
+        assert!(
+            backend
+                .save_file(&attempted, &backend.load_or_create_passphrase()?)
+                .is_err()
+        );
         assert!(Arc::ptr_eq(
             &committed,
             &backend

@@ -1,8 +1,4 @@
 use std::io;
-use std::sync::Mutex;
-use std::sync::PoisonError;
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -13,13 +9,10 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_exec_server::RouteAwareHttpClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
-use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::tests::MockKeyringStore;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
-use pretty_assertions::assert_ne;
 use serde_json::json;
-use tokio::sync::oneshot;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -32,6 +25,9 @@ use crate::WrappedOAuthTokenResponse;
 use crate::oauth::RefreshCredentialLock;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthCredentialSnapshot;
+use crate::oauth::test_support::GatedKeyringStore;
+use crate::oauth::test_support::REREAD_TEST_TIMEOUT;
+use crate::oauth::test_support::ReadOutcome;
 use crate::oauth::test_support::TempCodexHome;
 
 fn credentials(issuer: &str, subject: &str, expires_at: u64) -> StoredOAuthTokens {
@@ -180,67 +176,6 @@ async fn enterprise_discovery_shares_idp_checks_but_keeps_login_endpoint_policy(
     Ok(())
 }
 
-const REREAD_TEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
-const REREAD_PANIC_SENTINEL: &str = "credential-panic-payload-sentinel";
-
-#[derive(Clone, Copy, Debug)]
-enum ReadOutcome {
-    Stored,
-    BackendError,
-    Panic,
-}
-
-#[derive(Clone, Debug)]
-struct GatedKeyringStore {
-    inner: MockKeyringStore,
-    executor_thread: thread::ThreadId,
-    entered: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    release: Arc<Mutex<mpsc::Receiver<ReadOutcome>>>,
-}
-
-impl KeyringStore for GatedKeyringStore {
-    fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
-        // Fail before blocking if a regression puts this read on the current-thread executor.
-        assert_ne!(thread::current().id(), self.executor_thread);
-        if let Some(entered) = self
-            .entered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            let _ = entered.send(());
-        }
-        let outcome = match self
-            .release
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .recv_timeout(REREAD_TEST_TIMEOUT)
-        {
-            Ok(outcome) => outcome,
-            Err(mpsc::RecvTimeoutError::Disconnected) => ReadOutcome::Stored,
-            Err(mpsc::RecvTimeoutError::Timeout) => panic!("credential reread gate timed out"),
-        };
-        match outcome {
-            ReadOutcome::Stored => self.inner.load(service, account),
-            ReadOutcome::BackendError => Err(CredentialStoreError::new(
-                keyring::Error::PlatformFailure(Box::new(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "credential backend unavailable",
-                ))),
-            )),
-            ReadOutcome::Panic => panic!("{REREAD_PANIC_SENTINEL}"),
-        }
-    }
-
-    fn save(&self, service: &str, account: &str, value: &str) -> Result<(), CredentialStoreError> {
-        self.inner.save(service, account, value)
-    }
-
-    fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError> {
-        self.inner.delete(service, account)
-    }
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_subject_reread_is_cancellable_and_releases_guard_on_failure() -> Result<()> {
     let _home = TempCodexHome::new();
@@ -255,15 +190,7 @@ async fn refresh_subject_reread_is_cancellable_and_releases_guard_on_failure() -
     ] {
         let inner = MockKeyringStore::default();
         store.save(&inner, &stored.server_name, &stored)?;
-        let (entered_tx, entered_rx) = oneshot::channel();
-        // Dropping the sole sender releases the worker on any early return or panic.
-        let (release_tx, release_rx) = mpsc::channel();
-        let keyring = GatedKeyringStore {
-            inner,
-            executor_thread: thread::current().id(),
-            entered: Arc::new(Mutex::new(Some(entered_tx))),
-            release: Arc::new(Mutex::new(release_rx)),
-        };
+        let (keyring, entered_rx, release_tx) = GatedKeyringStore::new(inner);
         let request = request(&issuer, &snapshot);
         crate::oauth::test_support::warm_http_client(request.http_client.as_ref()).await?;
         let mut identity = Box::pin(resolve_ema_idp_identity_in(request, &keyring));
