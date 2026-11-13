@@ -73,6 +73,7 @@ impl SessionTask for RegularTask {
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {
             sess.emit_turn_started(&ctx, TaskKind::Regular).await;
+            sess.start_deferred_mcp_reprojection();
             // Regular-start contributors run once, after the task is visible and interruptible.
             let prepares_mcp = sess
                 .services

@@ -2,6 +2,8 @@ use crate::McpRefreshReason;
 use codex_protocol::ThreadId;
 use std::collections::BTreeSet;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::AcquireError;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
@@ -10,6 +12,8 @@ use tokio_util::task::TaskTracker;
 /// Owns MCP invalidation and the single gate used to publish runtime updates.
 pub(super) struct McpRefresh {
     pending: Mutex<BTreeSet<McpRefreshReason>>,
+    // Kept separate from pending so prewarm cannot claim work reserved for a real turn.
+    on_next_turn: AtomicBool,
     gate: Semaphore,
     pub(super) apps_refreshes: TaskTracker,
 }
@@ -21,9 +25,18 @@ impl McpRefresh {
         apps_refreshes.close();
         Self {
             pending: Mutex::default(),
+            on_next_turn: AtomicBool::new(false),
             gate: Semaphore::new(/*permits*/ 1),
             apps_refreshes,
         }
+    }
+
+    pub(super) fn request_for_next_turn(&self) {
+        self.on_next_turn.store(true, Ordering::Release);
+    }
+
+    pub(super) fn claim_for_turn_start(&self) -> bool {
+        self.on_next_turn.swap(false, Ordering::AcqRel)
     }
 
     pub(super) fn invalidate(&self, reason: McpRefreshReason) {

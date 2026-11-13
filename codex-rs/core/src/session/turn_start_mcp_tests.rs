@@ -74,7 +74,7 @@ async fn turn_start_refreshes_dirty_mcp_reuses_clean_runtime_and_cancels_discove
             .requires_mcp
             .store(turn > 0, std::sync::atomic::Ordering::Relaxed);
         if turn == 0 {
-            session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
+            session.reproject_mcp_on_next_turn();
         } else if turn == 3 {
             session.services.mcp_runtime.reconnect_on_next_refresh();
             session.request_mcp_runtime_refresh(McpRefreshReason::ExplicitInvalidation);

@@ -7,6 +7,16 @@ use super::*;
 use crate::McpRefreshReason;
 
 impl Session {
+    pub(crate) fn reproject_mcp_on_next_turn(&self) {
+        self.mcp_refresh.request_for_next_turn();
+    }
+
+    pub(crate) fn start_deferred_mcp_reprojection(&self) {
+        if self.mcp_refresh.claim_for_turn_start() {
+            self.request_mcp_runtime_reprojection(McpRefreshReason::ExplicitInvalidation);
+        }
+    }
+
     pub(crate) fn request_mcp_runtime_refresh(&self, reason: McpRefreshReason) {
         // Plugin changes can reuse connections but still change their skill resources.
         self.services.mcp_runtime.invalidate_resource_caches();

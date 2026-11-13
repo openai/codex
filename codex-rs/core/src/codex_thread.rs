@@ -1276,6 +1276,12 @@ impl CodexThread {
         self.session.hooks().list_with_environment_hooks(sources)
     }
 
+    /// Rebuilds the MCP projection on the next regular turn, after turn start and before
+    /// tools are bound. Repeated requests coalesce without starting a background refresh.
+    pub fn reproject_mcp_on_next_turn(&self) {
+        self.session.reproject_mcp_on_next_turn();
+    }
+
     /// Observes this thread's published MCP connections that match the requested config.
     pub async fn mcp_connection_statuses(
         &self,

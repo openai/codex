@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_config::Constrained;
+use codex_core::CodexThread;
 use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
@@ -17,6 +18,7 @@ use codex_history::RolloutItem;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::CodexAppsResourceListParams;
 use codex_mcp::McpResourceClient;
+use codex_mcp::McpSnapshotDetail;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -60,6 +62,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -110,6 +113,9 @@ struct CoalescingMcpContributor {
     entered: Semaphore,
     release: Semaphore,
     observed_markers: Mutex<Vec<String>>,
+    contributions: Mutex<Vec<McpServerContribution>>,
+    discovery_thread: Mutex<Option<Weak<CodexThread>>>,
+    saw_turn_started: AtomicBool,
 }
 
 struct AppsMcpServerContributor {
@@ -129,6 +135,9 @@ impl CoalescingMcpContributor {
             entered: Semaphore::new(0),
             release: Semaphore::new(0),
             observed_markers: Mutex::new(Vec::new()),
+            contributions: Mutex::new(Vec::new()),
+            discovery_thread: Mutex::new(None),
+            saw_turn_started: AtomicBool::new(false),
         }
     }
 }
@@ -155,17 +164,39 @@ impl McpServerContributor<Config> for CoalescingMcpContributor {
                 .lock()
                 .expect("observed markers lock should not be poisoned")
                 .push(marker.clone());
-            if marker != "initial" {
+            let discovery_thread = self
+                .discovery_thread
+                .lock()
+                .expect("discovery thread lock should not be poisoned")
+                .take();
+            if let Some(thread) = discovery_thread.and_then(|thread| thread.upgrade()) {
+                // The test transfers its sole event reader here until discovery is released.
+                // Snapshot the queue so a later TurnStarted cannot satisfy the ordering check.
+                for _ in 0..thread.queued_event_count() {
+                    let event = thread
+                        .next_event()
+                        .await
+                        .expect("thread should remain open");
+                    if matches!(event.msg, EventMsg::TurnStarted(_)) {
+                        self.saw_turn_started.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            let block_next = self.block_next.swap(false, Ordering::SeqCst);
+            if marker != "initial" || block_next {
                 self.entered.add_permits(1);
             }
-            if self.block_next.swap(false, Ordering::SeqCst) {
+            if block_next {
                 self.release
                     .acquire()
                     .await
                     .expect("release semaphore should remain open")
                     .forget();
             }
-            Vec::new()
+            self.contributions
+                .lock()
+                .expect("contributions lock should not be poisoned")
+                .clone()
         })
     }
 }
@@ -472,6 +503,112 @@ async fn rapid_mcp_refreshes_coalesce_to_the_latest_config() -> Result<()> {
             .any(|marker| marker == "config-b")
     );
     response.single_request();
+    Ok(())
+}
+
+/// Deferred requests survive idle reconciliation and coalesce into a refresh after TurnStarted,
+/// with the refreshed tools available to the next turn's first model request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_mcp_reprojection_waits_for_turn_start_and_binds_refreshed_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let mcp_config = serde_json::from_value(json!({
+        "url": format!("{}/api/codex/ps/mcp", apps_server.chatgpt_base_url),
+        "required": true,
+    }))?;
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let contributor = Arc::new(CoalescingMcpContributor::new());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_server_contributor(contributor.clone());
+    let mut builder = core_test_support::test_codex::test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .mcp_servers
+                .set(HashMap::from([("initial".to_string(), mcp_config)]))
+                .expect("test config should allow MCP servers");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("test config should allow feature update");
+            config.code_mode.direct_only_tool_namespaces = vec!["mcp__refreshed".to_string()];
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "initial").await?;
+    test.codex
+        .mcp_server_status_snapshot(
+            "initial",
+            /*environment_id*/ None,
+            McpSnapshotDetail::ToolsAndAuthOnly,
+            /*expected_registration*/ None,
+        )
+        .await?;
+    let initial_projections = contributor.observed_markers.lock().unwrap().len();
+
+    *contributor.contributions.lock().unwrap() = vec![McpServerContribution::Set {
+        name: "refreshed".to_string(),
+        config: Box::new(test.config.mcp_servers.get()["initial"].clone()),
+    }];
+    test.codex.reproject_mcp_on_next_turn();
+    test.codex.reproject_mcp_on_next_turn();
+
+    // Exercise ordinary reconciliation while idle; it must leave deferred work for the turn.
+    test.codex
+        .mcp_server_status_snapshot(
+            "initial",
+            /*environment_id*/ None,
+            McpSnapshotDetail::ToolsAndAuthOnly,
+            /*expected_registration*/ None,
+        )
+        .await?;
+    assert_eq!(
+        contributor.observed_markers.lock().unwrap().len(),
+        initial_projections
+    );
+
+    *contributor.discovery_thread.lock().unwrap() = Some(Arc::downgrade(&test.codex));
+    contributor.block_next.store(true, Ordering::SeqCst);
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "use the refreshed tools".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), contributor.entered.acquire())
+        .await
+        .expect("the regular turn should start deferred discovery")?
+        .forget();
+    assert!(
+        contributor.saw_turn_started.load(Ordering::SeqCst),
+        "TurnStarted must already be queued when discovery begins"
+    );
+    assert!(response.requests().is_empty());
+    contributor.release.add_permits(1);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(
+        contributor.observed_markers.lock().unwrap().len(),
+        initial_projections + 1,
+        "repeated requests should cause only one deferred projection"
+    );
+    let body = response.single_request().body_json();
+    assert!(
+        namespace_child_tool(&body, "mcp__refreshed", "calendar_list_events").is_some(),
+        "the first request must include the refreshed tool: {body}"
+    );
     Ok(())
 }
 
