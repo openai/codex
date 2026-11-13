@@ -12,9 +12,24 @@ const BASELINE_TOKENS: i64 = 12000;
 pub struct TokenUsage {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    #[serde(default)]
+    pub cache_write_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
     pub total_tokens: i64,
+}
+
+impl From<codex_app_server_protocol::TokenUsageBreakdown> for TokenUsage {
+    fn from(usage: codex_app_server_protocol::TokenUsageBreakdown) -> Self {
+        Self {
+            input_tokens: usage.input_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            cache_write_input_tokens: usage.cache_write_input_tokens,
+            output_tokens: usage.output_tokens,
+            reasoning_output_tokens: usage.reasoning_output_tokens,
+            total_tokens: usage.total_tokens,
+        }
+    }
 }
 
 impl TokenUsage {

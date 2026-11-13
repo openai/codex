@@ -1,5 +1,7 @@
 //! Projects the displayed conversation into the provider-facing statusline snapshot.
 
+mod usage;
+
 use super::ChatWidget;
 use super::normalize_thread_name;
 use super::status_state::TerminalTitleStatusKind as TerminalTitleStatus;
@@ -44,6 +46,7 @@ struct StatuslineStateThread {
     agent: StatuslineStateAgent,
     model: StatuslineStateModel,
     workspace: StatuslineStateWorkspace,
+    usage: usage::Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval: Option<StatuslineStateApproval>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +251,7 @@ impl ChatWidget {
                 name,
                 agent,
                 model,
+                usage: self.into(),
                 workspace: StatuslineStateWorkspace {
                     cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
                         self.status_line_workspace_cwd(),

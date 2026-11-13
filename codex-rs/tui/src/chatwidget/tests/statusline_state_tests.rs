@@ -34,6 +34,7 @@ async fn statusline_state_projects_the_displayed_settings() {
             "config": {"statusline_items": ["run-state"]},
             "thread": {
                 "workspace": {"cwd": expected_cwd},
+                "usage": {},
                 "id": id, "name": "Saved carts", "agent": {"state": "ready"},
                 "model": {"id": "gpt-5.5", "display_name": "Test model", "provider": "openai",
                     "reasoning_level": "none", "service_tier": "acme-priority", "service_tier_display_name": "Turbo"},
@@ -46,4 +47,48 @@ async fn statusline_state_projects_the_displayed_settings() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::Custom("default".into())));
     let state = serde_json::to_value(chat.statusline_state()).unwrap();
     assert_eq!(state["thread"]["model"]["reasoning_level"], "default");
+}
+
+#[tokio::test]
+async fn statusline_totals_use_the_reported_token_breakdown() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.handle_thread_session(configured_thread_session(ThreadId::new()));
+    let mut info =
+        helpers::make_token_info(/*total_tokens*/ 15, /*context_window*/ 100_000);
+    info.total_token_usage = TokenUsage {
+        input_tokens: 110,
+        cached_input_tokens: 60,
+        cache_write_input_tokens: 10,
+        output_tokens: 20,
+        total_tokens: 130,
+        ..Default::default()
+    };
+    helpers::handle_token_count(&mut chat, Some(info.clone()));
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["thread"]["usage"]["total"],
+        json!({
+            "total_input_tokens": 110, "cache_read_input_tokens": 60,
+            "cache_write_input_tokens": 10, "other_input_tokens": 40, "output_tokens": 20
+        })
+    );
+
+    info.total_token_usage.cache_write_input_tokens = 51;
+    for (report, has_total) in [
+        (info, false), // The cache counts exceed total input.
+        (
+            helpers::make_token_info(
+                /*total_tokens*/ 100_000, /*context_window*/ 100_000,
+            ),
+            false,
+        ), // Synthetic context fill.
+        (
+            helpers::make_token_info(/*total_tokens*/ 0, /*context_window*/ 100_000),
+            true,
+        ), // Measured zero.
+    ] {
+        helpers::handle_token_count(&mut chat, Some(report));
+        let state = serde_json::to_value(chat.statusline_state()).unwrap();
+        assert_eq!(state["thread"]["usage"].get("total").is_some(), has_total);
+    }
 }
