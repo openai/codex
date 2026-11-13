@@ -138,7 +138,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         thread_id: ThreadId,
-        request_id: u64,
+        request_id: Uuid,
         result: std::result::Result<crate::chatwidget::ThreadUsageOutcome, String>,
     ) -> Result<()> {
         let may_update_status = match &result {

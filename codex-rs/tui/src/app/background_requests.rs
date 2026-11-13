@@ -161,8 +161,14 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
         thread_id: ThreadId,
-        request_id: u64,
+        request_id: Uuid,
     ) {
+        if !self
+            .chat_widget
+            .is_pending_thread_usage(thread_id, request_id)
+        {
+            return;
+        }
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {

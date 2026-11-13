@@ -2,6 +2,7 @@ use super::THREAD_USAGE_RETRY_DELAYS;
 use super::THREAD_USAGE_SETTLEMENT_DELAYS;
 use super::ThreadUsageOutcome;
 use crate::app_event::AppEvent;
+use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::status::format_estimated_usd_micros;
@@ -21,8 +22,9 @@ use pretty_assertions::assert_eq;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedReceiver;
+use uuid::Uuid;
 
-fn thread_usage_request_id(events: &mut UnboundedReceiver<AppEvent>) -> u64 {
+fn thread_usage_request_id(events: &mut UnboundedReceiver<AppEvent>) -> Uuid {
     match events.try_recv() {
         Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
         event => panic!("expected a thread usage request, got {event:?}"),
@@ -41,6 +43,30 @@ fn thread_usage(
         estimated_usage_usd_micros,
         groups: Vec::new(),
     }
+}
+
+async fn widget_with_pending_billing_read(thread_id: ThreadId) -> (ChatWidget, Uuid) {
+    let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
+    chat.thread_id = Some(thread_id);
+    chat.has_chatgpt_account = true;
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.ensure_thread_usage_requested();
+    let request_id = thread_usage_request_id(&mut events);
+    (chat, request_id)
+}
+
+#[tokio::test]
+async fn replacement_widget_rejects_a_previous_widgets_read_for_the_same_thread() {
+    let thread = ThreadId::new();
+    let (_, old_request) = widget_with_pending_billing_read(thread).await;
+    let (mut replacement, current) = widget_with_pending_billing_read(thread).await;
+    assert!(!replacement.finish_thread_usage_refresh(
+        thread,
+        old_request,
+        Ok(ThreadUsageOutcome::Disabled)
+    ));
+    assert!(replacement.is_pending_thread_usage(thread, current));
 }
 
 #[test]
@@ -687,6 +713,13 @@ async fn billing_surfaces_render_for_every_supported_enterprise_plan() {
         ));
 
         assert!(rx.try_recv().is_err(), "billing surfaces share a request");
+        let snapshot = serde_json::to_value(chat.statusline_state()).unwrap();
+        let expected_cost = if plan_type == PlanType::Ent26 {
+            serde_json::json!({"total_cost_usd": 0.75})
+        } else {
+            serde_json::json!({"total_cost_usd": 0.21, "total_credits": 5.2})
+        };
+        assert_eq!(snapshot["thread"]["usage"]["cost"], expected_cost);
         if plan_type == PlanType::Ent26 {
             insta::assert_snapshot!(chat.status_line_text().unwrap(), @"~$0.75");
             insta::assert_snapshot!(chat.last_terminal_title.as_ref().unwrap(), @"~$0.75");

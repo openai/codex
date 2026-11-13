@@ -959,13 +959,13 @@ pub(crate) enum AppEvent {
     /// Fetch backend-estimated usage for the currently visible enterprise thread.
     RefreshThreadUsage {
         thread_id: ThreadId,
-        request_id: u64,
+        request_id: Uuid,
     },
 
     /// Result of fetching backend-estimated usage for a specific thread.
     ThreadUsageLoaded {
         thread_id: ThreadId,
-        request_id: u64,
+        request_id: Uuid,
         result: Result<ThreadUsageOutcome, String>,
     },
 
