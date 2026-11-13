@@ -1298,6 +1298,7 @@ ON CONFLICT(id) DO UPDATE SET
         }
         let mut rows_affected = 0;
         for thread_id_string in &thread_id_strings {
+            super::model_ids::delete_session(&mut tx, thread_id_string).await?;
             sqlx::query("DELETE FROM thread_read_receipts WHERE thread_id = ?")
                 .bind(thread_id_string)
                 .execute(&mut *tx)

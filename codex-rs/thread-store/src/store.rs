@@ -146,6 +146,11 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns the authority for session aliases when this backend supports them.
+    fn model_ids(&self) -> Option<std::sync::Arc<dyn codex_state::SessionModelIdStore>> {
+        None
+    }
+
     /// Returns the history mode to use when history does not carry a persisted mode.
     ///
     /// The default is legacy so existing stores stay compatible. Stores whose durable contract is

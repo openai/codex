@@ -525,6 +525,7 @@ pub struct InMemoryThreadStoreCalls {
 pub struct InMemoryThreadStore {
     state: Arc<tokio::sync::Mutex<InMemoryThreadStoreState>>,
     omit_metadata_update_result: Arc<AtomicBool>,
+    model_ids: Arc<codex_state::MemoryModelIdStore>,
     state_db: Option<codex_rollout::StateDbHandle>,
 }
 
@@ -558,6 +559,7 @@ impl InMemoryThreadStore {
         Self {
             state: Arc::clone(&self.state),
             omit_metadata_update_result: Arc::clone(&self.omit_metadata_update_result),
+            model_ids: Arc::clone(&self.model_ids),
             state_db,
         }
     }
@@ -906,6 +908,7 @@ impl InMemoryThreadStore {
             0
         };
         let mut state = self.state.lock().await;
+        self.model_ids.remove(params.thread_id.into());
         let existed = state.histories.remove(&params.thread_id).is_some();
         state.created_threads.remove(&params.thread_id);
         state.names.remove(&params.thread_id);
@@ -927,6 +930,10 @@ impl InMemoryThreadStore {
 }
 
 impl ThreadStore for InMemoryThreadStore {
+    fn model_ids(&self) -> Option<Arc<dyn codex_state::SessionModelIdStore>> {
+        Some(self.model_ids.clone())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

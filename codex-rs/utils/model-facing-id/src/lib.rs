@@ -11,6 +11,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+mod bindings;
+mod environment;
+pub use bindings::ModelIdKey;
+pub use bindings::ModelIdKind;
+pub use bindings::ModelIdMap;
+pub use environment::ModelEnvironmentId;
+pub use environment::RegisteredEnvironmentId;
+
 const VERSION: u32 = 1;
 // Our tokenizers encode every decimal ID of up to three digits as a single token.
 const GROUP_SIZE: u64 = 1_000;
@@ -47,15 +55,12 @@ impl ModelFacingId {
 
     /// Formats the padded digits for protocols that supply their own type prefix.
     pub fn digits(&self) -> impl fmt::Display + '_ {
-        fmt::from_fn(|f| {
-            write!(
-                f,
-                "{:0width$}",
-                self.value,
-                width = decimal_width(self.value)
-            )
-        })
+        padded_digits(self.value)
     }
+}
+
+fn padded_digits(value: u64) -> impl fmt::Display {
+    fmt::from_fn(move |f| write!(f, "{value:0width$}", width = decimal_width(value)))
 }
 
 fn decimal_width(value: u64) -> usize {
@@ -153,6 +158,13 @@ pub struct ModelFacingIdGeneratorState {
 }
 
 impl ModelFacingIdGeneratorState {
+    /// Recovers the ID at a stored binding's ordinal in this version of the sequence.
+    pub fn id_at(&self, ordinal: u64) -> Result<ModelFacingId, RestoreError> {
+        let mut state = self.clone();
+        state.next_ordinal = ordinal;
+        Ok(ModelFacingIdGenerator::restore(state)?.fetch_next())
+    }
+
     /// Returns the namespace this snapshot belongs to.
     pub fn salt(&self) -> &str {
         &self.salt

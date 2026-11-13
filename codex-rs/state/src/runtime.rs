@@ -48,6 +48,7 @@ mod logs;
 mod logs_maintenance;
 mod memories;
 mod memory_versions;
+pub(crate) mod model_ids;
 mod projects;
 mod queued_items;
 pub(crate) mod reclamation;
