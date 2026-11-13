@@ -56,45 +56,22 @@ common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 
 common --test_output=errors
 common --nobuild_runfile_links
-# These settings tune BuildBuddy/RBE behavior but do not contact a remote
-# service unless a `buildbuddy-*` configuration below supplies an endpoint.
+# These settings tune remote cache and execution behavior. They do not
+# configure a remote service.
 common --remote_download_toplevel
 common --remote_timeout=3600
 common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
 
-# These configurations are available for explicit use on the command line.
-# Use the generic host for cache, BES, and downloads without remote execution.
-common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
-common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
-common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
-common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
-
-# Add remote execution on the generic host.
-common:buildbuddy-generic-rbe --config=buildbuddy-generic
-common:buildbuddy-generic-rbe --config=remote
-common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
-
-# Use the OpenAI tenant for cache, BES, and downloads without remote execution.
-common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
-common:buildbuddy-openai --bes_results_url=https://openai.buildbuddy.io/invocation/
-common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
-common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
-
-# Add remote execution on the OpenAI tenant.
-common:buildbuddy-openai-rbe --config=buildbuddy-openai
-common:buildbuddy-openai-rbe --config=remote
-common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
-
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
-# Shared remote execution policy. The endpoint-bearing `buildbuddy-*-rbe`
-# configurations include this group; CI configs override TestRunner below
-# when tests must remain local on their runner.
+# Shared remote execution policy for callers that provide an approved remote
+# executor. CI configs override TestRunner below when tests must remain local
+# on their runner.
 common:remote --strategy=remote
 # Native Mac voice actions need the local Apple tools; Linux remains remote.
 common:macos --strategy=VoiceNativePrefix=remote,sandboxed,local

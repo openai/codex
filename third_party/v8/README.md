@@ -168,19 +168,8 @@ tools retain their default C++ runtime. V8's own generator binaries explicitly
 reapply the private-runtime policy after the execution transition. Neither flag
 suppresses C headers, the SDK, CRT, compiler-rt, or the independent unwinder.
 
-Build with Linux remote execution and the static CRT:
-
-```sh
-bazel build --config=buildbuddy-generic-rbe --host_platform=//:rbe \
-  --platforms=@llvm//platforms:windows_x86_64_msvc \
-  --extra_execution_platforms=//:rbe \
-  --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
-  --repo_env=BAZEL_WINDOWS_SDK_EULA=1 \
-  --features=-dynamic_link_msvcrt --features=static_link_msvcrt \
-  --features=cargo-rebase-json-vfs-overlays \
-  //third_party/v8:rusty_v8_native_windows_archive_for_target \
-  //third_party/v8:rusty_v8_native_windows_binding_for_target
-```
+The native Windows V8 workflow owns the approved Linux execution environment
+for these cross-build targets and builds them with the static CRT.
 
 Torque and other ordinary generators execute on Linux. The MSVC snapshot
 generator is a Windows payload compiled with the same `@llvm` toolchain.
