@@ -24,6 +24,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -53,6 +55,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use core_test_support::responses::ev_assistant_message;
@@ -994,6 +997,139 @@ async fn manual_compact_uses_custom_prompt() {
             "summarization prompt should not appear if compaction omits a prompt"
         );
     }
+}
+
+#[test_case::test_case(false; "local_messages")]
+#[test_case::test_case(true; "remote_tool_outputs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn additional_context_survives_compaction(remote: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let (provider, summary) = if remote {
+        (
+            openai_model_provider(&server),
+            remote_v2_compaction_response(),
+        )
+    } else {
+        (
+            local_compaction_provider(&server),
+            sse(vec![
+                ev_assistant_message("summary", "Compacted."),
+                ev_completed("compact"),
+            ]),
+        )
+    };
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("first")]),
+            sse(vec![ev_completed("second")]),
+            summary,
+            sse(vec![ev_completed("follow-up")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model_provider = provider;
+            set_test_compact_prompt(config);
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, remote)
+                .expect("set context tool-output format");
+            config
+                .features
+                .enable(Feature::RetainClientDeveloperMessages)
+                .expect("retain client developer messages");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let untrusted = |value: &str| {
+        AdditionalContextEntry::new(value.to_owned(), AdditionalContextKind::Untrusted)
+    };
+    let mut context = BTreeMap::from([
+        ("page".to_owned(), untrusted("old selection")),
+        ("removed".to_owned(), untrusted("closed tab")),
+        (
+            "app".to_owned(),
+            AdditionalContextEntry::new("editor".to_owned(), AdditionalContextKind::Application),
+        ),
+    ]);
+    let submit = async |prompt: &str, context| -> Result<()> {
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: prompt.to_owned(),
+                    text_elements: Vec::new(),
+                }])
+                .with_additional_context(context),
+            )
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        Ok(())
+    };
+    submit("first", context.clone()).await?;
+    context.remove("removed");
+    context.insert("page".to_owned(), untrusted("current selection"));
+    submit("second", context.clone()).await?;
+
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    submit("follow-up", context).await?;
+
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 4);
+    let follow_up = &requests[3];
+    assert!(!follow_up.body_contains_text("closed tab"));
+    assert!(!follow_up.body_contains_text("old selection"));
+    let app_messages = follow_up
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text == "<app>editor</app>")
+        .collect::<Vec<_>>();
+    assert_eq!(app_messages, ["<app>editor</app>"]);
+    // The context belongs to the compacted window, before the preserved second prompt.
+    let input = follow_up.input();
+    let second_prompt = input
+        .iter()
+        .position(|item| item["content"][0]["text"] == "second")
+        .expect("preserved second prompt");
+    assert!(
+        input[..second_prompt]
+            .iter()
+            .any(|item| item["output"] == "current selection"
+                || item["content"][0]["text"]
+                    == "<external_page>current selection</external_page>")
+    );
+    if remote {
+        let page_outputs = follow_up
+            .inputs_of_type("function_call_output")
+            .into_iter()
+            .filter(|item| item["namespace"] == "agent" && item["name"] == "page")
+            .map(|item| item["output"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(page_outputs, [json!("current selection")]);
+    } else {
+        let page_messages = follow_up
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text.starts_with("<external_page>"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            page_messages,
+            ["<external_page>current selection</external_page>"]
+        );
+    }
+    Ok(())
 }
 
 #[test_case::test_case(false; "success")]

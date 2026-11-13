@@ -251,6 +251,7 @@ pub(crate) use file_audio::FileAudioDurations;
 
 mod approved_plan;
 mod code_mode_warning;
+mod compaction_replacement;
 mod config_refresh;
 pub(crate) mod context_window;
 mod daemon_recovery;
@@ -293,6 +294,8 @@ mod turn_input;
 mod turn_suspension;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
+use self::compaction_replacement::CompactedHistoryReplacement;
+pub(crate) use self::compaction_replacement::PrefixCompactionInstallation;
 pub(crate) use self::environment::ThreadEnvironmentDefaults;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
@@ -493,17 +496,7 @@ pub(crate) struct CompactionPrefix {
 
 pub(crate) enum CompactedHistoryInstallation<'a> {
     Complete(CompactedHistoryMetadata),
-    Prefix {
-        prefix: CompactionPrefix,
-        prefix_context: Vec<ResponseItem>,
-        initial_context: Vec<ResponseItemEnvelope>,
-        reset_world_state_sections: Vec<&'static str>,
-        model_info: &'a ModelInfo,
-        compaction_response_id: String,
-        reviewer_compaction_hash: Option<String>,
-        turn_context: &'a TurnContext,
-        started_item: Option<&'a TurnItem>,
-    },
+    Prefix(PrefixCompactionInstallation<'a>),
 }
 
 impl From<CompactedHistoryMetadata> for CompactedHistoryInstallation<'_> {
@@ -4825,14 +4818,14 @@ impl Session {
         &self,
         mut items: Vec<ResponseItemEnvelope>,
         reference_context_item: TurnContextItem,
-        mut world_state_baseline: WorldStateSnapshot,
+        world_state_baseline: WorldStateSnapshot,
         rejected_audio_file_ids: std::collections::BTreeSet<String>,
         installation: impl Into<CompactedHistoryInstallation<'a>>,
     ) -> bool {
         let installation = installation.into();
         let compaction_model_hash = match &installation {
             CompactedHistoryInstallation::Complete(metadata) => &metadata.compaction_model_hash,
-            CompactedHistoryInstallation::Prefix { model_info, .. } => &model_info.comp_hash,
+            CompactedHistoryInstallation::Prefix(prefix) => &prefix.model_info.comp_hash,
         };
         crate::model_search::SearchOwner::checkpoint(
             &self.services.thread_extension_data,
@@ -4862,74 +4855,45 @@ impl Session {
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
-        let (compacted_item, started_item) = {
+        let (compacted_item, world_state_baseline, started_item) = {
             let mut state = self.state.lock().await;
             let complete_replacement =
                 matches!(&installation, CompactedHistoryInstallation::Complete(_));
-            let (metadata, started_item) = match installation {
-                CompactedHistoryInstallation::Complete(metadata) => (metadata, None),
-                CompactedHistoryInstallation::Prefix {
-                    prefix,
-                    prefix_context,
-                    initial_context,
-                    reset_world_state_sections,
-                    model_info,
-                    compaction_response_id,
-                    reviewer_compaction_hash,
-                    turn_context,
-                    started_item,
-                } => {
-                    // Validate immediately before slicing and replacing the captured prefix.
-                    if state.history.history_version() != prefix.generation
-                        || state.history.annotated_items().len() < prefix.len
-                        || self.services.model_client.auth_owner() != prefix.auth_owner
-                    {
-                        return false;
-                    }
-                    let current = state.history.annotated_items();
-                    let suffix = &current[prefix.len..];
-                    if suffix.iter().any(|envelope| {
-                        crate::compact_retained_tool_outputs::is_retained_tool_output(envelope)
-                            || compact::is_real_user_or_agent_message(&envelope.item)
-                    }) {
-                        items.extend(initial_context);
-                    } else {
+            let replacement = match installation {
+                CompactedHistoryInstallation::Complete(metadata) => {
+                    let context = state
+                        .additional_context
+                        .restore_compacted_items(state.history.annotated_items(), &mut items);
+                    if !context.is_empty() {
                         items = compact::insert_initial_context_before_last_real_user_or_summary(
-                            items,
-                            initial_context,
+                            items, context,
                         );
                     }
-                    items.splice(
-                        0..0,
-                        prefix_context.into_iter().map(ResponseItemEnvelope::new),
-                    );
-                    items.extend_from_slice(suffix);
-                    // The unchanged suffix already contains updates through this baseline.
-                    if let Some(checkpoint) = state.history.world_state_checkpoint() {
-                        world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);
+                    CompactedHistoryReplacement {
+                        items,
+                        world_state_baseline,
+                        metadata,
+                        started_item: None,
                     }
-                    // Volatile sections must refresh in the new window even if their
-                    // previous messages and comparison state survived in the suffix.
-                    for section_id in reset_world_state_sections {
-                        world_state_baseline.remove_section(section_id);
-                    }
-                    // Prefix replacement already retains all edits in the live suffix.
-                    let input_goal_ids = Default::default();
-                    let (window_number, window_ids) = state.advance_auto_compact_window();
-                    (
-                        CompactedHistoryMetadata {
-                            input_goal_ids,
-                            message: String::new(),
-                            window_number,
-                            window_ids,
-                            compaction_response_id: Some(compaction_response_id),
-                            compaction_model_hash: model_info.comp_hash.clone(),
-                            reviewer_compaction_hash,
-                        },
-                        started_item.map(|item| (turn_context, item)),
-                    )
+                }
+                CompactedHistoryInstallation::Prefix(prefix) => {
+                    let Some(replacement) = prefix.assemble_replacement(
+                        &mut state,
+                        items,
+                        world_state_baseline,
+                        self.services.model_client.auth_owner(),
+                    ) else {
+                        return false;
+                    };
+                    replacement
                 }
             };
+            let CompactedHistoryReplacement {
+                mut items,
+                world_state_baseline,
+                metadata,
+                started_item,
+            } = replacement;
             for envelope in &mut items {
                 self.assign_missing_response_item_id(&mut envelope.item);
             }
@@ -4984,7 +4948,7 @@ impl Session {
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
                 resume_metadata: Some(self.compaction_resume_metadata(&state)),
             };
-            (compacted_item, started_item)
+            (compacted_item, world_state_baseline, started_item)
         };
 
         if let Some((turn_context, item)) = started_item {

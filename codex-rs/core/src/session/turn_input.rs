@@ -792,6 +792,7 @@ impl Session {
             )]),
             self.additional_context_format(),
             &task.turn_context.session_telemetry,
+            &self.item_id_generator,
         );
         if !input.is_empty() {
             self.input_queue
@@ -1085,9 +1086,12 @@ async fn merge_additional_context_input(
     let format = session.additional_context_format();
     let additional_context_input = {
         let mut state = session.state.lock().await;
-        state
-            .additional_context
-            .merge(additional_context, format, &turn_context.session_telemetry)
+        state.additional_context.merge(
+            additional_context,
+            format,
+            &turn_context.session_telemetry,
+            &session.item_id_generator,
+        )
     };
     additional_context_input
         .into_iter()

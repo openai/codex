@@ -7,6 +7,7 @@ use crate::compact::build_compaction_replacement_history;
 use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
+use crate::session::PrefixCompactionInstallation;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 
 #[cfg(test)]
@@ -218,7 +219,7 @@ async fn build_and_install_compaction(
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
             rejected_audio_file_ids,
-            CompactedHistoryInstallation::Prefix {
+            CompactedHistoryInstallation::Prefix(PrefixCompactionInstallation {
                 prefix,
                 prefix_context,
                 initial_context,
@@ -231,7 +232,7 @@ async fn build_and_install_compaction(
                 reviewer_compaction_hash,
                 turn_context,
                 started_item: needs_start.then_some(&compaction_item),
-            },
+            }),
         )
         .await
     } else {
