@@ -181,7 +181,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
 async fn test_review_session() -> (
     GuardianReviewSession,
     async_channel::Sender<Event>,
-    async_channel::Receiver<Submission>,
+    async_channel::Receiver<Box<Submission>>,
 ) {
     let (session, _turn, _rx) = crate::session::tests::make_session_and_context_with_rx().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);

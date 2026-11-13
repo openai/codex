@@ -520,7 +520,7 @@ pub async fn review(
 pub(super) async fn submission_loop(
     sess: Arc<Session>,
     config: Arc<Config>,
-    rx_sub: Receiver<Submission>,
+    rx_sub: Receiver<Box<Submission>>,
 ) {
     // Session shutdown and tree shutdown both use the existing teardown handler.
     let mut shutdown_received = false;
@@ -575,7 +575,7 @@ pub(super) async fn submission_loop(
                 continue;
             }
             sub = rx_sub.recv() => match sub {
-                Ok(sub) => sub,
+                Ok(sub) => *sub,
                 Err(_) => break,
             },
             update = async {

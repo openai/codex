@@ -6185,7 +6185,7 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
     let (reply, mut accepted) = tokio::sync::oneshot::channel();
     let (tx_sub, rx_sub) = async_channel::bounded(1);
     tx_sub
-        .send(Submission {
+        .send(Box::new(Submission {
             id: "settings".into(),
             turn_extension_init: None,
             op: Op::ThreadSettings {
@@ -6197,7 +6197,7 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
             root_turn_id: None,
             residency_guard: None,
             message_delivery: None,
-        })
+        }))
         .await
         .expect("submit settings");
     let mut submissions = Box::pin(tokio::task::unconstrained(submission_loop(
@@ -9037,7 +9037,7 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 #[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (_session, _turn_context) = make_session_and_context().await;
-    let (tx_sub, rx_sub) = async_channel::bounded::<Submission>(4);
+    let (tx_sub, rx_sub) = async_channel::bounded::<Box<Submission>>(4);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let session_loop_handle = tokio::spawn(async move {
         let shutdown = rx_sub.recv().await.expect("shutdown submission");
@@ -9494,7 +9494,7 @@ pub(super) async fn make_thread_for_session(
     turn_context: &TurnContext,
     rx_event: async_channel::Receiver<Event>,
     session_source: SessionSource,
-) -> (crate::CodexThread, async_channel::Receiver<Submission>) {
+) -> (crate::CodexThread, async_channel::Receiver<Box<Submission>>) {
     let rollout_path = session.current_rollout_path().await.expect("rollout path");
     let event = SessionConfiguredEvent {
         session_id: session.session_id(),

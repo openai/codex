@@ -604,7 +604,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         },
     );
     submissions
-        .send(submission)
+        .send(Box::new(submission))
         .await
         .expect("submit model update");
     lookup.wait_until_blocked().await;
@@ -643,7 +643,10 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         ),
     ] {
         let (submission, reply) = settings_submission(id, &turn.sub_id, update);
-        submissions.send(submission).await.expect("queue update");
+        submissions
+            .send(Box::new(submission))
+            .await
+            .expect("queue update");
         replies.push(reply);
     }
     lookup.release();

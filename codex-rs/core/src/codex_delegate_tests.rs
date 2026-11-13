@@ -166,7 +166,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         residency_guard: None,
         message_delivery: None,
     };
-    tx_ops.send(submission).await.unwrap();
+    tx_ops.send(Box::new(submission)).await.unwrap();
     drop(tx_ops);
 
     let forwarded = timeout(Duration::from_secs(1), rx_sub.recv())

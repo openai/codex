@@ -452,7 +452,10 @@ pub(crate) enum NetworkApprovalTurn {
 /// completion future observes that shutdown.
 #[derive(Clone)]
 pub(crate) struct SessionIo {
-    pub(crate) tx_sub: Sender<Submission>,
+    // The bounded channel reserves all its slots at session startup.
+    // Boxing reserves only a pointer for the payload in each slot and
+    // allocates the full submission when there is one to send.
+    pub(crate) tx_sub: Sender<Box<Submission>>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
@@ -1207,12 +1210,12 @@ impl SessionIo {
             residency_guard,
             message_delivery,
         };
-        self.submit_with_id(sub).await?;
+        self.submit_with_id(Box::new(sub)).await?;
         Ok(id)
     }
 
     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
-    pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+    pub(crate) async fn submit_with_id(&self, mut sub: Box<Submission>) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
@@ -1239,7 +1242,7 @@ impl SessionIo {
             turn_extension_init,
         } = request.into();
         let trace = request.trace.take();
-        self.submit_with_id(Submission {
+        self.submit_with_id(Box::new(Submission {
             id,
             op: Op::TurnInput {
                 request: Box::new(request),
@@ -1252,7 +1255,7 @@ impl SessionIo {
             root_turn_id: None,
             residency_guard: None,
             message_delivery: None,
-        })
+        }))
         .await?;
         reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
     }
@@ -1266,7 +1269,7 @@ impl SessionIo {
         turn_extension_init: Option<ExtensionDataInit>,
     ) -> CodexResult<TurnInputSubmission> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.submit_with_id(Submission {
+        self.submit_with_id(Box::new(Submission {
             id: turn_id,
             op: Op::RecoverTurn {
                 thread_settings,
@@ -1279,7 +1282,7 @@ impl SessionIo {
             root_turn_id: None,
             residency_guard: None,
             message_delivery: None,
-        })
+        }))
         .await?;
         reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
     }
