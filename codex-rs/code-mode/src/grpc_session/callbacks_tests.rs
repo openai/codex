@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use codex_code_mode_protocol::CodeModeOutputTruncation;
+use codex_code_mode_protocol::grpc;
 use http_body_util::Full;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
@@ -46,6 +47,27 @@ async fn missing_invocation_completion_racing_cancellation_preserves_session() {
         .await;
 
     assert_eq!(session.require_open(), Ok(()));
+}
+
+#[tokio::test]
+async fn tool_call_heartbeats_do_not_enter_callback_admission() {
+    let client = GrpcClient::new(BoxCloneSyncService::new(service_fn(|_request| async {
+        panic!("heartbeat must not send an RPC");
+    })));
+    let session = session(client);
+    let heartbeat = grpc::ToolCall {
+        session_id: session.id.clone(),
+        heartbeat: Some(grpc::StreamHeartbeat {}),
+        ..Default::default()
+    };
+    assert_eq!(session.handle_tool_call(heartbeat.clone()), Ok(()));
+    assert_eq!(
+        session.handle_tool_call(grpc::ToolCall {
+            invocation_id: "not-a-heartbeat".to_string(),
+            ..heartbeat
+        }),
+        Err("gRPC code-mode heartbeat carried a tool invocation".to_string())
+    );
 }
 
 fn session(client: GrpcClient) -> Arc<SessionInner> {

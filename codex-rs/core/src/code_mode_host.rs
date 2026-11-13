@@ -65,6 +65,13 @@ impl CodeModeSessionProvider for LocalServerOutputProvider {
         self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
     }
 
+    fn default_session_options(&self) -> CodeModeSessionOptions {
+        CodeModeSessionOptions {
+            output_truncation: CodeModeOutputTruncation::Server,
+            ..CodeModeSessionOptions::default()
+        }
+    }
+
     fn create_session_with_limits<'a>(
         &'a self,
         limits: CodeModeSessionCellExecutionLimits,
@@ -72,7 +79,7 @@ impl CodeModeSessionProvider for LocalServerOutputProvider {
         self.inner
             .create_session_with_options(CodeModeSessionOptions {
                 cell_execution_limits: limits,
-                output_truncation: CodeModeOutputTruncation::Server,
+                ..self.default_session_options()
             })
     }
 

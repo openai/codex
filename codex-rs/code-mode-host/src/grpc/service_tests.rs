@@ -5,6 +5,9 @@ use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHost;
 use futures::FutureExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::Code;
 use tonic::Request;
 
@@ -15,12 +18,63 @@ pub(super) async fn open_session(
     (opened.session_id, stream)
 }
 
+#[tokio::test(start_paused = true)]
+async fn zero_interval_keeps_both_rpc_streams_quiet() {
+    let host = GrpcCodeModeHost::new();
+    let (session_id, mut lease) = open_session(&host).await;
+    let mut calls = host
+        .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            session_id,
+            tool_names: Vec::new(),
+            heartbeat_interval_s: 0,
+        }))
+        .await
+        .expect("subscribe to tool calls")
+        .into_inner();
+
+    assert!(lease.next().now_or_never().is_none());
+    assert!(calls.next().now_or_never().is_none());
+    sleep(Duration::from_secs(121)).await;
+    assert!(lease.next().now_or_never().is_none());
+    assert!(calls.next().now_or_never().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_heartbeats_repeat_and_reset_after_traffic() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut stream = super::with_heartbeats(
+        Box::pin(UnboundedReceiverStream::new(rx)),
+        /*interval_s*/ 30,
+        || "heartbeat",
+    );
+    sleep(Duration::from_secs(29)).await;
+    tx.send(Ok("event")).unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap(), "event");
+
+    for _ in 0..2 {
+        sleep(Duration::from_secs(29)).await;
+        assert!(stream.next().now_or_never().is_none());
+        sleep(Duration::from_secs(2)).await;
+        let next = stream.next().now_or_never().expect("idle heartbeat due");
+        assert_eq!(next.transpose().unwrap(), Some("heartbeat"));
+    }
+    sleep(Duration::from_secs(31)).await;
+    tx.send(Err(tonic::Status::cancelled("closed"))).unwrap();
+    drop(tx);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap_err().code(),
+        Code::Cancelled
+    );
+    assert!(stream.next().await.is_none());
+}
+
 async fn open_session_with_truncation(
     host: &GrpcCodeModeHost,
     output_truncation: Option<i32>,
 ) -> (proto::SessionOpened, GrpcStream<proto::SessionEvent>) {
     let mut stream = host
         .open_session(Request::new(proto::OpenSessionRequest {
+            heartbeat_interval_s: 0,
             max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation,
@@ -211,6 +265,7 @@ async fn filtered_subscriptions_match_default_namespace_aliases() {
         let (session_id, _events) = open_session(&host).await;
         let mut subscription = host
             .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+                heartbeat_interval_s: 0,
                 session_id: session_id.clone(),
                 tool_names: vec![proto::ToolName {
                     name: "echo".to_string(),
@@ -277,6 +332,7 @@ async fn filtered_subscriptions_receive_ordered_calls_and_unary_completions() {
     let (session_id, mut session_events) = open_session(&host).await;
     let mut matching = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: "echo".to_string(),
@@ -288,6 +344,7 @@ async fn filtered_subscriptions_receive_ordered_calls_and_unary_completions() {
         .into_inner();
     let mut unrelated = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: "other".to_string(),
@@ -606,6 +663,7 @@ async fn unknown_output_truncation_is_rejected_before_opening_a_session() {
     let host = GrpcCodeModeHost::new();
     let result = host
         .open_session(Request::new(proto::OpenSessionRequest {
+            heartbeat_interval_s: 0,
             max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation: Some(42),

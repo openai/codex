@@ -64,6 +64,9 @@ message OpenSessionRequest {
   // Absent preserves the legacy 1,024 callback budget. Hosts may impose a lower
   // shared limit, and older hosts ignore this field and retain their own limit.
   optional uint32 max_pending_delegate_calls = 3;
+  reserved 4; // Boolean heartbeat opt-in used by earlier preview builds.
+  // Seconds of stream inactivity before a heartbeat. Zero disables heartbeats.
+  uint32 heartbeat_interval_s = 5;
 }
 
 enum OutputTruncation {
@@ -84,6 +87,7 @@ message SessionEvent {
     Notification notification = 3;
     NotificationCancelled notification_cancelled = 4;
     CellClosed cell_closed = 5;
+    StreamHeartbeat heartbeat = 6;
   }
 }
 
@@ -102,7 +106,12 @@ message CloseSessionResponse {}
 message SubscribeToToolCallsRequest {
   string session_id = 1;
   repeated ToolName tool_names = 2;
+  reserved 3; // Boolean heartbeat opt-in used by earlier preview builds.
+  // Seconds of stream inactivity before a heartbeat. Zero disables heartbeats.
+  uint32 heartbeat_interval_s = 4;
 }
+
+message StreamHeartbeat {}
 
 message ToolCall {
   string session_id = 1;
@@ -123,6 +132,9 @@ message ToolCall {
   // gRPC metadata is fixed when the subscription stream opens, so each call
   // carries its own context in the message.
   optional string traceparent = 10;
+
+  // A heartbeat carries only the session ID and must not be handled as a tool call.
+  optional StreamHeartbeat heartbeat = 11;
 }
 
 message CompleteToolCallRequest {

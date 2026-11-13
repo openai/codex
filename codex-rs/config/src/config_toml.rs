@@ -484,6 +484,9 @@ pub struct ConfigToml {
     /// Additional discoverable tools that can be suggested for installation.
     pub tool_suggest: Option<ToolSuggestConfig>,
 
+    /// Code Mode session settings.
+    pub code_mode: Option<CodeModeToml>,
+
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
@@ -710,6 +713,13 @@ pub struct ToolsToml {
     pub web_search: Option<WebSearchToolConfig>,
     pub experimental_request_user_input: Option<ExperimentalRequestUserInput>,
     pub update_plan: Option<UpdatePlanToolConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CodeModeToml {
+    /// Idle seconds between gRPC stream heartbeats. Zero (the default) disables them.
+    pub heartbeat_interval_s: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

@@ -34,6 +34,7 @@ fn request(execution_id: &str) -> grpc::ExecuteRequest {
 fn tool_call(execution_id: &str, invocation_id: u128) -> grpc::ToolCall {
     let invocation_id = Uuid::from_u128(invocation_id).to_string();
     grpc::ToolCall {
+        heartbeat: None,
         session_id: "session".to_string(),
         execution_id: execution_id.to_string(),
         cell_id: "cell".to_string(),

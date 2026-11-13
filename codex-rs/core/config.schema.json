@@ -710,6 +710,18 @@
       },
       "type": "object"
     },
+    "CodeModeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "heartbeat_interval_s": {
+          "description": "Idle seconds between gRPC stream heartbeats. Zero (the default) disables them.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ComputerUseConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -7879,6 +7891,14 @@
         }
       ],
       "description": "Cloud-owned feature settings."
+    },
+    "code_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CodeModeToml"
+        }
+      ],
+      "description": "Code Mode session settings."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",

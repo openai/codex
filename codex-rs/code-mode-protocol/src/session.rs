@@ -57,6 +57,8 @@ pub enum CodeModeOutputTruncation {
 pub struct CodeModeSessionOptions {
     pub cell_execution_limits: CodeModeSessionCellExecutionLimits,
     pub output_truncation: CodeModeOutputTruncation,
+    /// Interval for idle gRPC heartbeats. Zero disables them.
+    pub heartbeat_interval_s: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -235,6 +237,11 @@ pub trait CodeModeSessionProvider: Send + Sync {
     }
 
     fn create_session(&self) -> CodeModeSessionProviderFuture<'_>;
+
+    /// Returns the default options for callers that need to override one setting.
+    fn default_session_options(&self) -> CodeModeSessionOptions {
+        CodeModeSessionOptions::default()
+    }
 
     /// Creates a session whose cells share the supplied execution limits.
     ///

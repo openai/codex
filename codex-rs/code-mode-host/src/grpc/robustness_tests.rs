@@ -94,6 +94,7 @@ async fn rejects_oversized_identifiers_and_subscription_filters() {
     );
     assert_invalid(
         host.subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: oversized_id,
@@ -104,6 +105,7 @@ async fn rejects_oversized_identifiers_and_subscription_filters() {
     );
     assert_invalid(
         host.subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![
                 proto::ToolName {
@@ -274,6 +276,7 @@ async fn oversized_encoded_tool_invocation_fails_without_closing_its_session() {
     let (session_id, _events) = open_session(&host).await;
     let mut subscription = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))
@@ -333,6 +336,7 @@ async fn unmatched_tool_subscription_fails_without_closing_its_session() {
     let (session_id, _events) = open_session(&host).await;
     let _unrelated = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: "other".to_string(),
@@ -374,6 +378,7 @@ async fn unmatched_tool_subscription_fails_without_closing_its_session() {
 
     let mut matching = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id,
             tool_names: vec![proto::ToolName {
                 name: "echo".to_string(),
@@ -407,6 +412,7 @@ async fn missing_selected_subscription_retries_another_matching_subscription() {
     let (session_id, _events) = open_session(&host).await;
     let mut first = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))
@@ -415,6 +421,7 @@ async fn missing_selected_subscription_retries_another_matching_subscription() {
         .into_inner();
     let mut second = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))
@@ -496,6 +503,7 @@ async fn saturated_subscription_does_not_block_independently_filtered_tools() {
     let (session_id, _events) = open_session(&host).await;
     let mut slow = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: "slow".to_string(),
@@ -507,6 +515,7 @@ async fn saturated_subscription_does_not_block_independently_filtered_tools() {
         .into_inner();
     let mut fast = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: vec![proto::ToolName {
                 name: "fast".to_string(),
@@ -602,6 +611,7 @@ async fn dropping_subscriptions_only_retires_sessions_with_unread_calls() {
     let (session_id, _events) = open_session(&host).await;
     let idle = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))
@@ -622,6 +632,7 @@ async fn dropping_subscriptions_only_retires_sessions_with_unread_calls() {
 
     let first = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))
@@ -630,6 +641,7 @@ async fn dropping_subscriptions_only_retires_sessions_with_unread_calls() {
         .into_inner();
     let mut second = host
         .subscribe_to_tool_calls(Request::new(proto::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: 0,
             session_id: session_id.clone(),
             tool_names: Vec::new(),
         }))

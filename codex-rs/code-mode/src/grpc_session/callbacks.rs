@@ -84,7 +84,8 @@ impl SessionInner {
             grpc::session_event::Event::Notification(notification) => {
                 self.handle_notification(notification)
             }
-            grpc::session_event::Event::NotificationCancelled(_) => Ok(()),
+            grpc::session_event::Event::NotificationCancelled(_)
+            | grpc::session_event::Event::Heartbeat(_) => Ok(()),
             grpc::session_event::Event::CellClosed(closed) => {
                 let cell = self
                     .state
@@ -97,12 +98,20 @@ impl SessionInner {
         }
     }
 
-    fn handle_tool_call(self: &Arc<Self>, call: grpc::ToolCall) -> Result<(), String> {
+    fn handle_tool_call(self: &Arc<Self>, mut call: grpc::ToolCall) -> Result<(), String> {
         if call.session_id != self.id {
             return Err(format!(
                 "gRPC code-mode tool invocation belongs to session {} instead of {}",
                 call.session_id, self.id
             ));
+        }
+        if call.heartbeat.take().is_some() {
+            // A heartbeat carries only its marker and the verified session ID.
+            call.session_id.clear();
+            if call != grpc::ToolCall::default() {
+                return Err("gRPC code-mode heartbeat carried a tool invocation".to_string());
+            }
+            return Ok(());
         }
         let admission = self
             .state

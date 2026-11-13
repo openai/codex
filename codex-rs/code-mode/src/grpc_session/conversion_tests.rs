@@ -63,6 +63,7 @@ fn execute_request_preserves_tool_schemas_namespaces_and_limits() {
 #[test]
 fn tool_call_decodes_structured_input_and_namespace() {
     let call = grpc::ToolCall {
+        heartbeat: None,
         session_id: "session".to_string(),
         execution_id: "execution".to_string(),
         cell_id: "cell".to_string(),

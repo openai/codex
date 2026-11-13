@@ -176,6 +176,7 @@ impl GrpcCodeModeSessionProvider {
             let mut retries = 0;
             loop {
                 let mut request = tonic::Request::new(grpc::OpenSessionRequest {
+                    heartbeat_interval_s: options.heartbeat_interval_s,
                     max_pending_delegate_calls: Some(
                         codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS as u32,
                     ),
@@ -289,6 +290,7 @@ impl GrpcCodeModeSessionProvider {
             session.id = %inner.id,
         );
         let mut request = inner.request(grpc::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: options.heartbeat_interval_s,
             session_id: inner.id.clone(),
             tool_names: Vec::new(),
         });

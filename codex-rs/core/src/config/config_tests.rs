@@ -667,6 +667,9 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml: ConfigToml = toml::from_str(
         r#"
+[code_mode]
+heartbeat_interval_s = 30
+
 [features.code_mode]
 enabled = true
 default_exec_yield_time_ms = 10000
@@ -700,6 +703,7 @@ disable_in_process_fallback = true
         vec!["mcp__history".to_string(), "mcp__notes".to_string()]
     );
     assert!(config.code_mode.disable_in_process_fallback);
+    assert_eq!(config.code_mode.heartbeat_interval_s, 30);
     assert!(config.features.enabled(Feature::CodeMode));
     assert!(config.features.enabled(Feature::CodeModeHost));
     Ok(())

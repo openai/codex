@@ -1258,6 +1258,7 @@ pub struct CodeModeConfig {
     pub direct_only_tool_namespaces: Vec<String>,
     /// Keep code mode fail-closed when the standalone host is unavailable.
     pub disable_in_process_fallback: bool,
+    pub heartbeat_interval_s: u32,
 }
 
 impl Default for CodeModeConfig {
@@ -1269,6 +1270,7 @@ impl Default for CodeModeConfig {
             excluded_tool_namespaces: Vec::new(),
             direct_only_tool_namespaces: Vec::new(),
             disable_in_process_fallback: false,
+            heartbeat_interval_s: 0,
         }
     }
 }
@@ -2872,6 +2874,11 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .unwrap_or_default(),
         disable_in_process_fallback: host
             .and_then(|config| config.disable_in_process_fallback)
+            .unwrap_or_default(),
+        heartbeat_interval_s: config_toml
+            .code_mode
+            .as_ref()
+            .and_then(|config| config.heartbeat_interval_s)
             .unwrap_or_default(),
     }
 }
