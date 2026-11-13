@@ -51,11 +51,20 @@ use tokio_util::sync::CancellationToken;
 #[path = "../../../message-board/tests/common/mod.rs"]
 mod board_host;
 
-#[test_case::test_case(false; "successful_writes")]
-#[test_case::test_case(true; "write_failure")]
+enum RoutingCase {
+    Success,
+    WriteFailure,
+    MissingNewDescription,
+    UnroutedDescription,
+}
+
+#[test_case::test_case(RoutingCase::Success; "successful_writes")]
+#[test_case::test_case(RoutingCase::WriteFailure; "write_failure")]
+#[test_case::test_case(RoutingCase::MissingNewDescription; "new_destination_needs_description")]
+#[test_case::test_case(RoutingCase::UnroutedDescription; "only_routed_channels_can_be_edited")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn routes_captured_originals_and_updates_descriptions(
-    fail_writes: bool,
+    case: RoutingCase,
 ) -> anyhow::Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
@@ -167,15 +176,50 @@ async fn routes_captured_originals_and_updates_descriptions(
     let runtime = prepared
         .bind_thread(&spawned.thread, key, state, cancellation.clone())
         .await;
-    let response = mount_sse_once(&server, sse(vec![
-        ev_assistant_message("routing", r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy","_audit":""}}"#),
-        ev_completed("routing"),
-    ])).await;
+    let reply = match case {
+        RoutingCase::Success | RoutingCase::WriteFailure => {
+            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy","_audit":""}}"#
+        }
+        RoutingCase::MissingNewDescription => {
+            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy"}}"#
+        }
+        RoutingCase::UnroutedDescription => {
+            r#"{"routes":[["_audit"]],"descriptions":{"_audit":"","release":"Unrelated edit"}}"#
+        }
+    };
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("routing", reply),
+            ev_completed("routing"),
+        ]),
+    )
+    .await;
     let deadline = ReviewDeadline::At(Instant::now() + HOUSEKEEPER_TIMEOUT);
-    host.fail_clock.store(fail_writes, Ordering::SeqCst);
+    host.fail_clock
+        .store(matches!(case, RoutingCase::WriteFailure), Ordering::SeqCst);
+    let calls_before = host.agent_path_calls.load(Ordering::SeqCst);
     let routed = housekeeper
         .route_next(&snapshot, &runtime, deadline, &cancellation)
         .await;
+    if !matches!(case, RoutingCase::Success) {
+        if matches!(case, RoutingCase::WriteFailure) {
+            assert_eq!(routed.disposition, SessionDisposition::Reusable);
+        } else {
+            assert_eq!(routed.disposition, SessionDisposition::Rollback);
+            // Invalid output stops after the catalog read, before any board writes.
+            assert_eq!(
+                host.agent_path_calls.load(Ordering::SeqCst) - calls_before,
+                1
+            );
+        }
+        assert!(routed.result.is_err());
+        assert_eq!(housekeeper.cursor(), &initial_cursor);
+        assert_eq!(housekeeper.cursor().pending(&snapshot)?.len(), 1);
+        spawned.thread.shutdown_and_wait().await?;
+        test.codex.shutdown_and_wait().await?;
+        return Ok(());
+    }
     insta::assert_snapshot!(
         "guardian_housekeeping_originals",
         context_snapshot::format_request_history_snapshot(
@@ -185,14 +229,6 @@ async fn routes_captured_originals_and_updates_descriptions(
         )
     );
     assert_eq!(routed.disposition, SessionDisposition::Reusable);
-    if fail_writes {
-        assert!(routed.result.is_err());
-        assert_eq!(housekeeper.cursor(), &initial_cursor);
-        assert_eq!(housekeeper.cursor().pending(&snapshot)?.len(), 1);
-        spawned.thread.shutdown_and_wait().await?;
-        test.codex.shutdown_and_wait().await?;
-        return Ok(());
-    }
     assert_eq!(routed.result?, 1);
     assert_eq!(
         housekeeper
@@ -287,22 +323,31 @@ async fn routes_captured_originals_and_updates_descriptions(
             > input_policy.limit as usize
     );
     for (index, source) in next.records().iter().enumerate() {
+        // Omission preserves the description. A redundant echo is harmless too.
+        let reply = if index == 0 {
+            r#"{"routes":[["release"]],"descriptions":{}}"#
+        } else {
+            r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#
+        };
         let response = mount_sse_once(
             &server,
             sse(vec![
-                ev_assistant_message(
-                    "routing-later",
-                    r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
-                ),
+                ev_assistant_message("routing-later", reply),
                 ev_completed("routing-later"),
             ]),
         )
         .await;
+        let calls_before = host.agent_path_calls.load(Ordering::SeqCst);
         let routed = housekeeper
             .route_next(&next, &runtime, deadline, &cancellation)
             .await;
         assert_eq!(routed.disposition, SessionDisposition::Reusable);
         assert_eq!(routed.result?, 1);
+        // An unchanged description needs only the catalog read and the evidence append.
+        assert_eq!(
+            host.agent_path_calls.load(Ordering::SeqCst) - calls_before,
+            2
+        );
         assert_eq!(
             housekeeper.cursor().pending(&next)?.len(),
             next.records().len() - index - 1
@@ -318,6 +363,15 @@ async fn routes_captured_originals_and_updates_descriptions(
             json!({"catalog":catalog,"sources":[source]})
         );
     }
+    let view = board.read_view(owner).await?;
+    let release = view
+        .channels()
+        .iter()
+        .find(|channel| channel.channel_name == "release");
+    assert_eq!(
+        release.map(|channel| (channel.description.as_deref(), channel.message_count)),
+        Some((Some("Release policy"), 3))
+    );
     assert!(
         host.notifications
             .lock()
