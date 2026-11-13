@@ -514,6 +514,49 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
     assert_ne!(cache_paths[0], cache_paths[1]);
 }
 
+#[tokio::test]
+async fn startup_returns_its_own_catalog_when_another_scope_fetches_first() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let context = create_codex_apps_tools_cache_context(
+        home.path().into(),
+        Some("account"),
+        /*chatgpt_user_id*/ None,
+    );
+    let first = context.clone().with_live_scope("one".into());
+    let other = context.with_live_scope("two".into());
+    let server = create_test_server_info("Apps");
+    let tools = vec![create_test_tool("apps", "one")];
+    let meta = Some(Arc::new(serde_json::json!({"version": "one"})));
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let mut list = std::pin::pin!(first.fetch_startup_tools(&server, async {
+        wait.await?;
+        Ok((tools.clone(), meta.clone()))
+    }));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(list.as_mut().poll(&mut cx).is_pending());
+    let other_reply = tokio::time::timeout(
+        Duration::from_secs(5),
+        other.fetch_startup_tools(&server, async {
+            Ok((vec![create_test_tool("apps", "other")], None))
+        }),
+    )
+    .await??;
+    assert_eq!(other_reply.0.as_ref(), [create_test_tool("apps", "other")]);
+    release.send(()).unwrap();
+    let (listed, listed_meta) = list.await?;
+    assert_eq!(
+        (listed.as_ref(), listed_meta.as_deref()),
+        (tools.as_slice(), meta.as_deref())
+    );
+
+    let updated = vec![create_test_tool("apps", "updated")];
+    let (fresh, _) = first
+        .fetch_startup_tools(&server, async { Ok((updated.clone(), None)) })
+        .await?;
+    assert_eq!(fresh.as_ref(), updated);
+    Ok(())
+}
+
 #[test]
 fn live_catalogs_isolate_scopes_and_reject_older_refreshes() {
     let codex_home = tempdir().expect("tempdir");

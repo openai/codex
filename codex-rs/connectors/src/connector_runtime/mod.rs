@@ -6,8 +6,8 @@
 //! owned by the connector metadata store, not by this module.
 //! Live catalog subscriptions publish only successful fetches from a matching
 //! discovery scope, never disk snapshots or another scope's discovery winner.
-//! Equivalent live contexts share one current catalog. Each fetch still contacts
-//! the server; equal definitions retain their established storage and ordering.
+//! Equivalent live contexts share one current catalog and any overlapping startup
+//! fetch. Later startups and explicit refreshes fetch from the server again.
 //! Providers expire with their last context.
 
 use std::collections::HashMap;
@@ -22,12 +22,14 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+use anyhow::Context;
 use arc_swap::ArcSwapOption;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::watch;
 
 use self::persistence::load_cached_codex_apps_server_info;
@@ -41,6 +43,7 @@ const MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC: &str = "codex.mcp.tools.cache_pub
 /// The current immutable tools for matching discovery inputs.
 struct CatalogProvider<T> {
     scope: Vec<String>,
+    startup: AsyncMutex<()>,
     updates: watch::Sender<Option<Arc<ConnectorRuntimeSnapshot<T>>>>,
 }
 
@@ -260,6 +263,7 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         self.live_catalog = Some(catalog.upgrade().unwrap_or_else(|| {
             let provider = Arc::new(CatalogProvider {
                 scope: scope_parts,
+                startup: AsyncMutex::default(),
                 updates: watch::channel(None).0,
             });
             *catalog = Arc::downgrade(&provider);
@@ -273,6 +277,46 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     pub fn without_live_scope(mut self) -> Self {
         self.live_catalog = None;
         self
+    }
+
+    /// Lists and publishes startup tools. Only overlapping calls in the same live scope
+    /// can join a fetch. If the listing fails or is cancelled, a waiter can use its own
+    /// connection to retry. Opted-out clients keep the exact tools their server returned.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "serialize startup listings through publication within one discovery scope"
+    )]
+    pub async fn fetch_startup_tools(
+        &self,
+        server_info: &McpServerInfo,
+        list: impl Future<Output = anyhow::Result<(Vec<T>, Option<Arc<serde_json::Value>>)>>,
+    ) -> anyhow::Result<(Arc<[T]>, Option<Arc<serde_json::Value>>)> {
+        let Some(catalog) = &self.live_catalog else {
+            let ticket = self.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+            let (tools, meta) = list.await?;
+            self.publish_runtime_if_newest_accepted(
+                ticket,
+                server_info,
+                tools.clone(),
+                meta.clone(),
+            );
+            return Ok((tools.into(), meta));
+        };
+
+        let updates = catalog.updates.subscribe();
+        let _guard = catalog.startup.lock().await;
+        // A peer may have published while this startup waited for the lock.
+        if !updates.borrow().has_changed() {
+            let ticket = self.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+            let (tools, meta) = list.await?;
+            self.publish_runtime_if_newest_accepted(ticket, server_info, tools, meta);
+        }
+        // Account-wide discovery may have accepted a different scope's newer fetch.
+        let current = catalog.updates.borrow();
+        let snapshot = current
+            .as_ref()
+            .context("Apps tool catalog is unavailable after startup")?;
+        Ok((snapshot.shared_tools(), snapshot.shared_tool_list_meta()))
     }
 
     /// Subscribes to accepted live tools without refetching or waiting for other clients.

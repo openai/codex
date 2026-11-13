@@ -433,6 +433,23 @@ impl InProcessTransportFactory for MutableToolsTransportFactory {
     }
 }
 
+pub(crate) async fn create_test_apps_client(
+    tool: Tool,
+    list_started: Option<Arc<Notify>>,
+    release_list: Option<Arc<Notify>>,
+    list_requests: Arc<AtomicUsize>,
+) -> anyhow::Result<Arc<RmcpClient>> {
+    let client = RmcpClient::new_in_process_client(Arc::new(RefreshTestTransportFactory {
+        tool,
+        list_started,
+        release_list,
+        next_cursor: None,
+        list_requests,
+    }))
+    .await?;
+    Ok(Arc::new(client))
+}
+
 struct DisconnectingToolsTransportFactory {
     server: MutableToolsServer,
     disconnect: CancellationToken,
@@ -856,16 +873,13 @@ pub(crate) async fn create_test_manager_with_ready_apps_client(
     release_list: Option<Arc<Notify>>,
 ) -> anyhow::Result<Arc<McpConnectionSet>> {
     let tool = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, tool_name);
-    let client = Arc::new(
-        RmcpClient::new_in_process_client(Arc::new(RefreshTestTransportFactory {
-            tool: tool.tool.clone(),
-            list_started,
-            release_list,
-            next_cursor: None,
-            list_requests: Arc::new(AtomicUsize::new(0)),
-        }))
-        .await?,
-    );
+    let client = create_test_apps_client(
+        tool.tool.clone(),
+        list_started,
+        release_list,
+        Arc::default(),
+    )
+    .await?;
     client
         .initialize(
             InitializeRequestParams::new(

@@ -15,6 +15,9 @@ mod managed_client;
 mod status;
 
 #[cfg(test)]
+#[path = "rmcp_client/apps_startup_tests.rs"]
+mod apps_startup_tests;
+#[cfg(test)]
 #[path = "rmcp_client/provenance_tests.rs"]
 mod provenance_tests;
 
@@ -69,7 +72,6 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeContext;
-use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_exec_server::Environment;
 use codex_login::AuthChangeState;
 use codex_otel::auth_storage::AuthStorageOriginator;
@@ -386,7 +388,7 @@ impl ManagedClientStartup {
                         sharing_declined,
                         publish_apps,
                         is_codex_apps_mcp_server,
-                        startup_timeout: Some(startup_timeout),
+                        startup_timeout,
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
@@ -1182,7 +1184,7 @@ async fn start_server_task(
     let requested_capabilities = params.capabilities.clone();
     let started_at = Instant::now();
     let initialize_result = client
-        .initialize(params, startup_timeout, send_elicitation)
+        .initialize(params, Some(startup_timeout), send_elicitation)
         .await;
     record_protocol_discovery_metrics(
         client.protocol_mode(),
@@ -1255,40 +1257,32 @@ async fn start_server_task(
     let list_start = Instant::now();
     let server_info =
         mcp_server_info_from_implementation(&server_name, initialize_result.server_info);
-    let fetch_ticket = codex_apps_tools_cache_context
-        .as_ref()
-        .map(|context| context.begin_fetch(ConnectorRuntimeFetchSource::Startup));
     if let Some(tx) = &publish_apps {
         tx.send_replace(Some(Arc::downgrade(&client)));
     }
-    let (tools, meta) = list_tools_for_client_uncached(
+    let list = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
         &client,
-        startup_timeout,
+        Some(startup_timeout),
         catalog_item_limit,
         initialize_result.instructions.as_deref(),
-    )
-    .await
-    .map_err(StartupOutcomeError::from)?;
-    let client_tools: Arc<[ToolInfo]> =
-        match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
-            (Some(context), Some(ticket)) if server_disables_tool_catalog_cache => {
-                context.publish_runtime_if_newest_accepted(
-                    ticket,
-                    &server_info,
-                    tools.clone(),
-                    meta.clone(),
-                );
-                tools.into()
+    );
+    let (client_tools, meta) = match &codex_apps_tools_cache_context {
+        Some(context) => tokio::select! {
+            // If the lock and deadline become ready together, skip the expired request.
+            biased;
+            () = tokio::time::sleep(startup_timeout) => {
+                return Err(anyhow!("tools/list startup timed out after {startup_timeout:?}").into());
             }
-            (Some(context), Some(ticket)) => context
-                .publish_runtime_if_newest_accepted(ticket, &server_info, tools, meta.clone())
-                .shared_tools(),
-            (None, None) => tools.into(),
-            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-        };
+            result = context.fetch_startup_tools(&server_info, list) => result?,
+        },
+        None => {
+            let (tools, meta) = list.await?;
+            (tools.into(), meta)
+        }
+    };
     if let (Some(cache_context), Some(mut fetch_ticket)) = (
         tool_catalog_cache_context.as_ref(),
         tool_catalog_fetch_ticket,
@@ -1420,7 +1414,7 @@ struct StartServerTaskParams {
     sharing_declined: Option<CancellationToken>,
     server_capabilities: Arc<StdMutex<Option<serde_json::Value>>>,
     is_codex_apps_mcp_server: bool,
-    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
+    startup_timeout: Duration,
     tx_event: Option<Sender<Event>>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
