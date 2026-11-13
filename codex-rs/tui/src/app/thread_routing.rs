@@ -2229,18 +2229,7 @@ impl App {
             && let ServerNotification::ItemCompleted(notification) = notification.as_ref()
             && let ThreadItemPayload::UserMessage { content, .. } = &notification.item.payload
         {
-            Some(
-                content
-                    .iter()
-                    .filter_map(|item| match item {
-                        codex_app_server_protocol::UserInput::Text { text, .. } => {
-                            Some(crate::user_prompt::extract_prompt_request_with_offset(text).0)
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
+            super::thread_title::user_message_text(content)
         } else {
             None
         };
@@ -2248,7 +2237,6 @@ impl App {
         self.handle_thread_event_now_recovering_file_changes(event)
             .await;
         if let Some(user_message) = automatic_title_user_message
-            && !user_message.trim().is_empty()
             && let Some(thread_id) = self.active_thread_id
         {
             self.generate_thread_title(
@@ -2256,6 +2244,7 @@ impl App {
                 thread_id,
                 ThreadTitleDestination::Automatic,
                 &user_message,
+                /*expected_name*/ None,
             );
         }
         if !had_active_modal

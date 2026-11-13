@@ -1,7 +1,7 @@
 //! Structured-output schema and normalization for generated TUI thread titles.
 //!
 //! Automatic titles use the first message until generation completes and as a fallback;
-//! the originating thread's saved name takes precedence over an automatic result. Manual
+//! a saved side chat may also replace the name it inherited at fork. Manual
 //! renames cancel pending requests; canceled events cannot affect newer requests.
 
 use super::App;
@@ -70,6 +70,7 @@ impl App {
         thread_id: ThreadId,
         destination: ThreadTitleDestination,
         source_text: &str,
+        expected_name: Option<String>,
     ) {
         if app_server.thread_params_mode().settings_owner() == ThreadSettingsOwner::Server {
             if let ThreadTitleDestination::RenameSuggestion { request_id } = destination {
@@ -87,7 +88,9 @@ impl App {
         let (prompt, fallback_title) = match destination {
             ThreadTitleDestination::Automatic => {
                 let fallback = fallback_thread_title(source_text);
-                if let Some(title) = &fallback {
+                if !self.side_threads.contains_key(&thread_id)
+                    && let Some(title) = &fallback
+                {
                     self.chat_widget
                         .display_thread_name(thread_id, title.clone());
                 }
@@ -135,6 +138,7 @@ impl App {
                 thread_id,
                 destination,
                 prompt,
+                expected_name,
                 fallback_title,
                 effort,
                 result,
@@ -150,6 +154,7 @@ impl App {
         thread_id: ThreadId,
         destination: ThreadTitleDestination,
         prompt: String,
+        expected_name: Option<String>,
         fallback_title: Option<String>,
         effort: Option<ReasoningEffort>,
         result: Result<String, String>,
@@ -165,7 +170,7 @@ impl App {
             return;
         }
         let save_name = (destination == ThreadTitleDestination::Automatic)
-            .then(|| app_server.automatic_thread_name_writer(thread_id));
+            .then(|| app_server.automatic_thread_name_writer(thread_id, expected_name));
         let temporary_thread_id = match result
             .and_then(|id| ThreadId::from_string(&id).map_err(|error| error.to_string()))
         {
@@ -278,6 +283,7 @@ impl App {
             thread_id,
             ThreadTitleDestination::RenameSuggestion { request_id },
             &conversation,
+            /*expected_name*/ None,
         );
     }
 }
@@ -352,6 +358,20 @@ pub(super) fn thread_title_prompt(user_message: &str) -> String {
         .collect::<String>();
 
     format!("{prefix}{user_message}")
+}
+
+pub(super) fn user_message_text(content: &[UserInput]) -> Option<String> {
+    let text = content
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => {
+                Some(crate::user_prompt::extract_prompt_request_with_offset(text).0)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Format recent substantive messages chronologically without trusting their markup.

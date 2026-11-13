@@ -441,6 +441,7 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         destination: ThreadTitleDestination,
         prompt: String,
+        expected_name: Option<String>,
         fallback_title: Option<String>,
         effort: Option<ReasoningEffort>,
         result: Result<String, String>,

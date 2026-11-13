@@ -109,6 +109,7 @@ async fn cloud_conversations_skip_tui_generated_titles() {
         thread_id,
         ThreadTitleDestination::Automatic,
         "Fix the login timeout",
+        /*expected_name*/ None,
     );
 
     assert!(app.pending_thread_titles.is_empty());
@@ -118,10 +119,12 @@ async fn cloud_conversations_skip_tui_generated_titles() {
 #[tokio::test]
 async fn automatic_thread_title_respects_origin_metadata_after_switching() -> color_eyre::Result<()>
 {
-    for (switch_threads, manual_name) in [
-        (true, None),
-        (true, Some("Manual title")),
-        (false, Some("Manual title")),
+    for (switch_threads, fork_name, manual_name) in [
+        (true, None, None),
+        (true, Some("Release plan"), None),
+        (true, Some("Release plan"), Some("Manual title")),
+        (true, None, Some("Manual title")),
+        (false, None, Some("Manual title")),
     ] {
         let mut app = make_test_app().await;
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
@@ -141,7 +144,13 @@ async fn automatic_thread_title_respects_origin_metadata_after_switching() -> co
         );
 
         let mut tui = crate::tui::test_support::make_test_tui()?;
-        let automatic = app_server.automatic_thread_name_writer(thread_id);
+        if let Some(name) = fork_name {
+            app_server
+                .thread_set_name(thread_id, name.to_owned())
+                .await?;
+        }
+        let automatic =
+            app_server.automatic_thread_name_writer(thread_id, fork_name.map(str::to_owned));
         if switch_threads {
             let second = app_server.start_thread(&app.config).await?;
             let second_id = second.session.thread_id;
@@ -532,7 +541,7 @@ async fn canceled_thread_title_ignores_late_start_and_completion() -> color_eyre
     app.pending_thread_titles
         .insert((thread_id, destination), cancellation.clone());
 
-    let writer = app_server.automatic_thread_name_writer(thread_id);
+    let writer = app_server.automatic_thread_name_writer(thread_id, /*expected_name*/ None);
     let token = cancellation.clone();
     let mut automatic = std::pin::pin!(writer.save("Stale title".into(), &token));
     assert!(automatic.as_mut().now_or_never().is_none());
@@ -558,6 +567,7 @@ async fn canceled_thread_title_ignores_late_start_and_completion() -> color_eyre
         thread_id,
         destination,
         "prompt".to_string(),
+        /*expected_name*/ None,
         /*fallback_title*/ None,
         /*effort*/ None,
         Ok(temporary_thread_id.to_string()),
@@ -603,7 +613,7 @@ async fn manual_rename_waits_for_an_in_flight_automatic_write() -> color_eyre::R
         codex_app_server_client::AppServerClient::Cloud(client),
         crate::app_server_session::ThreadParamsMode::Remote,
     );
-    let writer = session.automatic_thread_name_writer(thread_id);
+    let writer = session.automatic_thread_name_writer(thread_id, /*expected_name*/ None);
     let token = CancellationToken::new();
     let mut automatic = std::pin::pin!(writer.save("Generated".into(), &token));
     assert!(automatic.as_mut().now_or_never().is_none());
@@ -915,6 +925,7 @@ async fn failed_thread_title_requests_are_removed() -> color_eyre::Result<()> {
         thread_id,
         ThreadTitleDestination::Automatic,
         "prompt".to_string(),
+        /*expected_name*/ None,
         /*fallback_title*/ None,
         /*effort*/ None,
         Err("startup failed".to_string()),
@@ -925,6 +936,7 @@ async fn failed_thread_title_requests_are_removed() -> color_eyre::Result<()> {
         thread_id,
         suggestion,
         "prompt".to_string(),
+        /*expected_name*/ None,
         /*fallback_title*/ None,
         /*effort*/ None,
         Ok("invalid-thread-id".to_string()),

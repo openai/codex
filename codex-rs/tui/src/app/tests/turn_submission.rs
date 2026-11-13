@@ -175,6 +175,7 @@ async fn turn_start_failure_is_shown_without_exiting() -> Result<()> {
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000")?;
+    app_server.side_chat_fork_names.insert(thread_id, None);
     app.active_thread_id = Some(thread_id);
     app.chat_widget
         .handle_thread_session(test_thread_session(thread_id, app.config.cwd.to_path_buf()));
@@ -194,6 +195,7 @@ async fn turn_start_failure_is_shown_without_exiting() -> Result<()> {
         .handle_event(&mut tui, &mut app_server, AppEvent::CodexOp(op))
         .await?;
 
+    assert!(app_server.side_chat_fork_names.contains_key(&thread_id));
     assert!(matches!(control, AppRunControl::Continue));
     let error_cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
         .find_map(|event| match event {
