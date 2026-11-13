@@ -434,7 +434,8 @@ fn finalized_agent_cell_replays_visualization_link() {
         start..start + "file://".len(),
         "",
     );
-    let (copied, format) = crate::markdown_copy::selection(&selected, "file://");
+    let (copied, format) =
+        crate::markdown_copy::selection(&selected, "file://", /*rectangle_rows*/ None);
     assert_eq!(
         (copied.as_str(), format),
         ("file://", crate::clipboard_copy::CopyFormat::Markdown)

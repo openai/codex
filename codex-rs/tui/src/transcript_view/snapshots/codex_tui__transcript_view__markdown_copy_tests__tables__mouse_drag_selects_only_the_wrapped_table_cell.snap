@@ -1,0 +1,10 @@
+---
+source: tui/src/transcript_view/table_copy_tests.rs
+expression: highlight
+---
+   First change    Adds cell selection for a viewer    +332
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   who reads the room history with
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   界  characters.
+                   ^^^^^^^^^^^^^^

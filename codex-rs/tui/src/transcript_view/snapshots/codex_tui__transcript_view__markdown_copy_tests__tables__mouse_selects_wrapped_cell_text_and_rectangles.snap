@@ -1,0 +1,22 @@
+---
+source: tui/src/transcript_view/table_copy_tests.rs
+expression: rectangle_highlight
+---
+   First change    Adds cell selection for a viewer    +332
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   who reads the room history with
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   界  characters.
+                   ^^^^^^^^^^^^^^
+  ──────────────  ──────────────────────────────────  ──────
+
+   Pending
+
+  ──────────────  ──────────────────────────────────  ──────
+
+   Awaiting                                             TBD
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ──────────────  ──────────────────────────────────  ──────
+
+   Next change     Connects the reader.                +434
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

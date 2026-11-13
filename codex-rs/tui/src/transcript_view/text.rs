@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::ops::Range;
+use std::sync::Arc;
 
 #[path = "text_logical.rs"]
 mod logical;
@@ -74,6 +75,30 @@ struct TextRow {
     first_column: usize,
     prefix_columns: usize,
     tabs: tabs::TabStops,
+}
+
+pub(super) struct TableCellHit {
+    table: Arc<[&'static str]>,
+    pub(super) endpoint: TableEndpoint,
+    line: Range<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct TableEndpoint {
+    pub(super) cell: (usize, usize),
+    pub(super) record_row: Option<usize>,
+}
+
+impl TableEndpoint {
+    pub(super) fn display_row(self) -> usize {
+        self.record_row.unwrap_or(self.cell.0)
+    }
+}
+
+impl TableCellHit {
+    pub(super) fn same_table(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.table, &other.table)
+    }
 }
 
 impl TextLayout {
@@ -326,26 +351,166 @@ impl TextLayout {
         }
     }
 
+    fn logical_sources(&self) -> impl Iterator<Item = (usize, &LogicalLineSource)> {
+        self.logical.iter().scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.origin.range.len() + 1;
+            Some((start, &line.origin))
+        })
+    }
+
+    pub(super) fn table_cell_at(
+        &self,
+        row: usize,
+        column: u16,
+        offset: usize,
+    ) -> Option<TableCellHit> {
+        let display_row = self.rows.get(row)?;
+        if usize::from(column) < display_row.first_column {
+            return None;
+        }
+        let (position, origin) = self
+            .logical_sources()
+            .find(|(start, source)| (*start..=*start + source.range.len()).contains(&offset))?;
+        let table = origin.copy.as_ref()?.table.as_ref()?;
+        // The grid omits trailing blanks on short continuations. Recover the pointer's
+        // distance into that padding without introducing spaces into the logical text.
+        let trailing = if offset != display_row.source.end {
+            0
+        } else if display_row.line_end == Some(offset) {
+            column.saturating_sub(self.column_for_offset_on_row(row, offset))
+        } else {
+            return None;
+        };
+        let byte = origin.range.start + offset - position;
+        let column = display_width(&origin.text[..byte]) + usize::from(trailing);
+        let cell = table.cell_at(byte + usize::from(trailing), column)?;
+        Some(TableCellHit {
+            table: Arc::clone(&table.table),
+            endpoint: TableEndpoint {
+                cell,
+                record_row: table.record_row,
+            },
+            line: position..position + origin.range.len(),
+        })
+    }
+
+    pub(super) fn is_table_row(&self, row: usize, offset: usize, hit: &TableCellHit) -> bool {
+        self.rows
+            .get(row)
+            .is_some_and(|row| row.source.start <= offset && offset <= row.source.end)
+            && self.logical_sources().any(|(start, source)| {
+                (start..=start + source.range.len()).contains(&offset)
+                    && source
+                        .copy
+                        .as_ref()
+                        .and_then(|copy| copy.table.as_ref())
+                        .is_some_and(|table| Arc::ptr_eq(&table.table, &hit.table))
+            })
+    }
+
+    /// One span per logical line. Repeated labels contribute only from selected records.
+    pub(super) fn table_selection_ranges(
+        &self,
+        anchor: &TableCellHit,
+        head: &TableCellHit,
+    ) -> Vec<Range<usize>> {
+        let (row, col) = anchor.endpoint.cell;
+        let (head_row, head_col) = head.endpoint.cell;
+        let first = anchor
+            .endpoint
+            .display_row()
+            .min(head.endpoint.display_row());
+        let last = anchor
+            .endpoint
+            .display_row()
+            .max(head.endpoint.display_row());
+        let records = first..=last;
+        let rows = if anchor.endpoint == head.endpoint && row == 0 {
+            0..=0
+        } else if row == 0 || head_row == 0 {
+            0..=last
+        } else {
+            records.clone()
+        };
+        let columns = col.min(head_col)..=col.max(head_col);
+        let mut ranges = Vec::new();
+        for (start, source) in self.logical_sources() {
+            let fragment = source
+                .copy
+                .as_ref()
+                .and_then(|copy| copy.table.as_ref())
+                .filter(|line| Arc::ptr_eq(&line.table, &anchor.table))
+                .filter(|line| {
+                    line.record_row
+                        .is_none_or(|record| records.contains(&record))
+                })
+                .and_then(|line| line.cell_range(&rows, &columns))
+                .map(|range| range.start.max(source.range.start)..range.end.min(source.range.end));
+            if let Some(fragment) = fragment.filter(|range| range.start <= range.end) {
+                ranges.push(
+                    start + fragment.start - source.range.start
+                        ..start + fragment.end - source.range.start,
+                );
+            }
+        }
+        if ranges.is_empty() {
+            // A rectangle can consist entirely of cells omitted after the last visible value.
+            ranges.push(anchor.line.end..anchor.line.end);
+        }
+        ranges
+    }
+
+    pub(super) fn table_cell_on_row(
+        &self,
+        ranges: &[Range<usize>],
+        row: usize,
+    ) -> Option<Range<usize>> {
+        table_cell_intersection(ranges, &self.rows.get(row)?.source)
+    }
+
+    /// A drag includes the glyph under the pointer. Padding snaps to the nearest text edge.
+    pub(super) fn table_cell_pointer_range(
+        &self,
+        ranges: &[Range<usize>],
+        row: usize,
+        offset: usize,
+    ) -> Range<usize> {
+        let limits = self
+            .table_cell_on_row(ranges, row)
+            .unwrap_or_else(|| ranges[0].start..ranges[ranges.len() - 1].end);
+        offset.clamp(limits.start, limits.end)
+            ..self
+                .after_cursor_grapheme(row, offset)
+                .clamp(limits.start, limits.end)
+    }
+
+    /// A nonempty set of cell ranges limits copying to those spans.
     pub(super) fn copy_lines(
         &self,
         range: Range<usize>,
         separator: &str,
+        cell_ranges: &[Range<usize>],
         output: &mut Vec<crate::markdown_copy::SelectedLine>,
     ) {
-        let mut offset = 0;
-        for (index, line) in self.logical.iter().enumerate() {
-            let end = offset + line.origin.range.len();
+        for (offset, source) in self.logical_sources() {
+            let end = offset + source.range.len();
             if range.start <= end && range.end >= offset {
-                let selected = line.origin.range.start + range.start.saturating_sub(offset)
-                    ..line.origin.range.start + range.end.min(end) - offset;
+                let mut selected = range.start.max(offset)..range.end.min(end);
+                if !cell_ranges.is_empty() {
+                    selected = match table_cell_intersection(cell_ranges, &selected) {
+                        Some(fragment) => fragment,
+                        None => continue,
+                    };
+                }
                 crate::markdown_copy::SelectedLine::append(
                     output,
-                    line.origin.clone(),
-                    selected,
-                    if index == 0 { separator } else { "\n" },
+                    source.clone(),
+                    source.range.start + selected.start - offset
+                        ..source.range.start + selected.end - offset,
+                    if offset == 0 { separator } else { "\n" },
                 );
             }
-            offset = end + 1;
         }
     }
 
@@ -626,6 +791,14 @@ impl TextLayout {
             disclosure_control: None,
         }
     }
+}
+
+fn table_cell_intersection(ranges: &[Range<usize>], within: &Range<usize>) -> Option<Range<usize>> {
+    let fragment = ranges.get(ranges.partition_point(|range| range.end < within.start))?;
+    let start = within.start.max(fragment.start);
+    let end = within.end.min(fragment.end);
+    // An empty cell still contributes a row when copying a rectangle.
+    (start < end || start == end && fragment.is_empty()).then_some(start..end)
 }
 
 fn layout_line(logical: &LogicalLine, text_start: usize, width: u16) -> Vec<TextRow> {

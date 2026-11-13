@@ -1601,6 +1601,25 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 ));
             }
         }
+        // Include columns whose text ends before a neighbor wraps or whose value is empty.
+        let mut end = 0;
+        let edges: std::sync::Arc<[usize]> = column_widths
+            .iter()
+            .map(|width| {
+                end += width + 2 * TABLE_CELL_PADDING + TABLE_COLUMN_GAP;
+                end - TABLE_COLUMN_GAP / 2
+            })
+            .collect();
+        for line in &mut out {
+            if let Some(table) = line
+                .source
+                .as_mut()
+                .and_then(|source| source.copy.as_mut())
+                .and_then(|copy| std::sync::Arc::make_mut(copy).table.as_mut())
+            {
+                table.grid_columns = Some(std::sync::Arc::clone(&edges));
+            }
+        }
         RenderedTableLines {
             table_lines: out,
             table_lines_prewrapped: true,

@@ -12,6 +12,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::LogicalLineSource;
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -21,6 +22,10 @@ mod tests;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TableLine {
     pub(crate) table: Arc<[&'static str]>,
+    // Exclusive column boundaries shared by every visual line in the grid.
+    pub(crate) grid_columns: Option<Arc<[usize]>>,
+    /// Body row displayed by this occurrence of a stacked record.
+    pub(crate) record_row: Option<usize>,
     fragments: Vec<Fragment>,
 }
 
@@ -33,9 +38,42 @@ struct Fragment {
 }
 
 impl TableLine {
+    pub(crate) fn cell_at(&self, offset: usize, column: usize) -> Option<(usize, usize)> {
+        // A byte offset inside a fragment identifies the cell's text.
+        if let Some(fragment) = self.fragments.iter().find(|f| f.output.contains(&offset)) {
+            return Some((fragment.row, fragment.column));
+        }
+        // In a grid, use terminal column boundaries to resolve padding hits.
+        if let Some(ends) = &self.grid_columns {
+            let index = ends.partition_point(|end| *end <= column);
+            return (index < ends.len()).then_some((self.fragments.first()?.row, index));
+        }
+        // In record and pipe layouts, check the space beside each fragment.
+        self.fragments
+            .iter()
+            .find(|f| (f.output.start.saturating_sub(1)..=f.output.end).contains(&offset))
+            .map(|f| (f.row, f.column))
+    }
+
+    pub(crate) fn cell_range(
+        &self,
+        rows: &RangeInclusive<usize>,
+        columns: &RangeInclusive<usize>,
+    ) -> Option<Range<usize>> {
+        let mut fragments = self
+            .fragments
+            .iter()
+            .filter(|fragment| rows.contains(&fragment.row) && columns.contains(&fragment.column));
+        let first = fragments.next()?;
+        let last = fragments.next_back().unwrap_or(first);
+        Some(first.output.start..last.output.end)
+    }
+
     pub(crate) fn empty(table: &Arc<[&'static str]>) -> Self {
         Self {
             table: Arc::clone(table),
+            grid_columns: None,
+            record_row: None,
             fragments: Vec::new(),
         }
     }
@@ -55,6 +93,8 @@ pub(crate) fn annotate_cell(
             line,
             Some(TableLine {
                 table: Arc::clone(table),
+                grid_columns: None,
+                record_row: None,
                 fragments: vec![Fragment {
                     output: source.range.clone(),
                     row,
@@ -92,9 +132,10 @@ pub(crate) fn append(output: &mut Option<TableLine>, source: &LogicalLineSource,
         let mut cell = fragment.source.clone();
         cell.range = cell.range.start + start - fragment.output.start
             ..cell.range.start + end - fragment.output.start;
+        let start = offset + source.prefix_bytes + start - source.range.start;
+        let end = start + cell.range.len();
         output.fragments.push(Fragment {
-            output: offset + source.prefix_bytes + start - source.range.start
-                ..offset + source.prefix_bytes + end - source.range.start,
+            output: start..end,
             row: fragment.row,
             column: fragment.column,
             source: cell,
@@ -106,6 +147,7 @@ pub(super) fn render(
     lines: &[&SelectedLine],
     table: &TableLine,
     entire_selection: bool,
+    rectangle: Option<&RangeInclusive<usize>>,
     output: SelectionOutput,
 ) -> (String, CopyFormat) {
     let mut cells: BTreeMap<(usize, usize), Vec<LogicalLineSource>> = BTreeMap::new();
@@ -161,7 +203,7 @@ pub(super) fn render(
                 .and_then(|copy| copy.table.as_ref())
                 .is_some_and(|table| table.fragments.is_empty())
     });
-    let standalone = cells.len() == 1 && !includes_separator;
+    let standalone = rectangle.is_none() && cells.len() == 1 && !includes_separator;
     if entire_selection
         && standalone
         && let Some(parts) = cells.values().next()
@@ -183,6 +225,9 @@ pub(super) fn render(
                 .into_iter()
                 .map(|source| {
                     let text = &source.text[source.range.clone()];
+                    if rectangle.is_some() && output == SelectionOutput::PlainText {
+                        return text.replace('\\', "\\\\").replace('|', "\\|");
+                    }
                     output.render(text, || {
                         source.copy.as_ref().map_or_else(
                             || super::escape(text),
@@ -205,7 +250,7 @@ pub(super) fn render(
             CopyFormat::Markdown,
         );
     }
-    if cells.is_empty() {
+    if cells.is_empty() && rectangle.is_none() {
         return (
             lines
                 .iter()
@@ -223,6 +268,12 @@ pub(super) fn render(
     for ((row, column), text) in &cells {
         rows.entry(*row)
             .or_insert_with(|| vec![""; table.table.len()])[*column] = text;
+    }
+    if let Some(rectangle) = rectangle {
+        for row in rectangle.clone() {
+            rows.entry(row)
+                .or_insert_with(|| vec![""; table.table.len()]);
+        }
     }
     let mut out = String::new();
     for (row, values) in rows {

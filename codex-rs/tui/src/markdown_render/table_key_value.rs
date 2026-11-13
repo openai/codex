@@ -122,6 +122,7 @@ pub(super) fn render_records(
     let mut out = Vec::new();
 
     for (row_index, row) in rows.iter().enumerate() {
+        let start = out.len();
         for (header, value) in headers.iter().zip(row) {
             if aligned_fields {
                 render_aligned_field(
@@ -134,6 +135,16 @@ pub(super) fn render_records(
                 );
             } else {
                 render_stacked_field(&mut out, header, value, available_width, label_style);
+            }
+        }
+        for line in &mut out[start..] {
+            if let Some(table) = line
+                .source
+                .as_mut()
+                .and_then(|source| source.copy.as_mut())
+                .and_then(|copy| std::sync::Arc::make_mut(copy).table.as_mut())
+            {
+                table.record_row = Some(row_index + 1);
             }
         }
         if row_index + 1 < rows.len() {

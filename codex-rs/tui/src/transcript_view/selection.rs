@@ -3,8 +3,12 @@
 
 use crossterm::event::KeyCode;
 use ratatui::layout::Position as ScreenPosition;
+use std::ops::Range;
+use std::ops::RangeInclusive;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::text::TableCellHit;
+use super::text::TableEndpoint;
 use super::*;
 use crate::clipboard_copy::CopyFormat;
 use crate::clipboard_copy::worker::CopyResult;
@@ -22,6 +26,77 @@ struct PendingCopy {
     characters: usize,
 }
 
+struct TableSelection {
+    anchor: TableCellHit,
+    // A head marks a whole-cell drag. Returning to its anchor selects the whole cell again.
+    head: Option<TableEndpoint>,
+    ranges: Vec<Range<usize>>,
+}
+
+impl TableSelection {
+    fn rectangle_rows(&self) -> Option<RangeInclusive<usize>> {
+        let anchor = self.anchor.endpoint;
+        let head = self.head?;
+        let (first, last) = (anchor.display_row(), head.display_row());
+        (head != anchor).then(|| first.min(last)..=first.max(last))
+    }
+
+    fn bounds(&self) -> Range<usize> {
+        self.ranges[0].start..self.ranges[self.ranges.len() - 1].end
+    }
+
+    fn drag(
+        &mut self,
+        layout: &TextLayout,
+        row: usize,
+        column: u16,
+        pointer: Anchor,
+        origin: (Anchor, Anchor),
+    ) -> Option<(Anchor, Anchor)> {
+        if pointer.key != origin.0.key || !layout.is_table_row(row, pointer.offset, &self.anchor) {
+            return None;
+        }
+        if let Some(hit) = layout.table_cell_at(row, column, pointer.offset)
+            && self.anchor.same_table(&hit)
+        {
+            let hit = if hit.endpoint == self.anchor.endpoint {
+                &self.anchor
+            } else {
+                &hit
+            };
+            let endpoint = hit.endpoint;
+            if self.head.unwrap_or(self.anchor.endpoint) != endpoint {
+                self.ranges = layout.table_selection_ranges(&self.anchor, hit);
+                self.head = Some(endpoint);
+            }
+        }
+        let at = |offset| Anchor { offset, ..origin.0 };
+        let bounds = self.bounds();
+        if let Some(head) = self.head {
+            let start = at(bounds.start);
+            let end = at(bounds.end);
+            return Some(
+                if (head.display_row(), head.cell.1)
+                    < (
+                        self.anchor.endpoint.display_row(),
+                        self.anchor.endpoint.cell.1,
+                    )
+                {
+                    (end, start)
+                } else {
+                    (start, end)
+                },
+            );
+        }
+        let range = layout.table_cell_pointer_range(&self.ranges, row, pointer.offset);
+        Some(if range.start < origin.0.offset {
+            (origin.1, at(range.start))
+        } else {
+            (origin.0, at(range.end))
+        })
+    }
+}
+
 pub(super) struct Selection {
     pending_copy: Option<PendingCopy>,
     primary_owner: Option<Arc<()>>,
@@ -36,6 +111,7 @@ pub(super) struct Selection {
     pub(super) pointer: Option<ScreenPosition>,
     pub(super) pressed_link: Option<String>,
     origin: (Anchor, Anchor),
+    table_cell: Option<TableSelection>,
     unit: SelectionUnit,
     preferred_column: Option<u16>,
 }
@@ -56,12 +132,24 @@ impl Selection {
             pointer: None,
             pressed_link: None,
             origin: (cursor, cursor),
+            table_cell: None,
             unit: SelectionUnit::Character,
             preferred_column: None,
         }
     }
 
+    fn clear_table_cell_scope(&mut self) {
+        if self.table_cell.take().is_some() {
+            if self.unit == SelectionUnit::Character {
+                self.origin.1 = self.origin.0;
+            }
+            self.pending_copy = None;
+            self.primary_owner = None;
+        }
+    }
+
     pub(super) fn set_keyboard_range(&mut self, start: Anchor, end: Anchor) {
+        self.clear_table_cell_scope();
         if (self.start, self.end) != (start, end) {
             self.primary_owner = None;
             self.pending_copy = None;
@@ -127,6 +215,7 @@ impl TranscriptView {
             pointer: None,
             pressed_link: None,
             origin: (start, end),
+            table_cell: None,
             unit: SelectionUnit::Character,
             preferred_column: None,
         });
@@ -141,12 +230,34 @@ impl TranscriptView {
         clicks: u8,
     ) {
         self.copy_mode = None;
-        let Some((anchor, layout)) = self.hit_test(column, row) else {
+        let Some((anchor, layout, layout_row)) = self.hit_test(column, row) else {
             return;
         };
         self.cancel_beginning();
         let unit = SelectionUnit::from_clicks(clicks);
-        let range = unit.range(layout.text(), anchor.offset);
+        let table_cell = if self.select_mode.is_none()
+            && matches!(clicks, 1 | 3)
+            && let Some(cell) = layout.table_cell_at(
+                layout_row,
+                column.saturating_sub(self.area.x),
+                anchor.offset,
+            ) {
+            let ranges = layout.table_selection_ranges(&cell, &cell);
+            Some(TableSelection {
+                head: (clicks == 3).then_some(cell.endpoint),
+                anchor: cell,
+                ranges,
+            })
+        } else {
+            None
+        };
+        let range = match &table_cell {
+            Some(table) if table.head.is_some() => table.bounds(),
+            Some(table) => {
+                layout.table_cell_pointer_range(&table.ranges, layout_row, anchor.offset)
+            }
+            None => unit.range(layout.text(), anchor.offset),
+        };
         let snapshot = self.capture_snapshot(cells);
         self.held_reading = None;
         let start = Anchor {
@@ -163,8 +274,9 @@ impl TranscriptView {
             primary_owner: None,
             snapshot,
             start,
-            end,
+            end: if clicks == 1 { start } else { end },
             origin: (start, end),
+            table_cell,
             unit,
             preferred_column: None,
             dragging: true,
@@ -229,37 +341,58 @@ impl TranscriptView {
     }
 
     pub(super) fn extend_selection(&mut self, column: u16, row: u16) {
-        let Some((end, layout)) = self.hit_test(column, row) else {
+        let Some((end, layout, layout_row)) = self.hit_test(column, row) else {
             return;
         };
         let Some(mut selection) = self.selection.take() else {
             return;
         };
         self.copy_mode = None;
-        // A Shift-click starts a new pointer gesture while retaining the text anchor.
+        // Shift-click extends the retained anchor across cells or entries.
         if !selection.dragging {
+            selection.clear_table_cell_scope();
             selection.pointer_origin_row = row;
             selection.moved_vertically = false;
         }
         let cells = Arc::clone(&selection.snapshot.cells);
-        let range = selection.unit.range(layout.text(), end.offset);
-        let origin = selection.origin;
-        let backwards = (self.resolve(&cells, end), end.offset)
-            < (self.resolve(&cells, origin.0), origin.0.offset);
         let previous = (selection.start, selection.end);
-        selection.start = if backwards { origin.1 } else { origin.0 };
-        selection.end = Anchor {
-            offset: if backwards { range.start } else { range.end },
-            ..end
-        };
-        selection.snapshot.pinned.entry(end.key).or_insert(layout);
+        let table_head = |selection: &Selection| selection.table_cell.as_ref()?.head;
+        let previous_head = table_head(&selection);
+        let table_range = selection.table_cell.as_mut().and_then(|table| {
+            table.drag(
+                &layout,
+                layout_row,
+                column.saturating_sub(self.area.x),
+                end,
+                selection.origin,
+            )
+        });
+        (selection.start, selection.end) = table_range.unwrap_or_else(|| {
+            if selection.table_cell.is_some() && selection.unit == SelectionUnit::Line {
+                return previous;
+            }
+            selection.clear_table_cell_scope();
+            let origin = selection.origin;
+            let range = selection.unit.range(layout.text(), end.offset);
+            selection.snapshot.pinned.entry(end.key).or_insert(layout);
+            let backwards = (self.resolve(&cells, end), end.offset)
+                < (self.resolve(&cells, origin.0), origin.0.offset);
+            (
+                if backwards { origin.1 } else { origin.0 },
+                Anchor {
+                    offset: if backwards { range.start } else { range.end },
+                    ..end
+                },
+            )
+        });
         selection.moved = true;
         selection.moved_vertically |= selection.pointer_origin_row != row;
         selection.pointer = Some(ScreenPosition::new(column, row));
         selection.preferred_column = None;
         self.pin_selection_range(&cells, &mut selection);
-        if previous != (selection.start, selection.end) {
+        if previous != (selection.start, selection.end) || previous_head != table_head(&selection) {
             selection.primary_owner = None;
+            selection.pending_copy = None;
         }
         self.selection = Some(selection);
     }
@@ -269,6 +402,11 @@ impl TranscriptView {
         self.selection.as_ref().is_some_and(|selection| {
             selection.start.key != selection.end.key
                 || selection.start.offset != selection.end.offset
+                || selection
+                    .table_cell
+                    .as_ref()
+                    .and_then(TableSelection::rectangle_rows)
+                    .is_some()
         })
     }
 
@@ -288,9 +426,6 @@ impl TranscriptView {
         end.index = self.resolve(cells, end);
         if (start.index, start.offset) > (end.index, end.offset) {
             std::mem::swap(&mut start, &mut end);
-        }
-        if start == end {
-            return None;
         }
         let mut ranges = Vec::new();
         for index in start.index..=end.index {
@@ -313,7 +448,17 @@ impl TranscriptView {
         Some(ranges)
     }
 
+    fn table_selection(&self) -> Option<&TableSelection> {
+        self.selection.as_ref()?.table_cell.as_ref()
+    }
+
     pub(crate) fn selected_text(&mut self, cells: &[Arc<dyn HistoryCell>]) -> Option<String> {
+        if let Some(table) = self.table_selection() {
+            let rectangle_rows = table.rectangle_rows();
+            let lines = self.selected_copy_lines(cells);
+            let text = crate::markdown_copy::literal_selection(&lines, "", rectangle_rows.as_ref());
+            return (!text.is_empty()).then_some(text);
+        }
         let mut text = String::new();
         let mut previous: Option<Arc<TextLayout>> = None;
         for (layout, range) in self.selected_ranges(cells)? {
@@ -349,6 +494,26 @@ impl TranscriptView {
         }
     }
 
+    fn selected_copy_lines(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+    ) -> Vec<crate::markdown_copy::SelectedLine> {
+        let ranges = self.selected_ranges(cells).unwrap_or_default();
+        let cell_ranges = self
+            .table_selection()
+            .map_or(&[][..], |table| &table.ranges);
+        let mut lines = Vec::new();
+        let mut previous: Option<Arc<TextLayout>> = None;
+        for (layout, range) in ranges {
+            let separator = previous
+                .as_ref()
+                .map_or("", |previous| previous.separator_after(&layout));
+            layout.copy_lines(range, separator, cell_ranges, &mut lines);
+            previous = Some(layout);
+        }
+        lines
+    }
+
     /// Deselect only after confirmed delivery when the current copy policy requests it.
     /// Failures and unacknowledged terminal writes retain the selection.
     pub(crate) fn copy_selected_text_with(
@@ -361,15 +526,10 @@ impl TranscriptView {
             crate::clipboard_copy::CopyFormat,
         ) -> Result<crate::clipboard_copy::CopyStatus, String>,
     ) -> Result<crate::clipboard_copy::CopyStatus, String> {
-        let mut lines = Vec::new();
-        let mut previous: Option<Arc<TextLayout>> = None;
-        for (layout, range) in self.selected_ranges(cells).unwrap_or_default() {
-            let separator = previous
-                .as_ref()
-                .map_or("", |previous| previous.separator_after(&layout));
-            layout.copy_lines(range, separator, &mut lines);
-            previous = Some(layout);
-        }
+        let lines = self.selected_copy_lines(cells);
+        let rectangle_rows = self
+            .table_selection()
+            .and_then(TableSelection::rectangle_rows);
         let override_payload = self.copy_mode.as_ref().and_then(|mode| {
             if mode.whole {
                 mode.response.as_ref().map(|(_, text)| {
@@ -385,10 +545,11 @@ impl TranscriptView {
             }
         });
         let (text, format) = override_payload.unwrap_or_else(|| {
-            let (serialized, format) = crate::markdown_copy::selection(&lines, text);
+            let (serialized, format) =
+                crate::markdown_copy::selection(&lines, text, rectangle_rows.as_ref());
             if format == CopyFormat::Markdown {
                 (
-                    crate::markdown_copy::literal_selection(&lines, text),
+                    crate::markdown_copy::literal_selection(&lines, text, rectangle_rows.as_ref()),
                     CopyFormat::MarkdownSelection(serialized.into()),
                 )
             } else {
@@ -591,6 +752,7 @@ impl TranscriptView {
             return true;
         };
         if let Some(mut selection) = self.selection.take() {
+            selection.clear_table_cell_scope();
             if selection.end != next {
                 selection.primary_owner = None;
             }
@@ -698,6 +860,17 @@ impl TranscriptView {
                 }
                 continue;
             }
+            if let Some(table) = &selection.table_cell {
+                if let Some(fragment) = visible.layout.table_cell_on_row(&table.ranges, visible.row)
+                {
+                    let start = fragment.start.max(begin);
+                    let end = fragment.end.min(finish);
+                    if start < end {
+                        visible.layout.highlight(start..end, area, buf, visible.row);
+                    }
+                }
+                continue;
+            }
             let next = (visible.index + 1..=end.index)
                 .filter_map(|index| {
                     selection
@@ -716,7 +889,7 @@ impl TranscriptView {
         }
     }
 
-    pub(super) fn hit_test(&self, column: u16, row: u16) -> Option<(Anchor, Arc<TextLayout>)> {
+    fn hit_test(&self, column: u16, row: u16) -> Option<(Anchor, Arc<TextLayout>, usize)> {
         let row = row.saturating_sub(self.area.y) as usize;
         let visible = self
             .visible
@@ -731,6 +904,7 @@ impl TranscriptView {
                 row_bias: 0,
             },
             Arc::clone(&visible.layout),
+            visible.row,
         ))
     }
 
