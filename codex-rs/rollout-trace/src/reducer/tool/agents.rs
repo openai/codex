@@ -82,7 +82,7 @@ impl TraceReducer {
         match kind {
             ToolCallKind::AssignAgentTask => {
                 let payload: CollabAgentInteractionBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.queue_message_agent_interaction(
                     tool_call_id,
                     InteractionEdgeKind::AssignAgentTask,
@@ -93,7 +93,7 @@ impl TraceReducer {
             }
             ToolCallKind::SendMessage => {
                 let payload: CollabAgentInteractionBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.queue_message_agent_interaction(
                     tool_call_id,
                     InteractionEdgeKind::SendMessage,
@@ -104,7 +104,7 @@ impl TraceReducer {
             }
             ToolCallKind::CloseAgent => {
                 let payload: CollabCloseBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.upsert_close_agent_interaction(
                     tool_call_id,
                     payload.receiver_thread_id.to_string(),
@@ -135,7 +135,7 @@ impl TraceReducer {
         if matches!(kind, ToolCallKind::Mcp { .. }) {
             return Ok(());
         }
-        let runtime_payload_json = self.read_payload_json(runtime_payload)?;
+        let runtime_payload_json = self.payload_reader.read_json(runtime_payload)?;
         if runtime_payload_json.get("agent_thread_id").is_some() {
             let payload: SubAgentActivityEvent = serde_json::from_value(runtime_payload_json)?;
             return self.end_sub_agent_activity(wall_time_unix_ms, tool_call_id, &kind, &payload);
@@ -277,7 +277,7 @@ impl TraceReducer {
         })
     }
 
-    fn agent_message_content_from_invocation(&self, tool_call_id: &str) -> Result<String> {
+    fn agent_message_content_from_invocation(&mut self, tool_call_id: &str) -> Result<String> {
         let tool_call = self.rollout.tool_calls.get(tool_call_id).with_context(|| {
             format!("agent activity referenced unknown tool call {tool_call_id}")
         })?;
@@ -296,7 +296,7 @@ impl TraceReducer {
                     "agent activity tool call {tool_call_id} referenced missing invocation payload {invocation_payload_id}"
                 )
             })?;
-        let invocation = self.read_payload_json(invocation_payload)?;
+        let invocation = self.payload_reader.read_json(invocation_payload)?;
         let arguments = invocation
             .get("payload")
             .and_then(|payload| payload.get("arguments"))

@@ -9016,7 +9016,10 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() -> anyhow::Re
     let bundle = std::fs::read_dir(traces.path())?.next().unwrap()?.path();
     let rollout = replay_bundle(bundle)?;
     assert_eq!(rollout.status, RolloutStatus::Aborted);
-    assert!(rollout.recording_complete);
+    assert_eq!(
+        rollout.recording_status,
+        codex_rollout_trace::RecordingStatus::Complete
+    );
 
     assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(

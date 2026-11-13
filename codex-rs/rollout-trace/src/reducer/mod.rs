@@ -6,23 +6,20 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::Path;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use anyhow::ensure;
-use serde::de::IgnoredAny;
-use serde_json::Value;
 
 use crate::bundle::MANIFEST_FILE_NAME;
 use crate::bundle::RAW_EVENT_LOG_FILE_NAME;
-use crate::bundle::REDUCED_TRACE_SCHEMA_VERSION;
 use crate::bundle::TRACE_MANIFEST_SCHEMA_VERSION;
 use crate::bundle::TraceBundleManifest;
 use crate::model::ExecutionStatus;
 use crate::model::RolloutTrace;
-use crate::payload::RawPayloadRef;
+use crate::shard::PayloadReader;
+
 use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
 use crate::raw_event::RawTraceEvent;
 use crate::raw_event::RawTraceEventPayload;
@@ -48,9 +45,10 @@ use self::inference::StartedInferenceCall;
 use self::tool::ObservedAgentResultEdge;
 use self::tool::PendingAgentInteractionEdge;
 use self::tool::ToolCallStarted;
+use crate::RecordingStatus;
 
 /// Replays a trace bundle written by this executable into a reduced rollout graph.
-/// A valid prefix has `recording_complete = false`; malformed events or missing
+/// A valid prefix has `RecordingStatus::Unclosed`. Malformed events or missing
 /// or invalid referenced payloads return an error.
 pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     let bundle_dir = bundle_dir.as_ref();
@@ -64,13 +62,12 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     );
     let mut reducer = TraceReducer {
         rollout: RolloutTrace::new(
-            REDUCED_TRACE_SCHEMA_VERSION,
             manifest.trace_id,
             manifest.rollout_id,
             manifest.root_thread_id,
             manifest.started_at_unix_ms,
         ),
-        bundle_dir: bundle_dir.to_path_buf(),
+        payload_reader: PayloadReader::new(bundle_dir),
         next_conversation_item_ordinal: 1,
         next_terminal_operation_ordinal: 1,
         terminal_ids_by_process: BTreeMap::new(),
@@ -104,7 +101,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
             continue;
         }
         ensure!(
-            !reducer.rollout.recording_complete,
+            reducer.rollout.recording_status == RecordingStatus::Unclosed,
             "trace event after recording completed"
         );
         let event: RawTraceEvent = serde_json::from_str(&line)
@@ -132,14 +129,10 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         }
         reducer.apply_event(event)?;
     }
-    for payload in reducer.rollout.raw_payloads.values() {
-        // IgnoredAny checks JSON structure but skips UTF-8 validation inside strings.
-        // Read one body as text so opaque payloads get both checks without a JSON tree.
-        let body = std::fs::read_to_string(reducer.bundle_dir.join(&payload.path))
-            .with_context(|| format!("read payload {}", payload.raw_payload_id))?;
-        serde_json::from_str::<IgnoredAny>(&body)
-            .with_context(|| format!("invalid payload {}", payload.raw_payload_id))?;
-    }
+    reducer.payload_reader.validate(
+        &reducer.rollout.raw_payloads,
+        reducer.rollout.recording_status != RecordingStatus::Unclosed,
+    )?;
     // Spawn edges prefer the child task message as their target, but a child can
     // fail before that message is ever reduced. Only after replaying the whole
     // bundle do we know which spawn deliveries need the child-thread fallback.
@@ -209,7 +202,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
 
 struct TraceReducer {
     rollout: RolloutTrace,
-    bundle_dir: PathBuf,
+    payload_reader: PayloadReader,
     /// First (wall time, sequence) by receiving thread and Responses item ID.
     first_acceptances: BTreeMap<String, BTreeMap<String, (i64, crate::RawEventSeq)>>,
     /// Delivered items awaiting their first model-visible sighting, keyed by thread and wire ID.
@@ -261,27 +254,39 @@ struct TraceReducer {
 }
 
 impl TraceReducer {
-    fn read_payload_json(&self, payload: &RawPayloadRef) -> Result<Value> {
-        // Reducers keep raw bodies out of the graph, but typed replay sometimes
-        // needs a small subset of fields to build semantic objects.
-        let payload_path = self.bundle_dir.join(&payload.path);
-        let file = File::open(&payload_path)
-            .with_context(|| format!("open payload {}", payload.raw_payload_id))?;
-        serde_json::from_reader(BufReader::new(file))
-            .with_context(|| format!("parse payload {}", payload.raw_payload_id))
-    }
-
     fn apply_event(&mut self, event: RawTraceEvent) -> Result<()> {
         // Raw payload refs are reducer-wide evidence, not owned by a single
         // semantic arm. Keep this bookkeeping separate so typed reduction can
         // stay strict without duplicating payload insertion in every case.
-        for payload in event.payload.raw_payload_refs() {
-            self.insert_raw_payload(payload);
+        for payload in event
+            .payload
+            .raw_payload_refs()
+            .into_iter()
+            .flat_map(crate::RawPayloadRef::references)
+        {
+            let old = self
+                .rollout
+                .raw_payloads
+                .insert(payload.raw_payload_id.clone(), payload.clone());
+            ensure!(
+                old.as_ref().is_none_or(|old| old == payload),
+                "conflicting references for payload {}",
+                payload.raw_payload_id
+            );
         }
 
         match event.payload {
             RawTraceEventPayload::RecordingCompleted => {
-                self.rollout.recording_complete = true;
+                self.rollout.recording_status = if self
+                    .rollout
+                    .raw_payloads
+                    .values()
+                    .all(|p| p.capture.is_complete())
+                {
+                    RecordingStatus::Complete
+                } else {
+                    RecordingStatus::ClosedWithPartialPayloads
+                };
             }
             RawTraceEventPayload::RolloutStarted {
                 trace_id,
@@ -366,6 +371,8 @@ impl TraceReducer {
                 model,
                 provider_name,
                 request_payload,
+                prepared_prompt_payload,
+                warmup_context_payload,
             } => {
                 self.start_inference_call(
                     event.seq,
@@ -377,6 +384,8 @@ impl TraceReducer {
                         model,
                         provider_name,
                         request_payload,
+                        prepared_prompt_payload,
+                        warmup_context_payload,
                     },
                 )?;
             }
@@ -636,11 +645,5 @@ impl TraceReducer {
         // Compaction appends input and replacement histories separately. Pending cells
         // must see both before finding their source and outputs in the ordered history.
         self.flush_pending_code_cell_starts()
-    }
-
-    fn insert_raw_payload(&mut self, payload: &RawPayloadRef) {
-        self.rollout
-            .raw_payloads
-            .insert(payload.raw_payload_id.clone(), payload.clone());
     }
 }

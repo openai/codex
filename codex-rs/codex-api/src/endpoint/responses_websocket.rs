@@ -42,6 +42,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -283,17 +284,29 @@ impl ResponsesWebsocketConnection {
             .is_none_or(|stream| stream.pump_task.is_finished())
     }
 
+    pub async fn stream_request(
+        &self,
+        request: ResponsesWsRequest<'_>,
+        connection_reused: bool,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_observer(request, connection_reused, turn_state, |_| {})
+            .await
+    }
+
+    /// Gives the observer a shared copy of the exact JSON before transport dispatch.
     #[instrument(
         name = "responses_websocket.stream_request",
         level = "info",
         skip_all,
         fields(transport = "responses_websocket", api.path = "/responses")
     )]
-    pub async fn stream_request(
+    pub async fn stream_request_with_observer(
         &self,
         request: ResponsesWsRequest<'_>,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        on_encoded: impl FnOnce(&bytes::Bytes),
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -328,7 +341,8 @@ impl ResponsesWebsocketConnection {
             warmup: ws_request.generate == Some(false),
             connection_reused,
         };
-        let request_text = serialize_websocket_request(&request)?;
+        let request_text = Utf8Bytes::from(serialize_websocket_request(&request)?);
+        on_encoded(request_text.as_ref());
 
         let current_span = Span::current();
         tokio::spawn(
@@ -827,7 +841,7 @@ fn is_websocket_receive_failure(
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
-    request_text: String,
+    request_text: Utf8Bytes,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
@@ -873,7 +887,7 @@ async fn run_websocket_response_stream(
                         "type": "response.interrupt",
                         "response_id": response_id,
                         "mode": "discard_partial_items",
-                    }).to_string(),
+                    }).to_string().into(),
                     idle_timeout,
                     /*telemetry*/ None,
                     timing_log_context.connection_reused,
@@ -1104,7 +1118,7 @@ fn safety_buffering_for_event(
 
 async fn send_websocket_request(
     ws_stream: &mut WsStream,
-    request_text: String,
+    request_text: Utf8Bytes,
     idle_timeout: Duration,
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
@@ -1116,13 +1130,10 @@ async fn send_websocket_request(
         return Err(ApiError::WebsocketMessageTooLarge);
     }
     let request_start = Instant::now();
-    let result = tokio::time::timeout(
-        idle_timeout,
-        ws_stream.send(Message::Text(request_text.into())),
-    )
-    .await
-    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-    .and_then(|result| result.map_err(map_ws_stream_error));
+    let result = tokio::time::timeout(idle_timeout, ws_stream.send(Message::Text(request_text)))
+        .await
+        .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+        .and_then(|result| result.map_err(map_ws_stream_error));
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(

@@ -2078,6 +2078,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             let mut denied_results = Vec::new();
             for entry in std::fs::read_dir(traces.path())? {
                 let bundle = entry?.path();
+                let mut reader = codex_rollout_trace::PayloadReader::new(&bundle);
                 for line in std::fs::read_to_string(bundle.join("trace.jsonl"))?.lines() {
                     let event: Value = serde_json::from_str(line)?;
                     let payload = &event["payload"];
@@ -2086,12 +2087,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                         && payload["tool_call_id"] == "guardian-action-0"
                     {
                         assert_eq!(payload["status"], "failed");
-                        let path = payload["runtime_payload"]["path"]
-                            .as_str()
-                            .expect("MCP runtime payload path");
-                        let result: Value =
-                            serde_json::from_reader(std::fs::File::open(bundle.join(path))?)?;
-                        denied_results.push(result);
+                        let reference = serde_json::from_value(payload["runtime_payload"].clone())?;
+                        denied_results.push(reader.read_json(&reference)?);
                     }
                 }
             }

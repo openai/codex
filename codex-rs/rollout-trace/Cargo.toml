@@ -21,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
+zstd = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

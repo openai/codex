@@ -492,7 +492,7 @@ impl TraceReducer {
         let Some(request_payload) = request_payload else {
             return Ok(());
         };
-        let payload = self.read_payload_json(request_payload)?;
+        let payload = self.payload_reader.read_json(request_payload)?;
         if payload.get("tool_name").and_then(Value::as_str) != Some("wait") {
             return Ok(());
         }

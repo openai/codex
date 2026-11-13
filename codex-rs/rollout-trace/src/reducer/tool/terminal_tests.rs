@@ -22,6 +22,7 @@ use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::ROOT_THREAD_ID;
+use crate::reducer::test_support::append_inference_start;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::generic_summary;
 use crate::reducer::test_support::message;
@@ -555,9 +556,10 @@ fn invalid_write_stdin_arguments_remain_failed_tool_calls() -> anyhow::Result<()
                 json!({"type": "error", "error": "invalid arguments"}),
             ),
         ] {
-            let payload = std::fs::read(temp.path().join(&rollout.raw_payloads[id].path))?;
+            let mut reader = crate::PayloadReader::new(temp.path());
+            let payload = reader.read(&rollout.raw_payloads[id])?;
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&payload)?,
+                serde_json::from_slice::<serde_json::Value>(payload)?,
                 expected
             );
         }
@@ -654,14 +656,7 @@ fn append_inference_with_tool_call(writer: &TraceWriter) -> anyhow::Result<()> {
             "input": [message("user", "run tests")]
         }),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-1".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-1".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: request,
-    })?;
+    append_inference_start(writer, "inference-1", "turn-1", request)?;
 
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
@@ -696,13 +691,6 @@ fn append_followup_with_tool_output(writer: &TraceWriter) -> anyhow::Result<()> 
             }]
         }),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-2".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-2".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: request,
-    })?;
+    append_inference_start(writer, "inference-2", "turn-2", request)?;
     Ok(())
 }

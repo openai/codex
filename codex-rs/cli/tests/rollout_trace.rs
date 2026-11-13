@@ -25,6 +25,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
@@ -64,7 +65,12 @@ async fn enabled_recording_cannot_silently_fail_to_start() -> Result<()> {
     let mut bundles = std::fs::read_dir(trace_root)?;
     let bundle = bundles.next().unwrap()?.path();
     assert!(bundles.next().is_none());
-    assert!(codex_rollout_trace::replay_bundle(bundle)?.recording_complete);
+    assert_eq!(
+        reduce_with_recording_binary(&codex, home.path(), &bundle)
+            .await?
+            .recording_status,
+        codex_rollout_trace::RecordingStatus::Complete
+    );
     Ok(())
 }
 
@@ -141,23 +147,13 @@ async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
         );
         assert!(app.shutdown_gracefully().await?.success());
 
-        // Exercise the exported artifact, not just an in-process reducer call.
         // There is no following request to prove acceptance of this final item.
         let bundle = std::fs::read_dir(traces.path())?.next().unwrap()?.path();
-        let reduced = tokio::process::Command::new(&codex)
-            .env("CODEX_HOME", home.path())
-            .args(["debug", "trace-reduce"])
-            .arg(&bundle)
-            .output()
-            .await?;
-        assert!(
-            reduced.status.success(),
-            "{}",
-            String::from_utf8_lossy(&reduced.stderr)
+        let rollout = reduce_with_recording_binary(&codex, home.path(), &bundle).await?;
+        assert_eq!(
+            rollout.recording_status,
+            codex_rollout_trace::RecordingStatus::Complete
         );
-        let rollout: RolloutTrace =
-            serde_json::from_reader(std::fs::File::open(bundle.join("state.json"))?)?;
-        assert!(rollout.recording_complete);
         let call = rollout.inference_calls.values().next().unwrap();
         let output_id = &call.response_item_ids[0];
         let output = &rollout.conversation_items[output_id];
@@ -186,6 +182,20 @@ async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
             .iter()
             .find(|request| request.url.path().ends_with("/responses"))
             .unwrap();
+        let mut reader = codex_rollout_trace::PayloadReader::new(&bundle);
+        assert_eq!(
+            reader.read(&rollout.raw_payloads[&call.raw_request_payload_id])?,
+            request.body.as_slice()
+        );
+        let prepared = reader.read_json(&rollout.raw_payloads[&call.prepared_prompt_payload_id])?;
+        assert!(prepared["base_instructions"]["text"].is_string());
+        assert!(
+            prepared["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["role"] == "user")
+        );
         assert_eq!(
             request.headers["x-codex-inference-call-id"].to_str()?,
             call.inference_call_id
@@ -263,20 +273,11 @@ async fn accepted_output_survives_interruption_and_shutdown() -> Result<()> {
     // Reduce immediately after shutdown: the background stream recorder must
     // have preserved the accepted output even without response.completed.
     let bundle = std::fs::read_dir(traces.path())?.next().unwrap()?.path();
-    let reduced = tokio::process::Command::new(&codex)
-        .env("CODEX_HOME", home.path())
-        .args(["debug", "trace-reduce"])
-        .arg(&bundle)
-        .output()
-        .await?;
-    assert!(
-        reduced.status.success(),
-        "{}",
-        String::from_utf8_lossy(&reduced.stderr)
+    let rollout = reduce_with_recording_binary(&codex, home.path(), &bundle).await?;
+    assert_eq!(
+        rollout.recording_status,
+        codex_rollout_trace::RecordingStatus::Complete
     );
-    let rollout: RolloutTrace =
-        serde_json::from_reader(std::fs::File::open(bundle.join("state.json"))?)?;
-    assert!(rollout.recording_complete);
     assert_eq!(rollout.inference_calls.len(), 1);
     let call = rollout.inference_calls.values().next().unwrap();
     assert_eq!(call.execution.status, ExecutionStatus::Cancelled);
@@ -301,4 +302,26 @@ async fn accepted_output_survives_interruption_and_shutdown() -> Result<()> {
         .collect();
     assert_eq!(accepted_messages, vec![output_id]);
     Ok(())
+}
+
+/// Reduce with the executable that recorded the bundle, then read its exported graph.
+async fn reduce_with_recording_binary(
+    codex: &Path,
+    home: &Path,
+    bundle: &Path,
+) -> Result<RolloutTrace> {
+    let reduced = tokio::process::Command::new(codex)
+        .env("CODEX_HOME", home)
+        .args(["debug", "trace-reduce"])
+        .arg(bundle)
+        .output()
+        .await?;
+    assert!(
+        reduced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    Ok(serde_json::from_reader(std::fs::File::open(
+        bundle.join("state.json"),
+    )?)?)
 }

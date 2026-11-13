@@ -62,22 +62,28 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     assert_eq!(replayed.root_thread_id, thread_id.to_string());
     assert_eq!(replayed.threads[&thread_id.to_string()].agent_path, "/root");
     assert_eq!(replayed.raw_payloads.len(), 1);
-    assert!(!replayed.recording_complete);
+    assert_eq!(replayed.recording_status, crate::RecordingStatus::Unclosed);
 
     thread_trace.record_protocol_event(&EventMsg::ShutdownComplete);
     drop(thread_trace);
     let complete = replay_bundle(&bundle_dir)?;
     assert_eq!(complete.status, RolloutStatus::Completed);
-    assert!(complete.recording_complete);
+    assert_eq!(complete.recording_status, crate::RecordingStatus::Complete);
 
     // A syntactically valid prefix is still an incomplete export.
     let path = bundle_dir.join("trace.jsonl");
     let events = fs::read_to_string(&path)?;
     fs::write(&path, events.strip_suffix('\n').unwrap())?;
-    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
+    assert_eq!(
+        replay_bundle(&bundle_dir)?.recording_status,
+        crate::RecordingStatus::Unclosed
+    );
     let (prefix, _) = events.trim_end().rsplit_once('\n').unwrap();
     fs::write(&path, prefix)?;
-    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
+    assert_eq!(
+        replay_bundle(&bundle_dir)?.recording_status,
+        crate::RecordingStatus::Unclosed
+    );
     fs::write(&path, &events)?;
 
     // Completion closes the log; even a correctly numbered later event is invalid.
@@ -93,11 +99,33 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
         .values()
         .find(|payload| payload.kind == RawPayloadKind::ProtocolEvent)
         .unwrap();
-    fs::write(bundle_dir.join(&opaque.path), "{\"truncated\":")?;
+    let shard = opaque.shard.unwrap();
+    let shard_path = bundle_dir.join(format!("payloads/{shard:06}.zst"));
+    let compressed = fs::read(&shard_path)?;
+    // Even when all records can be decoded, a completed bundle requires the frame checksum.
+    fs::write(&shard_path, &compressed[..compressed.len() - 1])?;
     assert!(replay_bundle(&bundle_dir).is_err());
-    fs::write(bundle_dir.join(&opaque.path), b"{\"value\":\"\xff\"}")?;
+    let mut corrupt_checksum = compressed.clone();
+    *corrupt_checksum.last_mut().unwrap() ^= 1;
+    fs::write(&shard_path, corrupt_checksum)?;
     assert!(replay_bundle(&bundle_dir).is_err());
-    fs::remove_file(bundle_dir.join(&opaque.path))?;
+    fs::write(&shard_path, &compressed)?;
+
+    let mut reader = crate::PayloadReader::new(&bundle_dir);
+    let original = reader.read(opaque)?;
+    let mut decoded = zstd::decode_all(compressed.as_slice())?;
+    let start = decoded
+        .windows(original.len())
+        .position(|body| body == original)
+        .unwrap();
+    let string_byte = start + original.iter().position(|&b| b == b'"').unwrap() + 1;
+    for (index, bad_byte) in [(start, b'?'), (string_byte, 0xff)] {
+        let old_byte = std::mem::replace(&mut decoded[index], bad_byte);
+        fs::write(&shard_path, zstd::encode_all(decoded.as_slice(), 3)?)?;
+        assert!(replay_bundle(&bundle_dir).is_err());
+        decoded[index] = old_byte;
+    }
+    fs::remove_file(&shard_path)?;
     assert!(replay_bundle(&bundle_dir).is_err());
 
     Ok(())
@@ -157,9 +185,15 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
     root_trace.record_ended(RolloutStatus::Completed);
     drop(root_trace);
     // Root shutdown does not close the recording while a child still owns it.
-    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
+    assert_eq!(
+        replay_bundle(&bundle_dir)?.recording_status,
+        crate::RecordingStatus::Unclosed
+    );
     drop(child_trace);
-    assert!(replay_bundle(&bundle_dir)?.recording_complete);
+    assert_eq!(
+        replay_bundle(&bundle_dir)?.recording_status,
+        crate::RecordingStatus::Complete
+    );
 
     Ok(())
 }
@@ -178,18 +212,30 @@ fn resumed_child_rejects_a_failed_shared_writer() -> anyhow::Result<()> {
 
     // A parent payload write fails while the child is evicted.
     let bundle = single_bundle_dir(temp.path())?;
-    let payloads = bundle.join("payloads");
-    let backup = temp.path().join("saved-payloads");
-    fs::rename(&payloads, &backup)?;
-    root.record_protocol_event(&EventMsg::ShutdownComplete);
-    fs::rename(backup, payloads)?;
+    // Occupy the next shard path so rotation fails without moving an open file.
+    let next_shard = bundle.join("payloads/000002.zst");
+    fs::write(&next_shard, [])?;
+    let ThreadTraceContextState::Enabled(context) = &root.state else {
+        unreachable!()
+    };
+    let oversized = "x".repeat(32 * 1024 * 1024);
+    assert!(
+        context
+            .writer
+            .write_json_payload(RawPayloadKind::ProtocolEvent, &oversized)
+            .is_err()
+    );
+    fs::remove_file(next_shard)?;
 
     assert!(
         root.resume_child_thread_trace(child_id.to_string())
             .is_err()
     );
     drop(root);
-    assert!(!replay_bundle(&bundle)?.recording_complete);
+    assert_eq!(
+        replay_bundle(&bundle)?.recording_status,
+        crate::RecordingStatus::Unclosed
+    );
     Ok(())
 }
 
@@ -215,7 +261,8 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
     let inference_trace =
         thread_trace.inference_trace_context("turn-1", "gpt-test", "test-provider");
     let inference_attempt = inference_trace.start_attempt();
-    inference_attempt.record_started(&serde_json::json!({ "kind": "inference" }));
+    let input = serde_json::json!({ "kind": "inference" });
+    inference_attempt.record_started(serde_json::to_vec(&input)?, &input, || Ok(None));
     let token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
     inference_attempt.record_completed("response-1", Some("req-1"), &token_usage, &[]);
     inference_attempt.record_failed("inference failed", /*upstream_request_id*/ None, &[]);

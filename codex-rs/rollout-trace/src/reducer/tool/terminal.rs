@@ -57,7 +57,7 @@ impl TraceReducer {
             return Ok(None);
         };
 
-        let payload = self.read_payload_json(invocation_payload)?;
+        let payload = self.payload_reader.read_json(invocation_payload)?;
         let Some(request) = parse_dispatch_terminal_request(payload).with_context(|| {
             format!(
                 "parse terminal invocation payload {} as dispatch payload",
@@ -92,7 +92,7 @@ impl TraceReducer {
             return Ok(None);
         };
 
-        let payload = self.read_payload_json(runtime_payload)?;
+        let payload = self.payload_reader.read_json(runtime_payload)?;
         let payload: ExecCommandBeginPayload =
             serde_json::from_value(payload).with_context(|| {
                 format!(
@@ -173,7 +173,7 @@ impl TraceReducer {
         };
         let response = response_payload
             .map(|payload| {
-                let value = self.read_payload_json(payload)?;
+                let value = self.payload_reader.read_json(payload)?;
                 let response = parse_terminal_response_payload(
                     value,
                     &operation_kind,

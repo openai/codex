@@ -51,6 +51,18 @@ pub type EdgeId = String;
 /// Reducer-owned ID for request/log correlation metadata.
 pub type CorrelationId = String;
 
+/// Whether the recorder sealed the bundle and captured all referenced payload bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingStatus {
+    /// No closing event was observed. A live or interrupted bundle can have this state.
+    Unclosed,
+    /// The event log closed cleanly with one or more intentional capture gaps.
+    ClosedWithPartialPayloads,
+    /// The log closed and every referenced payload was captured in full.
+    Complete,
+}
+
 /// Canonical reduced graph for one Codex rollout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RolloutTrace {
@@ -67,9 +79,7 @@ pub struct RolloutTrace {
     /// Wall-clock timestamp for terminal rollout status. `None` means running or partial trace.
     pub ended_at_unix_ms: Option<i64>,
     pub status: RolloutStatus,
-    /// All recorder handles closed without a recorded write failure; not task success.
-    #[serde(default)]
-    pub recording_complete: bool,
+    pub recording_status: RecordingStatus,
     pub root_thread_id: AgentThreadId,
     pub threads: BTreeMap<AgentThreadId, AgentThread>,
     pub codex_turns: BTreeMap<CodexTurnId, CodexTurn>,
@@ -88,27 +98,26 @@ pub struct RolloutTrace {
     pub compaction_requests: BTreeMap<CompactionRequestId, CompactionRequest>,
     /// Information-flow edges between threads, cells, tools, and runtime resources.
     pub interaction_edges: BTreeMap<EdgeId, InteractionEdge>,
-    /// Raw JSON payloads keyed by raw-payload ID. Most point at files outside this object.
+    /// Index from raw payload IDs to their shard and role.
     pub raw_payloads: BTreeMap<RawPayloadId, RawPayloadRef>,
 }
 
 impl RolloutTrace {
     /// Builds an empty reduced trace that a reducer can populate.
     pub(crate) fn new(
-        schema_version: u32,
         trace_id: String,
         rollout_id: String,
         root_thread_id: AgentThreadId,
         started_at_unix_ms: i64,
     ) -> Self {
         Self {
-            schema_version,
+            schema_version: crate::bundle::REDUCED_TRACE_SCHEMA_VERSION,
             trace_id,
             rollout_id,
             started_at_unix_ms,
             ended_at_unix_ms: None,
             status: RolloutStatus::Running,
-            recording_complete: false,
+            recording_status: RecordingStatus::Unclosed,
             root_thread_id,
             threads: BTreeMap::new(),
             codex_turns: BTreeMap::new(),

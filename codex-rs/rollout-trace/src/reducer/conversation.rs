@@ -49,7 +49,8 @@ impl TraceReducer {
         {
             return Ok(());
         }
-        let item = normalize::normalize_model_item(&self.read_payload_json(payload)?, payload)?;
+        let item =
+            normalize::normalize_model_item(&self.payload_reader.observed_json(payload)?, payload)?;
         if item.agent_message.is_none() || item.responses_item_id.as_deref() != Some(wire_id) {
             bail!("accepted agent message does not match receipt {wire_id}");
         }
@@ -73,7 +74,7 @@ impl TraceReducer {
         codex_turn_id: &str,
         request_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
-        let payload = self.read_payload_json(request_payload)?;
+        let payload = self.payload_reader.read_json(request_payload)?;
         let Some(input) = payload.get("input") else {
             bail!(
                 "inference request payload {} did not contain input",
@@ -169,7 +170,7 @@ impl TraceReducer {
         inference_call_id: &InferenceCallId,
         response_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
-        let payload = self.read_payload_json(response_payload)?;
+        let payload = self.payload_reader.read_json(response_payload)?;
         let Some(output_items) = payload.get("output_items").and_then(Value::as_array) else {
             bail!(
                 "inference response payload {} did not contain output_items",
@@ -345,7 +346,7 @@ impl TraceReducer {
         compaction_id: &CompactionId,
         checkpoint_payload: &RawPayloadRef,
     ) -> Result<ReducedCompactionCheckpoint> {
-        let payload = self.read_payload_json(checkpoint_payload)?;
+        let payload = self.payload_reader.read_json(checkpoint_payload)?;
         let input_history = required_array(&payload, "input_history", checkpoint_payload)?;
         let replacement_history =
             required_array(&payload, "replacement_history", checkpoint_payload)?;

@@ -13,6 +13,8 @@ use crate::payload::RawPayloadKind;
 use crate::raw_event::RawToolCallRequester;
 use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::append_inference_request;
+use crate::reducer::test_support::append_inference_start;
+use crate::reducer::test_support::append_inference_start_for_thread;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::generic_summary;
 use crate::reducer::test_support::message;
@@ -34,14 +36,7 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
             "input": [message("user", "count files")]
         }),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-1".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-1".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: request,
-    })?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
         &json!({
@@ -125,14 +120,7 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
             }]
         }),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-2".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-2".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: followup,
-    })?;
+    append_inference_start(&writer, "inference-2", "turn-2", followup)?;
     let wait_request = writer.write_json_payload(
         RawPayloadKind::ToolInvocation,
         &json!({
@@ -368,14 +356,7 @@ fn cancelled_turn_terminates_unfinished_code_cell() -> anyhow::Result<()> {
             "input": [message("user", "count files")]
         }),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-1".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-1".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: request,
-    })?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
         &json!({
@@ -461,14 +442,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
                 "input": [message("user", "run code")]
             }),
         )?;
-        writer.append(RawTraceEventPayload::InferenceStarted {
-            inference_call_id: inference_call_id.to_string(),
-            thread_id: thread_id.to_string(),
-            codex_turn_id: turn_id.to_string(),
-            model: "gpt-test".to_string(),
-            provider_name: "test-provider".to_string(),
-            request_payload: request,
-        })?;
+        append_inference_start_for_thread(&writer, thread_id, turn_id, inference_call_id, request)?;
         writer.append_with_context(
             trace_context_for_thread(thread_id, turn_id),
             RawTraceEventPayload::CodeCellStarted {

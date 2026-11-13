@@ -14,7 +14,7 @@ use codex_protocol::models::ResponseItem;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::inference::TraceResponseItems;
+use crate::inference::serialize_trace_items;
 use crate::model::AgentThreadId;
 use crate::model::CodexTurnId;
 use crate::model::CompactionId;
@@ -71,7 +71,8 @@ struct EnabledCompactionTraceAttempt {
 
 #[derive(Serialize)]
 struct TracedCompactionCompleted<'a> {
-    output_items: TraceResponseItems<'a>,
+    #[serde(serialize_with = "serialize_trace_items")]
+    output_items: &'a [ResponseItem],
 }
 
 /// History replacement checkpoint persisted when compaction installs new live history.
@@ -213,9 +214,7 @@ impl CompactionTraceAttempt {
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
         };
-        let response_payload = TracedCompactionCompleted {
-            output_items: TraceResponseItems(output_items),
-        };
+        let response_payload = TracedCompactionCompleted { output_items };
         let Some(response_payload) = write_json_payload_best_effort(
             &attempt.context.writer,
             RawPayloadKind::CompactionResponse,

@@ -1129,11 +1129,8 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
         })
         .collect();
     assert_eq!(completions.len(), 1);
-    let payload_path = completions[0]["runtime_payload"]["path"]
-        .as_str()
-        .expect("MCP runtime payload path");
-    let payload: serde_json::Value =
-        serde_json::from_reader(std::fs::File::open(bundle.join(payload_path))?)?;
+    let reference = serde_json::from_value(completions[0]["runtime_payload"].clone())?;
+    let payload = codex_rollout_trace::PayloadReader::new(&bundle).read_json(&reference)?;
     let expected = json!({
         "content": [
             {"type": "text", "text": "large-mcp-content-".repeat(DEFAULT_OUTPUT_BYTES_CAP / 8)},

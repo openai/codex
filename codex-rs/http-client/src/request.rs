@@ -33,6 +33,11 @@ impl EncodedJsonBody {
         &self.bytes
     }
 
+    /// Observers can clone this handle to retain the transport JSON without copying it.
+    pub fn shared_bytes(&self) -> &Bytes {
+        &self.bytes
+    }
+
     pub(crate) fn trace_bytes(&self) -> &[u8] {
         self.trace_bytes.as_ref().unwrap_or(&self.bytes)
     }

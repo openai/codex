@@ -1469,14 +1469,15 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
         "test-provider".to_string(),
     );
     let attempt = inference_trace.start_attempt();
-    attempt.record_started(&json!({
+    let request = json!({
         "model": "gpt-test",
         "input": [{
             "type": "message",
             "role": "user",
             "content": [{"type": "input_text", "text": "hello"}]
         }],
-    }));
+    });
+    attempt.record_started(serde_json::to_vec(&request)?, &request, || Ok(None));
     Ok(attempt)
 }
 
@@ -1802,7 +1803,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         rollout.threads["thread-root"].conversation_item_ids,
         inference.request_item_ids
     );
-    assert_eq!(rollout.raw_payloads.len(), 2);
+    assert_eq!(rollout.raw_payloads.len(), 3);
 
     Ok(())
 }
@@ -2073,7 +2074,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
 
     assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
     assert_eq!(inference.response_item_ids.len(), 1);
-    assert_eq!(rollout.raw_payloads.len(), 2);
+    assert_eq!(rollout.raw_payloads.len(), 3);
 
     Ok(())
 }
@@ -2898,8 +2899,9 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         .values()
         .find(|payload| payload.kind == codex_rollout_trace::RawPayloadKind::InferenceResponse)
         .expect("response trace payload");
-    let recorded: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(temp.path().join(&payload.path))?)?;
+    let recorded: serde_json::Value = serde_json::from_slice(
+        codex_rollout_trace::PayloadReader::new(temp.path()).read(payload)?,
+    )?;
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
 }

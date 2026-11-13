@@ -915,12 +915,13 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
-    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let mut prompt = prompt_with_input_and_instructions(vec![message_item("hello")], "Base rules");
     let prewarm_responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
 
     client_session
@@ -989,6 +990,29 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
         }
     }
 
+    let attribution = serde_json::json!([{"provenance": {"type": "user"}}]);
+    prompt.input.push(serde_json::from_value(serde_json::json!({
+        "type": "message", "role": "user", "content": [{"type": "input_text", "text": "follow up"}],
+        "internal_chat_message_metadata_passthrough": {"content_item_metadata": attribution}
+    })).unwrap());
+    let mut next = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &inference_trace,
+        )
+        .await
+        .expect("second websocket stream");
+    while let Some(event) = next.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
     let connection = server.single_connection();
     let follow_up = connection
         .get(1)
@@ -998,20 +1022,50 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     assert_eq!(follow_up["input"], serde_json::json!([]));
 
     let rollout = replay_bundle(trace_dir.path()).expect("replay trace");
-    let inference = rollout
-        .inference_calls
-        .values()
-        .next()
-        .expect("inference should be present");
-    assert_eq!(inference.request_item_ids.len(), 1);
-    assert_eq!(
-        rollout.conversation_items[&inference.request_item_ids[0]]
-            .body
-            .parts,
-        vec![ConversationPart::Text {
-            text: "hello".to_string(),
-        }],
-    );
+    let mut reader = codex_rollout_trace::PayloadReader::new(trace_dir.path());
+    assert_eq!(rollout.inference_calls.len(), 2);
+    for (index, response_id, previous, wire_items, prepared_items) in
+        [(1, "resp-1", "warm-1", 0, 1), (2, "resp-2", "resp-1", 1, 2)]
+    {
+        let call = rollout
+            .inference_calls
+            .values()
+            .find(|call| call.response_id.as_deref() == Some(response_id))
+            .unwrap();
+        let outgoing = connection[index].body_json();
+        assert_eq!(
+            reader
+                .read_json(&rollout.raw_payloads[&call.raw_request_payload_id])
+                .unwrap(),
+            outgoing
+        );
+        assert_eq!(outgoing["previous_response_id"], previous);
+        assert_eq!(outgoing["input"].as_array().unwrap().len(), wire_items);
+        let prepared = reader
+            .read_json(&rollout.raw_payloads[&call.prepared_prompt_payload_id])
+            .unwrap();
+        assert_eq!(prepared["base_instructions"]["text"], "Base rules");
+        assert_eq!(
+            prepared["input"],
+            serde_json::to_value(&prompt.input[..prepared_items]).unwrap()
+        );
+        if index == 2 {
+            assert_eq!(
+                prepared["input"][1]["internal_chat_message_metadata_passthrough"]["content_item_metadata"],
+                attribution
+            );
+            assert!(outgoing["input"][0]["internal_chat_message_metadata_passthrough"]["content_item_metadata"].is_null());
+        }
+        assert_eq!(call.request_item_ids.len(), prepared_items + 1);
+        assert_eq!(
+            rollout.conversation_items[&call.request_item_ids[1]]
+                .body
+                .parts,
+            vec![ConversationPart::Text {
+                text: "hello".to_string()
+            }]
+        );
+    }
 
     server.shutdown().await;
 }

@@ -67,7 +67,7 @@ flowchart TD
     subgraph Bundle["trace bundle"]
         Manifest["manifest.json\ntrace_id, rollout_id, root_thread_id"]
         Events["trace.jsonl\nordered raw event spine"]
-        Payloads["payloads/*.json\nlarge raw evidence"]
+        Payloads["payloads/*.zst\nlarge raw evidence"]
     end
 
     Reducer["replay_bundle\ndeterministic offline reducer"]
@@ -110,7 +110,7 @@ writer. Disabled contexts accept the same calls and record nothing.
 
 When tracing is enabled, a thread can start or resume only if its recorder
 initializes successfully. A later write failure stops recording. Partial
-bundles remain available for replay. The reducer sets `recording_complete` in
+bundles remain available for replay. The reducer sets `recording_status` to `complete` in
 `state.json` when it reads the closing record written by the last trace handle,
 including when the recorded task was interrupted.
 
@@ -120,9 +120,32 @@ A trace bundle contains:
 
 - `manifest.json`: trace identity and bundle metadata.
 - `trace.jsonl`: append-only raw events ordered by writer-assigned `seq`.
-- `payloads/*.json`: raw requests, responses, tool inputs/results, runtime
+- `payloads/*.zst`: raw requests, responses, tool inputs/results, runtime
   events, terminal output, compaction data, and protocol snapshots.
 - `state.json`: reduced trace for consumers, written by `codex debug trace-reduce`.
+
+Schema v3 stores whole JSON bodies in numbered Zstandard shards. Every reference in
+`trace.jsonl` carries the payload ID and shard number. The reducer collects these
+references in `state.json` under `raw_payloads`, so the same index serves every
+payload kind. `PayloadReader::read` resolves a reference to JSON bytes and caches
+the two most recently read shards. An oversized shard occupies the cache alone.
+Reduce a bundle with the binary that recorded it.
+
+For an inference call, `raw_request_payload_id` resolves to the outgoing HTTP
+body or WebSocket message, including its `previous_response_id` and incremental
+`input`. `prepared_prompt_payload_id` resolves to Core's input to formatting,
+including base instructions and their provenance, ordered history, tools and
+output settings. For a continuation from an unrecorded WebSocket warmup, the
+start event also links the full formatted input so the reducer can resolve the
+missing history.
+
+Each shard is one Zstandard frame (level 3, 8 MiB window, checksum enabled).
+Each record contains a little-endian 16-bit ID length, a little-endian 64-bit
+body length, the UTF-8 ID, then the JSON bytes. The writer flushes a record
+before publishing its reference, and rotates before the next record would
+exceed 32 MiB uncompressed. An oversized record occupies one shard. The final
+frame is sealed before the writer publishes `RecordingCompleted`. A live bundle
+can be reduced through its published records with the last frame still open.
 
 `trace_id` identifies this diagnostic artifact. `rollout_id` identifies the
 Codex rollout/session being observed. Keeping those separate lets us reason about
@@ -143,7 +166,7 @@ By default this writes `<trace-bundle>/state.json`. Within the recording binary,
 flowchart LR
     Model["model-visible payloads\nrequests and response output items"]
     Runtime["runtime observations\ntool dispatch, terminal output, code-mode JSON"]
-    RawPayloads["payloads/*.json\nexact evidence"]
+    RawPayloads["payloads/*.zst\nexact evidence"]
     Reducer["reducer"]
     Conversation["ConversationItem\nwhat the model saw"]
     ToolCall["ToolCall\nruntime tool boundary"]
@@ -214,7 +237,7 @@ the same raw event log, payload directory, and reduced `state.json`.
 The reducer is strict where the raw evidence should be self-consistent:
 
 - raw events are replayed in `seq` order;
-- payload files must exist before events refer to them;
+- payload records must be readable before events refer to them;
 - reduced object IDs are stable within one replay;
 - runtime events may be queued until the model-visible source or delivery target
   has been observed;

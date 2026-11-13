@@ -55,6 +55,8 @@ pub struct AgentThread {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum AgentOrigin {
     Root,
+    /// Child session metadata was omitted by a capture limit.
+    Unknown,
     Spawned {
         parent_thread_id: AgentThreadId,
         /// Interaction edge that carried the spawn task.

@@ -18,10 +18,12 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-/// API request payload for a single model turn
-#[derive(Debug, Clone)]
+/// Core inputs to provider request formatting for a single model turn.
+/// The rollout trace serializes this shape before transport-specific rewrites.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Prompt {
     /// Conversation context input items.
+    #[serde(serialize_with = "codex_rollout_trace::serialize_trace_items")]
     pub input: Vec<ResponseItem>,
 
     /// Tool definitions to inject into this request, empty when supplied by history.
