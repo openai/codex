@@ -11,8 +11,8 @@ rust_library(
     deps = [
         "//bazel/rules/testing/wine:wine_test_support",
         "//codex-rs/utils/cargo-bin",
-        "@crates//:anyhow",
-        "@crates//:tokio",
+        "@crates//anyhow",
+        "@crates//tokio",
     ],
 )
 
@@ -26,8 +26,8 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":wine-exec-server-test-support",
-        "@crates//:anyhow",
-        "@crates//:tokio",
+        "@crates//anyhow",
+        "@crates//tokio",
     ],
 )
 
@@ -42,6 +42,6 @@ rust_binary(
         "//codex-rs/exec-server",
         "//codex-rs/http-client",
         "//codex-rs/utils/pty",
-        "@crates//:tokio",
+        "@crates//tokio",
     ],
 )

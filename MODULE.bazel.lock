@@ -233,6 +233,8 @@
     "https://bcr.bazel.build/modules/rules_python/1.8.0/MODULE.bazel": "c151c025dbcc93d8f62ab68ecc313c9176a868a0e6386981bf2a12aec77cbe7b",
     "https://bcr.bazel.build/modules/rules_python/2.4.2/MODULE.bazel": "fde4307b6765b6f261c40a2c08140a5d10e3aa9b6c12e23bb57d31b7ce124c29",
     "https://bcr.bazel.build/modules/rules_python/2.4.2/source.json": "225828a44c27fa97ba8a594e6fd3b752061779f052d40c4bb5d6b45f2ded567b",
+    "https://bcr.bazel.build/modules/rules_rs/0.2.3/MODULE.bazel": "0f5051c62a5cd780e78169bc9154b9f9e15774486faa9d1c98c34bf8380dd48f",
+    "https://bcr.bazel.build/modules/rules_rs/0.2.3/source.json": "349ce52664a611a9a4a83f7533fe85ceb07d1e603493ccf472249a54a4a76fa7",
     "https://bcr.bazel.build/modules/rules_shell/0.2.0/MODULE.bazel": "fda8a652ab3c7d8fee214de05e7a9916d8b28082234e8d2c0094505c5268ed3c",
     "https://bcr.bazel.build/modules/rules_shell/0.3.0/MODULE.bazel": "de4402cd12f4cc8fda2354fce179fdb068c0b9ca1ec2d2b17b3e21b24c1a937b",
     "https://bcr.bazel.build/modules/rules_shell/0.4.1/MODULE.bazel": "00e501db01bbf4e3e1dd1595959092c2fadf2087b2852d3f553b5370f5633592",

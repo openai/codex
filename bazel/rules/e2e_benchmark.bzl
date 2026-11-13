@@ -35,7 +35,7 @@ def codex_e2e_benchmark(name, binaries = [], data = [], deps = []):
             normal = True,
             normal_dev = True,
         ) + [
-            "@crates//:divan",
+            "@crates//divan",
         ] + deps,
     )
 

@@ -14,7 +14,7 @@ rust_library(
     edition = "2024",
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = ["@argument_comment_lint_crates//:clippy_utils"],
+    deps = ["@argument_comment_lint_crates//clippy_utils"],
 )
 
 rust_binary(

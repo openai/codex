@@ -13,11 +13,6 @@ codex_rust_crate(
         "src/**/*.rs",
         "tests/unit/**/*.rs",
     ]),
-    deps_extra = [
-        "@crates//:opentelemetry",
-        "@crates//:opentelemetry_sdk",
-        "@crates//:toml",
-    ],
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/windows-sandbox-rs:codex-command-runner",

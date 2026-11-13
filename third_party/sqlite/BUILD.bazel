@@ -11,7 +11,7 @@ exports_files([
 # Use bindings and native code from the same libsqlite3-sys release.
 copy_to_directory(
     name = "sqlite_bindings",
-    srcs = ["@crates//:libsqlite3_sys_bindings"],
+    srcs = ["@crates//libsqlite3_sys_bindings"],
     include_external_repositories = ["*"],
     replace_prefixes = {"sqlite3/bindgen_bundled_version.rs": "bindgen.rs"},
 )
@@ -26,7 +26,7 @@ sqlite_build_info(
 # Internal compilation options must not leak into dependent C/C++ targets.
 cc_library(
     name = "sqlite3",
-    srcs = ["@crates//:libsqlite3_sys_source"],
+    srcs = ["@crates//libsqlite3_sys_source"],
     linkopts = select({
         "@platforms//os:freebsd": ["-lpthread"],
         "@platforms//os:linux": [
@@ -65,5 +65,5 @@ cc_library(
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ["SQLITE_DISABLE_INTRINSIC"],
         "//conditions:default": [],
     }),
-    deps = ["@crates//:libsqlite3_sys_headers"],
+    deps = ["@crates//libsqlite3_sys_headers"],
 )

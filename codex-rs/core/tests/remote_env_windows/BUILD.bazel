@@ -16,9 +16,9 @@ wine_rust_test(
         "//codex-rs/features",
         "//codex-rs/protocol",
         "//codex-rs/utils/path-uri",
-        "@crates//:anyhow",
-        "@crates//:pretty_assertions",
-        "@crates//:serde_json",
-        "@crates//:tokio",
+        "@crates//anyhow",
+        "@crates//pretty_assertions",
+        "@crates//serde_json",
+        "@crates//tokio",
     ],
 )

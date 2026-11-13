@@ -4,17 +4,16 @@
 diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 --- a/rs/extensions.bzl
 +++ b/rs/extensions.bzl
-@@ -359,8 +359,8 @@ def _generate_hub_and_spokes(
-         kwargs = dict(
+@@ -324,7 +324,7 @@ crate.annotation(
              hub_name = hub_name,
-             crate_visibility = visibility_with_internal_access(annotation.visibility, internal_packages),
+             crate_visibility = package["visibility"],
              gen_build_script = annotation.gen_build_script,
 -            build_script_deps = [],
 +            build_script_deps = annotation.build_script_deps,
-             build_script_deps_select = _select(feature_resolutions.build_deps),
+             build_script_deps_select = feature_resolutions.build_deps,
              build_script_data = annotation.build_script_data,
              build_script_data_select = annotation.build_script_data_select,
-@@ -1094,9 +1094,9 @@ _annotation = tag_class(
+@@ -996,9 +996,9 @@ _annotation = tag_class(
          # "build_script_data_glob": attr.string_list(
          #     doc = "A list of glob patterns to add to a crate's `cargo_build_script::data` attribute",
          # ),
@@ -30,7 +29,7 @@ diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
 --- a/rs/private/annotations.bzl
 +++ b/rs/private/annotations.bzl
-@@ -2,6 +2,7 @@ def _crate_annotation(
+@@ -4,6 +4,7 @@ def _crate_annotation(
          additive_build_file = None,
          additive_build_file_content = "",
          gen_build_script = "auto",
@@ -38,7 +37,7 @@ diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
          build_script_data = [],
          build_script_data_select = {},
          build_script_env = {},
-@@ -30,6 +31,7 @@ def _crate_annotation(
+@@ -40,6 +41,7 @@ def _crate_annotation(
          additive_build_file = additive_build_file,
          additive_build_file_content = additive_build_file_content,
          gen_build_script = gen_build_script,
@@ -49,7 +48,8 @@ diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
 diff --git a/rs/private/repository_utils.bzl b/rs/private/repository_utils.bzl
 --- a/rs/private/repository_utils.bzl
 +++ b/rs/private/repository_utils.bzl
-@@ -298,6 +298,6 @@ rust_crate_attrs = {
+@@ -330,7 +330,7 @@ rust_crate_attrs = {
+     "crate_visibility": attr.label_list(default = ["//visibility:public"]),
      "hub_name": attr.string(),
      "gen_build_script": attr.string(),
 -    "build_script_deps": attr.label_list(),

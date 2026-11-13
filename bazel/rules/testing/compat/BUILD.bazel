@@ -21,11 +21,11 @@ rust_test(
     deps = [
         "//codex-rs/exec-server",
         "//codex-rs/exec-server/tests/support",
-        "@crates//:anyhow",
-        "@crates//:pretty_assertions",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-        "@crates//:wiremock",
+        "@crates//anyhow",
+        "@crates//pretty_assertions",
+        "@crates//serde_json",
+        "@crates//tempfile",
+        "@crates//tokio",
+        "@crates//wiremock",
     ],
 )

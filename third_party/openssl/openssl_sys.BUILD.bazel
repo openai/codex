@@ -28,9 +28,9 @@ cargo_build_script(
     rustc_env = {"CARGO_PKG_VERSION": "0.9.118"},
     version = "0.9.118",
     deps = [
-        "@crates//:cc-1.2.55",
-        "@crates//:pkg-config-0.3.32",
-        "@crates//:vcpkg-0.2.15",
+        "@crates//cc-1.2.55",
+        "@crates//pkg-config-0.3.32",
+        "@crates//vcpkg-0.2.15",
     ],
 )
 
@@ -45,6 +45,6 @@ rust_library(
     version = "0.9.118",
     deps = [
         "build_script",
-        "@crates//:libc-0.2.186",
+        "@crates//libc-0.2.186",
     ],
 )

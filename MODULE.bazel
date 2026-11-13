@@ -2,7 +2,7 @@ module(name = "codex")
 
 bazel_dep(name = "bazel_lib", version = "3.2.2")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 
 bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
 use_repo(bazel_lib_toolchains, "coreutils_toolchains")
@@ -165,7 +165,7 @@ bazel_dep(name = "rules_cc", version = "0.2.25")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.3")
-bazel_dep(name = "rules_rs", version = "0.0.96")
+bazel_dep(name = "rules_rs", version = "0.2.3")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 single_version_override(
     module_name = "rules_foreign_cc",
@@ -211,19 +211,15 @@ use_repo(foreign_cc_tools, "cmake-3.31.8-windows-x86_64", "ninja_1.13.0_win", "p
 
 register_toolchains("//third_party/voice:windows_ninja_toolchain")
 
-archive_override(
+single_version_override(
     module_name = "rules_rs",
-    integrity = "sha256-b8sUj9EvM72+so/q4uRH91ed7QwOO8EoGbdL8NyBjE4=",
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_bindgen_v0_0_4.patch",
         "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_rust_debug_modes.patch",
         "//patches:rules_rs_workspace_package_version.patch",
-        "//patches:rules_rs_zlib_snapshot_urls.patch",
     ],
-    strip_prefix = "rules_rs-7a05511772a8a85db5382ff7536bf2f1e6a8dde3",
-    urls = ["https://github.com/hermeticbuild/rules_rs/archive/7a05511772a8a85db5382ff7536bf2f1e6a8dde3.tar.gz"],
 )
 
 rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
@@ -349,6 +345,7 @@ crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
     cargo_lock = "//codex-rs:Cargo.lock",
     cargo_toml = "//codex-rs:Cargo.toml",
+    incompatible_no_root_alias_targets = True,
     platform_triples = [
         "aarch64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
@@ -369,6 +366,8 @@ crate.from_cargo(
     name = "argument_comment_lint_crates",
     cargo_lock = "//tools/argument-comment-lint:Cargo.lock",
     cargo_toml = "//tools/argument-comment-lint:Cargo.toml",
+    incompatible_no_root_alias_targets = True,
+    incompatible_no_root_crate_data = True,
     platform_triples = [
         "aarch64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
@@ -446,7 +445,7 @@ crate.annotation(
     gen_build_script = "off",
     repositories = ["crates"],
     rustc_flags = ["--cfg=use_bindgen_pregenerated"],
-    deps = ["@crates//:aws_lc_sys_build_info"],
+    deps = ["@crates//aws_lc_sys_build_info"],
 )
 crate.annotation(
     crate = "aws-lc-rs",
@@ -520,8 +519,8 @@ crate.annotation(
 # MXC's resource compiler lookup needs an explicit path for Windows GNU targets.
 crate.annotation(
     build_script_deps = [
-        "@crates//:cc-1.2.55",
-        "@crates//:winresource-0.1.34",
+        "@crates//cc-1.2.55",
+        "@crates//winresource-0.1.34",
     ],
     build_script_env = {
         "RC_PATH": "$(execpath @llvm//tools:llvm-rc)",
