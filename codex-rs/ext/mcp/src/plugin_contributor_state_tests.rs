@@ -115,9 +115,14 @@ fn partial_refresh_retains_entries_without_excluding_new_executor_plugins() -> a
         entries: vec![cloud_plugin("old_plugin")],
         ..Default::default()
     };
-    assert!(state.publish_cloud_catalog(auth_key.as_ref(), original.clone()));
     assert!(state.publish_cloud_catalog(
         auth_key.as_ref(),
+        /*resource_cache_key*/ None,
+        original.clone()
+    ));
+    assert!(state.publish_cloud_catalog(
+        auth_key.as_ref(),
+        /*resource_cache_key*/ None,
         PluginCatalog {
             entries: vec![cloud_plugin("plugin_a")],
             is_partial: true,
@@ -238,6 +243,7 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
         let key = state.prepare_cloud_generation(/*mcp_resources*/ None);
         assert!(state.publish_cloud_catalog(
             key.as_ref(),
+            /*resource_cache_key*/ None,
             PluginCatalog {
                 entries: vec![cloud_plugin("plugin_a")],
                 ..Default::default()
@@ -434,7 +440,11 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
             cache.cloud_generation = None;
             let key = cache.prepare_cloud_generation(/*mcp_resources*/ None);
             if let Some(catalog) = catalog {
-                assert!(cache.publish_cloud_catalog(key.as_ref(), catalog));
+                assert!(cache.publish_cloud_catalog(
+                    key.as_ref(),
+                    /*resource_cache_key*/ None,
+                    catalog
+                ));
             }
         }
         let contributions = contribution_labels(
@@ -479,6 +489,7 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
             .collect::<Vec<_>>();
         assert!(state.publish_cloud_catalog(
             key.as_ref(),
+            /*resource_cache_key*/ None,
             PluginCatalog {
                 entries,
                 ..Default::default()

@@ -1,4 +1,4 @@
-//! Tests per-turn cloud plugin discovery, auth recovery, tool calls, and plugin policy.
+//! Tests cloud plugin cache reuse, auth recovery, tool calls, and plugin policy.
 
 use super::*;
 use crate::PluginProvider;
@@ -26,6 +26,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::Op;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
@@ -223,11 +224,11 @@ async fn account_change_clears_hosted_plugins_before_waiting_for_executor() -> a
     let old_auth = state
         .contributor_state()
         .prepare_cloud_generation(/*mcp_resources*/ None);
-    assert!(
-        state
-            .contributor_state()
-            .publish_cloud_catalog(old_auth.as_ref(), cloud_catalog())
-    );
+    assert!(state.contributor_state().publish_cloud_catalog(
+        old_auth.as_ref(),
+        /*resource_cache_key*/ None,
+        cloud_catalog()
+    ));
     let roots = [SelectedCapabilityRoot {
         id: "plugin".to_string(),
         location: CapabilityRootLocation::Environment {
@@ -256,7 +257,7 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
         (Ok(cloud_catalog()), true),
     ] {
         let succeeded = reply.is_ok() && !cancelled;
-        let expected_catalog = if succeeded {
+        let mut expected_catalog = if succeeded {
             cloud_catalog()
         } else {
             new_catalog.clone()
@@ -325,8 +326,15 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
             1 + usize::from(!succeeded),
         );
 
-        // Retained catalogs do not need MCP rebuilding after failed retries.
+        // Retained partial catalogs do not need MCP rebuilding after failed retries.
         prewarm_turn.remove::<LatestCloudPluginAuth>();
+        expected_catalog.is_partial = true;
+        state
+            .contributor_state()
+            .cloud_generation
+            .as_mut()
+            .unwrap()
+            .catalog = Some(expected_catalog.clone());
         provider.set_reply(Err("discovery failed".to_string()));
         let previous_calls = provider.calls.load(Ordering::SeqCst);
         for _ in 0..2 {
@@ -475,7 +483,7 @@ fn app_tool(connector: &str, action: &str) -> serde_json::Value {
 }
 
 #[test]
-fn cloud_catalog_refreshes_per_turn_and_invalidates_on_auth_change() -> anyhow::Result<()> {
+fn cloud_catalog_reuses_cache_and_invalidates_on_resource_or_auth_change() -> anyhow::Result<()> {
     run_test_with_large_stack(
         "cloud-plugin-lifecycle",
         run_cloud_catalog_refresh_lifecycle,
@@ -581,6 +589,14 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             None,
             Some(calendar),
         ),
+        ("empty-cached", Ok(cloud_catalog()), None, None, None),
+        (
+            "in-flight-resource-change",
+            Ok(cloud_catalog()),
+            None,
+            None,
+            None,
+        ),
         (
             "partial-after-complete-empty",
             Ok(partial_catalog.clone()),
@@ -591,6 +607,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         (
             "discovered",
             Ok(cloud_catalog()),
+            Some("plugin_remote"),
+            None,
+            Some(calendar),
+        ),
+        (
+            "cached",
+            Ok(gmail_catalog.clone()),
             Some("plugin_remote"),
             None,
             Some(calendar),
@@ -678,7 +701,22 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         ),
     ] {
         let previous_discoveries = provider.calls.load(Ordering::SeqCst);
-        let retry_discovery = turn == "in-flight-auth-change";
+        let cached = matches!(turn, "cached" | "empty-cached");
+        let in_flight_change =
+            matches!(turn, "in-flight-auth-change" | "in-flight-resource-change");
+        let retry_discovery = in_flight_change;
+        // Complete catalogs refresh only after invalidation, just like cloud skills.
+        if matches!(
+            turn,
+            "in-flight-resource-change"
+                | "partial-after-complete-empty"
+                | "partial-refresh"
+                | "removed"
+                | "restored"
+                | "in-flight-auth-change"
+        ) {
+            test.codex.submit(Op::RefreshMcpServers).await?;
+        }
         if let Some(account) = new_account {
             // Do not manually refresh MCP: the auth transition must pick up this new inventory.
             *apps_tools
@@ -752,7 +790,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        if turn == "in-flight-auth-change" {
+        if in_flight_change {
             provider.pause_discovery.store(true, Ordering::SeqCst);
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
                 tokio::try_join!(
@@ -767,43 +805,50 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
                             .context("cloud provider resource client missing")?;
                         let previous_auth = resources
                             .auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
-                        // Rotate credentials without replacing the captured runtime/client.
-                        codex_login::auth::login_with_chatgpt_auth_tokens(
-                            test.codex_home_path(),
-                            "header.e30.rotated",
-                            "account-b",
-                            /*chatgpt_plan_type*/ None,
-                        )?;
-                        test.thread_manager.auth_manager().reload().await;
-                        // Auth must be published while cloud discovery remains paused.
-                        while resources
-                            .auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
-                            == previous_auth
-                        {
-                            tokio::task::yield_now().await;
+                        let previous_resource =
+                            resources.server_cache_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+                        if turn == "in-flight-resource-change" {
+                            test.codex.submit(Op::RefreshMcpServers).await?;
+                            while resources.server_cache_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+                                == previous_resource
+                            {
+                                tokio::task::yield_now().await;
+                            }
+                            assert!(
+                                resources.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME)
+                                    == previous_auth
+                            );
+                        } else {
+                            // Rotate credentials without replacing the captured runtime/client.
+                            codex_login::auth::login_with_chatgpt_auth_tokens(
+                                test.codex_home_path(),
+                                "header.e30.rotated",
+                                "account-b",
+                                /*chatgpt_plan_type*/ None,
+                            )?;
+                            test.thread_manager.auth_manager().reload().await;
+                            // Auth must be published while cloud discovery remains paused.
+                            while resources.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME)
+                                == previous_auth
+                            {
+                                tokio::task::yield_now().await;
+                            }
                         }
-                        provider.set_reply(Err("new-scope discovery failed".to_string()));
+                        provider.set_reply(Err("retry discovery failed".to_string()));
                         provider.resume_discovery.notify_one();
                         anyhow::Ok(())
                     }
                 )
             })
             .await??;
-            // Refresh under the new auth without retaining the old catalog.
+            // Failed retries retain a fallback only for the same auth.
             let state = test
                 .codex
                 .thread_extension_data()
                 .get::<PluginsThreadState>()
                 .context("plugin state missing")?;
-            assert_eq!(state.cloud_catalog(), None);
-            assert_eq!(
-                state
-                    .contributor_state()
-                    .cloud_generation
-                    .as_ref()
-                    .and_then(|generation| generation.catalog.clone()),
-                None,
-            );
+            let expected = (turn == "in-flight-resource-change").then(PluginCatalog::default);
+            assert_eq!(state.cloud_catalog(), expected);
         } else {
             test.submit_turn("What capabilities are available?").await?;
         }
@@ -866,7 +911,9 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         );
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
-            previous_discoveries + 1 + if retry_discovery { requests.len() } else { 0 },
+            previous_discoveries
+                + usize::from(!cached)
+                + if retry_discovery { requests.len() } else { 0 },
             "turn {turn}"
         );
     }

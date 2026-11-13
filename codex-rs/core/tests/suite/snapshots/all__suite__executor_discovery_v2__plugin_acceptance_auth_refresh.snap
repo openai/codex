@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/executor_discovery_v2.rs
-expression: "context_snapshot::format_context_snapshot(\"Two installations of one cloud plugin route MCP calls through their own executors. Mid-turn auth refresh preserves skill context and executor access; revocation removes both MCPs and cloud skill instructions and denies executor reads.\",\n&bodies.iter().map(context_snapshot::SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+expression: "context_snapshot::format_context_snapshot(\"Two installations of one cloud plugin route MCP calls through their own executors. Mid-turn auth refresh preserves skill context and executor access; revocation removes both MCPs and cloud skill instructions and denies executor reads. The next turn reuses the cached catalog.\",\n&bodies.iter().map(context_snapshot::SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
-Scenario: Two installations of one cloud plugin route MCP calls through their own executors. Mid-turn auth refresh preserves skill context and executor access; revocation removes both MCPs and cloud skill instructions and denies executor reads.
+Scenario: Two installations of one cloud plugin route MCP calls through their own executors. Mid-turn auth refresh preserves skill context and executor access; revocation removes both MCPs and cloud skill instructions and denies executor reads. The next turn reuses the cached catalog.
 
 ## Window 1
 -- request 1 (request) --
@@ -59,3 +59,6 @@ Scenario: Two installations of one cloud plugin route MCP calls through their ow
 -- request 6 (request) --
 13:function_call/skills.read:{"package":"skill://inert-sentinel@market/inert-sentinel"}
 14:function_call_output:skill package is not available
+-- request 7 (request) --
+15:message/user:
+    Check the same skills again.

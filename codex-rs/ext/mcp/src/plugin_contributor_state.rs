@@ -1,4 +1,5 @@
-//! Thread-owned cloud catalog and stable selected-root metadata, guarded by a short-lived mutex.
+//! Thread-owned catalogs, reused within their auth and resource scope, and selected-root metadata.
+//! A short-lived mutex guards publication; incomplete refreshes preserve same-auth fallback data.
 
 use crate::catalog_observability::record_catalog;
 use codex_core_plugins::PluginCatalog;
@@ -12,6 +13,7 @@ use codex_extension_api::SelectedPluginContribution;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
+use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,9 +59,16 @@ pub(crate) struct CloudPluginGeneration {
     pub(crate) auth_cache_key: Option<McpResourceClientAuthKey>,
     pub(crate) mcp_resources: Option<McpResourceClient>,
     pub(crate) catalog: Option<PluginCatalog>,
+    pub(crate) resource_cache_key: Option<McpResourceServerCacheKey>,
 }
 
 impl CloudPluginGeneration {
+    pub(crate) fn current_resource_cache_key(&self) -> Option<McpResourceServerCacheKey> {
+        self.mcp_resources
+            .as_ref()
+            .and_then(|client| client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME))
+    }
+
     pub(crate) fn is_auth_current(&self) -> bool {
         self.auth_cache_key
             == self
@@ -129,16 +138,18 @@ impl PluginContributorState {
                 auth_cache_key: auth_cache_key.clone(),
                 mcp_resources,
                 catalog: None,
+                resource_cache_key: None,
             });
         }
         auth_cache_key
     }
 
     /// Accepts current-auth results, retaining prior complete entries as partial after an incomplete refresh.
-    /// Returns false only when the result belongs to a stale auth generation.
+    /// Returns false when auth or resource identity changed during discovery.
     pub(crate) fn publish_cloud_catalog(
         &mut self,
         auth_cache_key: Option<&McpResourceClientAuthKey>,
+        resource_cache_key: Option<McpResourceServerCacheKey>,
         mut catalog: PluginCatalog,
     ) -> bool {
         let Some(generation) = self
@@ -146,6 +157,7 @@ impl PluginContributorState {
             .as_mut()
             .filter(|generation| generation.auth_cache_key.as_ref() == auth_cache_key)
             .filter(|generation| generation.is_auth_current())
+            .filter(|generation| generation.current_resource_cache_key() == resource_cache_key)
         else {
             return false;
         };
@@ -163,6 +175,7 @@ impl PluginContributorState {
         }
         record_catalog(self.extension_metrics.as_deref(), "cloud", &catalog);
         generation.catalog = Some(catalog);
+        generation.resource_cache_key = resource_cache_key;
         true
     }
 }
