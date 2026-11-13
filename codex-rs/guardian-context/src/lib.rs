@@ -108,6 +108,7 @@ pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
+pub use preparation::prepare_async_context;
 pub use preparation::prepare_context;
 pub use preparation::prepare_sync_context_with_facts;
 pub use preparation::prepare_sync_delivery;

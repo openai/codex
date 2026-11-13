@@ -3,7 +3,6 @@ use codex_extension_api::ResponseItem;
 pub(crate) use codex_features::GuardianV2TranscriptSource as TranscriptSource;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ComposedContext;
-use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::ContextTarget;
@@ -26,8 +25,7 @@ use codex_guardian_context::TranscriptRetentionConfig;
 use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
-use codex_guardian_context::prepare_context;
-use std::borrow::Cow;
+use codex_guardian_context::prepare_async_context;
 
 const DEFAULT_PROFILE: &ContextProfile = &ContextProfile::asynchronous();
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize =
@@ -185,17 +183,13 @@ impl CollectedTranscript {
             TranscriptSelection::Full(_) => (0, ContextPresentation::Async),
             TranscriptSelection::Delta { offset, .. } => (offset, ContextPresentation::AsyncDelta),
         };
-        let mut context = prepare_context(
-            Cow::Borrowed(&self.context),
+        let mut context = prepare_async_context(
+            &self.context,
             &self.profile,
             offset,
             presentation,
-            if self.elastic.is_some() {
-                ContextBudgeting::Elastic
-            } else {
-                ContextBudgeting::Fixed
-            },
             reviewer_history,
+            self.elastic.as_ref(),
         )?;
         if self.elastic.is_none() {
             context.retain_new_native_messages(reviewer_history)?;

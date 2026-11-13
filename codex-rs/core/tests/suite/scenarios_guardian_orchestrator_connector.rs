@@ -3,10 +3,15 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_guardian_context::ContextBudgeting;
+use codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS;
+use codex_guardian_context::ElasticSection;
+use codex_guardian_context::ElasticSectionLimits;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -27,8 +32,12 @@ use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+#[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case::test_case(ContextBudgeting::Elastic; "elastic_entry_cap")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<()> {
+async fn host_owned_orchestrator_connector_reaches_guardian_context(
+    budgeting: ContextBudgeting,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -48,14 +57,15 @@ async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<
             responses::ev_completed("done"),
         ]),
     ];
-    Mock::given(method("POST"))
+    let classifier_mock = Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(body_partial_json(json!({ "model": "gpt-5.6-luna" })))
         .respond_with(responses::sse_response(responses::sse(vec![
             responses::ev_assistant_message("score", "high"),
             responses::ev_completed("score"),
         ])))
-        .mount(&server)
+        .expect(1..)
+        .mount_as_scoped(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
@@ -98,7 +108,7 @@ async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<
             )
             .expect("write Guardian configuration");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             config.model_provider.supports_websockets = false;
             config
                 .features
@@ -114,12 +124,34 @@ async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<
                 .expect("enable Guardian approval");
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            if budgeting == ContextBudgeting::Elastic {
+                const TOOL_ENTRY_CAP: usize = 1;
+                let mut policy = core_test_support::guardian::elastic_budget_config();
+                let limits = |minimum| {
+                    ElasticSectionLimits::new(minimum, TOOL_ENTRY_CAP).expect("valid tool limits")
+                };
+                policy.sections.insert(ElasticSection::TrustedTools, limits(TOOL_ENTRY_CAP));
+                let other_minimums = usize::try_from(policy.total_minimum_tokens())
+                    .expect("token total fits usize")
+                    - TOOL_ENTRY_CAP;
+                policy.sections.insert(
+                    ElasticSection::TrustedTools,
+                    limits(DEFAULT_MAX_INPUT_TOKENS - other_minimums),
+                );
+                config.guardian_async_elastic_budget = Some(policy);
+            }
         })
         .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&test.codex, "codex_apps").await?;
     test.submit_text_turn("List today's calendar events.")
         .await?;
+    const CLASSIFIER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    tokio::time::timeout(
+        CLASSIFIER_REQUEST_TIMEOUT,
+        classifier_mock.wait_until_satisfied(),
+    )
+    .await?;
     assert_eq!(parent_index.load(Ordering::SeqCst), 2);
 
     let mut requests = server
@@ -149,6 +181,19 @@ async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<
             serde_json::from_str::<Value>(evidence)
         })
         .collect::<serde_json::Result<Vec<_>>>()?;
+    if budgeting == ContextBudgeting::Elastic {
+        assert!(trusted_messages.is_empty());
+        let classifier = requests
+            .iter()
+            .find(|request| request["model"] == "gpt-5.6-luna")
+            .expect("classifier request");
+        assert!(
+            classifier["input"]
+                .to_string()
+                .contains("<guardian_context_omission>")
+        );
+        return Ok(());
+    }
     assert_eq!(
         trusted_messages,
         vec![json!({

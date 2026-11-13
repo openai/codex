@@ -25,6 +25,32 @@ pub struct TrustedSkills {
 impl TrustedSkills {
     /// Classification attached to this fragment's rendered text.
     pub const KIND: &str = "guardian.trusted_skills";
+
+    pub(crate) fn render_paths(&self) -> (ContentItem, usize) {
+        let mut paths = String::from("[");
+        let mut count = 0;
+        let max_path_bytes = TruncationPolicy::Tokens(MAX_TRUSTED_SKILL_TOKENS)
+            .byte_budget()
+            .saturating_sub(TRUSTED_SKILLS_PREFIX.len());
+        for path in &self.paths {
+            let separator = if paths.ends_with('[') { "" } else { "," };
+            let encoded_path = json!(path).to_string();
+            if paths
+                .len()
+                .saturating_add(separator.len())
+                .saturating_add(encoded_path.len())
+                .saturating_add(1)
+                > max_path_bytes
+            {
+                continue;
+            }
+            paths.push_str(separator);
+            paths.push_str(&encoded_path);
+            count += 1;
+        }
+        paths.push(']');
+        (input_text(format!("{TRUSTED_SKILLS_PREFIX}{paths}")), count)
+    }
 }
 
 impl ContextualUserFragment for TrustedSkills {
@@ -45,27 +71,7 @@ impl ContextualUserFragment for TrustedSkills {
     }
 
     fn body(&self) -> ContentItem {
-        let mut paths = String::from("[");
-        let max_path_bytes = TruncationPolicy::Tokens(MAX_TRUSTED_SKILL_TOKENS)
-            .byte_budget()
-            .saturating_sub(TRUSTED_SKILLS_PREFIX.len());
-        for path in &self.paths {
-            let separator = if paths.ends_with('[') { "" } else { "," };
-            let encoded_path = json!(path).to_string();
-            if paths
-                .len()
-                .saturating_add(separator.len())
-                .saturating_add(encoded_path.len())
-                .saturating_add(1)
-                > max_path_bytes
-            {
-                continue;
-            }
-            paths.push_str(separator);
-            paths.push_str(&encoded_path);
-        }
-        paths.push(']');
-        input_text(format!("{TRUSTED_SKILLS_PREFIX}{paths}"))
+        self.render_paths().0
     }
 }
 
