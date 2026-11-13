@@ -229,6 +229,50 @@ async fn plugin_runtime_auth_shares_registration_and_strips_cross_origin_auth() 
 }
 
 #[tokio::test]
+async fn tooling_state_deadline_includes_pending_runtime_registration() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let runtime = Arc::new(RuntimeAuthManager::new(
+        AuthManager::from_auth_for_testing(auth.clone()),
+        AgentHostAuthorization::InstallationId {
+            installation_id: Uuid::nil(),
+        },
+        RuntimeRegistrationMetadata {
+            harness: Some("codex".into()),
+            harness_version: None,
+            role: RuntimeRole::Orchestrator,
+        },
+        format!("{base}/register").parse().unwrap(),
+    ));
+    let config = RemotePluginServiceConfig::new_with_selected_runtime_auth(
+        format!("{base}/backend-api"),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        /*product_sku*/ None,
+        (
+            Arc::new(std::sync::OnceLock::from(Arc::clone(&runtime))),
+            RuntimeAuthMode::DualHeader,
+        ),
+    );
+    // Hold registration open before starting the marker clock.
+    let registration = runtime.auth();
+    tokio::pin!(registration);
+    let (_connection, _) = tokio::select! {
+        connection = listener.accept() => connection.unwrap(),
+        _ = &mut registration => panic!("registration finished before receiving a response"),
+    };
+    tokio::time::pause();
+    let poll = fetch_tooling_changed_at(&config, Some(&auth));
+    let marker = tokio::time::timeout(TOOLING_STATE_TIMEOUT * 2, poll)
+        .await
+        .expect("the marker deadline must include runtime registration")
+        .unwrap();
+    assert_eq!(marker, None);
+}
+
+#[tokio::test]
 async fn custom_plugin_backend_keeps_legacy_auth_with_runtime_enabled() {
     for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
         let server = MockServer::start().await;

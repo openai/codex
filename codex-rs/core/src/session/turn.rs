@@ -67,7 +67,6 @@ use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::router::record_registration_metrics;
 use crate::tools::spec_plan::build_tool_router;
-use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
@@ -2095,40 +2094,29 @@ async fn run_sampling_request(
     }
 }
 
-pub(crate) struct PreparedToolRecommendations {
-    auth: Option<CodexAuth>,
-    endpoint_candidates: Option<Vec<DiscoverableTool>>,
+pub(super) enum PreparedToolRecommendations {
+    Endpoint(Vec<DiscoverableTool>),
+    Legacy(Option<CodexAuth>),
 }
 
-#[instrument(level = "trace", skip_all)]
-pub(crate) async fn prepare_tool_recommendations(
-    sess: &Session,
-    turn_context: &TurnContext,
-) -> PreparedToolRecommendations {
-    let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
-    let auth = if tool_suggest_is_enabled {
-        sess.services.auth_manager.auth().await
-    } else {
-        None
-    };
-    let endpoint_candidates = if tool_suggest_is_enabled {
-        let plugins_config = turn_context.config.plugins_config_input();
-        sess.services
+impl PreparedToolRecommendations {
+    #[instrument(level = "trace", skip_all)]
+    pub(super) async fn load(sess: &Session, turn_context: &TurnContext) -> Self {
+        let auth = sess.services.auth_manager.auth().await;
+        let endpoint_candidates = sess
+            .services
             .plugins_manager
             .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
-                plugins_config: &plugins_config,
+                plugins_config: &turn_context.config.plugins_config_input(),
                 auth: auth.as_ref(),
                 disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
                 app_server_client_name: turn_context.app_server_client_name.as_deref(),
             })
-            .await
-    } else {
-        None
-    };
-
-    PreparedToolRecommendations {
-        auth,
-        endpoint_candidates,
+            .await;
+        match endpoint_candidates {
+            Some(tools) => Self::Endpoint(tools),
+            None => Self::Legacy(auth),
+        }
     }
 }
 
@@ -2141,77 +2129,61 @@ pub(crate) async fn prepare_tool_recommendations(
         apps_enabled = turn_context.apps_enabled()
     )
 )]
-pub(crate) async fn built_tools(
+pub(super) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     model_info: &codex_protocol::openai_models::ModelInfo,
     environments: &TurnEnvironmentSnapshot,
     mcp: &Arc<codex_mcp::McpBinding>,
     step_store: &ExtensionData,
-    prepared_recommendations: PreparedToolRecommendations,
+    prepared_recommendations: Option<PreparedToolRecommendations>,
     dynamic_tools: &[codex_protocol::dynamic_tools::DynamicToolSpec],
 ) -> CodexResult<Arc<ToolRouter>> {
-    let all_mcp_tools = mcp.tools();
-    let connector_snapshot = mcp.config().connector_snapshot.clone();
-
     let apps_enabled = turn_context.apps_enabled();
-    let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(all_mcp_tools));
-    let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
-    let PreparedToolRecommendations {
-        auth,
-        endpoint_candidates: endpoint_recommended_plugin_candidates,
-    } = prepared_recommendations;
-    let tool_suggest_candidates =
-        if let Some(recommended_plugin_candidates) = endpoint_recommended_plugin_candidates {
-            Some(ToolSuggestCandidates {
-                tools: recommended_plugin_candidates,
-                presentation: ToolSuggestPresentation::RecommendationContext,
-            })
-        } else {
-            let loaded_plugin_app_connector_ids = connector_snapshot
+    let tool_suggest_candidates = match prepared_recommendations {
+        Some(PreparedToolRecommendations::Endpoint(tools)) => Some(ToolSuggestCandidates {
+            tools,
+            presentation: ToolSuggestPresentation::RecommendationContext,
+        }),
+        Some(PreparedToolRecommendations::Legacy(auth)) if apps_enabled => {
+            let accessible_connectors =
+                connectors::accessible_connectors_from_mcp_tools(mcp.tools());
+            let loaded_plugin_app_connector_ids = mcp
+                .config()
+                .connector_snapshot
                 .connector_ids()
                 .iter()
                 .map(|connector_id| connector_id.0.clone())
                 .collect::<Vec<_>>();
-            async {
-                if apps_enabled && tool_suggest_is_enabled {
-                    if let Some(accessible_connectors) = accessible_connectors.as_ref() {
-                        match connectors::list_tool_suggest_discoverable_tools_with_auth(
-                            &turn_context.config,
-                            sess.services.plugins_manager.as_ref(),
-                            auth.as_ref(),
-                            accessible_connectors.as_slice(),
-                            &loaded_plugin_app_connector_ids,
-                        )
-                        .await
-                        .map(|discoverable_tools| {
-                            filter_request_plugin_install_discoverable_tools_for_client(
-                                discoverable_tools,
-                                turn_context.app_server_client_name.as_deref(),
-                            )
-                        }) {
-                            Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
-                            Ok(discoverable_tools) => Some(ToolSuggestCandidates {
-                                tools: discoverable_tools,
-                                presentation: ToolSuggestPresentation::ListTool,
-                            }),
-                            Err(err) => {
-                                warn!("failed to load discoverable tool suggestions: {err:#}");
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
+            match connectors::list_tool_suggest_discoverable_tools_with_auth(
+                &turn_context.config,
+                sess.services.plugins_manager.as_ref(),
+                auth.as_ref(),
+                &accessible_connectors,
+                &loaded_plugin_app_connector_ids,
+            )
+            .instrument(trace_span!("built_tools.load_discoverable_tools"))
+            .await
+            {
+                Ok(tools) => {
+                    let tools = filter_request_plugin_install_discoverable_tools_for_client(
+                        tools,
+                        turn_context.app_server_client_name.as_deref(),
+                    );
+                    (!tools.is_empty()).then_some(ToolSuggestCandidates {
+                        tools,
+                        presentation: ToolSuggestPresentation::ListTool,
+                    })
+                }
+                Err(err) => {
+                    warn!("failed to load discoverable tool suggestions: {err:#}");
                     None
                 }
             }
-            .instrument(trace_span!("built_tools.load_discoverable_tools"))
-            .await
-        };
-    Ok(Arc::new(build_tool_router(
+        }
+        Some(PreparedToolRecommendations::Legacy(_)) | None => None,
+    };
+    let router = build_tool_router(
         sess,
         turn_context,
         model_info,
@@ -2221,7 +2193,13 @@ pub(crate) async fn built_tools(
         step_store,
         tool_suggest_candidates.as_ref(),
         dynamic_tools,
-    )?))
+    )?;
+    if let Some(candidates) = tool_suggest_candidates
+        && candidates.presentation == ToolSuggestPresentation::RecommendationContext
+    {
+        step_store.insert(candidates);
+    }
+    Ok(Arc::new(router))
 }
 
 #[derive(Debug)]

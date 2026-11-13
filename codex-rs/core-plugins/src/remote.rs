@@ -117,6 +117,7 @@ const REMOTE_INSTALLED_PLUGINS_FETCH_TIMEOUT: Duration = Duration::from_secs(60)
 // Allow 20,000 installed plugins without unbounded cursor history.
 const MAX_REMOTE_INSTALLED_PLUGIN_PAGES: usize = 100;
 const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
+const TOOLING_STATE_TIMEOUT: Duration = Duration::from_millis(250);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_RECOMMENDED_PLUGINS: usize = 50;
 const MAX_RECOMMENDED_PLUGIN_NAME_LEN: usize = 64;
@@ -897,6 +898,11 @@ struct RemotePluginListResponse {
     pagination: RemotePluginPagination,
 }
 
+#[derive(Deserialize)]
+struct PluginToolingStateResponse {
+    tooling_changed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RecommendedPluginsResponse {
     enabled: bool,
@@ -1145,6 +1151,27 @@ pub fn invalidate_cached_remote_plugin_catalog_scopes(
             );
         }
     }
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn fetch_tooling_changed_at(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<Option<String>, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/ps/plugins/tooling-state/turtle");
+    let poll = async {
+        let request = authenticated_request(config, Method::GET, &url, auth).await?;
+        let response: PluginToolingStateResponse = send_and_decode(request, &url).await?;
+        Ok(response.tooling_changed_at)
+    };
+    tokio::time::timeout(TOOLING_STATE_TIMEOUT, poll)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::debug!("timed out reading recommendation tooling state");
+            Ok(None)
+        })
 }
 
 #[instrument(level = "trace", skip_all)]

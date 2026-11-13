@@ -309,6 +309,7 @@ use self::session::SessionSettingsCommit;
 pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
+use self::turn::PreparedToolRecommendations;
 use self::turn::RealtimeEventText;
 use self::turn::agent_message_text;
 #[cfg(test)]
@@ -347,7 +348,9 @@ use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
 #[cfg(test)]
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::sandboxing::ApprovalStore;
+use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -356,7 +359,6 @@ use crate::windows_sandbox::local_binding_policy_for_sandbox;
 use crate::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_git_utils::get_git_repo_root;
 use codex_history::CodexHarnessMetadata;
 use codex_history::CompactedItem;
@@ -4488,7 +4490,13 @@ impl Session {
                     &required_servers,
                     required_plugins,
                 )),
-                turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
+                async {
+                    if tool_suggest_enabled(&turn_context) {
+                        Some(PreparedToolRecommendations::load(self, &turn_context).await)
+                    } else {
+                        None
+                    }
+                },
             );
             let search = crate::model_search::resolve(
                 turn_context.as_ref(),
@@ -5134,25 +5142,25 @@ impl Session {
             developer_sections
                 .push(DeveloperInstructions::new(developer_instructions).render_fragment());
         }
-        let recommended_plugin_candidates = if turn_context
-            .config
-            .features
-            .plugin_recommendations_enabled()
+        let step_candidates = step_context.extension_data.get::<ToolSuggestCandidates>();
+        // Prompt-only recommendations have no install handler to capture candidates for the step.
+        let prompt_only_candidates = if !tool_suggest_enabled(turn_context)
+            && turn_context
+                .config
+                .features
+                .plugin_recommendations_enabled()
         {
-            let auth = self.services.auth_manager.auth().await;
-            let plugins_config = turn_context.config.plugins_config_input();
-            self.services
-                .plugins_manager
-                .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
-                    plugins_config: &plugins_config,
-                    auth: auth.as_ref(),
-                    disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
-                    app_server_client_name: turn_context.app_server_client_name.as_deref(),
-                })
-                .await
+            match PreparedToolRecommendations::load(self, turn_context).await {
+                PreparedToolRecommendations::Endpoint(tools) => Some(tools),
+                PreparedToolRecommendations::Legacy(_) => None,
+            }
         } else {
             None
         };
+        let recommended_plugin_candidates = step_candidates
+            .as_deref()
+            .map(|candidates| candidates.tools.as_slice())
+            .or(prompt_only_candidates.as_deref());
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in &context_contributors {
             for fragment in contributor
@@ -5301,9 +5309,8 @@ impl Session {
             }
 
             if next_item.is_none()
-                && let Some(recommended_plugins) = recommended_plugin_candidates
-                    .as_deref()
-                    .and_then(|plugins| {
+                && let Some(recommended_plugins) =
+                    recommended_plugin_candidates.and_then(|plugins| {
                         RecommendedPluginsInstructions::from_plugins(
                             plugins,
                             &ResolvedModelMessages::from_model(&step_context.settings.model_info)
