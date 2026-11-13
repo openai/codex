@@ -497,6 +497,24 @@ pub struct ShellSnapshotRequest {
     pub shell: ShellInfo,
 }
 
+/// Optional JSON-RPC error data for a rejected `process/start`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProcessStartErrorData {
+    SpawnNotFound,
+    SpawnPermissionDenied,
+    SpawnFailed,
+    SandboxUnavailable,
+    SandboxPreparation,
+}
+
+impl ProcessStartErrorData {
+    pub fn attach_to(self, mut error: JSONRPCErrorError) -> JSONRPCErrorError {
+        error.data = Some(serde_json::json!(self));
+        error
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {

@@ -2,8 +2,11 @@
 
 use std::time::Instant;
 
+use codex_exec_server_protocol::ProcessStartErrorData;
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::protocol::EXEC_METHOD;
 use crate::rpc::RpcCallError;
 
 pub(crate) struct RpcCompletion {
@@ -20,9 +23,17 @@ impl RpcCompletion {
     }
 
     pub(crate) fn record_receipt(&self, method: &str) {
-        let outcome = match &self.result {
-            Ok(_) => "success",
-            Err(RpcCallError::Server(_)) => "error",
+        let (outcome, start_error_code, start_error_kind) = match &self.result {
+            Ok(_) => ("success", None, None),
+            Err(RpcCallError::Server(error)) if method == EXEC_METHOD => (
+                "error",
+                Some(error.code),
+                error
+                    .data
+                    .as_ref()
+                    .and_then(|data| ProcessStartErrorData::deserialize(data).ok()),
+            ),
+            Err(RpcCallError::Server(_)) => ("error", None, None),
             Err(
                 RpcCallError::Closed
                 | RpcCallError::Json(_)
@@ -37,6 +48,8 @@ impl RpcCompletion {
             event.name = "codex.exec_server.response_received",
             rpc.method = method,
             outcome,
+            process.start_error_code = start_error_code,
+            process.start_error_kind = start_error_kind.as_ref().map(tracing::field::debug),
             reader_to_caller_ns = i64::try_from(self.completed_at.elapsed().as_nanos())
                 .unwrap_or(i64::MAX),
         );
