@@ -1,6 +1,8 @@
 //! Read MCP tool catalogs from the connected app server’s global inventory.
 
 use super::McpServerName;
+use super::McpToolName;
+use super::StatuslineProvider;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ListMcpServerStatusParams;
@@ -10,9 +12,11 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::RequestId;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_protocol::ThreadId;
 use codex_protocol::mcp::Tool;
 use color_eyre::Result;
 use color_eyre::eyre::bail;
+use color_eyre::eyre::eyre;
 use futures::Stream;
 use futures::stream;
 use serde::Deserialize;
@@ -46,6 +50,26 @@ impl TryFrom<McpServerStatus> for StatuslineServer {
             plugin_id: row.plugin_id.as_deref().map(PluginId::parse).transpose()?,
             tools,
         })
+    }
+}
+
+impl StatuslineServer {
+    fn catalog(&self) -> Result<&HashMap<String, Tool>> {
+        self.tools.as_ref().map_err(|error| eyre!("{error}"))
+    }
+    pub(super) fn providers(&self) -> Result<Vec<StatuslineProvider>> {
+        Ok(self
+            .catalog()?
+            .values()
+            .filter_map(|tool| {
+                StatuslineProvider::from_tool(&self.name, self.plugin_id.as_ref(), tool)
+            })
+            .collect())
+    }
+    pub(super) fn provider(&self, name: &McpToolName) -> Result<Option<StatuslineProvider>> {
+        Ok(self.catalog()?.get(&name.0).and_then(|tool| {
+            StatuslineProvider::from_tool(&self.name, self.plugin_id.as_ref(), tool)
+        }))
     }
 }
 
@@ -119,11 +143,12 @@ fn local_server(value: Value) -> Result<Option<StatuslineServer>> {
 pub(super) async fn server(
     client: &AppServerRequestHandle,
     name: &McpServerName,
+    thread: Option<ThreadId>,
 ) -> Result<Option<StatuslineServer>> {
     let mut page = read_page(
         client,
         ListMcpServerStatusParams {
-            thread_id: None,
+            thread_id: thread.map(|id| id.to_string()),
             server_name: Some(name.0.clone()),
             detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
             cursor: None,

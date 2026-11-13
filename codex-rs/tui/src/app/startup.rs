@@ -67,8 +67,8 @@ pub(super) async fn prepare_fresh_startup_config(
         }
     };
     let defaults = crate::config_update::read_effective_config_with_layers(
-        app_server.request_handle(),
-        defaults_cwd,
+        &app_server.request_handle(),
+        defaults_cwd.display().to_string(),
     )
     .await?;
     super::new_session::overlay_new_session_defaults(

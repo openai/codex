@@ -173,7 +173,7 @@ async fn targeted_inventory_rejects_another_server() {
     let name = "calendar".into();
     let other = row("other", vec![json!({"name":"footer","inputSchema":{}})]);
     let (result, ()) = tokio::join!(
-        server(&client, &name),
+        server(&client, &name, /*thread*/ None),
         reply(
             &mut commands,
             "mcpServerStatus/list",
