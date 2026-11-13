@@ -34,7 +34,7 @@ async fn statusline_state_projects_the_displayed_settings() {
             "config": {"statusline_items": ["run-state"]},
             "thread": {
                 "workspace": {"cwd": expected_cwd},
-                "usage": {},
+                "usage": {"context": {}},
                 "id": id, "name": "Saved carts", "agent": {"state": "ready"},
                 "model": {"id": "gpt-5.5", "display_name": "Test model", "provider": "openai",
                     "reasoning_level": "none", "service_tier": "acme-priority", "service_tier_display_name": "Turbo"},
@@ -91,4 +91,31 @@ async fn statusline_totals_use_the_reported_token_breakdown() {
         let state = serde_json::to_value(chat.statusline_state()).unwrap();
         assert_eq!(state["thread"]["usage"].get("total").is_some(), has_total);
     }
+}
+
+#[tokio::test]
+async fn statusline_context_uses_the_footer_window_and_percentage() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.handle_thread_session(configured_thread_session(ThreadId::new()));
+    chat.config.model_context_window = Some(80_000);
+    helpers::handle_token_count(&mut chat, /*info*/ None);
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["thread"]["usage"]["context"],
+        json!({"context_window_size": 80_000})
+    );
+
+    // The last response occupies half the usable window after the footer's fixed overhead.
+    let mut info = helpers::make_token_info(
+        /*total_tokens*/ 56_000, /*context_window*/ 100_000,
+    );
+    info.total_token_usage.total_tokens = 220_000;
+    helpers::handle_token_count(&mut chat, Some(info));
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["thread"]["usage"]["context"],
+        json!({
+            "context_window_size": 100_000, "used_tokens": 56_000, "used_percentage": 50
+        })
+    );
 }
