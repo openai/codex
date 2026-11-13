@@ -977,7 +977,7 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
         )?;
 
         let mut session = client.new_session();
-        session.websocket_session.last_request = Some(previous);
+        session.websocket_session.last_request = Some(Arc::new(previous));
         let (sender, receiver) = tokio::sync::oneshot::channel();
         sender
             .send(super::LastResponse {
@@ -1028,7 +1028,7 @@ fn websocket_continuation_reports_unavailable_response_state() {
         )
         .expect("build continuation request");
     let mut session = client.new_session();
-    session.websocket_session.last_request = Some(request.clone());
+    session.websocket_session.last_request = Some(Arc::new(request.clone()));
     assert_eq!(
         session.prepare_websocket_request(&request).err(),
         Some(NonIncrementalReason::NoPreviousResponse),
@@ -1092,14 +1092,14 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
     let output = output_with_tool_result_metadata(ToolResultMetadata::new(&json!({
         "private": "raw-result-metadata",
     })));
-    let prompt = Prompt {
+    let prompt = Arc::new(Prompt {
         input: vec![output.clone()],
         base_instructions: BaseInstructions {
             text: String::new(),
             ..Default::default()
         },
         ..Default::default()
-    };
+    });
     let responses_metadata = test_responses_metadata_for_client(
         &client,
         /*turn_id*/ None,
@@ -1260,7 +1260,7 @@ fn websocket_continuation_reset_reason_survives_failed_reconnect_and_turn_bounda
             )
             .expect("build continuation request");
         let mut session = client.new_session();
-        session.websocket_session.last_request = Some(request);
+        session.websocket_session.last_request = Some(Arc::new(request));
         session.websocket_session.reset(Some(reason));
         session.websocket_session.reset(/*reason*/ None);
         session.websocket_session.reset(Some(later_reason));
@@ -1462,7 +1462,7 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
     })?;
 
     let inference_trace = InferenceTraceContext::enabled(
-        writer,
+        Arc::clone(&writer),
         "thread-root".to_string(),
         "turn-1".to_string(),
         "gpt-test".to_string(),
@@ -1477,7 +1477,11 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
             "content": [{"type": "input_text", "text": "hello"}]
         }],
     });
-    attempt.record_started(serde_json::to_vec(&request)?, &request, || Ok(None));
+    attempt.record_started(serde_json::to_vec(&request)?, Arc::new(request), || {
+        Ok(None)
+    });
+    // Cancellation tests can start replaying as soon as this helper returns.
+    writer.flush()?;
     Ok(attempt)
 }
 

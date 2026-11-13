@@ -3000,7 +3000,8 @@ async fn try_run_sampling_request(
         None
     };
     let mut resampling = crate::guardian::ResponseResampling::new(&sess);
-    let mut stream_request = async |prompt: &Prompt| {
+    let prompt = Arc::new(prompt);
+    let mut stream_request = async |prompt: &Arc<Prompt>| {
         client_session
             .stream(
                 prompt,

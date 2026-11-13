@@ -291,7 +291,7 @@ struct RemoteCompactionV2Output {
 async fn run_remote_compaction_request_v2(
     sess: &Session,
     step_context: &StepContext,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     responses_metadata: &CodexResponsesMetadata,
     transport: &mut CompactionRequestTransport<'_>,
     submitted_audio: Option<&crate::context_manager::rejected_audio::SubmittedFileAudio>,

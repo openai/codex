@@ -16,7 +16,6 @@ use crate::model::CodeCellRuntimeStatus;
 use crate::model::CodexTurnId;
 use crate::model::ModelVisibleCallId;
 use crate::payload::RawPayloadKind;
-use crate::payload::RawPayloadRef;
 use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::writer::TraceWriter;
@@ -86,14 +85,16 @@ impl CodeCellTraceContext {
         let CodeCellTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        append_with_context_best_effort(
-            context,
+        if let Err(err) = context.writer.enqueue_event(
+            RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
             RawTraceEventPayload::CodeCellStarted {
                 runtime_cell_id: context.runtime_cell_id.clone(),
                 model_visible_call_id: model_visible_call_id.into(),
                 source_js: source_js.into(),
             },
-        );
+        ) {
+            warn!("failed to append rollout trace event: {err:#}");
+        }
     }
 
     /// Records the first response returned by the public code-mode `exec` tool.
@@ -106,12 +107,16 @@ impl CodeCellTraceContext {
         let CodeCellTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        append_with_context_best_effort(
-            context,
-            RawTraceEventPayload::CodeCellInitialResponse {
-                runtime_cell_id: context.runtime_cell_id.clone(),
-                status: code_cell_status_for_runtime_response(response),
-                response_payload: code_cell_response_payload(context, response),
+        let runtime_cell_id = context.runtime_cell_id.clone();
+        let status = code_cell_status_for_runtime_response(response);
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
+            RawPayloadKind::ToolResult,
+            &CodeCellResponseTracePayload { response },
+            move |reference| RawTraceEventPayload::CodeCellInitialResponse {
+                runtime_cell_id,
+                status,
+                response_payload: Some(reference),
             },
         );
     }
@@ -121,12 +126,16 @@ impl CodeCellTraceContext {
         let CodeCellTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        append_with_context_best_effort(
-            context,
-            RawTraceEventPayload::CodeCellEnded {
-                runtime_cell_id: context.runtime_cell_id.clone(),
-                status: code_cell_status_for_runtime_response(response),
-                response_payload: code_cell_response_payload(context, response),
+        let runtime_cell_id = context.runtime_cell_id.clone();
+        let status = code_cell_status_for_runtime_response(response);
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
+            RawPayloadKind::ToolResult,
+            &CodeCellResponseTracePayload { response },
+            move |reference| RawTraceEventPayload::CodeCellEnded {
+                runtime_cell_id,
+                status,
+                response_payload: Some(reference),
             },
         );
     }
@@ -143,43 +152,5 @@ fn code_cell_status_for_runtime_response(response: &RuntimeResponse) -> CodeCell
                 CodeCellRuntimeStatus::Completed
             }
         }
-    }
-}
-
-fn code_cell_response_payload(
-    context: &EnabledCodeCellTraceContext,
-    response: &RuntimeResponse,
-) -> Option<RawPayloadRef> {
-    write_json_payload_best_effort(
-        &context.writer,
-        RawPayloadKind::ToolResult,
-        &CodeCellResponseTracePayload { response },
-    )
-}
-
-fn write_json_payload_best_effort(
-    writer: &TraceWriter,
-    kind: RawPayloadKind,
-    payload: &impl Serialize,
-) -> Option<RawPayloadRef> {
-    match writer.write_json_payload(kind, payload) {
-        Ok(payload_ref) => Some(payload_ref),
-        Err(err) => {
-            warn!("failed to write rollout trace payload: {err:#}");
-            None
-        }
-    }
-}
-
-fn append_with_context_best_effort(
-    context: &EnabledCodeCellTraceContext,
-    payload: RawTraceEventPayload,
-) {
-    let event_context = RawTraceEventContext {
-        thread_id: Some(context.thread_id.clone()),
-        codex_turn_id: Some(context.codex_turn_id.clone()),
-    };
-    if let Err(err) = context.writer.append_with_context(event_context, payload) {
-        warn!("failed to append rollout trace event: {err:#}");
     }
 }

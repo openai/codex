@@ -335,7 +335,7 @@ async fn run_compact_task_inner_impl(
             turn_context.as_ref(),
             &mut client_session,
             &responses_metadata,
-            &prompt,
+            &Arc::new(prompt),
             compaction_metadata.phase(),
         )
         .await;
@@ -842,7 +842,7 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     phase: CompactionPhase,
 ) -> CodexResult<CompactionResponse> {
     let mut includes_reasoning = turn_context.model_info().use_responses_lite;

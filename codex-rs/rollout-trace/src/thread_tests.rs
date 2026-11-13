@@ -56,6 +56,7 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     thread_trace.record_ended(RolloutStatus::Completed);
 
     let bundle_dir = single_bundle_dir(temp.path())?;
+    thread_trace.flush()?;
     let replayed = replay_bundle(&bundle_dir)?;
 
     assert_eq!(replayed.status, RolloutStatus::Completed);
@@ -165,6 +166,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
     })?;
     child_trace.record_ended(RolloutStatus::Completed);
     let bundle_dir = single_bundle_dir(temp.path())?;
+    root_trace.flush()?;
     let replayed = replay_bundle(&bundle_dir)?;
 
     assert_eq!(fs::read_dir(temp.path())?.count(), 1);
@@ -262,7 +264,11 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
         thread_trace.inference_trace_context("turn-1", "gpt-test", "test-provider");
     let inference_attempt = inference_trace.start_attempt();
     let input = serde_json::json!({ "kind": "inference" });
-    inference_attempt.record_started(serde_json::to_vec(&input)?, &input, || Ok(None));
+    inference_attempt.record_started(
+        serde_json::to_vec(&input)?,
+        std::sync::Arc::new(input),
+        || Ok(None),
+    );
     let token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
     inference_attempt.record_completed("response-1", Some("req-1"), &token_usage, &[]);
     inference_attempt.record_failed("inference failed", /*upstream_request_id*/ None, &[]);
@@ -275,7 +281,7 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
     );
     assert!(!compaction_trace.is_enabled());
     let compaction_attempt =
-        compaction_trace.start_attempt(&serde_json::json!({ "kind": "compaction" }));
+        compaction_trace.start_attempt::<()>(|| panic!("disabled tracing built the request"));
     compaction_attempt.record_completed(&[]);
     compaction_attempt.record_failed("compaction failed");
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
@@ -308,11 +314,16 @@ fn compaction_contexts_share_identity_across_models() -> anyhow::Result<()> {
         let compaction_trace =
             thread_trace.compaction_trace_context("turn-1", "compaction-1", model, "test-provider");
         assert!(compaction_trace.is_enabled());
+        let caller = std::thread::current().id();
         compaction_trace
-            .start_attempt(&serde_json::json!({ "model": model }))
+            .start_attempt(move || {
+                assert_ne!(std::thread::current().id(), caller);
+                serde_json::json!({ "model": model })
+            })
             .record_failed("test failure");
     }
 
+    thread_trace.flush()?;
     let replayed = replay_bundle(&single_bundle_dir(temp.path())?)?;
     let mut attempts = replayed
         .compaction_requests
@@ -340,6 +351,7 @@ fn protocol_wrapper_records_selected_events_as_raw_payloads() -> anyhow::Result<
 
     thread_trace.record_protocol_event(&EventMsg::ShutdownComplete);
 
+    thread_trace.flush()?;
     let event_log = fs::read_to_string(single_bundle_dir(temp.path())?.join("trace.jsonl"))?;
     let protocol_event_seen = event_log.lines().any(|line| {
         let event: crate::RawTraceEvent = serde_json::from_str(line).expect("raw trace event");
@@ -377,6 +389,7 @@ fn intercepted_exec_records_patch_without_a_terminal() -> anyhow::Result<()> {
         },
     }));
     let bundle = single_bundle_dir(temp.path())?;
+    trace.flush()?;
     let before = replay_bundle(&bundle)?.tool_calls["patch-call"].clone();
     let changes = HashMap::from([(
         PathBuf::from("hello.txt"),
@@ -415,6 +428,7 @@ fn intercepted_exec_records_patch_without_a_terminal() -> anyhow::Result<()> {
         },
     );
 
+    trace.flush()?;
     let rollout = replay_bundle(&bundle)?;
     let call = &rollout.tool_calls["patch-call"];
     assert_eq!(call.kind, ToolCallKind::ApplyPatch);

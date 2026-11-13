@@ -311,7 +311,7 @@ mod job {
         prompt.output_schema_strict = true;
 
         let (result, token_usage) = context
-            .stream_stage_one_prompt(config, &prompt, stage_one_context)
+            .stream_stage_one_prompt(config, prompt, stage_one_context)
             .await?;
 
         let output = StageOneOutput::parse(&result, config.memories.version)?;

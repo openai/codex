@@ -1,21 +1,22 @@
 //! Hot-path trace bundle writer.
 //!
-//! Writers serialize whole payloads before publishing the events that reference them.
-//! Closing the bundle seals the final shard before recording completion.
+//! A single worker publishes live events in order while model and tool work proceeds.
+//! Shutdown waits for the worker to drain accepted events and seal the bundle.
 
-use std::fmt;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::PoisonError;
+use std::sync::mpsc;
+use std::thread;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use anyhow::bail;
 use serde::Serialize;
 
@@ -32,15 +33,16 @@ use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::shard::ShardWriter;
 
-/// Serializes access to the event log and its ordered payload shards.
-pub struct TraceWriter {
-    bundle: Mutex<BundleWriter>,
-}
+// Bound the number of retained prompts before their serialized sizes are known.
+const MAX_PENDING_JOBS: usize = 8;
+type WriteJob = Box<dyn FnOnce(&mut BundleWriter) + Send>;
 
-impl fmt::Debug for TraceWriter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TraceWriter").finish_non_exhaustive()
-    }
+/// Serializes trace writes in submission order. Explicit writes wait until their evidence is readable.
+#[derive(Debug)]
+pub struct TraceWriter {
+    jobs: Option<mpsc::SyncSender<WriteJob>>,
+    worker: Option<thread::JoinHandle<()>>,
+    failure: Arc<OnceLock<String>>,
 }
 
 /// Owns the bundle files until shutdown. Each body is flushed before its event is published.
@@ -51,7 +53,7 @@ pub(crate) struct BundleWriter {
     next_seq: u64,
     next_payload_ordinal: u64,
     // Keep the first error so explicit reads and shutdown can detect an incomplete recording.
-    failure: OnceLock<String>,
+    failure: Arc<OnceLock<String>>,
 }
 
 impl BundleWriter {
@@ -90,7 +92,7 @@ impl BundleWriter {
     ) -> Result<RawTraceEvent> {
         if matches!(payload, RawTraceEventPayload::RecordingCompleted) {
             self.shards.finish()?;
-            // Timestamp the closing marker after the shard is sealed.
+            // Closure is observed here, after draining earlier jobs.
             wall_time_unix_ms = unix_time_ms();
         }
         let event = RawTraceEvent {
@@ -133,28 +135,50 @@ impl TraceWriter {
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
             .with_context(|| format!("write trace manifest {}", manifest_path.display()))?;
 
-        let bundle = BundleWriter {
+        let failure = Arc::new(OnceLock::new());
+        let mut bundle = BundleWriter {
             rollout_id: manifest.rollout_id,
             events: BufWriter::new(event_log),
             shards: ShardWriter::new(payloads_dir),
             next_seq: 1,
             next_payload_ordinal: 1,
-            failure: OnceLock::new(),
+            failure: Arc::clone(&failure),
         };
+        let (jobs, receiver) = mpsc::sync_channel::<WriteJob>(MAX_PENDING_JOBS);
+        let worker = thread::Builder::new()
+            .name("rollout-trace".into())
+            .spawn(move || {
+                for job in receiver {
+                    job(&mut bundle);
+                }
+            })
+            .context("start rollout trace writer")?;
         Ok(Self {
-            bundle: Mutex::new(bundle),
+            jobs: Some(jobs),
+            worker: Some(worker),
+            failure,
         })
     }
 
-    fn call<T>(&self, write: impl FnOnce(&mut BundleWriter) -> Result<T>) -> Result<T> {
-        self.bundle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .record(write)
+    fn submit(&self, job: impl FnOnce(&mut BundleWriter) + Send + 'static) -> Result<()> {
+        check_recording(&self.failure)?;
+        self.jobs
+            .as_ref()
+            .context("closed rollout trace writer")?
+            .send(Box::new(job))
+            .map_err(|_| anyhow!("rollout trace worker stopped"))
     }
 
-    pub(crate) fn check(&self) -> Result<()> {
-        self.call(|_| Ok(()))
+    /// A caller that needs a published reference or a live read barrier waits in FIFO order.
+    fn call<T: Send + 'static>(
+        &self,
+        write: impl FnOnce(&mut BundleWriter) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let (reply, result) = mpsc::channel();
+        self.submit(move |bundle| {
+            let _ = reply.send(bundle.record(write));
+        })?;
+        result.recv().context("rollout trace worker stopped")?
     }
 
     /// Publishes a complete JSON body and returns its location in the bundle.
@@ -163,7 +187,9 @@ impl TraceWriter {
         kind: RawPayloadKind,
         value: &impl Serialize,
     ) -> Result<RawPayloadRef> {
-        self.call(|bundle| bundle.write_body(kind, &serde_json::to_vec(value)?))
+        check_recording(&self.failure)?;
+        let body = serde_json::to_vec(value);
+        self.call(move |bundle| bundle.write_body(kind, &body?))
     }
 
     /// Appends one raw event with no extra envelope context.
@@ -181,38 +207,64 @@ impl TraceWriter {
         self.call(move |bundle| bundle.append(context, payload, now))
     }
 
-    /// Writes related payloads and their event under the same lock.
-    pub(crate) fn record_event(
+    /// The worker writes this event's bodies before publishing its references.
+    pub(crate) fn defer_event(
         &self,
         context: RawTraceEventContext,
-        build: impl FnOnce(&mut BundleWriter) -> Result<RawTraceEventPayload>,
+        build: impl FnOnce(&mut BundleWriter) -> Result<RawTraceEventPayload> + Send + 'static,
     ) -> Result<()> {
-        self.call(|bundle| {
-            let payload = build(bundle)?;
-            bundle.append(context, payload, unix_time_ms())?;
-            Ok(())
+        let now = unix_time_ms();
+        self.submit(move |bundle| {
+            let _ = bundle.record(|bundle| {
+                let payload = build(bundle)?;
+                bundle.append(context, payload, now)
+            });
         })
     }
 
-    /// Publishes a JSON body before the event that points to it.
+    pub(crate) fn enqueue_event(
+        &self,
+        context: RawTraceEventContext,
+        payload: RawTraceEventPayload,
+    ) -> Result<()> {
+        self.defer_event(context, move |_| Ok(payload))
+    }
+
+    /// Encodes a borrowed observation before returning. The worker handles its
+    /// bytes or serialization error in order, preserving previously accepted evidence.
     pub(crate) fn event_with_payload(
         &self,
         context: RawTraceEventContext,
         kind: RawPayloadKind,
         value: &impl Serialize,
-        event: impl FnOnce(RawPayloadRef) -> RawTraceEventPayload,
+        event: impl FnOnce(RawPayloadRef) -> RawTraceEventPayload + Send + 'static,
     ) -> Result<()> {
-        self.record_event(context, |bundle| {
-            let reference = bundle.write_body(kind, &serde_json::to_vec(value)?)?;
+        check_recording(&self.failure)?;
+        let body = serde_json::to_vec(value);
+        self.defer_event(context, move |bundle| {
+            let reference = bundle.write_body(kind, &body?)?;
             Ok(event(reference))
         })
+    }
+
+    /// Waits for earlier records to become readable, or returns the first recording failure.
+    pub fn flush(&self) -> Result<()> {
+        self.call(|_| Ok(()))
     }
 }
 
 impl Drop for TraceWriter {
     fn drop(&mut self) {
-        if !self.bundle.is_poisoned() && !std::thread::panicking() {
-            let _ = self.append(RawTraceEventPayload::RecordingCompleted);
+        // The closing event seals the shard after earlier jobs. Joining makes it visible on return.
+        if !thread::panicking() {
+            let _ = self.enqueue_event(
+                RawTraceEventContext::default(),
+                RawTraceEventPayload::RecordingCompleted,
+            );
+        }
+        drop(self.jobs.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
@@ -355,7 +407,7 @@ mod tests {
                 .is_err()
         );
         std::fs::create_dir(temp.path().join("payloads"))?;
-        assert!(writer.check().is_err());
+        assert!(writer.flush().is_err());
         assert!(
             writer
                 .write_json_payload(RawPayloadKind::ProtocolEvent, &json!({}))
@@ -387,7 +439,7 @@ mod tests {
                 })
                 .is_err()
         );
-        assert!(writer.check().is_err());
+        assert!(writer.flush().is_err());
         drop(writer);
         assert_eq!(
             std::fs::read_to_string(temp.path().join("trace.jsonl"))?,

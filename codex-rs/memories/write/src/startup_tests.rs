@@ -725,7 +725,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
     context
         .stream_stage_one_prompt(
             &test.config,
-            &codex_core::Prompt::default(),
+            codex_core::Prompt::default(),
             &request_context,
         )
         .await?;

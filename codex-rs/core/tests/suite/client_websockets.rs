@@ -962,7 +962,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
         .expect("turn started");
 
     let inference_trace = InferenceTraceContext::enabled(
-        writer,
+        Arc::clone(&writer),
         harness.thread_id.to_string(),
         "turn-1".to_string(),
         harness.model_info.slug.clone(),
@@ -991,7 +991,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     }
 
     let attribution = serde_json::json!([{"provenance": {"type": "user"}}]);
-    prompt.input.push(serde_json::from_value(serde_json::json!({
+    Arc::make_mut(&mut prompt).input.push(serde_json::from_value(serde_json::json!({
         "type": "message", "role": "user", "content": [{"type": "input_text", "text": "follow up"}],
         "internal_chat_message_metadata_passthrough": {"content_item_metadata": attribution}
     })).unwrap());
@@ -1021,6 +1021,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
 
+    writer.flush().expect("publish the live trace");
     let rollout = replay_bundle(trace_dir.path()).expect("replay trace");
     let mut reader = codex_rollout_trace::PayloadReader::new(trace_dir.path());
     assert_eq!(rollout.inference_calls.len(), 2);
@@ -2555,7 +2556,7 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let mut prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
-    prompt_two.output_schema = output_schema;
+    Arc::make_mut(&mut prompt_two).output_schema = output_schema;
     let mut model_info = harness.model_info.clone();
     if let Some(model) = model {
         model_info.slug = model.to_string();
@@ -2834,20 +2835,18 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
     }
 }
 
-fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
-    let mut prompt = Prompt::default();
-    prompt.input = input;
-    prompt.base_instructions.text.clear();
-    prompt
+fn prompt_with_input(input: Vec<ResponseItem>) -> Arc<Prompt> {
+    prompt_with_input_and_instructions(input, "")
 }
 
-fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
-    let mut prompt = prompt_with_input(input);
+fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Arc<Prompt> {
+    let mut prompt = Prompt::default();
+    prompt.input = input;
     prompt.base_instructions = BaseInstructions {
         text: instructions.to_string(),
         provenance: None,
     };
-    prompt
+    Arc::new(prompt)
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
@@ -3271,7 +3270,7 @@ fn assert_counter<const N: usize>(
 async fn stream_until_complete(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
 ) {
     stream_until_complete_with_service_tier(
         client_session,
@@ -3285,7 +3284,7 @@ async fn stream_until_complete(
 async fn stream_until_complete_with_model_info(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     model_info: &ModelInfo,
     expected_response_id: &str,
 ) {
@@ -3318,7 +3317,7 @@ async fn stream_until_complete_with_model_info(
 async fn stream_until_complete_with_service_tier(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     service_tier: Option<ServiceTier>,
 ) {
     let responses_metadata = turn_metadata(harness, /*turn_id*/ None);
@@ -3335,7 +3334,7 @@ async fn stream_until_complete_with_service_tier(
 async fn stream_until_complete_with_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     service_tier: Option<ServiceTier>,
     responses_metadata: &CodexResponsesMetadata,
 ) {

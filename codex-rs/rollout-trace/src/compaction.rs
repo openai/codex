@@ -12,7 +12,6 @@ use std::sync::atomic::Ordering;
 
 use codex_protocol::models::ResponseItem;
 use serde::Serialize;
-use tracing::warn;
 
 use crate::inference::serialize_trace_items;
 use crate::model::AgentThreadId;
@@ -120,19 +119,47 @@ impl CompactionTraceContext {
         matches!(self.state, CompactionTraceContextState::Enabled(_))
     }
 
-    /// Starts a new upstream attempt and records the exact compact endpoint request.
-    pub fn start_attempt(&self, request: &impl Serialize) -> CompactionTraceAttempt {
+    /// Starts an upstream attempt. The recording worker builds the snapshot if tracing is enabled.
+    pub fn start_attempt<T: Serialize>(
+        &self,
+        request: impl FnOnce() -> T + Send + 'static,
+    ) -> CompactionTraceAttempt {
         let CompactionTraceContextState::Enabled(context) = &self.state else {
-            return CompactionTraceAttempt::disabled();
+            return CompactionTraceAttempt {
+                state: CompactionTraceAttemptState::Disabled,
+            };
         };
 
+        let compaction_request_id = next_compaction_request_id();
         let attempt = CompactionTraceAttempt {
             state: CompactionTraceAttemptState::Enabled(EnabledCompactionTraceAttempt {
                 context: context.clone(),
-                compaction_request_id: next_compaction_request_id(),
+                compaction_request_id: compaction_request_id.clone(),
             }),
         };
-        attempt.record_started(request);
+        let compaction_id = context.compaction_id.clone();
+        let thread_id = context.thread_id.clone();
+        let codex_turn_id = context.codex_turn_id.clone();
+        let model = context.model.clone();
+        let provider_name = context.provider_name.clone();
+        let _ = context.writer.defer_event(
+            RawTraceEventContext::turn(&thread_id, &codex_turn_id),
+            move |bundle| {
+                let request_payload = bundle.write_body(
+                    RawPayloadKind::CompactionRequest,
+                    &serde_json::to_vec(&request())?,
+                )?;
+                Ok(RawTraceEventPayload::CompactionRequestStarted {
+                    compaction_id,
+                    compaction_request_id,
+                    thread_id,
+                    codex_turn_id,
+                    model,
+                    provider_name,
+                    request_payload,
+                })
+            },
+        );
         attempt
     }
 
@@ -144,67 +171,20 @@ impl CompactionTraceContext {
         let CompactionTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        let checkpoint_payload = match context
-            .writer
-            .write_json_payload(RawPayloadKind::CompactionCheckpoint, checkpoint)
-        {
-            Ok(payload_ref) => payload_ref,
-            Err(err) => {
-                warn!("failed to write rollout trace payload: {err:#}");
-                return;
-            }
-        };
-
-        let event_context = RawTraceEventContext {
-            thread_id: Some(context.thread_id.clone()),
-            codex_turn_id: Some(context.codex_turn_id.clone()),
-        };
-        if let Err(err) = context.writer.append_with_context(
-            event_context,
-            RawTraceEventPayload::CompactionInstalled {
-                compaction_id: context.compaction_id.clone(),
+        let compaction_id = context.compaction_id.clone();
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
+            RawPayloadKind::CompactionCheckpoint,
+            checkpoint,
+            move |checkpoint_payload| RawTraceEventPayload::CompactionInstalled {
+                compaction_id,
                 checkpoint_payload,
             },
-        ) {
-            warn!("failed to append rollout trace event: {err:#}");
-        }
+        );
     }
 }
 
 impl CompactionTraceAttempt {
-    /// Builds an attempt that records nothing.
-    fn disabled() -> Self {
-        Self {
-            state: CompactionTraceAttemptState::Disabled,
-        }
-    }
-
-    fn record_started(&self, request: &impl Serialize) {
-        let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
-            return;
-        };
-        let Some(request_payload) = write_json_payload_best_effort(
-            &attempt.context.writer,
-            RawPayloadKind::CompactionRequest,
-            request,
-        ) else {
-            return;
-        };
-
-        append_with_context_best_effort(
-            &attempt.context,
-            RawTraceEventPayload::CompactionRequestStarted {
-                compaction_id: attempt.context.compaction_id.clone(),
-                compaction_request_id: attempt.compaction_request_id.clone(),
-                thread_id: attempt.context.thread_id.clone(),
-                codex_turn_id: attempt.context.codex_turn_id.clone(),
-                model: attempt.context.model.clone(),
-                provider_name: attempt.context.provider_name.clone(),
-                request_payload,
-            },
-        );
-    }
-
     /// Records the non-streaming compact endpoint response payload.
     ///
     /// Compaction responses use the same response-item preservation rules as
@@ -215,19 +195,16 @@ impl CompactionTraceAttempt {
             return;
         };
         let response_payload = TracedCompactionCompleted { output_items };
-        let Some(response_payload) = write_json_payload_best_effort(
-            &attempt.context.writer,
+        let ctx = &attempt.context;
+        let compaction_id = ctx.compaction_id.clone();
+        let compaction_request_id = attempt.compaction_request_id.clone();
+        let _ = ctx.writer.event_with_payload(
+            RawTraceEventContext::turn(&ctx.thread_id, &ctx.codex_turn_id),
             RawPayloadKind::CompactionResponse,
             &response_payload,
-        ) else {
-            return;
-        };
-
-        append_with_context_best_effort(
-            &attempt.context,
-            RawTraceEventPayload::CompactionRequestCompleted {
-                compaction_id: attempt.context.compaction_id.clone(),
-                compaction_request_id: attempt.compaction_request_id.clone(),
+            move |response_payload| RawTraceEventPayload::CompactionRequestCompleted {
+                compaction_id,
+                compaction_request_id,
                 response_payload,
             },
         );
@@ -246,8 +223,8 @@ impl CompactionTraceAttempt {
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
         };
-        append_with_context_best_effort(
-            &attempt.context,
+        let _ = attempt.context.writer.enqueue_event(
+            RawTraceEventContext::turn(&attempt.context.thread_id, &attempt.context.codex_turn_id),
             RawTraceEventPayload::CompactionRequestFailed {
                 compaction_id: attempt.context.compaction_id.clone(),
                 compaction_request_id: attempt.compaction_request_id.clone(),
@@ -260,23 +237,4 @@ impl CompactionTraceAttempt {
 fn next_compaction_request_id() -> CompactionRequestId {
     let ordinal = NEXT_COMPACTION_REQUEST.fetch_add(1, Ordering::Relaxed);
     format!("compaction_request:{ordinal}")
-}
-
-fn write_json_payload_best_effort(
-    writer: &TraceWriter,
-    kind: RawPayloadKind,
-    payload: &impl Serialize,
-) -> Option<crate::RawPayloadRef> {
-    writer.write_json_payload(kind, payload).ok()
-}
-
-fn append_with_context_best_effort(
-    context: &EnabledCompactionTraceContext,
-    payload: RawTraceEventPayload,
-) {
-    let event_context = RawTraceEventContext {
-        thread_id: Some(context.thread_id.clone()),
-        codex_turn_id: Some(context.codex_turn_id.clone()),
-    };
-    let _ = context.writer.append_with_context(event_context, payload);
 }

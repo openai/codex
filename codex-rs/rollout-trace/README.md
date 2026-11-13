@@ -139,6 +139,15 @@ output settings. For a continuation from an unrecorded WebSocket warmup, the
 start event also links the full formatted input so the reducer can resolve the
 missing history.
 
+One worker per bundle records events in submission order. For inference starts,
+the transport shares its encoded request and Core shares the prepared prompt.
+The worker serializes the prompt, compresses both bodies, and writes them before
+publishing the start event. Remote compaction uses the same worker to snapshot
+the model, instructions, input history, and parallel tool-call setting. Up to
+eight jobs can wait for the worker. Use `TraceWriter::flush` to read a live
+snapshot. Shutdown waits for the worker to finish accepted jobs, seal the shard,
+and write the closing marker. A recording failure prevents the marker.
+
 Each shard is one Zstandard frame (level 3, 8 MiB window, checksum enabled).
 Each record contains a little-endian 16-bit ID length, a little-endian 64-bit
 body length, the UTF-8 ID, then the JSON bytes. The writer flushes a record

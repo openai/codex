@@ -177,7 +177,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             .iter()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
     let tool_router = &step_context.tool_router;
-    let mut prompt = Prompt {
+    let mut prompt = Arc::new(Prompt {
         input,
         tools: if tools_in_history {
             tool_router
@@ -195,7 +195,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema_strict: true,
         prompt_cache_ttl: turn_context.prompt_cache_ttl,
         cyber_access_program: turn_context.cyber_access_program,
-    };
+    });
 
     let mut responses_metadata = match captured_window {
         Some(window) => {
@@ -225,13 +225,20 @@ pub(super) async fn run_remote_compact_v2_attempt(
         response_id,
         token_usage,
     } = loop {
-        prompt.input.push(ResponseItem::CompactionTrigger {});
-        let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-            "model": model_info.slug.as_str(),
-            "instructions": prompt.base_instructions.text.as_str(),
-            "input": &prompt.input,
-            "parallel_tool_calls": prompt.parallel_tool_calls,
-        }));
+        Arc::make_mut(&mut prompt)
+            .input
+            .push(ResponseItem::CompactionTrigger {});
+        // A retry can edit its input while the worker still holds this attempt's snapshot.
+        let trace_prompt = Arc::clone(&prompt);
+        let trace_model = model_info.slug.clone();
+        let trace_attempt = compaction_trace.start_attempt(move || {
+            serde_json::json!({
+                "model": trace_model,
+                "instructions": trace_prompt.base_instructions.text.as_str(),
+                "input": &trace_prompt.input,
+                "parallel_tool_calls": trace_prompt.parallel_tool_calls,
+            })
+        });
         let compaction_output_result = run_remote_compaction_request_v2(
             sess,
             step_context,
@@ -246,30 +253,25 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 .as_ref()
                 .map(|output| std::slice::from_ref(&output.compaction_output)),
         );
-        prompt.input.pop();
-        match compaction_output_result {
+        let rejected_id = match compaction_output_result {
             Ok(output) => break output,
-            Err(error) => {
-                let Some(id) = submitted_audio
-                    .take()
-                    .and_then(|audio| audio.rejected_file_id(error.details()))
-                else {
-                    return Err(error);
-                };
-                unavailable.insert(id);
-                rejected_audio::project_compaction_audio(
-                    &mut prompt.input,
-                    &mut prompt_input_metadata,
-                    &unavailable,
-                );
-            }
-        }
+            Err(error) => submitted_audio
+                .take()
+                .and_then(|audio| audio.rejected_file_id(error.details()))
+                .ok_or(error)?,
+        };
+        unavailable.insert(rejected_id);
+        let input = &mut Arc::make_mut(&mut prompt).input;
+        input.pop();
+        rejected_audio::project_compaction_audio(input, &mut prompt_input_metadata, &unavailable);
     };
+    let mut prompt_input = Arc::unwrap_or_clone(prompt).input;
+    prompt_input.pop(); // Exclude the request-only trigger from checkpoint history.
     Ok(RemoteCompactV2Attempt {
         rejected_audio_file_ids: unavailable,
         input_goal_ids,
         trace_input_history,
-        prompt_input: prompt.input,
+        prompt_input,
         prompt_input_metadata,
         compaction_output,
         compaction_response_id: response_id,

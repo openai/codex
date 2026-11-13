@@ -177,11 +177,11 @@ impl InferenceTraceAttempt {
 
     /// Captures the transport's encoded JSON and the immutable Core prompt that produced it.
     /// A continuation from an unrecorded warmup also supplies its full formatted context.
-    pub fn record_started(
+    pub fn record_started<P: Serialize + Send + Sync + 'static>(
         &self,
-        outgoing: impl AsRef<[u8]>,
-        prepared_prompt: &impl Serialize,
-        warmup_context: impl FnOnce() -> serde_json::Result<Option<Vec<u8>>>,
+        outgoing: impl AsRef<[u8]> + Send + 'static,
+        prepared_prompt: Arc<P>,
+        warmup_context: impl FnOnce() -> serde_json::Result<Option<Vec<u8>>> + Send + 'static,
     ) {
         let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
@@ -192,14 +192,14 @@ impl InferenceTraceAttempt {
         let inference_call_id = attempt.inference_call_id.clone();
         let model = ctx.model.clone();
         let provider_name = ctx.provider_name.clone();
-        let start = ctx.writer.record_event(
+        let start = ctx.writer.defer_event(
             RawTraceEventContext::turn(&thread_id, &codex_turn_id),
             move |bundle| {
                 let request_payload =
                     bundle.write_body(RawPayloadKind::InferenceRequest, outgoing.as_ref())?;
                 let prepared_prompt_payload = bundle.write_body(
                     RawPayloadKind::PreparedPrompt,
-                    &serde_json::to_vec(prepared_prompt)?,
+                    &serde_json::to_vec(prepared_prompt.as_ref())?,
                 )?;
                 let warmup_context_payload = warmup_context()?
                     .map(|bytes| bundle.write_body(RawPayloadKind::WarmupContext, &bytes))
@@ -364,7 +364,7 @@ fn record_partial_response(
     let ctx = &attempt.context;
     let envelope = RawTraceEventContext::turn(&ctx.thread_id, &ctx.codex_turn_id);
     if output_items.is_empty() {
-        let _ = ctx.writer.append_with_context(envelope, event(None));
+        let _ = ctx.writer.enqueue_event(envelope, event(None));
     } else {
         let payload = TracedResponseStreamOutput {
             response_id: None,
@@ -469,9 +469,12 @@ mod tests {
                 "content": [{"type": "input_text", "text": "hello"}]
             }],
         });
-        attempt.record_started(serde_json::to_vec(&request)?, &request, || Ok(None));
+        attempt.record_started(serde_json::to_vec(&request)?, Arc::new(request), || {
+            Ok(None)
+        });
         attempt.record_completed("resp-1", Some("req-1"), &None, &[]);
 
+        writer.flush()?;
         let rollout = replay_bundle(temp.path())?;
         let inference = rollout
             .inference_calls
@@ -521,3 +524,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "inference_recording_tests.rs"]
+mod recording_tests;

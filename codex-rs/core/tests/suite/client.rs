@@ -1880,7 +1880,7 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,
@@ -3660,7 +3660,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,

@@ -319,7 +319,7 @@ impl MemoryStartupContext {
     pub(crate) async fn stream_stage_one_prompt(
         &self,
         config: &Config,
-        prompt: &Prompt,
+        prompt: Prompt,
         context: &StageOneRequestContext,
     ) -> anyhow::Result<(String, Option<TokenUsage>)> {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
@@ -364,7 +364,7 @@ impl MemoryStartupContext {
         .await;
         let mut stream = client_session
             .stream(
-                prompt,
+                &Arc::new(prompt),
                 &context.model_info,
                 &context.session_telemetry,
                 context.reasoning_effort.clone(),

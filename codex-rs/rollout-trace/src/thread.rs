@@ -6,6 +6,7 @@
 //! through session code.
 
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -26,7 +27,6 @@ use crate::ExecutionStatus;
 use crate::InferenceTraceContext;
 use crate::McpCallTraceContext;
 use crate::RawPayloadKind;
-use crate::RawPayloadRef;
 use crate::RawTraceEventContext;
 use crate::RawTraceEventPayload;
 use crate::RolloutStatus;
@@ -130,11 +130,26 @@ impl ThreadTraceContext {
             root_thread_id,
             thread_id: metadata.thread_id.clone(),
         };
-        record_thread_started(&context, metadata);
-        context.writer.check()?;
+        // Thread creation reports storage failures before returning the new handle.
+        let metadata_payload = context
+            .writer
+            .write_json_payload(RawPayloadKind::SessionMetadata, &metadata)?;
+        context.writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: metadata.thread_id,
+            agent_path: metadata.agent_path,
+            metadata_payload: Some(metadata_payload),
+        })?;
         Ok(Self {
             state: ThreadTraceContextState::Enabled(context),
         })
+    }
+
+    /// Publishes queued evidence before reading a snapshot of a running bundle.
+    pub fn flush(&self) -> anyhow::Result<()> {
+        match &self.state {
+            ThreadTraceContextState::Disabled => Ok(()),
+            ThreadTraceContextState::Enabled(context) => context.writer.flush(),
+        }
     }
 
     /// Returns whether this handle will write trace events.
@@ -209,15 +224,16 @@ impl ThreadTraceContext {
         let Some(event_type) = wrapped_protocol_event_type(event) else {
             return;
         };
-        let Some(event_payload) =
-            context.write_json_payload_best_effort(RawPayloadKind::ProtocolEvent, event)
-        else {
-            return;
-        };
-        context.append_best_effort(RawTraceEventPayload::ProtocolEventObserved {
-            event_type: event_type.to_string(),
-            event_payload,
-        });
+        let event_type = event_type.to_owned();
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::default(),
+            RawPayloadKind::ProtocolEvent,
+            event,
+            move |event_payload| RawTraceEventPayload::ProtocolEventObserved {
+                event_type,
+                event_payload,
+            },
+        );
     }
 
     /// Records turn lifecycle and history acceptance from existing protocol events.
@@ -225,10 +241,30 @@ impl ThreadTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return;
         };
+        if let EventMsg::RawResponseItem(event) = event {
+            let Some(item_id) = event.item.id().map(ToString::to_string) else {
+                return;
+            };
+            let accepted = move |agent_message_payload| RawTraceEventPayload::HistoryItemAccepted {
+                item_id,
+                agent_message_payload,
+            };
+            let turn = RawTraceEventContext::turn(&context.thread_id, default_turn_id);
+            if matches!(event.item, ResponseItem::AgentMessage { .. }) {
+                // Publish the receipt and its history event together, in worker order.
+                let _ = context.writer.event_with_payload(
+                    turn,
+                    RawPayloadKind::ProtocolEvent,
+                    &event.item,
+                    move |payload| accepted(Some(payload)),
+                );
+            } else {
+                let _ = context.writer.enqueue_event(turn, accepted(None));
+            }
+            return;
+        }
         let Some(trace_event) =
-            codex_turn_trace_event(context.thread_id.clone(), default_turn_id, event, |item| {
-                context.write_json_payload_best_effort(RawPayloadKind::ProtocolEvent, item)
-            })
+            codex_turn_trace_event(context.thread_id.clone(), default_turn_id, event)
         else {
             return;
         };
@@ -250,10 +286,43 @@ impl ThreadTraceContext {
         let Some(trace_event) = tool_runtime_trace_event(event) else {
             return;
         };
-        let Some(payload) = context.raw_tool_runtime_payload(trace_event) else {
-            return;
-        };
-        context.append_with_context_best_effort(codex_turn_id.into(), payload);
+        let envelope = RawTraceEventContext::turn(&context.thread_id, &codex_turn_id.into());
+        match trace_event {
+            crate::protocol_event::ToolRuntimeTraceEvent::Started {
+                tool_call_id,
+                kind,
+                payload,
+            } => {
+                let tool_call_id = tool_call_id.to_owned();
+                let _ = context.writer.event_with_payload(
+                    envelope,
+                    RawPayloadKind::ToolRuntimeEvent,
+                    &payload,
+                    move |runtime_payload| RawTraceEventPayload::ToolCallRuntimeStarted {
+                        tool_call_id,
+                        kind,
+                        runtime_payload,
+                    },
+                );
+            }
+            crate::protocol_event::ToolRuntimeTraceEvent::Ended {
+                tool_call_id,
+                status,
+                payload,
+            } => {
+                let tool_call_id = tool_call_id.to_owned();
+                let _ = context.writer.event_with_payload(
+                    envelope,
+                    RawPayloadKind::ToolRuntimeEvent,
+                    &payload,
+                    move |runtime_payload| RawTraceEventPayload::ToolCallRuntimeEnded {
+                        tool_call_id,
+                        status,
+                        runtime_payload,
+                    },
+                );
+            }
+        }
     }
 
     /// Records the full MCP backend result before callbacks, sanitization, or UI truncation.
@@ -271,20 +340,19 @@ impl ThreadTraceContext {
         struct Payload<'a> {
             result: &'a Result<CallToolResult, String>,
         }
-        let Some(runtime_payload) = context
-            .write_json_payload_best_effort(RawPayloadKind::ToolRuntimeEvent, &Payload { result })
-        else {
-            return;
+        let tool_call_id = tool_call_id.to_owned();
+        let status = if result.is_ok() {
+            ExecutionStatus::Completed
+        } else {
+            ExecutionStatus::Failed
         };
-        context.append_with_context_best_effort(
-            codex_turn_id.to_owned(),
-            RawTraceEventPayload::ToolCallRuntimeEnded {
-                tool_call_id: tool_call_id.to_owned(),
-                status: if result.is_ok() {
-                    ExecutionStatus::Completed
-                } else {
-                    ExecutionStatus::Failed
-                },
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::turn(&context.thread_id, codex_turn_id),
+            RawPayloadKind::ToolRuntimeEvent,
+            &Payload { result },
+            move |runtime_payload| RawTraceEventPayload::ToolCallRuntimeEnded {
+                tool_call_id,
+                status,
                 runtime_payload,
             },
         );
@@ -326,20 +394,21 @@ impl ThreadTraceContext {
         };
         let child_codex_turn_id = child_codex_turn_id.into();
         let parent_thread_id = parent_thread_id.into();
-        let carried_payload =
-            context.write_json_payload_best_effort(RawPayloadKind::AgentResult, payload);
-        context.append_with_context_best_effort(
-            child_codex_turn_id.clone(),
-            RawTraceEventPayload::AgentResultObserved {
-                edge_id: format!(
-                    "edge:agent_result:{}:{child_codex_turn_id}:{parent_thread_id}",
-                    context.thread_id
-                ),
-                child_thread_id: context.thread_id.clone(),
+        let child_thread_id = context.thread_id.clone();
+        let message = payload.message.to_owned();
+        let edge_id =
+            format!("edge:agent_result:{child_thread_id}:{child_codex_turn_id}:{parent_thread_id}");
+        let _ = context.writer.event_with_payload(
+            RawTraceEventContext::turn(&child_thread_id, &child_codex_turn_id),
+            RawPayloadKind::AgentResult,
+            payload,
+            move |reference| RawTraceEventPayload::AgentResultObserved {
+                edge_id,
+                child_thread_id,
                 child_codex_turn_id,
                 parent_thread_id,
-                message: payload.message.to_string(),
-                carried_payload,
+                message,
+                carried_payload: Some(reference),
             },
         );
     }
@@ -503,70 +572,12 @@ fn start_root_in_root(
     ThreadTraceContext::start(writer, thread_id, metadata)
 }
 
-fn record_thread_started(
-    context: &EnabledThreadTraceContext,
-    metadata: ThreadStartedTraceMetadata,
-) {
-    let metadata_payload =
-        context.write_json_payload_best_effort(RawPayloadKind::SessionMetadata, &metadata);
-    context.append_best_effort(RawTraceEventPayload::ThreadStarted {
-        thread_id: metadata.thread_id,
-        agent_path: metadata.agent_path,
-        metadata_payload,
-    });
-}
-
 impl EnabledThreadTraceContext {
-    fn write_json_payload_best_effort(
-        &self,
-        kind: RawPayloadKind,
-        payload: &impl Serialize,
-    ) -> Option<RawPayloadRef> {
-        match self.writer.write_json_payload(kind, payload) {
-            Ok(payload_ref) => Some(payload_ref),
-            Err(err) => {
-                warn!("failed to write rollout trace payload: {err:#}");
-                None
-            }
-        }
-    }
-
-    fn raw_tool_runtime_payload(
-        &self,
-        trace_event: crate::protocol_event::ToolRuntimeTraceEvent<'_>,
-    ) -> Option<RawTraceEventPayload> {
-        match trace_event {
-            crate::protocol_event::ToolRuntimeTraceEvent::Started {
-                tool_call_id,
-                kind,
-                payload,
-            } => {
-                let runtime_payload = self
-                    .write_json_payload_best_effort(RawPayloadKind::ToolRuntimeEvent, &payload)?;
-                Some(RawTraceEventPayload::ToolCallRuntimeStarted {
-                    tool_call_id: tool_call_id.to_string(),
-                    kind,
-                    runtime_payload,
-                })
-            }
-            crate::protocol_event::ToolRuntimeTraceEvent::Ended {
-                tool_call_id,
-                status,
-                payload,
-            } => {
-                let runtime_payload = self
-                    .write_json_payload_best_effort(RawPayloadKind::ToolRuntimeEvent, &payload)?;
-                Some(RawTraceEventPayload::ToolCallRuntimeEnded {
-                    tool_call_id: tool_call_id.to_string(),
-                    status,
-                    runtime_payload,
-                })
-            }
-        }
-    }
-
     fn append_best_effort(&self, payload: RawTraceEventPayload) {
-        if let Err(err) = self.writer.append(payload) {
+        if let Err(err) = self
+            .writer
+            .enqueue_event(RawTraceEventContext::default(), payload)
+        {
             warn!("failed to append rollout trace event: {err:#}");
         }
     }
@@ -580,7 +591,7 @@ impl EnabledThreadTraceContext {
             thread_id: Some(self.thread_id.clone()),
             codex_turn_id: Some(codex_turn_id),
         };
-        if let Err(err) = self.writer.append_with_context(event_context, payload) {
+        if let Err(err) = self.writer.enqueue_event(event_context, payload) {
             warn!("failed to append rollout trace event: {err:#}");
         }
     }

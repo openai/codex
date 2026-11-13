@@ -538,6 +538,7 @@ fn invalid_write_stdin_arguments_remain_failed_tool_calls() -> anyhow::Result<()
         );
         dispatch.record_failed("invalid arguments");
 
+        writer.flush()?;
         let rollout = replay_bundle(temp.path())?;
         let call = &rollout.tool_calls["call-stdin"];
         assert_eq!(call.execution.status, ExecutionStatus::Failed);

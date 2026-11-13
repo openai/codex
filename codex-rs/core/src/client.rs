@@ -373,7 +373,7 @@ struct WebsocketSession {
     /// Owner of the cached state, including before a connection is opened.
     auth_owner: Option<AuthOwner>,
     connection_key: Option<ResponsesConnectionKey>,
-    last_request: Option<ResponsesApiRequest>,
+    last_request: Option<Arc<ResponsesApiRequest>>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
@@ -1971,7 +1971,7 @@ impl ResponsesHttpExecutor<'_> {
         turn_state: &Arc<OnceLock<String>>,
         expected_auth_owner: Option<AuthOwner>,
         event_sender: Option<&Sender<ProtocolEvent>>,
-        prompt: &Prompt,
+        prompt: &Arc<Prompt>,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
@@ -2104,7 +2104,11 @@ impl ResponsesHttpExecutor<'_> {
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client
                 .stream_request_with_observer(request, options, |wire| {
-                    inference_trace_attempt.record_started(wire, prompt, || Ok(None));
+                    inference_trace_attempt.record_started(
+                        wire.clone(),
+                        Arc::clone(prompt),
+                        || Ok(None),
+                    );
                 })
                 .await;
 
@@ -2181,7 +2185,7 @@ impl ModelClientSession {
     )]
     async fn stream_responses_websocket(
         &mut self,
-        prompt: &Prompt,
+        prompt: &Arc<Prompt>,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
@@ -2388,6 +2392,7 @@ impl ModelClientSession {
                     .prepare_response_items_for_request(&mut request.input);
                 Some(original_item_ids)
             };
+            let mut request = Arc::new(request);
             let mut ws_payload = ResponseCreateWsRequest {
                 previous_response_id,
                 input: incremental_items.as_deref().unwrap_or(&request.input),
@@ -2396,7 +2401,7 @@ impl ModelClientSession {
                     Some(client_metadata),
                     request_trace.as_ref(),
                 ),
-                ..ResponseCreateWsRequest::from(&request)
+                ..ResponseCreateWsRequest::from(request.as_ref())
             };
             self.client.set_guardian_metadata(
                 &mut ws_payload.client_metadata,
@@ -2426,7 +2431,8 @@ impl ModelClientSession {
             // only [B] (or []) with previous_response_id pointing to the warmup.
             // Replay has no inference row for that ID. Keep the delta as sent and
             // supply the full provider-formatted input so replay can recover A.
-            let warmup_request = previous_response_id_from_untraced_warmup.then_some(&request);
+            let warmup_request =
+                previous_response_id_from_untraced_warmup.then(|| Arc::clone(&request));
 
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
@@ -2455,20 +2461,28 @@ impl ModelClientSession {
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
                     |wire| {
-                        inference_trace_attempt.record_started(wire, prompt, move || {
-                            #[derive(serde::Serialize)]
-                            struct WarmupContext<'a> {
-                                input: &'a [ResponseItem],
-                            }
-                            warmup_request
-                                .map(|r| serde_json::to_vec(&WarmupContext { input: &r.input }))
-                                .transpose()
-                        })
+                        inference_trace_attempt.record_started(
+                            wire.clone(),
+                            Arc::clone(prompt),
+                            move || {
+                                #[derive(serde::Serialize)]
+                                struct WarmupContext<'a> {
+                                    input: &'a [ResponseItem],
+                                }
+                                warmup_request
+                                    .map(|r| serde_json::to_vec(&WarmupContext { input: &r.input }))
+                                    .transpose()
+                            },
+                        )
                     },
                 )
                 .await;
             if let Some(original_item_ids) = original_item_ids {
-                for (item, original_item_id) in request.input.iter_mut().zip(original_item_ids) {
+                for (item, original_item_id) in Arc::make_mut(&mut request)
+                    .input
+                    .iter_mut()
+                    .zip(original_item_ids)
+                {
                     item.set_id(original_item_id);
                 }
             }
@@ -2548,7 +2562,7 @@ impl ModelClientSession {
     #[allow(clippy::too_many_arguments)]
     pub async fn prewarm_websocket(
         &mut self,
-        prompt: &Prompt,
+        prompt: &Arc<Prompt>,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
@@ -2613,7 +2627,7 @@ impl ModelClientSession {
     /// branches.
     pub async fn stream(
         &mut self,
-        prompt: &Prompt,
+        prompt: &Arc<Prompt>,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
