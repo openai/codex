@@ -178,6 +178,10 @@ pub struct McpToolOutput {
 }
 
 impl ToolOutput for McpToolOutput {
+    fn output_budget_applied(&self) -> bool {
+        true
+    }
+
     fn log_output(&self) -> String {
         // Logging has its own budget; do not first apply the model-context budget.
         let output = self.result.log_output();

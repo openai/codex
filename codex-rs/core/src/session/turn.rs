@@ -678,6 +678,9 @@ pub(crate) async fn run_turn(
                 // Process async hooks only after sampling and its tools have finished.
                 drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ false).await;
                 let (has_pending_input, token_status) = async {
+                    // Tool output can add audio without a queued user input. Resolve its
+                    // duration before checking the continuation's compaction threshold.
+                    super::file_audio::resolve_pending(&sess).await;
                     let has_pending_input =
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
                     let token_status = super::context_window::context_window_token_status(
@@ -1079,8 +1082,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
     // The batch has left the input queue. Persist every accepted item before the
     // optional lookup can suspend this task long enough for an interrupt to abort it.
     if !input.is_empty() {
-        let ids = std::mem::take(&mut sess.state.lock().await.pending_audio_duration_ids);
-        super::file_audio::resolve(sess, ids).await;
+        super::file_audio::resolve_pending(sess).await;
     }
     Ok(blocked_input && !accepted_user_input)
 }

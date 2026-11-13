@@ -2,8 +2,10 @@
 
 use super::super::audio_duration_store::TestAudioDurationStore;
 use super::*;
+use anyhow::Context as _;
 use codex_protocol::models::AudioReference;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::turn_input::TurnInputSubmission;
 use core_test_support::responses;
 use core_test_support::responses::mount_response_sequence;
@@ -77,6 +79,269 @@ async fn uploaded_audio_survives_follow_up_and_resume() -> Result<()> {
             "An uploaded audio file ID is forwarded to Responses and retained across follow-up and resume.",
             &requests,
             &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    Ok(())
+}
+
+/// The model calls a registered tool directly or via Code Mode. Both persist the store's ID.
+#[test_case(ToolMode::Direct, "function_call_output", ThreadHistoryMode::Legacy; "function")]
+#[test_case(ToolMode::Direct, "function_call_output", ThreadHistoryMode::Paginated; "paginated function")]
+#[test_case(ToolMode::CodeMode, "custom_tool_call_output", ThreadHistoryMode::Legacy; "code_mode")]
+#[test_case(ToolMode::CodeMode, "custom_tool_call_output", ThreadHistoryMode::Paginated; "paginated code_mode")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_audio_store_id_survives_rollout_and_next_request(
+    mode: ToolMode,
+    output: &str,
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let call_id = "recording-call";
+    let store = Arc::new(TestAudioDurationStore::default());
+    let builder = || {
+        test_codex()
+            .with_history_mode(history_mode)
+            .with_image_store(store.clone())
+            .with_config(move |config| {
+                config.allow_persistent_dynamic_tool_updates = true;
+                assert!(config.features.enable(Feature::FileBackedToolAudio).is_ok());
+                assert!(
+                    config
+                        .features
+                        .set_enabled(Feature::CodeMode, mode == ToolMode::CodeMode)
+                        .is_ok()
+                );
+            })
+            .with_model_info_override("gpt-5.5", move |model| {
+                model.input_modalities.push(InputModality::Audio);
+                // An unknown file reserves 12,000 tokens; this half-second clip must continue without compaction.
+                model.auto_compact_token_limit = Some(10_000);
+                model.tool_mode = Some(mode);
+                model.use_responses_lite = mode == ToolMode::CodeMode;
+                model.truncation_policy =
+                    codex_protocol::openai_models::TruncationPolicyConfig::tokens(
+                        /*limit*/ 50,
+                    );
+            })
+    };
+    let test = builder().build_with_auto_env(&server).await?;
+    test.codex
+        .replace_dynamic_tools(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            name: "recording".into(),
+            description: "Return an audio clip.".into(),
+            input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+            defer_loading: false,
+        })])
+        .await?;
+
+    let call = if mode == ToolMode::CodeMode {
+        ev_custom_tool_call(
+            call_id,
+            "exec",
+            r#"audio(await tools.recording({})); text("caption ".repeat(400));"#,
+        )
+    } else {
+        responses::ev_function_call(call_id, "recording", "{}")
+    };
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("r1"), call, ev_completed("r1")]),
+            sse(vec![
+                ev_assistant_message("heard", "I received the clip."),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("expired", "The recording is unavailable."),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("resumed", "The recording is still unavailable."),
+                ev_completed("r4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("restored", "The recording is available again."),
+                ev_completed("r5"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Listen to the recording.",
+        )]))
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::DynamicToolCallRequest(call) => Some(call.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.tool, "recording");
+    let wav = super::super::audio_truncation::pcm_wav_data_url(/*sample_count*/ 4_000);
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputAudio {
+                    audio_url: wav.clone(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    let live_parts = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(event) => match &event.item {
+            TurnItem::DynamicToolCall(call) if call.tool == "recording" => {
+                call.content_items.clone()
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        live_parts,
+        vec![DynamicToolCallOutputContentItem::InputAudio {
+            audio_url: wav.clone()
+        }]
+    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        store.tool_duration_reads.load(Ordering::SeqCst),
+        1,
+        "duration resolved during the original tool turn"
+    );
+    store.tool_file_expired.store(true, Ordering::SeqCst);
+    test.submit_text_turn("Check the recording again.").await?;
+    let rollout = test.codex.rollout_path().expect("durable thread rollout");
+    test.codex.shutdown_and_wait().await?;
+    // Reopen the durable store in a fresh manager, as a hosted resume would.
+    let restarted = builder()
+        .with_home(test.home.clone())
+        .build_with_auto_env(&server)
+        .await?;
+    let stored = restarted
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: true,
+        })
+        .await?;
+    let resumed = restarted
+        .thread_manager
+        .resume_thread_with_history(
+            restarted.config.clone(),
+            codex_history::InitialHistory::Resumed(codex_history::ResumedHistory {
+                history_revision: None,
+                conversation_id: stored.thread_id,
+                history: Arc::new(stored.items),
+                rollout_path: Some(rollout.clone()),
+            }),
+            restarted.thread_manager.auth_manager(),
+            /*parent_trace*/ None,
+            Default::default(),
+        )
+        .await?;
+    assert_eq!(
+        resumed.thread.config_snapshot().await.history_mode,
+        history_mode
+    );
+    for (expired, prompt) in [
+        (true, "Listen after restart."),
+        (false, "Listen after the file is restored."),
+    ] {
+        store.tool_file_expired.store(expired, Ordering::SeqCst);
+        resumed
+            .thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![text(prompt)]))
+            .await?;
+        wait_for_event(&resumed.thread, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 5);
+    let expected = json!({"type":"input_audio","file_id":"file_tool_audio"});
+    let persisted = std::fs::read_to_string(rollout)?;
+    let items = persisted
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let audio_output =
+        |item: &serde_json::Value| item["type"] == output && item["call_id"] == call_id;
+    let history = items
+        .iter()
+        .map(|line| &line["payload"])
+        .find(|item| audio_output(item))
+        .expect("persisted tool output");
+    let output_parts = history["output"]
+        .as_array()
+        .context("persisted tool content")?;
+    let audio = output_parts
+        .iter()
+        .filter(|part| part["type"] == "input_audio")
+        .collect::<Vec<_>>();
+    assert_eq!(audio, vec![&expected]);
+    if mode == ToolMode::CodeMode {
+        let caption = output_parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .find(|text| text.contains("caption"))
+            .expect("some caption remains after the clip");
+        assert!(
+            caption.len() < 400,
+            "history must bound the 2,800-byte caption"
+        );
+    }
+    let mut unavailable = history["output"].clone();
+    for part in unavailable
+        .as_array_mut()
+        .context("tool content for the expired-file request")?
+    {
+        if *part == expected {
+            *part = json!({"type":"input_text","text":"audio content omitted because its file is unavailable"});
+        }
+    }
+    for (request, expected_output) in requests[1..].iter().zip([
+        &history["output"],
+        &unavailable,
+        &unavailable,
+        &history["output"],
+    ]) {
+        let item = request
+            .input()
+            .into_iter()
+            .find(&audio_output)
+            .expect("tool result after execution and resume");
+        assert_eq!(&item["output"], expected_output);
+    }
+    {
+        let uploads = store
+            .tool_uploads
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload recorder poisoned"))?;
+        let [upload] = uploads.as_slice() else {
+            panic!("expected one upload across execution and resume");
+        };
+        assert_eq!(upload.tags["usage"], "tool_audio");
+        assert_eq!(upload.data, codex_utils_audio::decode_audio(&wav)?.1);
+    }
+    insta::assert_snapshot!(
+        format!("file_backed_{output}_trace"),
+        context_snapshot::format_request_history_snapshot(
+            "The tool returns file-backed audio. Follow-up and cold resume omit the expired clip, then use the original file again when it is available.",
+            &requests,
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())

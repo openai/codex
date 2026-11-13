@@ -1,8 +1,10 @@
+use super::audio_duration_store::TestAudioDurationStore;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
@@ -23,11 +25,11 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 const TEST_WAV_SAMPLE_RATE: u32 = 8_000;
-const OMITTED_AUDIO_MARKER: &str = "[omitted 1 audio items ...]";
 
-fn pcm_wav_data_url(sample_count: u32) -> String {
+pub(super) fn pcm_wav_data_url(sample_count: u32) -> String {
     let padding = sample_count % 2;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"RIFF");
@@ -49,8 +51,12 @@ fn pcm_wav_data_url(sample_count: u32) -> String {
     format!("data:audio/wav;base64,{}", BASE64_STANDARD.encode(bytes))
 }
 
+#[test_case::test_case(false; "inline")]
+#[test_case::test_case(true; "file backed")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<()> {
+async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted(
+    file_backed: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -73,10 +79,21 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
     )
     .await;
 
-    let mut builder = test_codex().with_model_info_override("gpt-5.5", |model_info| {
-        model_info.input_modalities.push(InputModality::Audio);
-        model_info.truncation_policy = TruncationPolicyConfig::tokens(/*limit*/ 50);
-    });
+    let store = Arc::new(TestAudioDurationStore::default());
+    let mut builder = test_codex()
+        .with_image_store(store.clone())
+        .with_config(move |config| {
+            assert!(
+                config
+                    .features
+                    .set_enabled(Feature::FileBackedToolAudio, file_backed)
+                    .is_ok()
+            );
+        })
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.input_modalities.push(InputModality::Audio);
+            model_info.truncation_policy = TruncationPolicyConfig::tokens(/*limit*/ 50);
+        });
     let base_test = builder.build_with_auto_env(&server).await?;
     let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
         name: "codex_app".to_string(),
@@ -118,13 +135,24 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
     else {
         unreachable!("event guard guarantees DynamicToolCallRequest");
     };
+    // The four-second clip fits by itself, but the preceding text has consumed 40
+    // of the 60 tokens (including the serialization allowance).
+    let prefix = "note".repeat(40);
     test.codex
         .submit(Op::DynamicToolResponse {
             id: request.call_id,
             response: DynamicToolResponse {
-                content_items: vec![DynamicToolCallOutputContentItem::InputAudio {
-                    audio_url: pcm_wav_data_url(/*sample_count*/ 80_000),
-                }],
+                content_items: vec![
+                    DynamicToolCallOutputContentItem::InputText {
+                        text: prefix.clone(),
+                    },
+                    DynamicToolCallOutputContentItem::InputAudio {
+                        audio_url: pcm_wav_data_url(/*sample_count*/ 32_000),
+                    },
+                    DynamicToolCallOutputContentItem::InputAudio {
+                        audio_url: pcm_wav_data_url(/*sample_count*/ 80_000),
+                    },
+                ],
                 success: true,
             },
         })
@@ -134,6 +162,14 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
     })
     .await;
 
+    assert!(
+        store
+            .tool_uploads
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload recorder poisoned"))?
+            .is_empty(),
+        "over-budget audio must be omitted before upload"
+    );
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
     let output = requests[1]
@@ -145,8 +181,9 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
         serde_json::from_value::<FunctionCallOutputPayload>(output)?,
         FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText { text: prefix },
                 FunctionCallOutputContentItem::InputText {
-                    text: OMITTED_AUDIO_MARKER.to_string(),
+                    text: "[omitted 2 audio items ...]".to_string(),
                 },
             ]),
             success: None,

@@ -126,6 +126,15 @@ pub struct CodexHarnessMetadata {
     )]
     pub history_truncation_token_limit: Option<usize>,
 
+    /// Fresh tool output has already passed a producer limit. Used only to budget
+    /// storage-error placeholders before the item is recorded. Never persisted.
+    #[serde(skip)]
+    pub producer_bounded_tool_audio: bool,
+
+    /// Core applied the history limit while tool audio still had its inline cost.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool_audio_budget_applied: bool,
+
     /// Bounded assistant text confirmed by a successful messaging tool result.
     /// Captured after input hooks; untrusted context, never user authorization.
     #[serde(default, skip_serializing_if = "Option::is_none")]

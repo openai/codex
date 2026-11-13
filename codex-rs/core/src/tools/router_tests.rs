@@ -692,7 +692,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         )
         .await?;
 
-    let response = result.into_response().item;
+    let response = result.into_response(/*file_backed_tool_audio*/ false).item;
     match response {
         ResponseItem::FunctionCallOutput {
             call_id, output, ..

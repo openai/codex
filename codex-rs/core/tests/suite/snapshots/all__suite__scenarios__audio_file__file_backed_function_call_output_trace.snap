@@ -1,0 +1,103 @@
+---
+source: core/tests/suite/scenarios_audio_file_tests.rs
+expression: "context_snapshot::format_request_history_snapshot(\"The tool returns file-backed audio. Follow-up and cold resume omit the expired clip, then use the original file again when it is available.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: The tool returns file-backed audio. Follow-up and cold resume omit the expired clip, then use the original file again when it is available.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (8; hash=fb7f1f10f0db22ba):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
+    - function/recording: Return an audio clip.; args=[]; hash=aeaf4746261bcbb1
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Listen to the recording.
+-- request 2 (turn) --
+04:function_call/recording:{}
+05:function_call_output:<input_audio>
+
+## Window 2 (after request 2: input diverged at item 05)
+Settings: same as window 1
+-- request 3 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Listen to the recording.
+04:function_call/recording:{}
+05:function_call_output:audio content omitted because its file is unavailable
+06:message/assistant:
+    I received the clip.
+07:message/user:
+    Check the recording again.
+-- request 4 (turn) --
+08:message/assistant:
+    The recording is unavailable.
+09:message/user:
+    <ENVIRONMENT_CONTEXT>
+10:message/user:
+    Listen after restart.
+
+## Window 3 (after request 4: input diverged at item 05)
+Settings: same as window 1
+-- request 5 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Listen to the recording.
+04:function_call/recording:{}
+05:function_call_output:<input_audio>
+06:message/assistant:
+    I received the clip.
+07:message/user:
+    Check the recording again.
+08:message/assistant:
+    The recording is unavailable.
+09:message/user:
+    <ENVIRONMENT_CONTEXT>
+10:message/user:
+    Listen after restart.
+11:message/assistant:
+    The recording is still unavailable.
+12:message/user:
+    Listen after the file is restored.

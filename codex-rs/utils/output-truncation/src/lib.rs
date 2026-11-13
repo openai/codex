@@ -311,13 +311,47 @@ fn truncate_output_items(
     }
 }
 
+/// Apply the mixed-output policy to owned, premeasured parts. Audio keeps its original
+/// token charge through truncation and storage. The charge for other parts is zero.
+pub fn truncate_measured_tool_output(
+    items: Vec<(FunctionCallOutputContentItem, usize)>,
+    policy: TruncationPolicy,
+) -> Vec<(FunctionCallOutputContentItem, usize)> {
+    truncate_measured_output_iter(
+        items
+            .into_iter()
+            .map(|(item, charge)| (Cow::Owned(item), charge)),
+        policy,
+        &mut [],
+        |item, charge| (item, charge),
+    )
+}
+
 fn truncate_output_iter<'a>(
     items: impl ExactSizeIterator<Item = Cow<'a, FunctionCallOutputContentItem>>,
     policy: TruncationPolicy,
     estimate_audio_token_count: impl Fn(&AudioReference) -> usize,
     boundaries: &mut [OutputBoundary],
 ) -> Vec<FunctionCallOutputContentItem> {
-    let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
+    let measured = items.map(|item| {
+        let charge = match item.as_ref() {
+            FunctionCallOutputContentItem::InputAudio { audio } => {
+                estimate_audio_token_count(audio)
+            }
+            _ => 0,
+        };
+        (item, charge)
+    });
+    truncate_measured_output_iter(measured, policy, boundaries, |item, _| item)
+}
+
+fn truncate_measured_output_iter<'a, T>(
+    items: impl ExactSizeIterator<Item = (Cow<'a, FunctionCallOutputContentItem>, usize)>,
+    policy: TruncationPolicy,
+    boundaries: &mut [OutputBoundary],
+    emit: impl Fn(FunctionCallOutputContentItem, usize) -> T,
+) -> Vec<T> {
+    let mut out = Vec::with_capacity(items.len());
     let mut remaining_budget = match policy {
         TruncationPolicy::Bytes(_) => policy.byte_budget(),
         TruncationPolicy::Tokens(_) => policy.token_budget(),
@@ -326,7 +360,7 @@ fn truncate_output_iter<'a>(
     let mut omitted_audio_items = 0usize;
     let mut next_boundary = 0;
 
-    for (index, item) in items.enumerate() {
+    for (index, (item, audio_tokens)) in items.enumerate() {
         let item_out = out.len();
         let item_policy = match policy {
             TruncationPolicy::Bytes(_) => TruncationPolicy::Bytes(remaining_budget),
@@ -354,7 +388,10 @@ fn truncate_output_iter<'a>(
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
-                        out.push(FunctionCallOutputContentItem::InputText { text: snippet });
+                        out.push(emit(
+                            FunctionCallOutputContentItem::InputText { text: snippet },
+                            0,
+                        ));
                     }
                     remaining_budget = 0;
                     false
@@ -362,11 +399,10 @@ fn truncate_output_iter<'a>(
             }
             FunctionCallOutputContentItem::InputImage { .. }
             | FunctionCallOutputContentItem::EncryptedContent { .. } => true,
-            FunctionCallOutputContentItem::InputAudio { audio } => {
-                let token_cost = estimate_audio_token_count(audio);
+            FunctionCallOutputContentItem::InputAudio { .. } => {
                 let cost = match policy {
-                    TruncationPolicy::Bytes(_) => approx_bytes_for_tokens(token_cost),
-                    TruncationPolicy::Tokens(_) => token_cost,
+                    TruncationPolicy::Bytes(_) => approx_bytes_for_tokens(audio_tokens),
+                    TruncationPolicy::Tokens(_) => audio_tokens,
                 };
                 if cost <= remaining_budget {
                     remaining_budget = remaining_budget.saturating_sub(cost);
@@ -390,7 +426,7 @@ fn truncate_output_iter<'a>(
             next_boundary += 1;
         }
         if keep {
-            out.push(item.into_owned());
+            out.push(emit(item.into_owned(), audio_tokens));
         }
     }
     // End boundaries precede generated omission counts: counts are not original
@@ -401,14 +437,20 @@ fn truncate_output_iter<'a>(
     }
 
     if omitted_text_items > 0 {
-        out.push(FunctionCallOutputContentItem::InputText {
-            text: format!("[omitted {omitted_text_items} text items ...]"),
-        });
+        out.push(emit(
+            FunctionCallOutputContentItem::InputText {
+                text: format!("[omitted {omitted_text_items} text items ...]"),
+            },
+            0,
+        ));
     }
     if omitted_audio_items > 0 {
-        out.push(FunctionCallOutputContentItem::InputText {
-            text: format!("[omitted {omitted_audio_items} audio items ...]"),
-        });
+        out.push(emit(
+            FunctionCallOutputContentItem::InputText {
+                text: format!("[omitted {omitted_audio_items} audio items ...]"),
+            },
+            0,
+        ));
     }
     out
 }

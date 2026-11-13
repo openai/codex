@@ -18,7 +18,7 @@ use crate::compact_remote_history::trim_function_call_history_to_fit_context_win
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
 use crate::context_manager::rejected_audio;
-use crate::context_manager::replace_unresolvable_image_files;
+use crate::context_manager::replace_unresolvable_media_files;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::CompactionPrefix;
 use crate::session::session::Session;
@@ -340,7 +340,7 @@ pub(crate) async fn run_background_compaction(
 ) -> CodexResult<BackgroundCompactionCandidate> {
     tokio::select! {
         _ = shutdown_cancellation.cancelled() => return Err(CodexErr::TurnAborted),
-        () = replace_unresolvable_image_files(
+        () = replace_unresolvable_media_files(
             prepared_input.input.iter_mut(),
             sess.services.image_store.as_ref(),
         ) => {},

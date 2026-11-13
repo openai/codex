@@ -1049,6 +1049,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "file_backed_tool_audio": {
+              "type": "boolean"
+            },
             "gateway_setup_wizard": {
               "type": "boolean"
             },
@@ -8203,6 +8206,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "file_backed_tool_audio": {
           "type": "boolean"
         },
         "gateway_setup_wizard": {

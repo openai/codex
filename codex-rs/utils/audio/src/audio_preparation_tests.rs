@@ -210,3 +210,13 @@ fn file_audio_uses_the_measured_length_or_the_full_file_budget() {
         assert_eq!(super::estimate_file_audio_tokens(duration), expected);
     }
 }
+
+#[test]
+fn audio_data_url_encodes_all_padding_lengths_directly_into_the_url() {
+    for (bytes, expected) in [(b"a".as_slice(), "YQ=="), (b"ab", "YWI="), (b"abc", "YWJj")] {
+        assert_eq!(
+            super::audio_data_url("audio/wav", bytes),
+            format!("data:audio/wav;base64,{expected}")
+        );
+    }
+}

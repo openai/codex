@@ -35,6 +35,7 @@ use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
@@ -327,7 +328,7 @@ pub(crate) struct AnyToolResult {
 }
 
 impl AnyToolResult {
-    pub(crate) fn into_response(self) -> ResponseItemEnvelope {
+    pub(crate) fn into_response(self, file_backed_tool_audio: bool) -> ResponseItemEnvelope {
         let Self {
             call_id,
             payload,
@@ -335,12 +336,19 @@ impl AnyToolResult {
             ..
         } = self;
         let history_truncation_token_limit = result.fallback_token_limit_override();
+        let item = result.to_response_item(&call_id, &payload).into();
+        let producer_bounded_tool_audio = file_backed_tool_audio
+            && result.output_budget_applied()
+            && matches!(&item, ResponseItem::FunctionCallOutput { output, .. }
+                 | ResponseItem::CustomToolCallOutput { output, .. } if output.contains_audio());
         ResponseItemEnvelope {
-            item: result.to_response_item(&call_id, &payload).into(),
-            metadata: history_truncation_token_limit.map(|limit| CodexHarnessMetadata {
-                history_truncation_token_limit: Some(limit),
-                ..Default::default()
-            }),
+            item,
+            metadata: (producer_bounded_tool_audio || history_truncation_token_limit.is_some())
+                .then_some(CodexHarnessMetadata {
+                    producer_bounded_tool_audio,
+                    history_truncation_token_limit,
+                    ..Default::default()
+                }),
         }
     }
 

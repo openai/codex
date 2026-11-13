@@ -29,6 +29,11 @@ pub trait ToolOutput: Send {
         false
     }
 
+    /// Whether the complete model-visible result was already limited by its producer.
+    fn output_budget_applied(&self) -> bool {
+        false
+    }
+
     /// Overrides history's fallback token limit after tool-specific truncation.
     /// Include any serialization allowance; history uses this limit unchanged.
     fn fallback_token_limit_override(&self) -> Option<usize> {
@@ -93,6 +98,10 @@ where
 
     fn contains_external_context(&self) -> bool {
         (**self).contains_external_context()
+    }
+
+    fn output_budget_applied(&self) -> bool {
+        (**self).output_budget_applied()
     }
 
     fn fallback_token_limit_override(&self) -> Option<usize> {

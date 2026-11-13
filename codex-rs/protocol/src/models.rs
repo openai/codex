@@ -2532,6 +2532,14 @@ impl Default for FunctionCallOutputBody {
 }
 
 impl FunctionCallOutputPayload {
+    pub fn contains_audio(&self) -> bool {
+        self.content_items().is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|part| matches!(part, FunctionCallOutputContentItem::InputAudio { .. }))
+        })
+    }
+
     pub fn from_text(content: String) -> Self {
         Self {
             body: FunctionCallOutputBody::Text(content),

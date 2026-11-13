@@ -3961,9 +3961,25 @@ impl Session {
             self.services.image_store.as_ref(),
         ))
         .await;
+        let file_backed = turn_context
+            .config
+            .features
+            .enabled(Feature::FileBackedToolAudio);
+        if file_backed {
+            Box::pin(file_audio::prepare_new_items(
+                &mut items,
+                self.services.image_store.as_ref(),
+                &self.thread_id.to_string(),
+                turn_context.config.ephemeral,
+                with_serialization_allowance(model_info.truncation_policy.into()).token_budget(),
+            ))
+            .await;
+        }
         for envelope in &mut items {
             let item = &mut envelope.item;
-            prepare_audio_response_items(std::slice::from_mut(item));
+            if !file_backed {
+                prepare_audio_response_items(std::slice::from_mut(item));
+            }
             // Most response items get their passthrough turn ID at the durable history boundary.
             Self::stamp_response_item_for_history(item, &turn_context.sub_id);
             self.assign_missing_response_item_id(item);

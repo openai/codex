@@ -12,22 +12,60 @@ use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
 use codex_attachment_store::UploadFuture;
 use codex_attachment_store::UploadRequest;
+use codex_attachment_store::UploadResult;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 #[derive(Default)]
 pub(super) struct TestAudioDurationStore {
     pub(super) slow_lookup_started: tokio::sync::Notify,
     pub(super) measure_short_clips: bool,
+    pub(super) tool_uploads: Mutex<Vec<UploadRequest>>,
+    pub(super) tool_file_expired: AtomicBool,
+    pub(super) tool_duration_reads: AtomicUsize,
 }
 
 impl AttachmentStore for TestAudioDurationStore {
     fn upload(&self, request: UploadRequest) -> UploadFuture<'_> {
+        if request
+            .tags
+            .get("usage")
+            .is_some_and(|usage| usage == "tool_audio")
+        {
+            self.tool_uploads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(request);
+            return Box::pin(async {
+                Ok(UploadResult::File {
+                    file_id: "file_tool_audio".into(),
+                })
+            });
+        }
         InlineAttachmentStore.upload(request)
+    }
+
+    fn is_resolvable<'a>(
+        &'a self,
+        file_id: &'a str,
+    ) -> codex_attachment_store::IsResolvableFuture<'a> {
+        Box::pin(async move {
+            file_id != "file_tool_audio" || !self.tool_file_expired.load(Ordering::SeqCst)
+        })
     }
 
     fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a> {
         Box::pin(async move {
             assert!(request.download_url_ttl.is_none());
             let format_specific = match request.file_id {
+                "file_tool_audio" => {
+                    self.tool_duration_reads.fetch_add(1, Ordering::SeqCst);
+                    Some(FormatSpecificMetadata::Audio(AudioMetadata {
+                        duration_ms: Some(500),
+                    }))
+                }
                 "file_audio_1" | "file_audio_7" if self.measure_short_clips => {
                     Some(FormatSpecificMetadata::Audio(AudioMetadata {
                         duration_ms: Some(30_000),

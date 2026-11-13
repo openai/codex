@@ -109,6 +109,38 @@ fn tool_output_audio_makes_an_invalid_audio_error_ambiguous() {
 }
 
 #[test]
+fn only_file_backed_tool_audio_competes_with_a_user_upload_for_an_unknown_file_error() {
+    use serde_json::json;
+    for kind in ["function_call_output", "custom_tool_call_output"] {
+        for (part, expected) in [
+            (
+                json!({"type":"input_audio","file_id":"expired_tool_clip"}),
+                None,
+            ),
+            (
+                json!({"type":"input_audio","audio_url":"data:audio/wav;base64,AA=="}),
+                Some("valid_upload"),
+            ),
+        ] {
+            let output =
+                serde_json::from_value(json!({"type":kind, "call_id":"call", "output":[part]}))
+                    .unwrap();
+            let items = [message(vec![file_audio("valid_upload")]), output];
+            assert_eq!(
+                rejected_file_audio_id(&unknown_file_error(), &items).as_deref(),
+                expected,
+                "{kind}"
+            );
+            assert_eq!(
+                rejected_file_audio_id(&audio_error(), &items),
+                None,
+                "{kind}"
+            );
+        }
+    }
+}
+
+#[test]
 fn attributes_audio_error_only_to_one_visible_file_audio() {
     let error = audio_error();
     assert_eq!(
@@ -145,9 +177,8 @@ fn attributes_audio_error_only_to_one_visible_file_audio() {
     );
 }
 
-#[test]
-fn unknown_file_error_counts_the_submitted_projection_not_raw_history() {
-    let error = CodexErrorDetails::UnexpectedStatus(codex_protocol::error::UnexpectedResponseError {
+fn unknown_file_error() -> CodexErrorDetails {
+    CodexErrorDetails::UnexpectedStatus(codex_protocol::error::UnexpectedResponseError {
         status: http::StatusCode::NOT_FOUND,
         body: serde_json::json!({"error": {"message": "Invalid input: Unknown `file_id` in input content."}}).to_string(),
         url: None,
@@ -156,7 +187,12 @@ fn unknown_file_error_counts_the_submitted_projection_not_raw_history() {
         request_id: None,
         identity_authorization_error: None,
         identity_error_code: None,
-    });
+    })
+}
+
+#[test]
+fn unknown_file_error_counts_the_submitted_projection_not_raw_history() {
+    let error = unknown_file_error();
     let unavailable_image_projection = message(vec![
         ContentItem::InputText {
             text: "[Image unavailable]".to_string(),

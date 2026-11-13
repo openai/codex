@@ -1,0 +1,136 @@
+---
+source: core/tests/suite/scenarios_audio_file_tests.rs
+expression: "context_snapshot::format_request_history_snapshot(\"The tool returns file-backed audio. Follow-up and cold resume omit the expired clip, then use the original file again when it is available.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: The tool returns file-backed audio. Follow-up and cold resume omit the expired clip, then use the original file again when it is available.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=3299611bc98d0784):
+        - namespace/functions; hash=1976557bc4879146
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+          - function/recording
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Listen to the recording.
+-- request 2 (turn) --
+05:custom_tool_call/exec:audio(await tools.recording({})); text("caption ".repeat(400));
+06:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | <input_audio> | caption caption caption caption caption caption caption caption caption caption captio…757 tokens trunca...ption caption caption caption caption caption caption [hash=a35e70d094c6690c]
+
+## Window 2 (after request 2: input diverged at item 06)
+Settings: same as window 1
+-- request 3 (turn) --
+00:additional_tools/developer (2; hash=3299611bc98d0784):
+        - namespace/functions; hash=1976557bc4879146
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+          - function/recording
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Listen to the recording.
+05:custom_tool_call/exec:audio(await tools.recording({})); text("caption ".repeat(400));
+06:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | audio content omitted because its file is unavailable | caption caption caption caption caption caption caption caption caption caption captio…757 tokens trunca...ption caption caption caption caption caption caption [hash=a35e70d094c6690c]
+07:message/assistant:
+    I received the clip.
+08:message/user:
+    Check the recording again.
+-- request 4 (turn) --
+09:message/assistant:
+    The recording is unavailable.
+10:message/user:
+    <ENVIRONMENT_CONTEXT>
+11:message/user:
+    Listen after restart.
+
+## Window 3 (after request 4: input diverged at item 06)
+Settings: same as window 1
+-- request 5 (turn) --
+00:additional_tools/developer (2; hash=3299611bc98d0784):
+        - namespace/functions; hash=1976557bc4879146
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+          - function/recording
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Listen to the recording.
+05:custom_tool_call/exec:audio(await tools.recording({})); text("caption ".repeat(400));
+06:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | <input_audio> | caption caption caption caption caption caption caption caption caption caption captio…757 tokens trunca...ption caption caption caption caption caption caption [hash=a35e70d094c6690c]
+07:message/assistant:
+    I received the clip.
+08:message/user:
+    Check the recording again.
+09:message/assistant:
+    The recording is unavailable.
+10:message/user:
+    <ENVIRONMENT_CONTEXT>
+11:message/user:
+    Listen after restart.
+12:message/assistant:
+    The recording is still unavailable.
+13:message/user:
+    Listen after the file is restored.

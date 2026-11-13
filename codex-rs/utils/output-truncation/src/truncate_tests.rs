@@ -8,6 +8,7 @@ use crate::formatted_truncate_text;
 use crate::mixed_output_at_token_boundaries;
 use crate::truncate_function_output_items_with_policy;
 use crate::truncate_mcp_tool_result;
+use crate::truncate_measured_tool_output;
 use crate::truncate_text;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::AudioReference;
@@ -576,4 +577,27 @@ fn owned_mixed_output_moves_a_preserved_image_across_text_truncation() {
         panic!("expected preserved image")
     };
     assert_eq!(image_url.as_ptr(), url_ptr);
+}
+
+#[test]
+fn measured_tool_output_keeps_charges_paired_with_retained_clips() {
+    let clip = FunctionCallOutputContentItem::inline_audio("clip".into());
+    let text = FunctionCallOutputContentItem::InputText {
+        text: "keep".into(),
+    };
+    let omitted = FunctionCallOutputContentItem::InputText {
+        text: "[omitted 1 audio items ...]".into(),
+    };
+    assert_eq!(
+        truncate_measured_tool_output(
+            vec![
+                (clip.clone(), 9),
+                (text.clone(), 0),
+                (clip.clone(), 2),
+                (clip.clone(), 1)
+            ],
+            TruncationPolicy::Tokens(4)
+        ),
+        vec![(text, 0), (clip.clone(), 2), (clip, 1), (omitted, 0)]
+    );
 }
