@@ -23,8 +23,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 
-use super::status_state::TerminalTitleStatusKind;
-
 /// Items shown in the terminal title when the user has not configured a
 /// custom selection. Unnamed threads omit the name until one is available.
 pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 3] =
@@ -464,7 +462,7 @@ impl ChatWidget {
     /// Parses configured status-line ids into known items and collects unknown ids.
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
-    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+    pub(super) fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
         if self.read_only_history {
             return Default::default();
         }
@@ -731,13 +729,9 @@ impl ChatWidget {
                 Some(self.model_with_reasoning_display_name(service_tier.as_deref()))
             }
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
-            StatusLineItem::Profile => {
-                let layer = self.config.config_layer_stack.get_active_user_layer()?;
-                let ConfigLayerSource::User { profile, .. } = &layer.name else {
-                    return None;
-                };
-                profile.as_ref().map(|name| format!("profile: {name}"))
-            }
+            StatusLineItem::Profile => self
+                .status_line_config_profile()
+                .map(|name| format!("profile: {name}")),
             StatusLineItem::Provider => self
                 .thread_id
                 .map(|_| format!("provider: {}", self.config.model_provider_id)),
@@ -1015,7 +1009,7 @@ impl ChatWidget {
         format!("{model} {label}{service_tier_label}")
     }
 
-    fn processing_tier_display_name(&self) -> Option<&str> {
+    pub(super) fn processing_tier_display_name(&self) -> Option<&str> {
         let id = self.current_service_tier()?;
         self.model_catalog
             .models
@@ -1039,26 +1033,15 @@ impl ChatWidget {
     /// Startup takes precedence over normal task states, and idle state renders
     /// as `Ready` regardless of the last active status bucket.
     pub(super) fn run_state_status_text(&self) -> String {
-        if self.mcp_startup_status.is_some() {
-            return "Starting".to_string();
-        }
+        self.status_line_run_state().to_string()
+    }
 
-        match self.status_state.terminal_title_status_kind {
-            TerminalTitleStatusKind::Working if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
-            }
-            TerminalTitleStatusKind::WaitingForBackgroundTerminal
-                if !self.bottom_pane.is_task_running() =>
-            {
-                "Ready".to_string()
-            }
-            TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
-            }
-            TerminalTitleStatusKind::Working => "Working".to_string(),
-            TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
-            TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
-        }
+    pub(super) fn status_line_config_profile(&self) -> Option<String> {
+        let layer = self.config.config_layer_stack.get_active_user_layer()?;
+        let ConfigLayerSource::User { profile, .. } = &layer.name else {
+            return None;
+        };
+        profile.clone()
     }
 
     pub(super) fn terminal_title_spinner_text_at(&self, now: Instant) -> Option<String> {
@@ -1251,7 +1234,7 @@ fn matches_window_label(window: &RateLimitWindowDisplay, label: &str) -> bool {
         == Some(label)
 }
 
-fn permissions_display(config: &Config) -> String {
+pub(super) fn permissions_display(config: &Config) -> String {
     let active_permission_profile = config.permissions.active_permission_profile();
     if let Some(active_permission_profile) = active_permission_profile.as_ref()
         && !active_permission_profile.id.starts_with(':')

@@ -1898,6 +1898,7 @@ async fn read_only_history_hides_the_statusline_until_interactive_resume() -> Re
         .await?;
     app.enqueue_primary_thread_session(view.session, view.turns)
         .await?;
+    assert!(app.chat_widget.statusline_state().is_none());
     let footer = render_bottom_popup(&app.chat_widget, /*width*/ 100);
     insta::assert_snapshot!(footer, @r"
     › Ask Codex to do anything
@@ -1927,6 +1928,7 @@ async fn read_only_history_hides_the_statusline_until_interactive_resume() -> Re
     );
     app.enqueue_primary_thread_session(live.session, live.turns)
         .await?;
+    assert!(app.chat_widget.statusline_state().is_some());
     let footer = render_bottom_popup(&app.chat_widget, /*width*/ 100);
     assert!(footer.contains(&thread_id.to_string()), "{footer}");
     app.chat_widget

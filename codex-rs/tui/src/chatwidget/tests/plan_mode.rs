@@ -17,6 +17,7 @@ fn paste_hidden_plan_shell_payload(chat: &mut ChatWidget) -> String {
 fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
     crate::session_state::ThreadSessionState {
         read_only_history: false,
+        thread_settings_confirmed: true,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -1231,6 +1232,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
         read_only_history: false,
+        thread_settings_confirmed: true,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,

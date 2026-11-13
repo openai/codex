@@ -82,6 +82,7 @@ impl App {
             if session.thread_id != thread_id {
                 // `thread/read` does not include all thread settings, so do not carry
                 // thread-scoped state from the currently active session.
+                session.thread_settings_confirmed = false;
                 session.collaboration_mode = None;
                 session.daybreak_enabled = false;
             }
@@ -89,6 +90,7 @@ impl App {
         } else {
             ThreadSessionState {
                 read_only_history: true,
+                thread_settings_confirmed: false,
                 daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id,
@@ -177,6 +179,7 @@ mod tests {
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,

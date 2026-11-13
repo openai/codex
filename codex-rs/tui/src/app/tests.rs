@@ -7464,6 +7464,15 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
 #[tokio::test]
 async fn inactive_thread_started_notification_initializes_replay_session() -> Result<()> {
     let mut app = make_test_app().await;
+    app.chat_widget
+        .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+    set_chatgpt_auth(&mut app.chat_widget);
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.model = "gpt-agent".into();
+    model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
+    });
+    crate::chatwidget::tests::helpers::set_test_model_catalog(&mut app.chat_widget, vec![model]);
     let temp_dir = tempdir()?;
     let main_thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
@@ -7473,6 +7482,14 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let shared_root = test_path_buf("/tmp/shared").abs();
     let primary_session = ThreadSessionState {
         read_only_history: true,
+        collaboration_mode: Some(Box::new(CollaborationMode {
+            mode: codex_protocol::config_types::ModeKind::Plan,
+            settings: codex_protocol::config_types::Settings {
+                model: "parent-model".into(),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                developer_instructions: None,
+            },
+        })),
         daybreak_enabled: false,
         windows_sandbox_host: WindowsSandboxHost::Local,
         approval_policy: AskForApproval::OnRequest,
@@ -7517,9 +7534,9 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 project_id: None,
                 daybreak_enabled: Some(true),
                 history_mode: Default::default(),
-                model_provider: "agent-provider".to_string(),
+                model_provider: "openai".to_string(),
                 model: Some("gpt-agent".to_string()),
-                reasoning_effort: None,
+                reasoning_effort: Some(ReasoningEffortConfig::Low),
                 created_at: 1,
                 updated_at: 2,
                 recency_at: Some(2),
@@ -7540,15 +7557,16 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     )
     .await?;
 
-    let store = app
+    let session = app
         .thread_event_channels
         .get(&agent_thread_id)
         .expect("agent thread channel")
         .store
         .lock()
-        .await;
-    let session = store.session.clone().expect("inferred session");
-    drop(store);
+        .await
+        .session
+        .take()
+        .expect("inferred session");
 
     assert!(!session.read_only_history);
     assert_eq!(session.thread_id, agent_thread_id);
@@ -7556,7 +7574,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     assert_eq!(session.windows_sandbox_host, WindowsSandboxHost::Remote);
     assert_eq!(session.thread_name, Some("agent thread".to_string()));
     assert_eq!(session.model, "gpt-agent");
-    assert_eq!(session.model_provider_id, "agent-provider");
+    assert_eq!(session.model_provider_id, "openai");
     assert_eq!(session.approval_policy, primary_session.approval_policy);
     assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/agent").as_path());
     assert_eq!(
@@ -7574,6 +7592,16 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
             is_closed: false,
         })
     );
+
+    app.chat_widget.handle_thread_session(session);
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    let thread = &state["thread"];
+    assert_eq!(thread["model"]["id"], "gpt-agent");
+    assert_eq!(thread["model"]["reasoning_level"], "low");
+    assert_eq!(thread["model"]["access_program"], "daybreak_blue");
+    assert!(thread["model"].get("service_tier").is_none());
+    assert!(thread.get("approval").is_none());
+    assert!(thread.get("permissions").is_none());
 
     Ok(())
 }
@@ -7648,17 +7676,21 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     )
     .await?;
 
-    let store = app
+    let session = app
         .thread_event_channels
         .get(&agent_thread_id)
         .expect("agent thread channel")
         .store
         .lock()
-        .await;
-    let session = store.session.clone().expect("inferred session");
-
+        .await
+        .session
+        .take()
+        .expect("inferred session");
     assert_eq!(session.model, primary_session.model);
 
+    app.chat_widget.handle_thread_session(session);
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(state["thread"]["model"]["id"], primary_session.model);
     Ok(())
 }
 
@@ -8838,6 +8870,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
     let make_header = |is_first| -> Arc<dyn HistoryCell> {
         let session = ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -9552,6 +9585,7 @@ async fn replace_goal_confirmation_snapshot() {
 pub(super) fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
     ThreadSessionState {
         read_only_history: false,
+        thread_settings_confirmed: true,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -10869,6 +10903,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     let make_header = |is_first| {
         let session = ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -10943,6 +10978,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: base_id,
@@ -12340,6 +12376,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         let thread_id = ThreadId::new();
         let event = crate::session_state::ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
@@ -13120,6 +13157,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
             read_only_history: false,
+            thread_settings_confirmed: true,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,

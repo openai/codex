@@ -29,6 +29,8 @@ pub(crate) struct MessageHistoryMetadata {
 pub(crate) struct ThreadSessionState {
     /// This TUI opened saved history without a live attachment.
     pub(crate) read_only_history: bool,
+    /// Inferred child sessions can carry settings copied from the primary thread.
+    pub(crate) thread_settings_confirmed: bool,
     pub(crate) daybreak_enabled: bool,
     pub(crate) windows_sandbox_host: crate::app::WindowsSandboxHost,
     pub(crate) thread_id: ThreadId,
