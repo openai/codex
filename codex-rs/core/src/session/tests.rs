@@ -5636,7 +5636,7 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: external_write_path.clone().into(),
+                path: external_write_path.into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
@@ -5660,15 +5660,6 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
     assert_eq!(
         updated.file_system_sandbox_policy(&[]),
         file_system_sandbox_policy
-    );
-    assert_eq!(
-        updated.sandbox_policy(&[]),
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        }
     );
 }
 
@@ -8877,7 +8868,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() -> anyhow::Re
             model: turn_context.model_info().slug.clone(),
             provider_name: config.model_provider_id.clone(),
             approval_policy: "never".to_string(),
-            sandbox_policy: "danger-full-access".to_string(),
+            permissions_profile: "danger-full-access".to_string(),
         },
     )?;
     let live_thread = LiveThread::create(

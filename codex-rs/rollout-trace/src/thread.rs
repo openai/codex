@@ -62,7 +62,7 @@ pub struct ThreadStartedTraceMetadata {
     pub model: String,
     pub provider_name: String,
     pub approval_policy: String,
-    pub sandbox_policy: String,
+    pub permissions_profile: String,
 }
 
 /// Trace-only payload for a child completion notification delivered to its parent.

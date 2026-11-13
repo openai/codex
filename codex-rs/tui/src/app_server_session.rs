@@ -162,6 +162,8 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -2603,9 +2605,14 @@ pub(crate) fn permission_profile_is_safely_represented_by_sandbox_mode(
     let projected_profile = match sandbox_mode {
         codex_app_server_protocol::SandboxMode::ReadOnly => PermissionProfile::read_only(),
         codex_app_server_protocol::SandboxMode::WorkspaceWrite => {
-            PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-                &codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
-                cwd,
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::workspace_write(
+                    &[],
+                    /*exclude_tmpdir_env_var*/ false,
+                    /*exclude_slash_tmp*/ false,
+                )
+                .with_workspace_write_cwd(cwd),
+                NetworkSandboxPolicy::Restricted,
             )
         }
         codex_app_server_protocol::SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
@@ -4238,6 +4245,32 @@ mod tests {
 
         assert_eq!(resume.cwd, Some(remote_cwd.to_string_lossy().to_string()));
         assert_eq!(resume.runtime_workspace_roots, None);
+    }
+
+    #[test]
+    fn sandbox_mode_preserves_workspace_metadata_at_the_destination() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let cwd = workspace.path();
+        std::fs::create_dir(cwd.join(".git")).expect("git metadata");
+        let profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
+            cwd,
+        );
+        assert!(permission_profile_is_safely_represented_by_sandbox_mode(
+            &profile, cwd
+        ));
+        let policy = profile
+            .file_system_sandbox_policy()
+            .with_additional_writable_roots(
+                cwd,
+                &[AbsolutePathBuf::from_absolute_path(cwd.join(".git"))
+                    .expect("absolute metadata")],
+            );
+        let profile =
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+        assert!(!permission_profile_is_safely_represented_by_sandbox_mode(
+            &profile, cwd
+        ));
     }
 
     #[test]

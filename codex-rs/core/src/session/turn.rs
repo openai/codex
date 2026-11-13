@@ -2909,10 +2909,16 @@ async fn try_run_sampling_request(
     draining_for_mailbox: &mut bool,
 ) -> CodexResult<SamplingRequestResult> {
     let turn_context = Arc::clone(&step_context.turn);
+    #[expect(deprecated, reason = "Classify feedback using the initial turn cwd.")]
+    let diagnostic_cwd = &turn_context.cwd;
     feedback_tags!(
         model = step_context.settings.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy(),
-        sandbox_policy = &turn_context.sandbox_policy(),
+        sandbox_policy = tracing::field::display(
+            turn_context
+                .permission_profile()
+                .legacy_sandbox_policy_label(diagnostic_cwd)
+        ),
         effort = step_context.settings.reasoning_effort(),
         auth_mode = sess.services.auth_manager.auth_mode(),
         tags_json = tracing::field::display(serde_json::json!(crate::feedback_config::usage_tags(

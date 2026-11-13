@@ -421,7 +421,7 @@ fn attach_test_trace(session: &mut Session, turn: &TurnContext, root: &Path) -> 
                 model: "gpt-test".to_string(),
                 provider_name: "test-provider".to_string(),
                 approval_policy: "never".to_string(),
-                sandbox_policy: "danger-full-access".to_string(),
+                permissions_profile: "danger-full-access".to_string(),
             },
         )?;
     rollout_thread_trace.record_codex_turn_started(turn.sub_id.as_str());

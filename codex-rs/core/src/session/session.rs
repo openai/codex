@@ -265,17 +265,6 @@ impl SessionConfiguration {
             .set_legacy_permission_profile(permission_profile)
     }
 
-    pub(super) fn sandbox_policy(
-        &self,
-        environments: &[TurnEnvironmentSelection],
-    ) -> SandboxPolicy {
-        let permission_profile = self.materialized_permission_profile(environments);
-        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            self.cwd(),
-        )
-    }
-
     pub(super) fn file_system_sandbox_policy(
         &self,
         environments: &[TurnEnvironmentSelection],
@@ -1334,10 +1323,10 @@ impl Session {
                     .approval_policy
                     .value()
                     .to_string(),
-                sandbox_policy: format!(
-                    "{:?}",
-                    session_configuration.sandbox_policy(environment_selections)
-                ),
+                permissions_profile: session_configuration
+                    .materialized_permission_profile(environment_selections)
+                    .legacy_sandbox_policy_label(session_configuration.cwd())
+                    .to_string(),
             };
             let mut post_session_configured_events = Vec::<Event>::new();
 

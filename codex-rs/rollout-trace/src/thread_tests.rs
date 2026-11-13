@@ -49,7 +49,7 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
             model: "gpt-test".to_string(),
             provider_name: "test-provider".to_string(),
             approval_policy: "never".to_string(),
-            sandbox_policy: "DangerFullAccess".to_string(),
+            permissions_profile: "danger-full-access".to_string(),
         },
     )?;
 
@@ -162,7 +162,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         model: "gpt-test".to_string(),
         provider_name: "test-provider".to_string(),
         approval_policy: "never".to_string(),
-        sandbox_policy: "DangerFullAccess".to_string(),
+        permissions_profile: "danger-full-access".to_string(),
     })?;
     child_trace.record_ended(RolloutStatus::Completed);
     let bundle_dir = single_bundle_dir(temp.path())?;
@@ -458,7 +458,7 @@ fn minimal_metadata(thread_id: ThreadId) -> ThreadStartedTraceMetadata {
         model: "gpt-test".to_string(),
         provider_name: "test-provider".to_string(),
         approval_policy: "never".to_string(),
-        sandbox_policy: "danger-full-access".to_string(),
+        permissions_profile: "danger-full-access".to_string(),
     }
 }
 

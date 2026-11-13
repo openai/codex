@@ -892,16 +892,7 @@ impl FileSystemSandboxPolicy {
     pub fn from_legacy_sandbox_policy_for_cwd(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox_policy {
-            if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
-                for protected_path in default_read_only_subpaths_for_writable_root(
-                    &cwd_root, /*protect_missing_dot_codex*/ true,
-                ) {
-                    append_default_read_only_path_if_no_explicit_rule(
-                        &mut file_system_policy.entries,
-                        protected_path,
-                    );
-                }
-            }
+            file_system_policy = file_system_policy.with_workspace_write_cwd(cwd);
             for writable_root in writable_roots {
                 for protected_path in default_read_only_subpaths_for_writable_root(
                     writable_root,
@@ -916,6 +907,21 @@ impl FileSystemSandboxPolicy {
         }
 
         file_system_policy
+    }
+
+    /// Binds the default workspace metadata protections for a native working directory.
+    pub fn with_workspace_write_cwd(mut self, cwd: &Path) -> Self {
+        if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
+            for protected_path in default_read_only_subpaths_for_writable_root(
+                &cwd_root, /*protect_missing_dot_codex*/ true,
+            ) {
+                append_default_read_only_path_if_no_explicit_rule(
+                    &mut self.entries,
+                    protected_path,
+                );
+            }
+        }
+        self
     }
 
     /// Returns true when filesystem reads are unrestricted on this host.

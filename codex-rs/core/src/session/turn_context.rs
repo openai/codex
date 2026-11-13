@@ -796,14 +796,6 @@ impl TurnContext {
         self.permission_profile().network_sandbox_policy()
     }
 
-    pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
-        #[allow(deprecated)]
-        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile(),
-            &self.cwd,
-        )
-    }
-
     /// Legacy: returns the frozen initial-turn reasoning effort, including the initial model default.
     /// Step-scoped consumers should use their captured `StepContext::settings`.
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
