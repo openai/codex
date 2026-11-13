@@ -136,7 +136,7 @@ async fn global_pages_preserve_catalogs_and_skip_hosted_or_unidentified_transpor
             reply(
                 &mut commands,
                 "mcpServerStatus/list",
-                json!({"threadId":null,"serverName":null,"detail":"toolsAndAuthOnly","cursor":cursor,"limit":null}),
+                json!({"threadId":null,"serverName":null,"environmentId":null,"detail":"toolsAndAuthOnly","cursor":cursor,"limit":null}),
                 json!({"data":rows,"nextCursor":next}),
             ).await;
         }
@@ -177,7 +177,7 @@ async fn targeted_inventory_rejects_another_server() {
         reply(
             &mut commands,
             "mcpServerStatus/list",
-            json!({"threadId":null,"serverName":"calendar","detail":"toolsAndAuthOnly","cursor":null,"limit":null}),
+            json!({"threadId":null,"serverName":"calendar","environmentId":null,"detail":"toolsAndAuthOnly","cursor":null,"limit":null}),
             json!({"data":[other],"nextCursor":null}),
         )
     );

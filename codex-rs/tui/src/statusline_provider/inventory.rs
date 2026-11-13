@@ -110,6 +110,7 @@ pub(super) fn global_pages(
             ListMcpServerStatusParams {
                 thread_id: None,
                 server_name: None,
+                environment_id: None,
                 detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
                 cursor,
                 limit: None,
@@ -150,6 +151,7 @@ pub(super) async fn server(
         ListMcpServerStatusParams {
             thread_id: thread.map(|id| id.to_string()),
             server_name: Some(name.0.clone()),
+            environment_id: None,
             detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
             cursor: None,
             limit: None,
@@ -157,13 +159,13 @@ pub(super) async fn server(
     )
     .await?;
     if page.next_cursor.is_some() || page.data.len() > 1 {
-        bail!("targeted MCP inventory returned more than one server")
+        bail!("targeted MCP inventory returned more than one server");
     }
     let Some(value) = page.data.pop() else {
         return Ok(None);
     };
     if value["name"] != name.as_str() {
-        bail!("targeted MCP inventory did not identify the requested server")
+        bail!("targeted MCP inventory did not identify the requested server");
     }
     local_server(value)
 }

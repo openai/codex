@@ -75,7 +75,7 @@ async fn named(commands: &mut Requests, thread: Option<ThreadId>, row: Value) {
         commands,
         "mcpServerStatus/list",
         json!({"threadId":thread.map(|id| id.to_string()),"serverName":row["name"],
-               "detail":"toolsAndAuthOnly","cursor":null,"limit":null}),
+               "environmentId":null,"detail":"toolsAndAuthOnly","cursor":null,"limit":null}),
         json!({"data":[row],"nextCursor":null}),
     )
     .await;
@@ -109,6 +109,7 @@ async fn picker_choice_reads_the_displayed_threads_uri_with_the_snapshot() -> Re
             json!({
                 "threadId": thread.to_string(),
                 "server": "calendar",
+                "environmentId": null,
                 "uri": "ui://calendar/today",
                 "connectorId": null,
                 "target": null,
@@ -236,7 +237,7 @@ async fn selecting_a_plugin_requires_the_globally_advertised_tool_and_the_connec
             "mcpServer/resource/read",
             json!({
                 "threadId":thread.to_string(),"server":"calendar","uri":"ui://calendar/current",
-                "connectorId":null,"target":null,"originCallId":null,
+                "environmentId":null,"connectorId":null,"target":null,"originCallId":null,
                 "_meta":{"com.openai/codex-statusline-state":{"version":1}}
             }),
             json!({"contents":[],"originCallId":null}),

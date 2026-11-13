@@ -175,6 +175,7 @@ impl ResolvedStatuslineProvider {
                 params: McpResourceReadParams {
                     thread_id: Some(self.thread.to_string()),
                     server: provider.id.server.0.clone(),
+                    environment_id: None,
                     uri: provider.uri.clone(),
                     connector_id: None,
                     origin_call_id: None,
