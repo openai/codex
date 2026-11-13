@@ -29,7 +29,7 @@ impl ChatWidget {
         match self.external_editor_state {
             ExternalEditorState::Requested | ExternalEditorState::Active => None,
             ExternalEditorState::Closed
-                if !self.external_writer_view && !self.has_provider_error() =>
+                if !self.is_read_only_view() && !self.has_provider_error() =>
             {
                 self.bottom_pane.empty_state_composer()
             }

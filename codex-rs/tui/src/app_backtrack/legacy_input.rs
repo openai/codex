@@ -96,7 +96,7 @@ impl App {
                     kind: KeyEventKind::Press,
                     ..
                 }) => {
-                    if self.chat_widget.is_external_writer_view() {
+                    if self.chat_widget.is_read_only_view() {
                         self.close_transcript_overlay(tui);
                     } else {
                         self.begin_overlay_backtrack_preview(tui);

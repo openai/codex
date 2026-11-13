@@ -562,8 +562,7 @@ impl App {
         }
         let is_new_session = started.is_some();
         if self.current_displayed_thread_id() == Some(root_thread_id)
-            && (!self.thread_unavailable(root_thread_id)
-                || self.chat_widget.is_external_writer_view())
+            && (!self.thread_unavailable(root_thread_id) || self.chat_widget.is_read_only_view())
         {
             // Keep the displayed read-only snapshot frozen; R explicitly retries attachment.
             if let Ok(mut state) = self.agents_overview.view_state.lock() {
@@ -1003,8 +1002,7 @@ impl App {
         }
 
         if self.current_displayed_thread_id() != Some(root_thread_id)
-            || (self.thread_unavailable(root_thread_id)
-                && !self.chat_widget.is_external_writer_view())
+            || (self.thread_unavailable(root_thread_id) && !self.chat_widget.is_read_only_view())
         {
             self.select_agent_thread(tui, app_server, root_thread_id)
                 .await?;
@@ -1012,7 +1010,7 @@ impl App {
         if self.current_displayed_thread_id() == Some(root_thread_id) {
             self.remember_attached_host_project(app_server);
         }
-        let read_only = self.chat_widget.is_external_writer_view();
+        let read_only = self.chat_widget.is_read_only_view();
         if !read_only {
             self.replay_agents_overview_requests(app_server, root_thread_id)
                 .await;
@@ -1049,7 +1047,7 @@ impl App {
         mut input: ThreadInputState,
         pending_settings: Option<codex_app_server_protocol::ThreadSettingsUpdatedNotification>,
     ) {
-        let preserve_in_flight_turn = !self.chat_widget.is_external_writer_view()
+        let preserve_in_flight_turn = !self.chat_widget.is_read_only_view()
             && self.active_turn_id_for_thread(thread_id).await.is_some();
         self.reconcile_saved_session_input(thread_id, &mut input)
             .await;

@@ -552,7 +552,7 @@ impl App {
                 return Err(err);
             }
             self.config = self.chat_widget.config_ref().clone();
-            if self.thread_unavailable(id) && !self.chat_widget.is_external_writer_view() {
+            if self.thread_unavailable(id) && !self.chat_widget.is_read_only_view() {
                 self.agent_navigation.mark_stopped(id);
                 self.chat_widget.pause_unavailable_thread();
                 self.chat_widget.add_info_message("This conversation is unavailable. Its cached transcript and draft remain here; input is paused. Open the agent picker or return to the parent to continue.".into(), /*hint*/ None);

@@ -1825,7 +1825,7 @@ impl App {
             && owned_channel.is_some()
             && (refreshing_history
                 || was_reconnecting
-                || self.chat_widget.is_external_writer_view()
+                || self.chat_widget.is_read_only_view()
                 || self.chat_widget.has_provider_error()))
         .then(|| self.chat_widget.capture_thread_input_state())
         .flatten();

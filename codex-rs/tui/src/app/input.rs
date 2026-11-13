@@ -476,7 +476,7 @@ impl App {
                 _ => {}
             }
         }
-        if self.chat_widget.is_external_writer_view()
+        if self.chat_widget.is_read_only_view()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             && key_event.kind == KeyEventKind::Press
@@ -680,7 +680,7 @@ impl App {
             return;
         }
 
-        if self.chat_widget.is_external_writer_view()
+        if self.chat_widget.is_read_only_view()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
         {
@@ -852,7 +852,7 @@ impl App {
     }
 
     pub(crate) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
-        !self.chat_widget.is_external_writer_view()
+        !self.chat_widget.is_read_only_view()
             && !self.chat_widget.has_provider_error()
             && !self.chat_widget.side_conversation_active()
             && !self.chat_widget.shortcut_overlay_visible()

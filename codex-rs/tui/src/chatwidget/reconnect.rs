@@ -203,7 +203,7 @@ impl ChatWidget {
         key: KeyEvent,
         mode: RestrictedInputMode,
     ) -> KeyEventAction {
-        if self.external_writer_view {
+        if self.is_read_only_view() {
             return KeyEventAction::None;
         }
         if mode == RestrictedInputMode::DraftHandoff {

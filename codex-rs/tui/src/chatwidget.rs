@@ -1899,6 +1899,10 @@ impl ChatWidget {
         self.external_writer_view
     }
 
+    pub(crate) fn is_read_only_view(&self) -> bool {
+        self.is_external_writer_view()
+    }
+
     fn refresh_skills_for_current_cwd(&mut self, force_reload: bool) {
         self.submit_op(AppCommand::list_skills(
             vec![self.config.cwd.to_path_buf()],

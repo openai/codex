@@ -562,7 +562,7 @@ impl App {
             None => (None, None),
         };
         let mut composer_gap = (!self.chat_widget.has_active_view()
-            && !self.chat_widget.is_external_writer_view())
+            && !self.chat_widget.is_read_only_view())
         .then(crate::bottom_pane::ComposerGap::default);
         let prompt_footer = if self.pane_resize.is_some() {
             Some(crate::bottom_pane::TranscriptFooter {
@@ -986,7 +986,7 @@ impl App {
         // Search and selection still consume Escape first to dismiss their interaction.
         if let TuiEvent::Key(key) = event
             && !self.transcript_view.has_active_interaction()
-            && (self.chat_widget.is_external_writer_view() || self.chat_widget.has_provider_error())
+            && (self.chat_widget.is_read_only_view() || self.chat_widget.has_provider_error())
             && crate::key_hint::plain(KeyCode::Esc).is_press(*key)
         {
             return Ok(false);

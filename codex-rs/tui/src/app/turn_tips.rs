@@ -156,7 +156,7 @@ impl App {
         if !self.local_settings.tui.show_tooltips
             || !self.chat_widget.no_modal_or_popup_active()
             || !self.chat_widget.composer_is_empty()
-            || self.chat_widget.is_external_writer_view()
+            || self.chat_widget.is_read_only_view()
             || self.chat_widget.has_queued_follow_up_messages()
             || self.backtrack.primed
             || self.backtrack.overlay_preview_active
