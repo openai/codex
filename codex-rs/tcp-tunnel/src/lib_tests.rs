@@ -138,17 +138,30 @@ async fn control_input_acknowledges_bearer_renewal_with_or_without_metadata() ->
 }
 
 #[tokio::test]
-async fn portals_jwt_listener_requires_v2_at_startup_and_on_renewal() -> Result<()> {
+async fn portals_jwt_listener_rejects_invalid_credentials() -> Result<()> {
     // Inert parser fixtures with a placeholder signature. No signing key or live credential.
     const HEADER: &str = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9";
     let v1 = format!("{HEADER}.eyJ2ZXIiOjF9.fixture");
     let v2 = format!("{HEADER}.eyJ2ZXIiOjJ9.fixture");
+    let v3 = format!("{HEADER}.eyJ2ZXIiOjN9.fixture");
     let origin = super::ssh::PUBLIC_GATEWAY;
     for invalid in [
-        &v1[..],
+        &v3[..],
         "opaque",
         "malformed.parts",
         &format!("{HEADER}.e30.fixture"),
+        "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture",
+        // String versions and malformed claims.
+        &format!("{HEADER}.eyJ2ZXIiOiIxIn0.fixture"),
+        &format!("{HEADER}.eyJ2ZXIiOiIyIn0.fixture"),
+        &format!("{HEADER}.invalid-json.fixture"),
+        // Missing or empty signatures and extra segments, for both versions.
+        &format!("{HEADER}.eyJ2ZXIiOjF9"),
+        &format!("{HEADER}.eyJ2ZXIiOjJ9"),
+        &format!("{HEADER}.eyJ2ZXIiOjF9."),
+        &format!("{HEADER}.eyJ2ZXIiOjJ9."),
+        &format!("{v1}.extra"),
+        &format!("{v2}.extra"),
     ] {
         let (_, mut tokens) = control_input(
             Cursor::new(invalid.to_owned()),
@@ -158,12 +171,13 @@ async fn portals_jwt_listener_requires_v2_at_startup_and_on_renewal() -> Result<
         let error = tokens.recv().await.unwrap().unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Portals requires an ERS-issued v2 tunnel JWT"
+            "Portals requires an ERS-issued v1 or v2 tunnel JWT"
         );
+        assert!(tokens.recv().await.is_none());
     }
 
     let (_, mut tokens) = control_input(
-        Cursor::new(format!("{v2}\n{v2}\n{v1}\n")),
+        Cursor::new(format!("{v2}\n{v2}\n{v3}\n")),
         /*connect_headers_stdin*/ false,
         origin,
     )?;
@@ -178,7 +192,7 @@ async fn portals_jwt_listener_requires_v2_at_startup_and_on_renewal() -> Result<
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "Portals requires an ERS-issued v2 tunnel JWT"
+        "Portals requires an ERS-issued v1 or v2 tunnel JWT"
     );
     assert_eq!(output, b"AUTH_UPDATED\n");
     assert_eq!(*latest.borrow(), initial);
@@ -186,9 +200,11 @@ async fn portals_jwt_listener_requires_v2_at_startup_and_on_renewal() -> Result<
 }
 
 #[tokio::test]
-async fn other_bearer_modes_reject_ers_v1_and_accept_unrelated_jwts() -> Result<()> {
+async fn other_bearer_modes_accept_ers_v1_v2_and_unrelated_jwts() -> Result<()> {
     let unrelated = "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture";
     let ers_v1 = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjF9.fixture";
+    let ers_v2 = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjJ9.fixture";
+    let ers_v3 = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjN9.fixture";
     for (origin, metadata) in [
         (
             super::ssh::PUBLIC_GATEWAY,
@@ -197,18 +213,49 @@ async fn other_bearer_modes_reject_ers_v1_and_accept_unrelated_jwts() -> Result<
         ("https://proxy.example", "[]"),
     ] {
         let (headers, mut tokens) = control_input(
-            Cursor::new(format!("{metadata}\n{unrelated}\n{ers_v1}\n")),
+            Cursor::new(format!(
+                "{metadata}\n{unrelated}\n{ers_v1}\n{ers_v2}\n{ers_v3}\n"
+            )),
             /*connect_headers_stdin*/ true,
             origin,
         )?;
         headers.await??;
-        let initial = tokens.recv().await.unwrap()?.unwrap();
-        assert_eq!(initial.to_str()?, format!("Bearer {unrelated}"));
+        for token in [unrelated, ers_v1, ers_v2] {
+            let actual = tokens.recv().await.unwrap()?.unwrap();
+            assert_eq!(actual.to_str()?, format!("Bearer {token}"));
+            assert!(actual.is_sensitive());
+        }
         let error = tokens.recv().await.unwrap().unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Portals requires an ERS-issued v2 tunnel JWT"
+            "Portals requires an ERS-issued v1 or v2 tunnel JWT"
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn portals_jwt_listener_accepts_v1_and_v2_at_startup_and_on_renewal() -> Result<()> {
+    // Inert parser fixtures with a placeholder signature. No signing key or live credential.
+    const V1: &str = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjF9.fixture";
+    const V2: &str = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjJ9.fixture";
+    for (first, renewed) in [(V1, V1), (V1, V2), (V2, V1), (V2, V2)] {
+        let (_, mut tokens) = control_input(
+            Cursor::new(format!("{first}\n{renewed}\n")),
+            /*connect_headers_stdin*/ false,
+            super::ssh::PUBLIC_GATEWAY,
+        )?;
+        let initial = tokens.recv().await.unwrap()?.unwrap();
+        assert_eq!(initial.to_str()?, format!("Bearer {first}"));
+        assert!(initial.is_sensitive());
+        let (updates, latest) = watch::channel(initial);
+        let (ready, readiness) = oneshot::channel();
+        ready.send(()).unwrap();
+        let mut output = Vec::new();
+        update_auth_tokens(&mut tokens, updates, readiness, &mut output).await?;
+        assert_eq!(latest.borrow().to_str()?, format!("Bearer {renewed}"));
+        assert!(latest.borrow().is_sensitive());
+        assert_eq!(output, b"AUTH_UPDATED\n");
     }
     Ok(())
 }

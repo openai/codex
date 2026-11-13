@@ -92,10 +92,10 @@ impl TunnelCredential {
             // Check the wire version locally. The gateway verifies the signature.
             let claims = parts.next().and_then(json_segment);
             ensure!(
-                ers && claims.is_some_and(|claims| claims["ver"].as_u64() == Some(2))
+                ers && claims.is_some_and(|claims| matches!(claims["ver"].as_u64(), Some(1 | 2)))
                     && parts.next().is_some_and(|signature| !signature.is_empty())
                     && parts.next().is_none(),
-                "Portals requires an ERS-issued v2 tunnel JWT"
+                "Portals requires an ERS-issued v1 or v2 tunnel JWT"
             );
         }
         let mut auth = HeaderValue::from_str(&format!("Bearer {token}"))
