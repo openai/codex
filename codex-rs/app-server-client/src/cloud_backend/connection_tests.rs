@@ -1,14 +1,16 @@
 #![cfg(test)]
 
-//! Ensures only a successfully attached thread can receive new turns.
+//! Exercises native worker progress and reply attachment.
 
 use super::*;
 use futures::stream;
 use pretty_assertions::assert_eq;
+use std::sync::Mutex;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_bytes;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -220,6 +222,83 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
         )
     );
     assert!(notifications.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(home.path().to_owned())
+        .fallback_cwd(Some(home.path().to_owned()))
+        .without_project_context()
+        .build()
+        .await?;
+    let native = cloud::Client::new(
+        &config.http_client_factory(),
+        &server.uri(),
+        cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
+    )?;
+    let account = protocol::GetAccountResponse {
+        user_id: None,
+        account: None,
+        requires_openai_auth: true,
+        workspace_routing: None,
+    };
+    let (client, commands, output) = CloudClient::channel(/*capacity*/ 32);
+    let client = AppServerClient::Cloud(client);
+    let mut requests = requests::Requests {
+        client: Arc::new(native),
+        account: account.clone(),
+        loaded: None,
+        warned_partial_history: None,
+    };
+    tokio::spawn(async move {
+        run_worker(commands, &mut requests, &mut Replies::default(), &output).await;
+    });
+    let (list_arrived, mut arrival) = mpsc::unbounded_channel();
+    let (release_list, held) = std::sync::mpsc::channel::<()>();
+    let held = Mutex::new(held);
+    Mock::given(method("POST"))
+        .and(path(
+            "/oaiproto.codex_app_server_backend.ThreadService/ListThreads",
+        ))
+        .and(header("authorization", "Bearer synthetic-bearer"))
+        .respond_with(move |_: &wiremock::Request| {
+            let _ = list_arrived.send(());
+            // Wiremock serves on a dedicated thread. Hold the RPC until the sender drops.
+            let _ = held.lock().unwrap().recv();
+            ResponseTemplate::new(503)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut list = Box::pin(client.request(protocol::ClientRequest::ThreadList {
+        request_id: protocol::RequestId::Integer(1),
+        params: serde_json::from_value(serde_json::json!({"limit": 10}))?,
+    }));
+    tokio::select! {
+        seen = tokio::time::timeout(crate::SHUTDOWN_TIMEOUT, arrival.recv()) => {
+            assert_eq!(seen?, Some(()));
+        }
+        _ = &mut list => panic!("list finished before the fixture held it"),
+    }
+    drop(list);
+    let account_response = tokio::time::timeout(
+        crate::SHUTDOWN_TIMEOUT,
+        client.request_typed::<protocol::GetAccountResponse>(protocol::ClientRequest::GetAccount {
+            request_id: protocol::RequestId::Integer(2),
+            params: protocol::GetAccountParams {
+                refresh_token: false,
+            },
+        }),
+    )
+    .await;
+    drop(release_list);
+    assert_eq!(account_response??, account);
+    client.shutdown().await?;
     Ok(())
 }
 
