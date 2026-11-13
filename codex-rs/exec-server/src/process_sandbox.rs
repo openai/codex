@@ -366,20 +366,14 @@ async fn prepare_managed_network(
                 registration_id: registration.executor_registration_id.clone(),
             }),
     });
-    let mut builder = NetworkProxy::builder()
-        .state(Arc::new(state))
-        .managed_proxy_routing(routing);
-    if let Some(network_policy_decider) = network_policy_decider {
-        builder = builder.policy_decider_arc(network_policy_decider);
-    }
-    let proxy = builder
-        .build()
-        .await
-        .map_err(|err| internal_error(format!("failed to build executor network proxy: {err}")))?;
-    let handle = proxy
-        .run()
-        .await
-        .map_err(|err| internal_error(format!("failed to start executor network proxy: {err}")))?;
+    let (proxy, handle) = NetworkProxy::start_managed(
+        state,
+        routing,
+        network_policy_decider,
+        /*blocked_request_observer*/ None,
+    )
+    .await
+    .map_err(|err| internal_error(err.to_string()))?;
     #[cfg(target_os = "windows")]
     let network_proxy_restricting_sid = if routing == ManagedProxyRouting::SharedIngress {
         Some(

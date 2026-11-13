@@ -886,6 +886,33 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
+    /// Starts a Codex-managed proxy from resolved policy. Keep the handle for as long as
+    /// clients need the proxy. A disabled policy returns the proxy and an inactive handle.
+    pub async fn start_managed(
+        state: NetworkProxyState,
+        routing: ManagedProxyRouting,
+        policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) -> Result<(Self, NetworkProxyHandle)> {
+        // Startup errors can cross the executor RPC boundary. Keep the stage and immediate cause.
+        let proxy = NetworkProxyBuilder {
+            state: Some(Arc::new(state)),
+            managed_by_codex: true,
+            managed_proxy_routing: routing,
+            policy_decider,
+            blocked_request_observer,
+            ..Default::default()
+        }
+        .build()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to build network proxy: {err}"))?;
+        let handle = proxy
+            .run()
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to run network proxy: {err}"))?;
+        Ok((proxy, handle))
+    }
+
     pub fn http_addr(&self) -> SocketAddr {
         self.http_addr
     }

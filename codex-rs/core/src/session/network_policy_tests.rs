@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-//! Compares session network enforcement with the policy sent to MCP servers.
+//! Tests session proxy policy across permission changes and MCP launches.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -183,6 +183,98 @@ async fn failed_network_rule_write_keeps_native_denial_in_mcp_policy(
     assert_eq!(
         (mcp.allowed_domains, mcp.denied_domains),
         (vec![], vec![DENIED.to_owned()])
+    );
+    Ok(())
+}
+
+#[test_case(true, false, 1; "approvals enabled")]
+#[test_case(false, false, 0; "approvals disabled")]
+#[test_case(true, true, 0; "managed allowlist is final")]
+#[tokio::test]
+async fn managed_network_proxy_respects_approval_policy_after_profile_change(
+    approvals_enabled: bool,
+    managed_allowed_domains_only: bool,
+    expected_decider_calls: usize,
+) -> anyhow::Result<()> {
+    let full_access_permission_profile = PermissionProfile::Disabled;
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            managed_allowed_domains_only: Some(managed_allowed_domains_only),
+            ..Default::default()
+        }),
+        &full_access_permission_profile,
+    )?;
+    let exec_policy = Policy::empty();
+    let decider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let network_policy_decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider> = Arc::new({
+        let decider_calls = Arc::clone(&decider_calls);
+        move |_request| {
+            decider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { codex_network_proxy::NetworkDecision::ask("not_allowed") }
+        }
+    });
+
+    let (blocked_tx, mut blocked_rx) = tokio::sync::mpsc::unbounded_channel();
+    let observer = move |request: codex_network_proxy::BlockedRequest| {
+        blocked_tx
+            .send(request.host)
+            .expect("blocked request receiver");
+        std::future::ready(())
+    };
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &full_access_permission_profile,
+        SandboxType::None,
+        Some(network_policy_decider),
+        Some(Arc::new(observer)),
+        approvals_enabled,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    let spec = spec.recompute_for_permission_profile(&PermissionProfile::workspace_write())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.allowed_domains(), None);
+
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let prepared = started_proxy
+        .proxy()
+        .prepare_for_remote_environment(std::collections::HashMap::new(), "test-bridge")?;
+    let proxy_addr = prepared.env["HTTP_PROXY"]
+        .strip_prefix("http://")
+        .expect("HTTP proxy URL")
+        .parse::<std::net::SocketAddr>()?;
+    let mut stream = tokio::net::TcpStream::connect(proxy_addr).await?;
+    stream
+        .write_all(
+            b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+    let mut buffer = [0_u8; 4096];
+    let bytes_read = tokio::time::timeout(StdDuration::from_secs(2), stream.read(&mut buffer))
+        .await
+        .expect("timed out waiting for proxy response")?;
+    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+    assert!(
+        response.starts_with("HTTP/1.1 403 Forbidden"),
+        "unexpected proxy response: {response}"
+    );
+    assert!(
+        response.contains("x-proxy-error: blocked-by-allowlist"),
+        "unexpected proxy response: {response}"
+    );
+    assert_eq!(blocked_rx.try_recv()?, "example.com");
+    assert_eq!(
+        decider_calls.load(std::sync::atomic::Ordering::SeqCst),
+        expected_decider_calls,
+        "unexpected proxy response: {response}"
     );
     Ok(())
 }

@@ -229,33 +229,25 @@ impl NetworkProxySpec {
             Platform::native(),
             local_binding_policy,
         )?;
-        let mut builder = NetworkProxy::builder()
-            .state(Arc::new(state))
-            .managed_proxy_routing(managed_proxy_routing);
-        let retained_policy_decider = policy_decider.as_ref().map(Arc::clone);
-        if enable_network_approval_flow && !self.hard_deny_allowlist_misses {
-            if let Some(policy_decider) = policy_decider {
-                builder = builder.policy_decider_arc(policy_decider);
-            } else if Self::managed_sandbox_active(permission_profile) {
-                builder = builder
-                    .policy_decider(|_request| async { NetworkDecision::ask("not_allowed") });
-            }
-        }
-        if let Some(blocked_request_observer) = blocked_request_observer {
-            builder = builder.blocked_request_observer_arc(blocked_request_observer);
-        }
-        let proxy = builder.build().await.map_err(|err| {
-            std::io::Error::other(format!("failed to build network proxy: {err}"))
-        })?;
-        let handle = proxy
-            .run()
-            .await
-            .map_err(|err| std::io::Error::other(format!("failed to run network proxy: {err}")))?;
-        Ok(StartedNetworkProxy::new(
-            proxy,
-            handle,
-            retained_policy_decider,
-        ))
+        let active_decider: Option<Arc<dyn NetworkPolicyDecider>> =
+            if !enable_network_approval_flow || self.hard_deny_allowlist_misses {
+                None
+            } else if policy_decider.is_none() && Self::managed_sandbox_active(permission_profile) {
+                Some(Arc::new(|_request| async {
+                    NetworkDecision::ask("not_allowed")
+                }))
+            } else {
+                policy_decider.clone()
+            };
+        let (proxy, handle) = NetworkProxy::start_managed(
+            state,
+            managed_proxy_routing,
+            active_decider,
+            blocked_request_observer,
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+        Ok(StartedNetworkProxy::new(proxy, handle, policy_decider))
     }
 
     pub(crate) fn recompute_for_permission_profile(
