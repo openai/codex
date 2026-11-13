@@ -1267,7 +1267,7 @@ impl ContextManager {
     }
 }
 
-/// Configuration updates require harness provenance; raw system messages are never retained.
+/// Configuration updates and internal system messages require harness provenance.
 fn is_api_message(message: &ResponseItem, metadata: Option<&CodexHarnessMetadata>) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
