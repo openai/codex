@@ -28,6 +28,72 @@ fn domain_permissions(
 }
 
 #[tokio::test]
+async fn saved_grant_cannot_open_loopback_under_fixed_allowlist() -> anyhow::Result<()> {
+    let profile = PermissionProfile::workspace_write();
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig {
+            proxy_url: "http://127.0.0.1:0".into(),
+            enable_socks5: false,
+            allow_upstream_proxy: false,
+            ..Default::default()
+        },
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            managed_allowed_domains_only: Some(true),
+            allow_local_binding: Some(false),
+            domains: Some(domain_permissions([(
+                "127.0.0.1:*",
+                NetworkDomainPermissionToml::Allow,
+            )])),
+            ..Default::default()
+        }),
+        &profile,
+    )?;
+    let mut saved = Policy::empty();
+    saved.add_network_rule(
+        "127.0.0.1",
+        codex_execpolicy::NetworkRuleProtocol::Http,
+        Allow,
+        /*justification*/ None,
+    )?;
+    let spec = spec.with_exec_policy_network_rules(&saved)?;
+    assert_eq!(
+        spec.config.allowed_domains(),
+        Some(vec!["127.0.0.1:*".to_owned()])
+    );
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let proxy = spec
+        .start_proxy(
+            &profile,
+            ManagedProxyRouting::DedicatedListeners,
+            DefaultFalse,
+            /*policy_decider*/ None,
+            /*blocked_request_observer*/ None,
+            /*enable_network_approval_flow*/ false,
+            NetworkProxyAuditMetadata::default(),
+        )
+        .await?;
+    let request = codex_http_client::HttpClientBuilder::new()
+        .build_direct()?
+        .get(format!("http://{}/", proxy.proxy().http_addr()))
+        .header(http::header::HOST, listener.local_addr()?.to_string())
+        .timeout(std::time::Duration::from_secs(5))
+        .send();
+    tokio::select! {
+        biased;
+        connection = listener.accept() => anyhow::bail!("loopback destination reached: {:?}", connection?.1),
+        response = request => {
+            let response = response?;
+            assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+            assert_eq!(response.json::<serde_json::Value>().await?["reason"], "not_allowed_local");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn attachment_socket_grants_respect_configured_restrictions_at_remote_launch()
 -> anyhow::Result<()> {
     let profile = PermissionProfile::workspace_write();

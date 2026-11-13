@@ -9,7 +9,7 @@ Config layer stack (lowest precedence first):
   <none>
 
 Requirements:
-  - network_proxy: enabled=true (source: <unspecified>)
+  - permissions.network: enabled=true (source: enterprise-managed requirements Network policy (network))
 
 experimental_network:
 /debug-config
@@ -18,7 +18,7 @@ Config layer stack (lowest precedence first):
   <none>
 
 Requirements:
-  - network_proxy: enabled=true (source: <unspecified>)
+  - permissions.network: enabled=true (source: enterprise-managed requirements Network policy (network))
 
 permissions.network:
 /debug-config
@@ -27,4 +27,4 @@ Config layer stack (lowest precedence first):
   <none>
 
 Requirements:
-  - permissions.network: enabled=true (source: <unspecified>)
+  - permissions.network: enabled=true (source: enterprise-managed requirements Network policy (network))

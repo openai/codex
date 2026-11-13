@@ -23,13 +23,7 @@ pub(crate) fn validate_bundle(
         enterprise_managed_requirements,
     } = bundle_layers;
 
-    let requirements = compose_requirements(enterprise_managed_requirements).map_err(|_| {
-        CloudConfigBundleLoadError::new(
-            CloudConfigBundleLoadErrorCode::InvalidBundle,
-            /*status_code*/ None,
-            "invalid cloud config bundle: invalid requirements",
-        )
-    })?;
+    let requirements = compose_requirements(enterprise_managed_requirements)?;
     if let Some(providers) = requirements.and_then(|requirements| requirements.model_providers) {
         validate_model_providers(&providers).map_err(|_| {
             CloudConfigBundleLoadError::new(

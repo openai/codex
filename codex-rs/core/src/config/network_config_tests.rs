@@ -146,7 +146,7 @@ action = ['redact']
         "[unix_sockets]\n'relative.sock' = 'allow'",
         "[unix_sockets]\n'~/allowed.sock' = 'allow'",
         "[unix_sockets]\n\"/tmp/\\u0000allowed.sock\" = 'allow'",
-        "[domains]\n'[' = 'allow'",
+        "[domains]\n'api[12].example' = 'allow'",
     ] {
         let network: NetworkToml = toml::from_str(raw).unwrap();
         let projected = project_environment_profile_network(Some(network.clone()))
@@ -154,6 +154,14 @@ action = ['redact']
             .unwrap();
         assert_eq!(projected, network);
         let configured_proxy = projected.to_network_proxy_config();
+        assert!(
+            PreparedNetworkConfig {
+                configured_proxy: configured_proxy.clone()
+            }
+            .build(/*requirements*/ None, &PermissionProfile::read_only())
+            .expect("a disabled unmanaged profile can load unused selectors")
+            .is_none()
+        );
         let policy = EnvironmentNetworkPolicy::from_config(
             &configured_proxy,
             /*managed_allowed_domains_only*/ false,

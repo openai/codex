@@ -154,10 +154,17 @@ impl ComposableRequirementsLayer {
         {
             table.insert("features".to_string(), features);
         }
-        if let Some(table) = regular_toml.as_table_mut()
-            && let Some(network) = table.remove("experimental_network")
+        if let Some(legacy) = &requirements.network
+            && let Some(nested) = requirements
+                .permissions
+                .as_ref()
+                .and_then(|p| p.network.as_deref())
+            && !legacy.describes_same_policy(nested)
         {
-            table.insert("network_proxy".to_string(), network);
+            return Err(RequirementsCompositionError::Parse {
+                layer_source: source,
+                message: "legacy and permissions.network requirements must describe the same network policy".into(),
+            });
         }
 
         // Hostname lookup is configuration-driven and may block on DNS, so only
@@ -301,11 +308,14 @@ pub(crate) fn strip_cloud_auth_requirements(source: &RequirementSource, value: &
     }
 }
 
-fn remove_top_level_field(value: &mut TomlValue, key: &str) -> Option<TomlValue> {
+pub(super) fn remove_top_level_field(value: &mut TomlValue, key: &str) -> Option<TomlValue> {
     value.as_table_mut()?.remove(key)
 }
 
-fn remove_nested_field_and_prune_empty(value: &mut TomlValue, path: &[&str]) -> Option<TomlValue> {
+pub(super) fn remove_nested_field_and_prune_empty(
+    value: &mut TomlValue,
+    path: &[&str],
+) -> Option<TomlValue> {
     let (key, remaining) = path.split_first()?;
     let table = value.as_table_mut()?;
     if remaining.is_empty() {

@@ -4,28 +4,56 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[test]
-fn cloud_validation_rejects_mixed_network_requirements() {
+fn cloud_validation_checks_network_spellings_per_fragment() {
     let home = tempdir().expect("tempdir");
     let base_dir = AbsolutePathBuf::from_absolute_path(home.path()).expect("absolute path");
     let mut bundle = CloudConfigBundle::default();
     for alias in ["experimental_network", "network_proxy"] {
         let nested = "[permissions.network]\nenabled = false";
         let top_level = format!("[{alias}]\nenabled = false");
-        for contents in [
-            vec![format!("{nested}\n{top_level}")],
-            vec![nested.to_owned(), top_level],
+        let conflicting = format!("[{alias}]\nenabled = true");
+        for (contents, expected) in [
+            (vec![format!("{nested}\n{top_level}")], Ok(())),
+            (
+                vec![nested.to_owned(), conflicting.clone()],
+                Err(CloudConfigBundleLoadErrorCode::InvalidBundle),
+            ),
+            (
+                vec![conflicting.clone(), nested.to_owned()],
+                Err(CloudConfigBundleLoadErrorCode::InvalidBundle),
+            ),
+            (
+                vec![
+                    "[permissions.network]\ndenied_domains = ['shared.test']".to_string(),
+                    format!("[{alias}]\nallowed_domains = ['shared.test']"),
+                ],
+                Err(CloudConfigBundleLoadErrorCode::InvalidBundle),
+            ),
+            (
+                vec![format!(
+                    "{nested}\n{conflicting}\nreview_domains = ['private-policy.example']"
+                )],
+                Err(CloudConfigBundleLoadErrorCode::InvalidBundle),
+            ),
         ] {
             bundle.requirements_toml.enterprise_managed = contents
                 .into_iter()
                 .enumerate()
                 .map(|(index, contents)| CloudRequirementsFragment {
-                    id: index.to_string(),
+                    id: format!("fragment-{index}"),
                     name: index.to_string(),
                     contents,
                 })
                 .collect();
-            let err = validate_bundle(&bundle, &base_dir).expect_err("mixed policy spellings");
-            assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+            let result = validate_bundle(&bundle, &base_dir);
+            if let Err(error) = &result {
+                let message = error.to_string();
+                for fragment in &bundle.requirements_toml.enterprise_managed {
+                    assert!(message.contains(&fragment.id), "{message}");
+                }
+                assert!(!message.contains("private-policy.example"), "{message}");
+            }
+            assert_eq!(result.map_err(|error| error.code()), expected);
         }
     }
 }

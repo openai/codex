@@ -390,6 +390,18 @@ pub enum NetworkDomainPermissionToml {
     Deny,
 }
 
+impl NetworkDomainPermissionToml {
+    /// Unsupported patterns retain their exact spelling. They can never compare equal
+    /// to a valid selector and disappear when two published declarations are combined.
+    pub(crate) fn pattern_identity(self, pattern: &str) -> Result<String, String> {
+        match self {
+            Self::Allow => codex_network_proxy::canonical_allow_pattern(pattern),
+            Self::Deny => codex_network_proxy::canonical_deny_pattern(pattern),
+        }
+        .map_err(|_| pattern.to_owned())
+    }
+}
+
 impl std::fmt::Display for NetworkDomainPermissionToml {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let permission = match self {
@@ -454,6 +466,45 @@ pub struct NetworkRequirementsToml {
     /// Requirements-only header injections. These annotate matching requests
     /// without changing whether non-matching requests are allowed.
     pub header_injections: Option<Vec<NetworkHeaderInjectionToml>>,
+}
+
+impl NetworkRequirementsToml {
+    /// Compare the selector identities used by the proxy without modifying the published
+    /// representation. Keep allow and deny contributions distinct, including shadowed grants.
+    pub(crate) fn describes_same_policy(&self, other: &Self) -> bool {
+        if self == other {
+            return true;
+        }
+        let domain_rules = |policy: &Self| {
+            policy.domains.as_ref().map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .map(|(pattern, &rule)| (rule, rule.pattern_identity(pattern)))
+                    .collect::<BTreeSet<_>>()
+            })
+        };
+        let review_patterns = |policy: &Self| {
+            policy.review_domains.as_ref().map(|patterns| {
+                patterns
+                    .iter()
+                    .map(|pattern| {
+                        codex_network_proxy::canonical_review_pattern(pattern)
+                            .map_err(|_| pattern.to_owned())
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+        };
+        if domain_rules(self) != domain_rules(other)
+            || review_patterns(self) != review_patterns(other)
+        {
+            return false;
+        }
+        let mut comparable = other.clone();
+        comparable.domains.clone_from(&self.domains);
+        comparable.review_domains.clone_from(&self.review_domains);
+        self == &comparable
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -1344,15 +1395,16 @@ pub struct ConfigRequirementsWithSources {
 
 impl ConfigRequirementsWithSources {
     pub(crate) fn validate_network_spelling(&self) -> Result<(), ConstraintError> {
-        if let (Some(nested), Some(top_level)) = (&self.permissions_network, &self.network) {
+        if let (Some(nested), Some(top_level)) = (&self.permissions_network, &self.network)
+            && !nested.value.describes_same_policy(&top_level.value)
+        {
             return Err(ConstraintError::InvalidValue {
                 field_name: "permissions.network",
                 candidate: format!(
                     "configured together with top-level network requirements from {}",
                     top_level.source
                 ),
-                allowed: "specify managed network requirements through exactly one surface"
-                    .to_string(),
+                allowed: "legacy and permissions.network requirements must describe the same network policy".to_string(),
                 requirement_source: nested.source.clone(),
             });
         }
@@ -1542,6 +1594,8 @@ impl ConfigRequirementsWithSources {
         }
     }
 
+    /// Public loader view. Older runtime clients still read the top-level
+    /// network field when selecting an executor policy, including on resume.
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             config_server,
@@ -1596,6 +1650,12 @@ impl ConfigRequirementsWithSources {
             permissions.get_or_insert_with(Default::default).network =
                 Some(Box::new(network.value));
         }
+        let network = network.map(|sourced| sourced.value).or_else(|| {
+            permissions
+                .as_ref()
+                .and_then(|permissions| permissions.network.as_deref())
+                .cloned()
+        });
         ConfigRequirementsToml {
             config_server: config_server.map(|sourced| sourced.value),
             allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
@@ -1637,7 +1697,7 @@ impl ConfigRequirementsWithSources {
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
-            network: network.map(|sourced| sourced.value),
+            network,
             application: application.map(|sourced| sourced.value),
             permissions,
             auto_review: auto_review.map(|sourced| sourced.value),
@@ -2522,10 +2582,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let network = permissions_network
-            .map(|network| *network)
-            .or(network)
-            .map(|Sourced { value, source }| Sourced::new(NetworkConstraints::from(value), source));
+        let network = match (permissions_network, network) {
+            // A dual-published source keeps its original selector text on older executors.
+            (Some(nested), Some(legacy)) if nested.source == legacy.source => Some(legacy),
+            (Some(nested), _) => Some(*nested),
+            (None, legacy) => legacy,
+        }
+        .map(|Sourced { value, source }| Sourced::new(NetworkConstraints::from(value), source));
         let filesystem = permissions
             .filter(|permissions| permissions.value.filesystem.is_some())
             .map(|Sourced { value, source }| {
@@ -4995,6 +5058,15 @@ command = "python3 /enterprise/hooks/pre.py"
             ))
         };
         assert_eq!(parse("network_proxy")?, parse("experimental_network")?);
+        for table in ["network_proxy", "experimental_network"] {
+            let dual: ConfigRequirementsToml = from_str(&format!(
+                "[{table}]\ndenied_domains = ['2001:db8::1']\n\
+                 [permissions.network]\ndenied_domains = ['2001:0db8:0:0:0:0:0:1']"
+            ))?;
+            let expected = dual.network.clone().map(NetworkConstraints::from);
+            let runtime = ConfigRequirements::try_from(with_unknown_source(dual))?;
+            assert_eq!(runtime.network.map(|network| network.value), expected);
+        }
         for values in ["", "enabled = true"] {
             let both = format!("[network_proxy]\n{values}\n[experimental_network]\n{values}");
             assert!(from_str::<ConfigRequirementsToml>(&both).is_err());

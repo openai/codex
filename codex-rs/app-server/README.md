@@ -379,10 +379,11 @@ alongside `[permissions.filesystem]`:
 enabled = true
 ```
 
-`[network_proxy]` and its compatibility alias `[experimental_network]` still work.
-Do not mix either with `[permissions.network]`, even across requirements layers. A single
-layer cannot use both top-level names; across layers the top-level names merge with normal
-precedence. `configRequirements/read` returns the result in `requirements.network`.
+Codex reads `[network_proxy]` and its alias `[experimental_network]` as
+`[permissions.network]` within each source before merging managed requirements.
+Across sources, use the same surface (legacy or nested). Use at most one top-level spelling per layer.
+If a layer also sets `[permissions.network]`, both tables must describe the same policy.
+`configRequirements/read` returns the result in `requirements.network`.
 
 In `config.toml`, `[features.network_proxy]` configures the proxy, while
 `[permissions.<profile>.network]` configures a profile's network settings. Managed requirements

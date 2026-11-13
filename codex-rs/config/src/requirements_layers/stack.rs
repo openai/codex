@@ -20,7 +20,6 @@ use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::Sourced;
-use crate::config_requirements::PermissionsRequirementsToml;
 use crate::config_requirements::merge_otel_requirements;
 use crate::merge::merge_toml_values;
 use std::cell::OnceCell;
@@ -53,6 +52,30 @@ pub enum RequirementsCompositionError {
         incoming_source: RequirementSource,
         message: String,
     },
+}
+
+impl From<RequirementsCompositionError> for crate::CloudConfigBundleLoadError {
+    fn from(error: RequirementsCompositionError) -> Self {
+        // Parser messages can contain the submitted TOML, including credentials.
+        let reason = match error {
+            RequirementsCompositionError::Parse { layer_source, .. } => {
+                format!("invalid requirements in {layer_source}")
+            }
+            RequirementsCompositionError::Conflict {
+                existing_source,
+                incoming_source,
+                ..
+            } => {
+                format!("conflicting requirements from {existing_source} and {incoming_source}")
+            }
+            RequirementsCompositionError::ComposedParse { .. } => "invalid requirements".to_owned(),
+        };
+        Self::new(
+            crate::CloudConfigBundleLoadErrorCode::InvalidBundle,
+            /*status_code*/ None,
+            format!("invalid cloud config bundle: {reason}"),
+        )
+    }
 }
 
 impl From<RequirementsCompositionError> for io::Error {
@@ -150,10 +173,11 @@ impl RequirementsLayerStack {
         self,
     ) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
         let Self {
-            layers,
+            mut layers,
             hook_directory_field,
         } = self;
 
+        let network = super::network::compose(&mut layers)?;
         let mut merged_toml = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
             // An endpoint and its credentials must come from the same requirements layer.
@@ -173,11 +197,8 @@ impl RequirementsLayerStack {
             })?;
         let mut output = ConfigRequirementsWithSources::default();
         populate_merged_regular_fields_with_sources(&mut output, requirements, &layers);
-        output.validate_network_spelling().map_err(|err| {
-            RequirementsCompositionError::ComposedParse {
-                message: err.to_string(),
-            }
-        })?;
+        output.permissions_network = network;
+
         // Merge OTEL requirements so higher-priority exact values replace
         // lower-priority values while exporters stay atomic.
         let mut otel = None;
@@ -281,9 +302,9 @@ fn populate_merged_regular_fields_with_sources(
         apps,
         rules: _,
         enforce_residency,
-        network,
+        network: _,
         application,
-        mut permissions,
+        permissions,
         auto_review,
         models,
         additional_developer_instructions,
@@ -341,7 +362,6 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(marketplaces, &["marketplaces"]);
     set_sourced!(apps, &["apps"]);
     set_sourced!(enforce_residency, &["enforce_residency"]);
-    set_sourced!(network, &["network_proxy"]);
     set_sourced!(application, &["application"]);
     let permission_sources = |contributes: fn(&toml::Table) -> bool| {
         RequirementSource::composite(
@@ -358,12 +378,6 @@ fn populate_merged_regular_fields_with_sources(
                 .map(|layer| layer.source.clone()),
         )
     };
-    if let Some(network) = PermissionsRequirementsToml::take_network(&mut permissions) {
-        output.permissions_network = Some(Box::new(Sourced::new(
-            *network,
-            permission_sources(|table| table.contains_key("network")),
-        )));
-    }
     output.permissions = permissions.map(|value| {
         let source = if value.filesystem.is_some() {
             permission_sources(|table| table.contains_key("filesystem"))

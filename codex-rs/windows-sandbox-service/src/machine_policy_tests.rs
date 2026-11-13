@@ -318,7 +318,7 @@ fn malformed_machine_policy_fails_closed() {
             validate_requirements(
                 &WindowsSandboxProvisioningSettings::default(),
                 WindowsSandboxProxyListeners::default(),
-                &format!("[{table}]\nenabled = true\n[permissions.network]\nenabled = true")
+                &format!("[{table}]\nenabled = true\n[permissions.network]\nenabled = false")
             )
             .is_err()
         );

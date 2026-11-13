@@ -172,6 +172,13 @@ async fn managed_network_requirements_control_broker_project_discovery() -> anyh
                 format!("[{table}]\nenabled = {enabled}\n"),
             )?;
             let (canonical, local) = fixture.load().await?;
+            let policy_only = crate::loader::load_managed_requirements_state(
+                &TestFileSystem,
+                &fixture.home,
+                fixture.overrides.clone(),
+            )
+            .await?;
+            assert_eq!(&policy_only, canonical.requirements_toml());
             let mut local_effective = TomlValue::Table(toml::map::Map::new());
             for layer in local.config.layers {
                 merge_toml_values(&mut local_effective, &layer.toml);
@@ -203,8 +210,9 @@ async fn project_discovery_rejects_invalid_network_requirements() -> anyhow::Res
     fixture.overrides.system_requirements_path = Some(path.clone());
     for table in ["network_proxy", "experimental_network"] {
         for (nested, message) in [
-            ("http_port = 8090", "exactly one surface"),
-            ("enabled = false", "exactly one surface"),
+            ("http_port = 8090", "same network policy"),
+            ("enabled = false", "same network policy"),
+            ("review_domains = []", "same network policy"),
             ("", "rename the managed profile"),
             (
                 "extends = ':workspace'\nenabled = true",
