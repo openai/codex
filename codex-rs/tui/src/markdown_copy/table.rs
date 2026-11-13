@@ -69,6 +69,23 @@ impl TableLine {
         Some(first.output.start..last.output.end)
     }
 
+    pub(crate) fn source_fragments(
+        &self,
+    ) -> impl Iterator<Item = (&Range<usize>, &LogicalLineSource)> {
+        self.fragments
+            .iter()
+            .map(|fragment| (&fragment.output, &fragment.source))
+    }
+
+    /// Find the leading display column even if a trailing empty cell has no fragment.
+    pub(crate) fn grid_cell_column(&self, row: usize, column: usize) -> Option<usize> {
+        let ends = self.grid_columns.as_ref()?;
+        if self.fragments.first()?.row != row || column >= ends.len() {
+            return None;
+        }
+        Some(if column == 0 { 0 } else { ends[column - 1] })
+    }
+
     pub(crate) fn empty(table: &Arc<[&'static str]>) -> Self {
         Self {
             table: Arc::clone(table),

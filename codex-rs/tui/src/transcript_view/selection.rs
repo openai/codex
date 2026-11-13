@@ -30,6 +30,8 @@ struct TableSelection {
     anchor: TableCellHit,
     // A head marks a whole-cell drag. Returning to its anchor selects the whole cell again.
     head: Option<TableEndpoint>,
+    // Keyboard text marks keep the full grapheme at their fixed anchor on mouse takeover.
+    keyboard_text: bool,
     ranges: Vec<Range<usize>>,
 }
 
@@ -37,8 +39,14 @@ impl TableSelection {
     fn rectangle_rows(&self) -> Option<RangeInclusive<usize>> {
         let anchor = self.anchor.endpoint;
         let head = self.head?;
+        if head == anchor {
+            return None;
+        }
+        if anchor.is_header_row_with(head) {
+            return Some(0..=0);
+        }
         let (first, last) = (anchor.display_row(), head.display_row());
-        (head != anchor).then(|| first.min(last)..=first.max(last))
+        Some(first.min(last)..=first.max(last))
     }
 
     fn bounds(&self) -> Range<usize> {
@@ -139,8 +147,8 @@ impl Selection {
     }
 
     fn clear_table_cell_scope(&mut self) {
-        if self.table_cell.take().is_some() {
-            if self.unit == SelectionUnit::Character {
+        if let Some(table) = self.table_cell.take() {
+            if self.unit == SelectionUnit::Character && !table.keyboard_text {
                 self.origin.1 = self.origin.0;
             }
             self.pending_copy = None;
@@ -160,6 +168,44 @@ impl Selection {
         self.preferred_column = None;
     }
 
+    pub(super) fn set_keyboard_table_range(
+        &mut self,
+        entry: Anchor,
+        layout: &TextLayout,
+        anchor: TableCellHit,
+        active: TableCellHit,
+        text_active: Option<Anchor>,
+    ) {
+        let ranges = layout.table_selection_ranges(&anchor, &active);
+        let table = TableSelection {
+            anchor,
+            head: text_active.is_none().then_some(active.endpoint),
+            keyboard_text: text_active.is_some(),
+            ranges,
+        };
+        let at = |offset| Anchor {
+            offset,
+            row_bias: 0,
+            ..entry
+        };
+        if let Some(active) = text_active {
+            let after =
+                |offset| at(layout.after_cursor_grapheme(layout.row_for_offset(offset), offset));
+            let origin = (entry, after(entry.offset));
+            let (start, end) = if entry.offset <= active.offset {
+                (entry, after(active.offset))
+            } else {
+                (active, origin.1)
+            };
+            self.set_keyboard_marked_range(start, end, origin, SelectionUnit::Character);
+        } else {
+            let bounds = table.bounds();
+            self.set_keyboard_range(at(bounds.start), at(bounds.end));
+            self.unit = SelectionUnit::Character;
+        }
+        self.table_cell = Some(table);
+    }
+
     pub(super) fn set_keyboard_marked_range(
         &mut self,
         start: Anchor,
@@ -174,6 +220,10 @@ impl Selection {
 
     pub(super) fn unit(&self) -> SelectionUnit {
         self.unit
+    }
+
+    pub(super) fn has_table_scope(&self) -> bool {
+        self.table_cell.is_some()
     }
 }
 
@@ -245,6 +295,7 @@ impl TranscriptView {
             let ranges = layout.table_selection_ranges(&cell, &cell);
             Some(TableSelection {
                 head: (clicks == 3).then_some(cell.endpoint),
+                keyboard_text: false,
                 anchor: cell,
                 ranges,
             })
@@ -301,7 +352,7 @@ impl TranscriptView {
         };
         if let Some(mode) = &mut self.select_mode {
             let cursor = mode.cursor(&selection);
-            mode.mark = None;
+            mode.clear_mark();
             let mut selection = selection;
             selection.set_keyboard_range(cursor, cursor);
             self.selection = Some(selection);

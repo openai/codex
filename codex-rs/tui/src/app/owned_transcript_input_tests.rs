@@ -137,6 +137,76 @@ async fn configured_ctrl_space_submit_wins_over_transcript_selection() -> Result
 }
 
 #[tokio::test]
+async fn markdown_chord_and_remapped_find_work_in_transcript_selection() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 16);
+    tui.terminal.resize(size)?;
+
+    for (config, prefix) in [
+        (
+            serde_json::json!({"pager": {"find": "c"}}),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        ),
+        (
+            serde_json::json!({"global": {"leader": "f6"}, "pager": {"find": "c"}}),
+            KeyCode::F(6).into(),
+        ),
+    ] {
+        let config = serde_json::from_value(config)?;
+        app.keymap = RuntimeKeymap::from_config(&config).expect("valid Markdown shortcuts");
+        app.local_settings.tui.keymap = config.clone();
+        app.chat_widget.apply_keymap_update(config, &app.keymap);
+        app.transcript_view = Default::default();
+        app.transcript_cells = vec![Arc::new(crate::history_cell::AgentMarkdownCell::new(
+            "| Left | Right |\n|---|---|\n| alpha | Beta |".into(),
+            std::path::Path::new("/"),
+        ))];
+        app.render_owned_transcript(&mut tui, size)?;
+        assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+        app.handle_tui_event(
+            &mut tui,
+            &mut server,
+            TuiEvent::Key(KeyCode::Char('c').into()),
+        )
+        .await?;
+        assert!(app.transcript_view.is_search_editing());
+        for event in [
+            TuiEvent::Paste("Beta".into()),
+            TuiEvent::Draw,
+            TuiEvent::Key(KeyCode::Enter.into()),
+            TuiEvent::Key(prefix),
+            TuiEvent::Key(KeyCode::Char('v').into()),
+        ] {
+            app.handle_tui_event(&mut tui, &mut server, event).await?;
+        }
+        assert_eq!(
+            app.transcript_view
+                .selected_text(&app.transcript_cells)
+                .as_deref(),
+            Some("Beta")
+        );
+        app.handle_tui_event(
+            &mut tui,
+            &mut server,
+            TuiEvent::Key(KeyCode::Char('v').into()),
+        )
+        .await?;
+        assert_eq!(
+            app.transcript_view
+                .selected_text(&app.transcript_cells)
+                .as_deref(),
+            Some("B")
+        );
+    }
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn default_page_up_still_scrolls_the_transcript() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::clipboard_copy::CopyStatus;
+use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::PlainHistoryCell;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
@@ -272,7 +273,7 @@ fn configured_pager_page_motion_moves_the_select_cursor() {
         (0..12).map(|row| format!("line {row}").into()).collect(),
     )) as Arc<dyn HistoryCell>];
     let config = serde_json::from_value(serde_json::json!({
-        "pager": {"page_down": "x"}
+        "pager": {"page_down": "c"}
     }))
     .expect("keymap config");
     let keymap = crate::keymap::RuntimeKeymap::from_config(&config).expect("configured page down");
@@ -284,7 +285,7 @@ fn configured_pager_page_motion_moves_the_select_cursor() {
 
     press(&mut view, &cells, KeyCode::Char('v'));
     assert!(view.select_mode.is_some_and(|mode| mode.mark.is_some()));
-    press(&mut view, &cells, KeyCode::Char('x'));
+    press(&mut view, &cells, KeyCode::Char('c'));
 
     let cursor = view
         .select_mode
@@ -803,4 +804,315 @@ fn select_mode_renders_cursor_and_scannable_footer_hints() {
         find_footer_text,
         find_footer.cursor_column,
     ));
+}
+
+fn select_table_at_match(
+    cells: &[Arc<dyn HistoryCell>],
+    width: u16,
+    query: &str,
+) -> TranscriptView {
+    let mut view = TranscriptView::default();
+    crate::transcript_view::tests::render(&mut view, cells, width, /*height*/ 32);
+    assert!(view.begin_select_mode(cells));
+    press(&mut view, cells, KeyCode::Char('/'));
+    assert!(view.paste_search(query));
+    while view.advance_search(cells) {}
+    press(&mut view, cells, KeyCode::Enter);
+    view
+}
+
+// These view tests receive the semantic event produced by the app's chord router.
+fn mark_markdown(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) {
+    let key = crate::keymap::dispatch_event(crate::keymap::KeymapActionId {
+        context: crate::keymap::KeymapContext::Pager,
+        action: "mark_markdown",
+    })
+    .unwrap();
+    press(view, cells, key.code);
+}
+
+#[test]
+fn keyboard_table_mark_selects_cells_and_swaps_rectangle_corners() {
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(AgentMarkdownCell::new(
+        "| Left | Right |\n|---|---|\n| alpha | Beta |\n| Gamma | delta |".into(),
+        std::path::Path::new("/"),
+    ))];
+    let mut view = select_table_at_match(&cells, /*width*/ 32, "Beta");
+    let footer = |view: &TranscriptView| {
+        view.footer_with_navigation(/*width*/ 32, crate::motion::MotionMode::Reduced, "")
+            .unwrap()
+            .text
+    };
+    let before = footer(&view);
+
+    mark_markdown(&mut view, &cells);
+    press(&mut view, &cells, KeyCode::Down);
+    press(&mut view, &cells, KeyCode::Char('h'));
+    let rectangle = "|  |  |\n|---|---|\n| alpha | Beta |\n| Gamma | delta |";
+    assert!(matches!(
+        view.handle_key(KeyCode::Char('y').into(), &cells),
+        Some(ViewAction::Copy(text)) if text == rectangle
+    ));
+
+    let marked = crate::transcript_view::tests::render(
+        &mut view, &cells, /*width*/ 32, /*height*/ 5,
+    );
+    let highlight: String = marked
+        .content()
+        .chunks(32)
+        .map(|row| {
+            row.iter()
+                .map(|cell| {
+                    use ratatui::style::Modifier;
+                    if cell.modifier.contains(Modifier::UNDERLINED) {
+                        "@"
+                    } else if cell.modifier.contains(Modifier::REVERSED) {
+                        cell.symbol()
+                    } else {
+                        " "
+                    }
+                })
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(format!("{before}\n{highlight}\n{}", footer(&view)));
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    press(&mut view, &cells, KeyCode::Esc);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(rectangle));
+    press(&mut view, &cells, KeyCode::Char('o'));
+    press(&mut view, &cells, KeyCode::Down);
+    press(&mut view, &cells, KeyCode::Left);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("Gamma"));
+    press(&mut view, &cells, KeyCode::Esc);
+    assert_eq!(view.selected_text(&cells), None);
+}
+
+#[test]
+fn keyboard_table_header_rectangle_excludes_record_values() {
+    let cells = [Arc::new(AgentMarkdownCell::new(
+        "| Left | Right |\n|---|---|\n| alpha | Beta |".into(),
+        std::path::Path::new("/"),
+    )) as Arc<dyn HistoryCell>];
+    for width in [10, 32] {
+        let mut view = select_table_at_match(&cells, width, "Left");
+        mark_markdown(&mut view, &cells);
+        press(&mut view, &cells, KeyCode::Right);
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some("| Left | Right |\n|---|---|"),
+            "width {width}",
+        );
+    }
+}
+
+#[test]
+fn shift_click_extends_from_the_fixed_in_cell_text_anchor() {
+    let cells = [Arc::new(AgentMarkdownCell::new(
+        "| Text | Other |\n|---|---|\n| abcde | 1 |".into(),
+        std::path::Path::new("/"),
+    )) as Arc<dyn HistoryCell>];
+    for (motion, target, expected) in [(KeyCode::Left, "e", "bcd"), (KeyCode::Right, "a", "ab")] {
+        let mut view = select_table_at_match(&cells, /*width*/ 32, "bcd");
+        mark_markdown(&mut view, &cells);
+        press(&mut view, &cells, KeyCode::Char('v'));
+        press(&mut view, &cells, motion);
+        let buffer = crate::transcript_view::tests::render(
+            &mut view, &cells, /*width*/ 32, /*height*/ 12,
+        );
+        let index = buffer
+            .content()
+            .iter()
+            .rposition(|cell| cell.symbol() == target)
+            .unwrap();
+        let (column, row) = buffer.pos_of(index);
+        view.handle_selection_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::SHIFT,
+            },
+            &cells,
+            /*patch_approval*/ None,
+        );
+        assert_eq!(view.selected_text(&cells).as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn in_cell_word_motion_projects_boundaries_past_escaped_pipes() {
+    for (header, query, motion, expected) in [
+        (r"A\|界語", "語", 'b', "界語"),
+        (r"A\|alpha", "alpha", 'e', "alpha"),
+    ] {
+        let cells = [Arc::new(AgentMarkdownCell::new(
+            format!("| {header} | B |\n|---|---|"),
+            std::path::Path::new("/"),
+        )) as Arc<dyn HistoryCell>];
+        let mut view = select_table_at_match(&cells, /*width*/ 8, query);
+        mark_markdown(&mut view, &cells);
+        press(&mut view, &cells, KeyCode::Char('v'));
+        press(&mut view, &cells, KeyCode::Char(motion));
+        assert!(matches!(
+            view.handle_key(KeyCode::Char('y').into(), &cells),
+            Some(ViewAction::Copy(text)) if text == expected
+        ));
+    }
+}
+
+#[test]
+fn shift_click_replaces_the_cell_mark_at_the_same_endpoint() {
+    let cells = [Arc::new(AgentMarkdownCell::new(
+        "| Left | Right |\n|---|---|\n| alpha | Beta |\n| Gamma | delta |".into(),
+        std::path::Path::new("/"),
+    )) as Arc<dyn HistoryCell>];
+    let mut view = select_table_at_match(&cells, /*width*/ 32, "Beta");
+    mark_markdown(&mut view, &cells);
+    press(&mut view, &cells, KeyCode::Down);
+    crate::transcript_view::tests::render(&mut view, &cells, /*width*/ 32, /*height*/ 12);
+    let selection = view.selection.as_ref().unwrap();
+    let bounds = (selection.start, selection.end);
+    let (row, line) = view
+        .visible
+        .iter()
+        .enumerate()
+        .find(|(_, visible)| {
+            visible.key == bounds.1.key
+                && visible.layout.row_for_offset(bounds.1.offset) == visible.row
+        })
+        .unwrap();
+    let column = line
+        .layout
+        .column_for_offset_on_row(line.row, bounds.1.offset);
+    view.handle_selection_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: row as u16,
+            modifiers: KeyModifiers::SHIFT,
+        },
+        &cells,
+        /*patch_approval*/ None,
+    );
+    let selection = view.selection.as_ref().unwrap();
+    assert_eq!((selection.start, selection.end), bounds);
+    assert!(view.table_mark().is_none());
+}
+
+#[test]
+fn keyboard_cell_word_motion_crosses_a_wrapped_identifier() {
+    let cells = [Arc::new(AgentMarkdownCell::new(
+        "| Name | Value |\n|---|---|\n| abcdefghijklmnop next | 1 |".into(),
+        std::path::Path::new("/"),
+    )) as Arc<dyn HistoryCell>];
+    let mut view = select_table_at_match(&cells, /*width*/ 12, "abcd");
+    mark_markdown(&mut view, &cells);
+    press(&mut view, &cells, KeyCode::Char('v'));
+    press(&mut view, &cells, KeyCode::Char('e'));
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("abcdefghijklmnop")
+    );
+    press(&mut view, &cells, KeyCode::Char('b'));
+    press(&mut view, &cells, KeyCode::Char('w'));
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("abcdefghijklmnop n")
+    );
+}
+
+#[test]
+fn keyboard_table_motion_skips_record_labels_and_reaches_empty_cells() {
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(AgentMarkdownCell::new(
+        "| Left | Right |\n|---|---|\n| alpha | Beta |\n| Gamma |  |\n| omega | delta |".into(),
+        std::path::Path::new("/"),
+    ))];
+    for width in [32, 10] {
+        let mut view = select_table_at_match(&cells, width, "Beta");
+        mark_markdown(&mut view, &cells);
+        press(&mut view, &cells, KeyCode::Char('j'));
+        press(&mut view, &cells, KeyCode::Char('j'));
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some("|  |  |\n|---|---|\n|  | Beta |\n|  |  |\n|  | delta |"),
+            "width {width}"
+        );
+        press(&mut view, &cells, KeyCode::Char('k'));
+        press(&mut view, &cells, KeyCode::Esc);
+        mark_markdown(&mut view, &cells);
+        assert_eq!(view.selected_text(&cells), None);
+        press(&mut view, &cells, KeyCode::Char('k'));
+        assert!(
+            view.selected_text(&cells)
+                .is_some_and(|text| text.contains("Beta"))
+        );
+        if width == 32 {
+            press(&mut view, &cells, KeyCode::Down);
+            press(&mut view, &cells, KeyCode::Esc);
+            press(&mut view, &cells, KeyCode::Up); // Cross the separator.
+            press(&mut view, &cells, KeyCode::Up);
+            mark_markdown(&mut view, &cells);
+            assert_eq!(view.selected_text(&cells).as_deref(), Some("Beta"));
+        }
+    }
+}
+
+#[test]
+fn keyboard_cell_text_crosses_wraps_without_selecting_neighbors() {
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(AgentMarkdownCell::new(
+        "| Description | Size |\n|---|---|\n| alpha **界 beta gamma delta** omega | 123 |\n| following | 456 |".into(),
+        std::path::Path::new("/"),
+    ))];
+    for width in [34, 12] {
+        let mut view = select_table_at_match(&cells, width, "界");
+        mark_markdown(&mut view, &cells);
+        press(&mut view, &cells, KeyCode::Char('v'));
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("界"));
+        press(&mut view, &cells, KeyCode::Down);
+        assert!(
+            view.selected_text(&cells).unwrap().starts_with("界 beta"),
+            "width {width}"
+        );
+        press(&mut view, &cells, KeyCode::Up);
+        press(&mut view, &cells, KeyCode::Char('w'));
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("界 b"));
+        press(&mut view, &cells, KeyCode::End);
+        press(&mut view, &cells, KeyCode::Right);
+        let text = "界 beta gamma delta omega";
+        assert!(matches!(
+            view.handle_key(KeyCode::Char('y').into(), &cells),
+            Some(ViewAction::Copy(copy)) if copy == text
+        ));
+        view.copy_selected_text_with(
+            &cells,
+            text,
+            /*clear_selection*/ false,
+            |text, format| {
+                assert_eq!(
+                    (text, format),
+                    (
+                        "界 beta gamma delta omega",
+                        crate::clipboard_copy::CopyFormat::MarkdownSelection(
+                            "**界 beta gamma delta** omega".into()
+                        ),
+                    )
+                );
+                Ok(CopyStatus::Confirmed)
+            },
+        )
+        .unwrap();
+
+        press(&mut view, &cells, KeyCode::Char('o'));
+        press(&mut view, &cells, KeyCode::Home);
+        press(&mut view, &cells, KeyCode::Left);
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some("alpha 界 beta gamma delta omega"),
+            "width {width}"
+        );
+    }
 }

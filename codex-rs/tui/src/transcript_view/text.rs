@@ -27,6 +27,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_to_width;
+use crate::markdown_copy::table::TableLine;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::terminal_hyperlinks::LineWrapPolicy;
@@ -93,9 +94,24 @@ impl TableEndpoint {
     pub(super) fn display_row(self) -> usize {
         self.record_row.unwrap_or(self.cell.0)
     }
+
+    pub(super) fn is_header_row_with(self, other: Self) -> bool {
+        self.cell.0 == 0 && other.cell.0 == 0 && self.record_row == other.record_row
+    }
 }
 
 impl TableCellHit {
+    fn new(table: &TableLine, cell: (usize, usize), line: Range<usize>) -> Self {
+        Self {
+            table: Arc::clone(&table.table),
+            endpoint: TableEndpoint {
+                cell,
+                record_row: table.record_row,
+            },
+            line,
+        }
+    }
+
     pub(super) fn same_table(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.table, &other.table)
     }
@@ -385,14 +401,80 @@ impl TextLayout {
         let byte = origin.range.start + offset - position;
         let column = display_width(&origin.text[..byte]) + usize::from(trailing);
         let cell = table.cell_at(byte + usize::from(trailing), column)?;
-        Some(TableCellHit {
-            table: Arc::clone(&table.table),
-            endpoint: TableEndpoint {
-                cell,
-                record_row: table.record_row,
-            },
-            line: position..position + origin.range.len(),
-        })
+        Some(TableCellHit::new(
+            table,
+            cell,
+            position..position + origin.range.len(),
+        ))
+    }
+
+    pub(super) fn table_cell_at_offset(
+        &self,
+        offset: usize,
+        cell: (usize, usize),
+    ) -> Option<TableCellHit> {
+        let (start, source) = self
+            .logical_sources()
+            .find(|(start, source)| (*start..=*start + source.range.len()).contains(&offset))?;
+        let table = source.copy.as_ref()?.table.as_ref()?;
+        Some(TableCellHit::new(
+            table,
+            cell,
+            start..start + source.range.len(),
+        ))
+    }
+
+    /// Locate a logical cell in the current presentation. A missing trailing grid cell
+    /// uses its display column on the first line of the row.
+    pub(super) fn table_cell_position(
+        &self,
+        current: &TableCellHit,
+        cell: (usize, usize),
+    ) -> Option<(usize, Option<u16>)> {
+        let (row, column) = cell;
+        let mut padding = None;
+        for (start, source) in self.logical_sources() {
+            let Some(table) = source.copy.as_ref().and_then(|copy| copy.table.as_ref()) else {
+                continue;
+            };
+            if !Arc::ptr_eq(&table.table, &current.table) {
+                continue;
+            }
+            if row == 0
+                && current.endpoint.cell.0 == 0
+                && table.record_row != current.endpoint.record_row
+            {
+                continue;
+            }
+            let range = table.cell_range(&(row..=row), &(column..=column));
+            let position = range.and_then(|range| {
+                if range.is_empty() && source.range.is_empty() {
+                    // Stacked records discard the indentation of blank values.
+                    let padding = display_width(&source.text[..range.start]);
+                    Some((start, u16::try_from(padding).ok()))
+                } else if range.start <= source.range.end && range.end >= source.range.start {
+                    Some((start + range.start.saturating_sub(source.range.start), None))
+                } else {
+                    None
+                }
+            });
+            if let Some(position) = position {
+                return Some(position);
+            }
+            if padding.is_none()
+                && let Some(column) = table.grid_cell_column(row, column)
+                && let Some(display_row) = self.rows.get(self.row_for_offset(start))
+            {
+                let first_column = display_row.first_column;
+                let source_prefix = display_width(&source.text[..source.range.start]);
+                let column = first_column + column.saturating_sub(source_prefix);
+                padding = Some((
+                    start + source.range.len(),
+                    Some(u16::try_from(column).unwrap_or(u16::MAX)),
+                ));
+            }
+        }
+        padding
     }
 
     pub(super) fn is_table_row(&self, row: usize, offset: usize, hit: &TableCellHit) -> bool {
@@ -426,7 +508,7 @@ impl TextLayout {
             .display_row()
             .max(head.endpoint.display_row());
         let records = first..=last;
-        let rows = if anchor.endpoint == head.endpoint && row == 0 {
+        let rows = if anchor.endpoint.is_header_row_with(head.endpoint) {
             0..=0
         } else if row == 0 || head_row == 0 {
             0..=last
@@ -467,6 +549,35 @@ impl TextLayout {
         row: usize,
     ) -> Option<Range<usize>> {
         table_cell_intersection(ranges, &self.rows.get(row)?.source)
+    }
+
+    pub(super) fn table_word_fragments<'a>(
+        &'a self,
+        ranges: &'a [Range<usize>],
+    ) -> impl Iterator<Item = (&'a str, Range<usize>, usize)> {
+        self.logical_sources()
+            .filter_map(move |(start, source)| {
+                let table = source.copy.as_ref()?.table.as_ref()?;
+                let selection =
+                    table_cell_intersection(ranges, &(start..start + source.range.len()))?;
+                let display = source.range.start + selection.start - start
+                    ..source.range.start + selection.end - start;
+                Some((table, display, start, source.range.start))
+            })
+            .flat_map(|(table, display, start, source_start)| {
+                table.source_fragments().filter_map(move |(output, cell)| {
+                    let first = display.start.max(output.start);
+                    let last = display.end.min(output.end);
+                    (first < last).then(|| {
+                        (
+                            cell.text.as_ref(),
+                            cell.range.start + first - output.start
+                                ..cell.range.start + last - output.start,
+                            start + first - source_start,
+                        )
+                    })
+                })
+            })
     }
 
     /// A drag includes the glyph under the pointer. Padding snaps to the nearest text edge.

@@ -53,7 +53,39 @@ impl TranscriptView {
             });
         }
         if self.select_mode.is_some() {
-            let hints = if has_selected_text {
+            let hints = if let Some(mark) = self.table_mark() {
+                let (full, short, minimal) =
+                    if mark.kind == super::select_mode::table::TableMarkKind::Text {
+                        (
+                            "arrows/hjkl move in cell · o swap · y copy · v/esc clear",
+                            "arrows move · y copy · esc clear",
+                            "y copy · esc clear",
+                        )
+                    } else {
+                        (
+                            "arrows/hjkl extend cells · v mark text · o swap · y copy · esc clear",
+                            "arrows move · v mark text · y copy",
+                            "v mark text · y copy",
+                        )
+                    };
+                [full, short, minimal, "esc clear"].map(str::to_owned)
+            } else if !has_selected_text
+                && self.select_cursor_is_on_table()
+                && let Some(mark) = self
+                    .disclosure
+                    .keymap
+                    .primary_hint(crate::keymap::KeymapContext::Pager, "mark_markdown")
+            {
+                let mark = mark.display_label();
+                [
+                    format!(
+                        "arrows/hjkl move · v mark text · V mark lines · {mark} mark cell · / find · q close"
+                    ),
+                    format!("arrows move · {mark} mark cell · v mark text"),
+                    format!("{mark} mark cell · q close"),
+                    format!("{mark} mark cell"),
+                ]
+            } else if has_selected_text {
                 let copy = crate::key_hint::ctrl(KeyCode::Char('c')).display_label();
                 [
                     format!(
@@ -274,6 +306,11 @@ pub(super) fn navigation_line(navigation: &str) -> Line<'static> {
             " copy & latest",
             " clear selection",
             " copy+↓",
+            " extend cells",
+            " mark cell",
+            " mark text",
+            " mark lines",
+            " move in cell",
             " move",
             " ends",
             " page",

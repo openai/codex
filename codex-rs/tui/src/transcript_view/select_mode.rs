@@ -16,11 +16,13 @@ use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod motion;
+pub(super) mod table;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct SelectMode {
     pub(super) mark: Option<Mark>,
     pub(super) preferred_column: Option<u16>,
+    pub(super) table_caret: Option<table::CellPosition>,
     pub(super) search_origin: Option<SelectSearchOrigin>,
 }
 
@@ -31,12 +33,14 @@ pub(super) struct Mark {
     anchor_edges: Option<(Anchor, Anchor)>,
     active_edges: Option<(Anchor, Anchor)>,
     unit: SelectionUnit,
+    table: Option<table::TableMark>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct SelectSearchOrigin {
     pub(super) mark: Option<Mark>,
     pub(super) preferred_column: Option<u16>,
+    pub(super) table_caret: Option<table::CellPosition>,
     pub(super) start: Anchor,
     pub(super) end: Anchor,
 }
@@ -85,8 +89,26 @@ fn pager_motion(
 }
 
 impl SelectMode {
+    pub(super) fn clear_mark(&mut self) {
+        self.table_caret = self
+            .mark
+            .take()
+            .and_then(|mark| mark.table)
+            .map(|table| table.active)
+            .or(self.table_caret);
+        self.preferred_column = None;
+    }
+
     pub(super) fn cursor(self, selection: &Selection) -> Anchor {
         self.mark.map_or(selection.end, |mark| mark.active)
+    }
+
+    fn padding_column(self, width: u16) -> Option<u16> {
+        self.mark
+            .and_then(|mark| mark.table.map(|table| table.active))
+            .or(self.table_caret)
+            .and_then(|cell| cell.padding_column)
+            .map(|column| column.min(width.saturating_sub(1)))
     }
 }
 
@@ -206,11 +228,21 @@ impl TranscriptView {
             && matches!(code, KeyCode::Char('v') | KeyCode::Char(' '))
             && modifiers == KeyModifiers::NONE
         {
-            self.start_select_mark(cells, SelectionUnit::Character);
+            if self.table_mark().is_some() && code == KeyCode::Char('v') {
+                self.start_select_cell_text(cells);
+            } else {
+                self.start_select_mark(cells, SelectionUnit::Character);
+            }
             return Some(ViewAction::Changed);
         }
         if pressed && code == KeyCode::Char('v') && modifiers == KeyModifiers::SHIFT {
             self.start_select_mark(cells, SelectionUnit::Line);
+            return Some(ViewAction::Changed);
+        }
+        if pressed
+            && self.disclosure.keymap.pager.mark_markdown.is_pressed(key)
+            && self.start_select_table(cells)
+        {
             return Some(ViewAction::Changed);
         }
         if pressed && code == KeyCode::Char('o') && modifiers == KeyModifiers::NONE {
@@ -301,25 +333,27 @@ impl TranscriptView {
         };
         let cursor = mode.cursor(selection);
         mode.mark = match mode.mark {
-            Some(mark) if mark.unit == unit => {
+            Some(mark) if mark.unit == unit && mark.table.is_none() => {
                 self.clear_select_mark();
                 return;
             }
-            Some(mark) => Some(Mark {
+            Some(mark) if mark.table.is_none() => Some(Mark {
                 anchor_edges: None,
                 active_edges: None,
                 unit,
                 ..mark
             }),
-            None => Some(Mark {
+            _ => Some(Mark {
                 anchor: cursor,
                 active: cursor,
                 anchor_edges: None,
                 active_edges: None,
                 unit,
+                table: None,
             }),
         };
         mode.preferred_column = None;
+        mode.table_caret = None;
         self.select_mode = Some(mode);
         self.sync_select_range(cells);
     }
@@ -333,8 +367,7 @@ impl TranscriptView {
             return;
         };
         let cursor = mode.cursor(selection);
-        mode.mark = None;
-        mode.preferred_column = None;
+        mode.clear_mark();
         selection.set_keyboard_range(cursor, cursor);
     }
 
@@ -348,6 +381,9 @@ impl TranscriptView {
         };
         std::mem::swap(&mut mark.anchor, &mut mark.active);
         std::mem::swap(&mut mark.anchor_edges, &mut mark.active_edges);
+        if let Some(table) = &mut mark.table {
+            std::mem::swap(&mut table.anchor, &mut table.active);
+        }
         mode.preferred_column = None;
         self.sync_select_range(cells);
         self.reveal_select_cursor(cells);
@@ -391,9 +427,11 @@ impl TranscriptView {
         }) else {
             return;
         };
-        let column = visible
-            .layout
-            .column_for_offset_on_row(visible.row, cursor.offset);
+        let column = mode.padding_column(self.area.width).unwrap_or_else(|| {
+            visible
+                .layout
+                .column_for_offset_on_row(visible.row, cursor.offset)
+        });
         if column < self.area.width {
             let area = Rect::new(
                 self.area.x + column,
@@ -429,6 +467,7 @@ impl TranscriptView {
                     anchor_edges: Some((start, anchor_end)),
                     active_edges: Some((active_start, end)),
                     unit,
+                    table: None,
                 }
             } else {
                 let anchor = self.before_grapheme(cells, start);
@@ -444,12 +483,14 @@ impl TranscriptView {
                     anchor_edges: Some((anchor_start, start)),
                     active_edges: Some((end, active_end)),
                     unit,
+                    table: None,
                 }
             }
         });
         if let Some(mode) = &mut self.select_mode {
             mode.preferred_column = None;
             mode.mark = mark;
+            mode.table_caret = None;
         }
     }
 
@@ -489,6 +530,10 @@ impl TranscriptView {
             selection.set_keyboard_range(origin.start, origin.end);
         }
         mode.preferred_column = None;
+        mode.table_caret = None;
+        if mode.mark.is_some_and(|mark| mark.table.is_some()) {
+            mode.mark = None;
+        }
         if let Some(mark) = &mut mode.mark {
             mark.active = anchor;
             mark.active_edges = None;

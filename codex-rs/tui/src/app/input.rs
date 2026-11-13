@@ -274,30 +274,26 @@ impl App {
         use crate::keymap::KeymapContextSet;
 
         if let Some(overlay) = &self.overlay {
-            let context = if matches!(overlay, Overlay::Transcript(view) if view.is_search_editing())
-            {
-                KeymapContext::Editor
-            } else {
-                KeymapContext::Pager
-            };
-            let contexts =
-                if matches!(overlay, Overlay::Transcript(_)) && context == KeymapContext::Pager {
-                    KeymapContextSet::transcript()
-                } else {
-                    KeymapContextSet::new(context)
+            let contexts = match overlay {
+                Overlay::Transcript(view) if view.is_search_editing() => {
+                    KeymapContextSet::new(KeymapContext::Editor)
                 }
-                .with_voice_toggle(&self.keymap);
-            return if self.backtrack.overlay_preview_active && context == KeymapContext::Pager {
-                KeymapContextSet::browsing().with_voice_toggle(&self.keymap)
-            } else {
-                contexts
+                Overlay::Transcript(view) if view.is_select_mode() => {
+                    KeymapContextSet::transcript().with_transcript_select()
+                }
+                _ if self.backtrack.overlay_preview_active => KeymapContextSet::browsing(),
+                Overlay::Transcript(_) => KeymapContextSet::transcript(),
+                _ => KeymapContextSet::new(KeymapContext::Pager),
             };
+            return contexts.with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_select_mode() && self.chat_widget.no_modal_or_popup_active() {
-            return KeymapContextSet::transcript().with_voice_toggle(&self.keymap);
+            return KeymapContextSet::transcript()
+                .with_transcript_select()
+                .with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()
         {

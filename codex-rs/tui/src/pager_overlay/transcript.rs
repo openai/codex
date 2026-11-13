@@ -250,6 +250,7 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.keymap.clone_from(&keymap.pager);
         self.find_transcript.clone_from(&keymap.app.find_transcript);
         self.select_transcript
             .clone_from(&keymap.app.select_transcript);

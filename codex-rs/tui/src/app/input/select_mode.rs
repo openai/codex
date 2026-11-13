@@ -101,6 +101,7 @@ impl App {
                                     | "half_page_down"
                                     | "jump_top"
                                     | "jump_bottom"
+                                    | "mark_markdown"
                             )
                     ) || (self.overlay.is_some()
                         && action.context == crate::keymap::KeymapContext::Pager
@@ -113,15 +114,19 @@ impl App {
                     && crate::keymap::dispatch_event(binding.action) == Some(dispatch)
             })
         };
-        if fixed_search_control || fixed_select_control || pager_motion {
-            false
-        } else if self.key_chord_matcher.is_pending() {
+        let fixed_control = fixed_search_control || fixed_select_control || pager_motion;
+        if self.key_chord_matcher.is_pending() {
             match self
                 .key_chord_matcher
                 .clone()
                 .advance(key_event, &self.keymap.chords, contexts)
             {
-                crate::keymap::KeyChordMatch::Completed(dispatch) => completed_action(dispatch),
+                crate::keymap::KeyChordMatch::Completed(dispatch) => {
+                    // The Markdown chord's completion may be the standalone text mark.
+                    completed_action(dispatch)
+                        && (!fixed_control || self.keymap.pager.mark_markdown.is_pressed(dispatch))
+                }
+                _ if fixed_control => false,
                 crate::keymap::KeyChordMatch::Pending(prefix) => {
                     let (code, modifiers) = prefix.parts();
                     self.keymap.chords.bindings.iter().any(|binding| {
@@ -136,6 +141,8 @@ impl App {
                 crate::keymap::KeyChordMatch::PassThrough
                 | crate::keymap::KeyChordMatch::Cancelled => false,
             }
+        } else if fixed_control {
+            false
         } else {
             self.keymap.chords.bindings.iter().any(|binding| {
                 active_action(binding.action)

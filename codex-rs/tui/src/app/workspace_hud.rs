@@ -66,6 +66,7 @@ impl App {
                 "open_presets" => (2, "Presets ›"),
                 "find_transcript" => (2, "Find text"),
                 "select_transcript" => (2, "Select transcript"),
+                "mark_markdown" => (2, "Mark table cell"),
                 "focus_conversation_composer" => (2, "Composer"),
                 other => (2, other),
             };

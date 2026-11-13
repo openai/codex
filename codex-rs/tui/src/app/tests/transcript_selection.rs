@@ -180,3 +180,59 @@ async fn offline_selection_reserves_keys_and_preserves_draft_and_backtrack_state
     app_server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn markdown_chord_marks_whole_cells_in_the_transcript_overlay() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.keymap = RuntimeKeymap::from_config(&toml::from_str("[pager]\nfind = 'c'\n")?)
+        .expect("valid pager bindings");
+    app.transcript_cells = vec![Arc::new(crate::history_cell::AgentMarkdownCell::new(
+        "| Left | Right |\n|---|---|\n| alpha | Beta |".into(),
+        std::path::Path::new("/"),
+    ))];
+    app.open_transcript_overlay(&mut tui);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 16,
+    );
+    let Some(Overlay::Transcript(overlay)) = &mut app.overlay else {
+        panic!("expected transcript overlay");
+    };
+    overlay.begin_select_mode();
+    overlay.render(area, &mut Buffer::empty(area));
+
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyCode::Char('c').into()),
+    )
+    .await?;
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_editing())
+    );
+    for event in [
+        TuiEvent::Paste("Be".into()),
+        TuiEvent::Draw,
+        TuiEvent::Key(KeyCode::Enter.into()),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        TuiEvent::Key(KeyCode::Char('v').into()),
+    ] {
+        app.handle_tui_event(&mut tui, &mut app_server, event)
+            .await?;
+    }
+    let Some(Overlay::Transcript(overlay)) = &mut app.overlay else {
+        panic!("expected transcript overlay");
+    };
+    let mut buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    let selected = buffer
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::REVERSED))
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert_eq!(selected, "Beta");
+    app_server.shutdown().await?;
+    Ok(())
+}

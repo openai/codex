@@ -213,7 +213,7 @@ impl TranscriptView {
                     if accepting && self.search.is_reading() {
                         self.accept_search_into_select_mode(cells);
                     } else if cancelling {
-                        self.restore_select_search_origin();
+                        self.restore_select_search_origin(cells);
                     }
                     return Some(ViewAction::Changed);
                 }
@@ -270,16 +270,24 @@ impl TranscriptView {
                 | MouseEventKind::Drag(MouseButton::Left)
                 | MouseEventKind::Up(MouseButton::Left)
         );
-        let before = self
-            .selection
-            .as_ref()
-            .map(|selection| (selection.start, selection.end, selection.unit()));
+        let before = self.selection.as_ref().map(|selection| {
+            (
+                selection.start,
+                selection.end,
+                selection.unit(),
+                selection.has_table_scope(),
+            )
+        });
         let action =
             self.handle_mouse_with_mode(event, cells, MouseMode::Selection(patch_approval));
-        let after = self
-            .selection
-            .as_ref()
-            .map(|selection| (selection.start, selection.end, selection.unit()));
+        let after = self.selection.as_ref().map(|selection| {
+            (
+                selection.start,
+                selection.end,
+                selection.unit(),
+                selection.has_table_scope(),
+            )
+        });
         if endpoint_changed && before != after {
             if self.has_selection_range() {
                 self.disclosure.resume_after_approval = None;

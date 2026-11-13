@@ -1392,38 +1392,66 @@ impl PickerState {
     }
 
     fn route_key_chord(&mut self, key: KeyEvent) -> Option<KeyEvent> {
-        if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key))
-        {
-            if self.chord_matcher.cancel() {
-                self.requester.schedule_frame();
-            }
-            return Some(key);
-        }
-        let context = if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_editing())
-        {
-            crate::keymap::KeymapContext::Editor
-        } else if self.overlay.is_some() {
-            crate::keymap::KeymapContext::Pager
+        use crate::keymap::KeyChordMatch;
+        use crate::keymap::KeymapContext;
+        use crate::keymap::KeymapContextSet;
+
+        let mut contexts = KeymapContextSet::new(if self.overlay.is_some() {
+            KeymapContext::Pager
         } else {
-            crate::keymap::KeymapContext::List
-        };
+            KeymapContext::List
+        });
+        if let Some(Overlay::Transcript(overlay)) = &self.overlay {
+            if overlay.is_search_editing() {
+                contexts = KeymapContextSet::new(KeymapContext::Editor);
+            }
+            let selecting = overlay.is_select_mode() && !overlay.is_search_editing();
+            if selecting {
+                contexts = contexts.with_transcript_select();
+            }
+            if overlay.owns_interaction_key(key) {
+                let markdown_chord = selecting
+                    && match self
+                        .chord_matcher
+                        .clone()
+                        .advance(key, &self.keymap.chords, contexts)
+                    {
+                        KeyChordMatch::Completed(key) => {
+                            self.keymap.pager.mark_markdown.is_pressed(key)
+                        }
+                        KeyChordMatch::Pending(prefix) => {
+                            self.keymap.chords.bindings.iter().any(|binding| {
+                                binding.action.action == "mark_markdown"
+                                    && binding.chord.prefix == prefix
+                            })
+                        }
+                        KeyChordMatch::PassThrough
+                        | KeyChordMatch::Cancelled
+                        | KeyChordMatch::Ignored => false,
+                    };
+                if !markdown_chord {
+                    if self.chord_matcher.cancel() {
+                        self.requester.schedule_frame();
+                    }
+                    return Some(key);
+                }
+            }
+        }
         let was_pending = self.chord_matcher.is_pending();
-        let result = self.chord_matcher.advance(
-            key,
-            &self.keymap.chords,
-            crate::keymap::KeymapContextSet::new(context),
-        );
+        let result = self
+            .chord_matcher
+            .advance(key, &self.keymap.chords, contexts);
         if was_pending && !self.chord_matcher.is_pending() {
             self.requester.schedule_frame();
         }
         match result {
-            crate::keymap::KeyChordMatch::PassThrough => Some(key),
-            crate::keymap::KeyChordMatch::Completed(dispatch_event) => Some(dispatch_event),
-            crate::keymap::KeyChordMatch::Pending(_) | crate::keymap::KeyChordMatch::Cancelled => {
+            KeyChordMatch::PassThrough => Some(key),
+            KeyChordMatch::Completed(dispatch_event) => Some(dispatch_event),
+            KeyChordMatch::Pending(_) | KeyChordMatch::Cancelled => {
                 self.requester.schedule_frame();
                 None
             }
-            crate::keymap::KeyChordMatch::Ignored => None,
+            KeyChordMatch::Ignored => None,
         }
     }
 
