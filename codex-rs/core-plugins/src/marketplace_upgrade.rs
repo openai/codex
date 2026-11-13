@@ -225,12 +225,11 @@ fn parse_configured_git_marketplace(
         .try_into::<MarketplaceConfig>()
         .map_err(|err| format!("invalid configured Git marketplace: {err}"))?;
     let MarketplaceConfig {
-        last_updated: _,
-        last_revision: _,
         source_type,
         source,
         ref_name,
         sparse_paths,
+        ..
     } = marketplace;
     if source_type != Some(MarketplaceSourceType::Git) {
         return Ok(None);

@@ -2,6 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use codex_utils_path::paths_match_after_normalization;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
@@ -89,7 +90,9 @@ fn upsert_marketplace(
     let Some(marketplaces_item) = root.get_mut("marketplaces") else {
         return;
     };
-    if !marketplaces_item.is_table() {
+    if let Some(inline) = marketplaces_item.as_inline_table() {
+        *marketplaces_item = TomlItem::Table(inline.clone().into_table());
+    } else if !marketplaces_item.is_table() {
         *marketplaces_item = TomlItem::Table(new_implicit_table());
     }
 
@@ -98,6 +101,19 @@ fn upsert_marketplace(
     };
     let mut entry = TomlTable::new();
     entry.set_implicit(false);
+    if let Some(existing) = marketplaces.get(marketplace_name)
+        && existing.get("source_type").and_then(TomlItem::as_str) == Some(update.source_type)
+        && existing
+            .get("source")
+            .and_then(TomlItem::as_str)
+            .is_some_and(|source| match update.source_type {
+                "local" => paths_match_after_normalization(source, update.source),
+                _ => source == update.source,
+            })
+        && let Some(auto_update) = existing.get("auto_update")
+    {
+        entry["auto_update"] = auto_update.clone();
+    }
     entry["source_type"] = value(update.source_type.to_string());
     entry["source"] = value(update.source.to_string());
     if let Some(ref_name) = update.ref_name {
@@ -213,6 +229,73 @@ mod tests {
         );
         assert!(marketplace.get("last_updated").is_none());
         assert!(marketplace.get("last_revision").is_none());
+    }
+
+    #[test]
+    fn readding_a_marketplace_keeps_auto_update_only_for_the_same_source() {
+        let codex_home = TempDir::new().unwrap();
+        let path = codex_home.path().join(CONFIG_TOML_FILE);
+        let original = "https://example.com/team.git";
+        let replacement = "https://example.com/other.git";
+        let existing = format!(
+            r#"marketplaces = {{ team = {{ source_type = "git", source = "{original}", auto_update = true }} }}"#
+        );
+        for (source, expected) in [(original, Some(true)), (replacement, None)] {
+            fs::write(&path, &existing).unwrap();
+            record_user_marketplace(
+                codex_home.path(),
+                "team",
+                &MarketplaceConfigUpdate {
+                    source_type: "git",
+                    source,
+                    ref_name: None,
+                    sparse_paths: &[],
+                },
+            )
+            .unwrap();
+
+            let config: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                config["marketplaces"]["team"]
+                    .get("auto_update")
+                    .and_then(toml::Value::as_bool),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn readding_a_local_marketplace_keeps_auto_update_for_an_equivalent_path() {
+        let codex_home = TempDir::new().unwrap();
+        let catalog = codex_home.path().join("catalog");
+        fs::create_dir_all(&catalog).unwrap();
+        let alias = catalog.join("..").join("catalog");
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let source = toml::Value::String(alias.to_string_lossy().into_owned());
+        fs::write(
+            &config_path,
+            format!("[marketplaces.team]\nsource_type = 'local'\nsource = {source}\nauto_update = true\n"),
+        )
+        .unwrap();
+
+        record_user_marketplace(
+            codex_home.path(),
+            "team",
+            &MarketplaceConfigUpdate {
+                source_type: "local",
+                source: catalog.to_str().unwrap(),
+                ref_name: None,
+                sparse_paths: &[],
+            },
+        )
+        .unwrap();
+
+        let config: toml::Value =
+            toml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+        assert_eq!(
+            config["marketplaces"]["team"]["auto_update"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
