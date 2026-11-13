@@ -167,7 +167,7 @@ async fn background_routing_skips_config_until_chatgpt_sign_in(
     Ok(())
 }
 
-#[test_case(Some("https://gov.chatgpt.com/backend-api/"), "NO_CONSTRAINT", "https://gov.chatgpt.com"; "configured_only")]
+#[test_case(Some("https://custom.example/backend-api/"), "NO_CONSTRAINT", "https://custom.example"; "configured_only")]
 #[test_case(None, "https://gov.chatgpt.com", "https://gov.chatgpt.com"; "discovered_only")]
 #[test_case(Some("https://GOV.chatgpt.com:443/backend-api/"), "https://gov.chatgpt.com", "https://gov.chatgpt.com"; "matching_effective_port")]
 #[test_case(Some("https://example.com:8443/backend-api/"), "https://example.com:8443", "https://example.com:8443"; "custom_port")]
@@ -185,6 +185,22 @@ fn resolves_origins(required: Option<&str>, discovered: &str, expected: &str) {
             backend_origin: expected.into(),
             account_routing_override: "NO_CONSTRAINT".into(),
         }
+    );
+}
+
+#[test_case(Some("https://GOV.chatgpt.com:443/backend-api/"), "https://chatgpt.com/backend-api/"; "required_gov")]
+#[test_case(None, "https://gov.chatgpt.com/backend-api/"; "effective_gov")]
+fn rejects_commercial_workspace_on_government_backend(required: Option<&str>, effective: &str) {
+    let entry = serde_json::from_value(serde_json::json!({
+        "id": "workspace", "workspace_backend_origin": "NO_CONSTRAINT",
+        "account_routing_override": "NO_CONSTRAINT",
+    }))
+    .unwrap();
+    assert_eq!(
+        resolve_routing(entry, required, effective),
+        Err(AccountReadError::Routing(
+            WorkspaceRoutingError::GovernmentWorkspaceRequired
+        ))
     );
 }
 
