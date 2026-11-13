@@ -14,7 +14,6 @@ use crate::mitm_hook::MitmHooksByHost;
 use crate::mitm_hook::evaluate_mitm_hooks;
 use crate::network_policy::NetworkPolicyAuditObserver;
 use crate::policy::Host;
-use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
 use crate::policy::unscoped_ip_literal;
@@ -922,18 +921,7 @@ impl NetworkProxyState {
             // request. Explicit local/loopback literals are allowed only when explicitly
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
-            let local_literal = {
-                let host_no_scope = unscoped_ip_literal(host_str).unwrap_or(host_str);
-                if is_loopback_host(&host) {
-                    true
-                } else if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
-                    is_non_public_ip(ip)
-                } else {
-                    false
-                }
-            };
-
-            if local_literal {
+            if crate::policy::is_local_literal(host_str) {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }

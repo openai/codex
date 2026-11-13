@@ -5,6 +5,24 @@ use crate::policy::normalize_host;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn comparison_keys_preserve_differences_between_grants_and_restrictions() -> Result<()> {
+    for (selector, grant, restriction) in [
+        ("?*.EXAMPLE.com.", "*.example.com", "*.example.com"),
+        ("[::1]:*", "[::1]:*", "::1"),
+        (
+            "2001:0db8:0:0:0:0:0:1",
+            "2001:0db8:0:0:0:0:0:1",
+            "2001:db8::1",
+        ),
+    ] {
+        assert_eq!(canonical_allow_pattern(selector)?, grant);
+        assert_eq!(canonical_deny_pattern(selector)?, restriction);
+        assert_eq!(canonical_review_pattern(selector)?, restriction);
+    }
+    Ok(())
+}
+
+#[test]
 fn unicode_wildcards_preserve_utf8_byte_matching() {
     for (pattern, host, expected) in [
         ("api?.com", "api1.com", true),
