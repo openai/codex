@@ -14,8 +14,9 @@ ignored = ["png"]
 
 [dependencies]
 base64 = { workspace = true }
-image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
-png = { version = "0.18.0", features = ["zlib-rs"] }
+image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+moxcms = { version = "=0.7.11", features = ["options"] }
+png = { version = "=0.18.1", features = ["zlib-rs"] }
 codex-utils-cache = { workspace = true }
 mime_guess = { workspace = true }
 thiserror = { workspace = true }

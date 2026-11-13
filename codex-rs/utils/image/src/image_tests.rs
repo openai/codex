@@ -236,8 +236,12 @@ async fn data_url_processing_preserves_supported_source_bytes() {
         .replacen("data:", "DATA:", 1)
         .replacen(";base64,", ";BASE64,", 1);
 
-    let processed = load_data_url_for_prompt_uncached(&image_url, PromptImageMode::ResizeToFit)
-        .expect("process data URL image");
+    let processed = load_data_url_for_prompt_uncached(
+        &image_url,
+        PromptImageMode::ResizeToFit,
+        PromptImageDecoder::Legacy,
+    )
+    .expect("process data URL image");
 
     assert_eq!(processed.width, 64);
     assert_eq!(processed.height, 32);
@@ -251,8 +255,12 @@ async fn data_url_processing_converts_gif_to_png() {
     let gif_bytes = image_bytes(&image, ImageFormat::Gif);
     let image_url = data_url_from_bytes("image/gif", &gif_bytes);
 
-    let processed = load_data_url_for_prompt(&image_url, PromptImageMode::ResizeToFit)
-        .expect("process GIF data URL");
+    let processed = load_data_url_for_prompt(
+        &image_url,
+        PromptImageMode::ResizeToFit,
+        PromptImageDecoder::Legacy,
+    )
+    .expect("process GIF data URL");
 
     assert_eq!(processed.mime, "image/png");
     assert_eq!(
@@ -270,7 +278,11 @@ fn data_url_processing_rejects_malformed_input() {
         "data:image/png;base64,not base64",
     ] {
         assert!(matches!(
-            load_data_url_for_prompt(image_url, PromptImageMode::ResizeToFit),
+            load_data_url_for_prompt(
+                image_url,
+                PromptImageMode::ResizeToFit,
+                PromptImageDecoder::Legacy,
+            ),
             Err(ImageProcessingError::InvalidDataUrl { .. })
         ));
     }
@@ -382,12 +394,29 @@ async fn reprocesses_updated_file_contents() {
     assert_ne!(second.bytes, first.bytes);
 }
 
+#[test]
+fn legacy_cache_entry_cannot_bypass_sanitization() {
+    let image = ImageBuffer::from_pixel(7, 11, Rgba([42, 64, 128, 255]));
+    let bytes = image_bytes_with_metadata(&image, ImageFormat::Jpeg, TEST_RGB_ICC_PROFILE);
+    let path = Path::new("oriented.jpg");
+    let mode = PromptImageMode::Original;
+
+    let legacy = load_for_prompt_bytes(path, bytes.clone(), mode).expect("load legacy image");
+    let sanitized =
+        load_for_prompt_bytes_with_decoder(path, bytes, mode, PromptImageDecoder::Sanitizer)
+            .expect("sanitize image after warming the legacy cache");
+
+    assert_eq!((legacy.width, legacy.height), (7, 11));
+    assert_eq!((sanitized.width, sanitized.height), (11, 7));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bounds_cache_by_encoded_byte_size() {
     let cache = ImageCache::new(NonZeroUsize::new(4).expect("non-zero cache capacity"));
     let key = |digest_byte| ImageCacheKey {
         digest: [digest_byte; 20],
         mode: PromptImageMode::Original,
+        decoder: PromptImageDecoder::Legacy,
     };
     let image = |size| EncodedImage {
         bytes: vec![0; size].into(),

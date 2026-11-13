@@ -6,6 +6,7 @@ use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
 use crate::function_tool::FunctionCallError;
+use crate::image_preparation::prompt_image_decoder;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::session::session::Session;
@@ -415,6 +416,7 @@ impl CoreToolRuntime for McpHandler {
                 .and_then(Value::as_bool)
                 == Some(true)
         };
+        let decoder = prompt_image_decoder(&invocation.turn.config.features);
         let mut captured_image_bytes = 0_usize;
         let mut items = content
             .iter()
@@ -458,8 +460,12 @@ impl CoreToolRuntime for McpHandler {
                             .and_then(|detail| serde_json::from_value(detail.clone()).ok());
                         let image_url =
                             format!("data:{};base64,{payload}", mime_type.to_ascii_lowercase());
-                        load_data_url_for_prompt_uncached(&image_url, PromptImageMode::Original)
-                            .ok()?;
+                        load_data_url_for_prompt_uncached(
+                            &image_url,
+                            PromptImageMode::Original,
+                            decoder,
+                        )
+                        .ok()?;
                         captured_image_bytes = next_image_bytes;
                         Some(UserInput::Image {
                             image: codex_protocol::models::ImageReference::Inline { image_url },

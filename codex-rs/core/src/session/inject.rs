@@ -1,7 +1,6 @@
 use super::TurnInput as PendingTurnInput;
 use super::session::Session;
 use super::turn_context::TurnContext;
-use codex_analytics::ImagePreparationMetadata;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
@@ -126,24 +125,20 @@ impl Session {
         envelope
     }
 
+    #[tracing::instrument(
+        name = "record_conversation_items",
+        level = "trace",
+        skip_all,
+        fields(item_count = items.len())
+    )]
     pub(crate) async fn record_annotated_conversation_items(
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
         items: Vec<ResponseItemEnvelope>,
     ) {
-        if items.iter().all(|item| item.metadata.is_none()) {
-            let items = items
-                .into_iter()
-                .map(ResponseItemEnvelope::into_item)
-                .collect::<Vec<_>>();
-            self.record_conversation_items(turn_context, model_info, &items)
-                .await;
-            return;
-        }
-
         let (annotated_items, image_preparations) = self
-            .prepare_annotated_conversation_items_for_history(turn_context, model_info, items)
+            .prepare_conversation_items_for_history(turn_context, model_info, items)
             .await;
         self.record_prepared_conversation_items(
             turn_context,
@@ -152,33 +147,6 @@ impl Session {
             image_preparations,
         )
         .await;
-    }
-
-    pub(crate) async fn prepare_annotated_conversation_items_for_history(
-        &self,
-        turn_context: &TurnContext,
-        model_info: &ModelInfo,
-        items: Vec<ResponseItemEnvelope>,
-    ) -> (Vec<ResponseItemEnvelope>, Vec<ImagePreparationMetadata>) {
-        let mut annotated_items = Vec::with_capacity(items.len());
-        let mut image_preparations = Vec::new();
-        for envelope in items {
-            let (prepared_items, prepared_images) = self
-                .prepare_conversation_items_for_history(
-                    turn_context,
-                    model_info,
-                    std::slice::from_ref(&envelope.item),
-                )
-                .await;
-            image_preparations.extend(prepared_images);
-
-            let mut metadata = envelope.metadata;
-            annotated_items.extend(prepared_items.into_iter().map(|item| ResponseItemEnvelope {
-                item,
-                metadata: metadata.take(),
-            }));
-        }
-        (annotated_items, image_preparations)
     }
 
     /// Injects items into active work, or records them without starting a turn.

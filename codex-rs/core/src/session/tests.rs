@@ -390,14 +390,17 @@ async fn default_turn_context_assigns_missing_response_item_ids() {
             role: "developer".to_string(),
             tools: Arc::from([]),
         },
-    ];
+    ]
+    .into_iter()
+    .map(ResponseItemEnvelope::new)
+    .collect();
     let (items, _) = session
-        .prepare_conversation_items_for_history(&turn_context, turn_context.model_info(), &items)
+        .prepare_conversation_items_for_history(&turn_context, turn_context.model_info(), items)
         .await;
 
     assert_eq!(items.len(), 3);
     for (item, prefix) in items.iter().zip(["msg_", "amsg_", "at_"]) {
-        let suffix = item.id().unwrap().strip_prefix(prefix).unwrap();
+        let suffix = item.item.id().unwrap().strip_prefix(prefix).unwrap();
         assert_eq!(Uuid::parse_str(suffix).unwrap().get_version_num(), 7);
     }
 }

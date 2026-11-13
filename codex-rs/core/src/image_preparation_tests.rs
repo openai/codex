@@ -9,6 +9,7 @@ use codex_attachment_store::IsResolvableFuture;
 use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
 use codex_attachment_store::UploadFuture;
+use codex_history::RolloutItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -25,6 +26,28 @@ use serde_json::from_value;
 use serde_json::json;
 
 use super::*;
+
+async fn prepare_response_items(
+    thread_id: &str,
+    ephemeral: bool,
+    items: &mut Vec<ResponseItem>,
+    mode: ImagePreparationMode,
+    resize_notice_mode: ImageResizeNoticeMode,
+    image_store: &dyn AttachmentStore,
+) -> Vec<ImagePreparationMetadata> {
+    let mut envelopes = items.drain(..).map(ResponseItemEnvelope::new).collect();
+    let metadata = super::prepare_response_items(
+        thread_id,
+        ephemeral,
+        &mut envelopes,
+        mode,
+        resize_notice_mode,
+        image_store,
+    )
+    .await;
+    items.extend(envelopes.into_iter().map(ResponseItemEnvelope::into_item));
+    metadata
+}
 
 pub(crate) struct FailingAttachmentStore;
 
@@ -68,6 +91,59 @@ fn decoded_image(image_url: &str) -> (Vec<u8>, DynamicImage) {
     let bytes = BASE64_STANDARD.decode(payload).expect("decode image URL");
     let image = image::load_from_memory(&bytes).expect("decode processed image");
     (bytes, image)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_regenerates_the_recorded_jpeg_from_its_original() {
+    let pixels = image::RgbImage::from_fn(81, 57, |x, y| {
+        image::Rgb([(19 * x + y) as u8, (11 * y + x) as u8, (x * y) as u8])
+    });
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(pixels)
+        .write_to(&mut bytes, ImageFormat::Jpeg)
+        .expect("encode original JPEG");
+    let source = data_url_from_bytes("image/jpeg", &bytes.into_inner());
+    let message = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage {
+            image: ImageReference::Inline { image_url: source },
+            detail: Some(ImageDetail::High),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut items = vec![ResponseItemEnvelope::new(message)];
+    let prepare = async |items: &mut Vec<ResponseItemEnvelope>, replay| {
+        super::prepare_response_items(
+            "image-preparation-thread",
+            /*ephemeral*/ false,
+            items,
+            ImagePreparationMode {
+                decoder: PromptImageDecoder::Sanitizer,
+                replay,
+                ..Default::default()
+            },
+            ImageResizeNoticeMode::Disabled,
+            &InlineAttachmentStore,
+        )
+        .await;
+    };
+    prepare(&mut items, /*replay*/ false).await;
+    let recorded = items.pop().expect("prepared item");
+    assert!(recorded.metadata.is_some());
+    let json =
+        serde_json::to_string(&RolloutItem::ResponseItem(recorded.clone())).expect("persist item");
+    let RolloutItem::ResponseItem(reloaded) =
+        serde_json::from_str(&json).expect("read persisted item")
+    else {
+        panic!("expected persisted response item");
+    };
+    let mut replayed = vec![reloaded];
+    prepare(&mut replayed, /*replay*/ true).await;
+    assert_eq!(replayed, vec![recorded]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,7 +190,7 @@ async fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
         "image-preparation-thread",
         /*ephemeral*/ false,
         &mut items,
-        ImagePreparationMode::DetailBased,
+        ImagePreparationMode::default(),
         ImageResizeNoticeMode::Disabled,
         &InlineAttachmentStore,
     )
@@ -206,7 +282,7 @@ async fn detail_policies_apply_the_expected_budgets() {
             "image-preparation-thread",
             /*ephemeral*/ false,
             &mut items,
-            ImagePreparationMode::DetailBased,
+            ImagePreparationMode::default(),
             ImageResizeNoticeMode::Disabled,
             &InlineAttachmentStore,
         )
@@ -261,7 +337,7 @@ async fn preparation_reports_tool_output_item_id() {
         "image-preparation-thread",
         /*ephemeral*/ false,
         &mut items,
-        ImagePreparationMode::DetailBased,
+        ImagePreparationMode::default(),
         ImageResizeNoticeMode::Disabled,
         &InlineAttachmentStore,
     )
@@ -301,7 +377,7 @@ async fn upload_failure_keeps_resized_image_inline() {
         "image-preparation-thread",
         /*ephemeral*/ false,
         &mut items,
-        ImagePreparationMode::DetailBased,
+        ImagePreparationMode::default(),
         ImageResizeNoticeMode::Disabled,
         &FailingAttachmentStore,
     )
@@ -405,7 +481,7 @@ async fn resize_notices_count_file_backed_images_and_skip_failed_images() {
         "image-preparation-thread",
         /*ephemeral*/ false,
         &mut items,
-        ImagePreparationMode::DetailBased,
+        ImagePreparationMode::default(),
         ImageResizeNoticeMode::Enabled,
         &InlineAttachmentStore,
     )
@@ -602,7 +678,7 @@ async fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
         "image-preparation-thread",
         /*ephemeral*/ false,
         &mut items,
-        ImagePreparationMode::DetailBased,
+        ImagePreparationMode::default(),
         ImageResizeNoticeMode::Disabled,
         &InlineAttachmentStore,
     )

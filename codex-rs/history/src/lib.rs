@@ -75,6 +75,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampled_through_sequence: Option<u64>,
 
+    /// Original inline images to sanitize again on resume or fork.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_replay_sources: Vec<ImageReplaySource>,
+
     /// Complete retained records actually delivered by this Guardian message. Host-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guardian_sources: Vec<RetainedSource>,
@@ -158,6 +162,21 @@ pub struct CodexHarnessMetadata {
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+pub struct ImageReplaySource {
+    pub prepared_url_digest: Vec<u8>,
+    pub detail: Option<codex_protocol::models::ImageDetail>,
+    pub original_data_url: Arc<String>,
+}
+
+impl std::fmt::Debug for ImageReplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageReplaySource")
+            .field("original_data_url_len", &self.original_data_url.len())
+            .finish_non_exhaustive()
+    }
 }
 
 fn deserialize_mcp_attribution_checkpoint<'de, D>(

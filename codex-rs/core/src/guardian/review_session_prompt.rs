@@ -22,7 +22,6 @@ use super::GuardianReviewSessionParams;
 use crate::context_manager::ContextManager;
 use crate::image_preparation::ImagePreparationMode;
 use crate::image_preparation::resize_image;
-use crate::image_preparation::unified_image_budget_enabled;
 
 pub(super) async fn build_guardian_prompt_items(
     params: &GuardianReviewSessionParams,
@@ -71,11 +70,7 @@ pub(super) async fn build_guardian_prompt_items(
     });
     let context_window =
         context_window.filter(|limit| *limit > 0 && model_info.origin != ModelOrigin::Synthetic);
-    let image_mode = if unified_image_budget_enabled(&params.spawn_config.features, model_info) {
-        ImagePreparationMode::UnifiedBudget
-    } else {
-        ImagePreparationMode::DetailBased
-    };
+    let image_mode = ImagePreparationMode::for_model(&params.spawn_config.features, model_info);
     let history_tokens = if context_window.is_some() && collected.sections.has_images() {
         let base_instructions = reviewer.session.get_base_instructions().await;
         reviewer_history
@@ -121,7 +116,7 @@ impl codex_guardian_context::SyncImagePreparer for ReviewImagePreparer<'_> {
         detail: &mut Option<ImageDetail>,
     ) -> Option<Cow<'image, ImageReference>> {
         *detail = match normalize_output_image_detail(self.model_info, *detail) {
-            _ if self.mode == ImagePreparationMode::UnifiedBudget => Some(ImageDetail::Original),
+            _ if self.mode.unified_budget => Some(ImageDetail::Original),
             Some(ImageDetail::Low) => Some(ImageDetail::High),
             detail => detail,
         };

@@ -27,6 +27,8 @@ pub enum ImageProcessingError {
     UnsupportedImageFormat { mime: String },
     #[error("invalid image data URL: {reason}")]
     InvalidDataUrl { reason: String },
+    #[error("image has too many decoded pixels ({pixels}; max {max})")]
+    ImageTooManyPixels { pixels: u64, max: u64 },
     #[error("image {representation} is too large ({size} bytes; max {max} bytes)")]
     ImageTooLarge {
         representation: &'static str,

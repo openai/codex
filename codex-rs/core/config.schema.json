@@ -1316,6 +1316,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "safe_image_decoder": {
+              "type": "boolean"
+            },
             "search_tool": {
               "type": "boolean"
             },
@@ -8448,6 +8451,9 @@
           "$ref": "#/definitions/FeatureToml_for_RuntimeAgentInstancesConfigToml"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "safe_image_decoder": {
           "type": "boolean"
         },
         "search_tool": {
