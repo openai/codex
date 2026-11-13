@@ -146,7 +146,7 @@ use crate::test_support::test_path_display;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::CloudClient;
-use codex_app_server_protocol::CurrentTimeReadParams;
+use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -2016,10 +2016,15 @@ async fn root_switch_preserves_idle_root_with_running_subagent() -> Result<()> {
     );
     app.handle_app_server_event(
         &app_server,
-        AppServerEvent::ServerRequest(Box::new(ServerRequest::CurrentTimeRead {
+        AppServerEvent::ServerRequest(Box::new(ServerRequest::DynamicToolCall {
             request_id: RequestId::Integer(99),
-            params: CurrentTimeReadParams {
+            params: DynamicToolCallParams {
                 thread_id: idle_child_id.to_string(),
+                turn_id: "turn".into(),
+                call_id: "call".into(),
+                namespace: None,
+                tool: "test".into(),
+                arguments: serde_json::Value::Null,
             },
         })),
     )

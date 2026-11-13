@@ -212,7 +212,7 @@ impl MessageBoardHost for LocalBoardHost {
         Box::pin(async move {
             let actor = self.actor(caller).await?;
             self.registered_path(&actor).await?;
-            actor.current_time().await
+            actor.current_time()
         })
     }
 

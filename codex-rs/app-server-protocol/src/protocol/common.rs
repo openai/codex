@@ -1943,13 +1943,6 @@ server_request_definitions! {
         response: v2::AttestationGenerateResponse,
     },
 
-    #[experimental("currentTime/read")]
-    /// Read the current time from an external clock owned by the client.
-    CurrentTimeRead => "currentTime/read" {
-        params: v2::CurrentTimeReadParams,
-        response: v2::CurrentTimeReadResponse,
-    },
-
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -3128,32 +3121,6 @@ mod tests {
         let payload = ServerRequestPayload::AttestationGenerate(params);
         assert_eq!(request.id(), &RequestId::Integer(9));
         assert_eq!(payload.request_with_id(RequestId::Integer(9)), request);
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_current_time_read_request() -> Result<()> {
-        let params = v2::CurrentTimeReadParams {
-            thread_id: "thread-123".to_string(),
-        };
-        let request = ServerRequest::CurrentTimeRead {
-            request_id: RequestId::Integer(10),
-            params: params.clone(),
-        };
-        assert_eq!(
-            json!({
-                "method": "currentTime/read",
-                "id": 10,
-                "params": {
-                    "threadId": "thread-123"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-
-        let payload = ServerRequestPayload::CurrentTimeRead(params);
-        assert_eq!(request.id(), &RequestId::Integer(10));
-        assert_eq!(payload.request_with_id(RequestId::Integer(10)), request);
         Ok(())
     }
 

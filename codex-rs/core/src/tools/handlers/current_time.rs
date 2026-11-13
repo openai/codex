@@ -103,7 +103,6 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
                 .services
                 .time_provider
                 .current_time(invocation.session.thread_id)
-                .await
                 .map_err(|err| {
                     if invocation
                         .turn

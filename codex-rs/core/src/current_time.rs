@@ -12,12 +12,12 @@ use codex_protocol::ThreadId;
 
 use crate::config::CurrentTimeReminderConfig;
 
-pub type TimeFuture<'a> = Pin<Box<dyn Future<Output = Result<DateTime<Utc>>> + Send + 'a>>;
 pub type SleepFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 /// Host integration boundary for reading and waiting on the current time.
 pub trait TimeProvider: Send + Sync {
-    fn current_time(&self, thread_id: ThreadId) -> TimeFuture<'_>;
+    /// Reads the clock without yielding or calling back into the session.
+    fn current_time(&self, thread_id: ThreadId) -> Result<DateTime<Utc>>;
 
     /// Waits for the given duration on this provider's clock.
     ///
@@ -28,8 +28,8 @@ pub trait TimeProvider: Send + Sync {
 pub(crate) struct SystemTimeProvider;
 
 impl TimeProvider for SystemTimeProvider {
-    fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
-        Box::pin(async { Ok(Utc::now()) })
+    fn current_time(&self, _thread_id: ThreadId) -> Result<DateTime<Utc>> {
+        Ok(Utc::now())
     }
 
     fn sleep(&self, _thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
@@ -53,3 +53,7 @@ pub(crate) fn resolve_time_provider(
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "current_time_tests.rs"]
+mod tests;

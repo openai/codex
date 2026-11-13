@@ -278,12 +278,11 @@ impl CodexThread {
     }
 
     /// Reads this thread's configured clock.
-    pub async fn current_time(&self) -> CodexResult<DateTime<Utc>> {
+    pub fn current_time(&self) -> CodexResult<DateTime<Utc>> {
         self.session
             .services
             .time_provider
             .current_time(self.session.thread_id)
-            .await
             .map_err(|error| CodexErr::Io(std::io::Error::other(error)))
     }
 
