@@ -43,6 +43,7 @@ pub use attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 pub use attribution::write_attribution_frame;
 pub use aws_sigv4::AwsSigV4Config;
 pub use aws_sigv4::ProxySecretSource;
+pub use certs::CHILD_ONLY_CA_ENV_KEYS;
 pub use certs::CUSTOM_CA_ENV_KEYS;
 pub use certs::is_managed_mitm_ca_trust_bundle_path;
 pub use codex_utils_path_uri::Platform;

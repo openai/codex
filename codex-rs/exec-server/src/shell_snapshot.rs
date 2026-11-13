@@ -12,8 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::CHILD_ONLY_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::RemoteCredentialBrokerCache;
+use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::shell_environment;
@@ -297,6 +299,13 @@ impl ShellSnapshotCache {
         let request_overrides = params
             .env
             .iter()
+            // A local caller may have already filled in the child CA defaults. A value
+            // set by the login shell takes precedence over the generated default.
+            .filter(|(key, value)| {
+                !(params.managed_network.is_some()
+                    && CHILD_ONLY_CA_ENV_KEYS.contains(&key.as_str())
+                    && is_managed_mitm_ca_trust_bundle_path(value))
+            })
             .map(|(name, value)| {
                 (
                     name.clone(),

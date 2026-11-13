@@ -1296,6 +1296,11 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
     let workspace = TempDir::new()?;
     let file = workspace.path().join("allowed.txt");
     std::fs::write(&file, b"allowed")?;
+    // Capture Bash startup with the controller's default in the environment, then replay the override.
+    std::fs::write(
+        workspace.path().join(".bashrc"),
+        "export DENO_CERT=profile.pem\n",
+    )?;
     let cwd = PathUri::from_host_native_path(workspace.path())?;
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -1324,15 +1329,20 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
             metadata: Default::default(),
             process_id: ProcessId::from("proc-restricted-helper"),
             argv: vec![
-                "/bin/sh".to_owned(), "-c".to_owned(),
-                r#"cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#.to_owned(),
-                "sh".to_owned(), file.to_string_lossy().into_owned(),
+                "/bin/bash".to_owned(), "-lc".to_owned(),
+                r#"test "$DENO_CERT" = profile.pem && cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#.to_owned(),
+                "bash".to_owned(), file.to_string_lossy().into_owned(),
             ],
             cwd,
-            shell_snapshot: None,
+            shell_snapshot: Some(ShellSnapshotRequest {
+                scope_id: "restricted-ca".to_string(),
+                shell: ShellInfo { name: "bash".to_string(), path: "/bin/bash".to_string() },
+            }),
             env_policy: /*env_policy*/ None,
             env: HashMap::from([
                 ("PATH".to_owned(), std::env::var("PATH")?),
+                ("HOME".to_owned(), workspace.path().display().to_string()),
+                ("DENO_CERT".to_owned(), bundle.to_string_lossy().into_owned()),
                 ("CURL_CA_BUNDLE".to_owned(), bundle.to_string_lossy().into_owned()),
                 ("SSL_CERT_FILE".to_owned(), untrusted.to_string_lossy().into_owned()),
             ]),

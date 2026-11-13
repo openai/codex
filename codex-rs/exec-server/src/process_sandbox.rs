@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::process_telemetry::ProcessTelemetry;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_file_system::WindowsSandboxSelection;
+use codex_network_proxy::CHILD_ONLY_CA_ENV_KEYS;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::CredentialMaskingFailureMode;
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -162,13 +163,16 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
         runtime_readable_paths.extend(runtime_paths.codex_linux_sandbox_exe.iter().cloned());
     }
     let managed_mitm_ca_trust_bundle_path = managed_network.as_ref().and_then(|_| {
-        CUSTOM_CA_ENV_KEYS.iter().find_map(|key| {
-            let path = env.get(*key)?;
-            if !is_managed_mitm_ca_trust_bundle_path(path) {
-                return None;
-            }
-            AbsolutePathBuf::from_absolute_path(path).ok()
-        })
+        CUSTOM_CA_ENV_KEYS
+            .into_iter()
+            .chain(CHILD_ONLY_CA_ENV_KEYS)
+            .find_map(|key| {
+                let path = env.get(key)?;
+                if !is_managed_mitm_ca_trust_bundle_path(path) {
+                    return None;
+                }
+                AbsolutePathBuf::from_absolute_path(path).ok()
+            })
     });
     runtime_readable_paths.extend(managed_mitm_ca_trust_bundle_path);
     let sandbox_manager = SandboxManager::new()

@@ -737,6 +737,8 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     std::fs::write(
         &startup,
         "unset GITHUB_ENTERPRISE_TOKEN UNSET_AUTH_HEADER\n\
+         export DENO_CERT=profile.pem\n\
+         export CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE=\"$SSL_CERT_FILE\"\n\
          export GH_TOKEN='ghp_shell_only_secret'\n\
          export AUTH_HEADER=\"Bearer $GH_TOKEN\"\n\
          declare -rx GITHUB_TOKEN='ghp_readonly_secret'\n\
@@ -857,6 +859,8 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     }
     assert!(!snapshot.contains("attacker.example"));
     assert!(!snapshot.contains("CODEX_NETWORK_PROXY_BROKERED_CREDENTIALS"));
+    assert!(snapshot.contains(r#"DENO_CERT="profile.pem""#));
+    assert!(!snapshot.contains("CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE="));
     assert!(snapshot.contains("api.snapshot.example"));
     assert!(!snapshot.contains("attacker.vendor.example"));
     assert!(snapshot.contains("IDENTITY_SEEN=\"missing\""));

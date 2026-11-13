@@ -683,7 +683,10 @@ pub fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
     if PROXY_ENV_KEYS.contains(&key) {
         return true;
     }
-    if key == crate::aws_sigv4::AWS_CA_BUNDLE || crate::certs::CUSTOM_CA_ENV_KEYS.contains(&key) {
+    if key == crate::aws_sigv4::AWS_CA_BUNDLE
+        || crate::certs::CUSTOM_CA_ENV_KEYS.contains(&key)
+        || crate::certs::CHILD_ONLY_CA_ENV_KEYS.contains(&key)
+    {
         return crate::certs::is_managed_mitm_ca_trust_bundle_path(value);
     }
     #[cfg(target_os = "macos")]
@@ -877,6 +880,11 @@ fn apply_proxy_env_overrides(
                 continue;
             }
             env.insert(key.to_string(), managed_path.clone());
+        }
+        for key in crate::certs::CHILD_ONLY_CA_ENV_KEYS {
+            if crate::credential_broker::env_value(env, key).is_none() {
+                env.insert(key.to_string(), managed_path.clone());
+            }
         }
     }
 }
@@ -3102,7 +3110,11 @@ mod tests {
             Some(&mitm_ca_trust_bundle),
         );
 
-        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
+        assert!(!env.contains_key("NIX_SSL_CERT_FILE"));
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS
+            .into_iter()
+            .chain(["DENO_CERT", "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"])
+        {
             assert_eq!(
                 env.get(key),
                 Some(&mitm_ca_trust_bundle_path.display().to_string())
@@ -3113,10 +3125,21 @@ mod tests {
     #[test]
     fn apply_proxy_env_overrides_preserves_command_scoped_mitm_ca_override() {
         let command_ca_bundle_path = "/tmp/command-ca.pem".to_string();
-        let mut env = HashMap::from([(
-            "REQUESTS_CA_BUNDLE".to_string(),
-            command_ca_bundle_path.clone(),
-        )]);
+        let mut env = HashMap::from([
+            (
+                "REQUESTS_CA_BUNDLE".to_string(),
+                command_ca_bundle_path.clone(),
+            ),
+            (
+                "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE".to_string(),
+                command_ca_bundle_path.clone(),
+            ),
+            ("DENO_CERT".to_string(), String::new()),
+            (
+                "NIX_SSL_CERT_FILE".to_string(),
+                command_ca_bundle_path.clone(),
+            ),
+        ]);
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
         let mitm_ca_trust_bundle = crate::certs::ManagedMitmCaTrustBundle {
             path: mitm_ca_trust_bundle_path.to_path_buf(),
@@ -3132,7 +3155,14 @@ mod tests {
             Some(&mitm_ca_trust_bundle),
         );
 
-        assert_eq!(env.get("REQUESTS_CA_BUNDLE"), Some(&command_ca_bundle_path));
+        for key in [
+            "REQUESTS_CA_BUNDLE",
+            "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+            "NIX_SSL_CERT_FILE",
+        ] {
+            assert_eq!(env.get(key), Some(&command_ca_bundle_path));
+        }
+        assert_eq!(env.get("DENO_CERT").map(String::as_str), Some(""));
         assert_eq!(
             env.get("SSL_CERT_FILE"),
             Some(&mitm_ca_trust_bundle_path.display().to_string())
