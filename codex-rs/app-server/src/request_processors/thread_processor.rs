@@ -212,9 +212,8 @@ fn collect_resume_override_mismatches(
             }
         };
         if !sandbox_matches {
-            let active_sandbox = config_snapshot.sandbox_policy();
             mismatch_details.push(format!(
-                "sandbox requested={requested_sandbox:?} active={active_sandbox:?}"
+                "sandbox requested={requested_sandbox:?} active={active_sandbox_label}"
             ));
         }
     }

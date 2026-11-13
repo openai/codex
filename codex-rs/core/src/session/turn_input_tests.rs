@@ -185,7 +185,7 @@ async fn accepted_input_applies_thread_settings() {
             environments: Some(local_selections(config.cwd.clone()).into_requests()),
             approval_policy: Some(config.permissions.approval_policy.value()),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
-            sandbox_policy: Some(config.legacy_sandbox_policy()),
+            permission_profile: Some(config.permissions.effective_permission_profile()),
             summary: config.model_reasoning_summary,
             personality: config.personality,
             collaboration_mode: Some(CollaborationMode {

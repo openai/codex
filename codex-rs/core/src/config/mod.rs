@@ -204,7 +204,6 @@ pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_config::LoaderOverrides;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub(crate) use metrics::emit_session_start_metrics;
@@ -495,12 +494,6 @@ impl Permissions {
     /// Effective network sandbox policy derived from the canonical profile.
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile().network_sandbox_policy()
-    }
-
-    /// Legacy compatibility projection derived from the canonical profile.
-    pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        let permission_profile = self.effective_permission_profile();
-        compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
     }
 
     /// Check whether a legacy sandbox policy can be applied to this permission
@@ -1792,10 +1785,6 @@ impl Config {
                 self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS)
             }
         }
-    }
-
-    pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
-        self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }
 
     /// Combine runtime and profile roots without interpreting them on the current host.
@@ -3914,11 +3903,6 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            // No named `[permissions]` profile is active, but permissions
-            // should still flow through the canonical profile representation.
-            // Derive the old `sandbox_mode` defaults as a profile first, then
-            // keep a legacy-compatible projection only for the remaining code
-            // paths that still speak `SandboxPolicy`.
             let mut permission_profile = if let Some(PermissionConfig::Legacy { mode, workspace_write }) = permission_config {
                 translate_legacy_permissions(
                     mode,

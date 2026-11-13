@@ -57,7 +57,6 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -65,12 +64,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxEntry;
-use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -2289,10 +2285,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         Arc::clone(&environment_manager),
     );
     set_agent_control(&mut session, manager.agent_control());
-    let expected_sandbox = turn.config.legacy_sandbox_policy();
-    #[allow(deprecated)]
-    let mut expected_file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, &turn.cwd);
+    let expected_profile = turn.config.permissions.effective_permission_profile();
+    let (mut expected_file_system_sandbox_policy, expected_network_sandbox_policy) =
+        expected_profile.to_runtime_permissions();
     expected_file_system_sandbox_policy
         .entries
         .push(FileSystemSandboxEntry {
@@ -2308,9 +2303,8 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             },
             missing_path_behavior: None,
         });
-    let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
     let expected_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        SandboxEnforcement::from_legacy_sandbox_policy(&expected_sandbox),
+        expected_profile.enforcement(),
         &expected_file_system_sandbox_policy,
         expected_network_sandbox_policy,
     );
@@ -2390,7 +2384,6 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .expect("spawned agent thread should exist")
         .config_snapshot()
         .await;
-    assert_eq!(snapshot.sandbox_policy(), expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(snapshot.permission_profile, expected_permission_profile);
@@ -4555,29 +4548,6 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 async fn build_agent_spawn_config_uses_captured_step_settings_and_turn_context_values(
     parent_enabled: bool,
 ) {
-    fn pick_allowed_sandbox_policy(
-        permissions: &crate::config::Permissions,
-        base: SandboxPolicy,
-        cwd: &std::path::Path,
-    ) -> SandboxPolicy {
-        let candidates = [
-            SandboxPolicy::new_read_only_policy(),
-            SandboxPolicy::new_workspace_write_policy(),
-            SandboxPolicy::DangerFullAccess,
-        ];
-        candidates
-            .into_iter()
-            .find(|candidate| {
-                if *candidate == base {
-                    return false;
-                }
-                permissions
-                    .can_set_legacy_sandbox_policy(candidate, cwd)
-                    .is_ok()
-            })
-            .unwrap_or(base)
-    }
-
     let (_session, mut turn) = make_session_and_context().await;
     update_turn_settings_for_test(&mut turn, |settings| {
         update_selected_settings_for_test(settings, |selected| {
@@ -4609,19 +4579,23 @@ async fn build_agent_spawn_config_uses_captured_step_settings_and_turn_context_v
     }
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
-    let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions,
-        turn.config.legacy_sandbox_policy(),
-        turn_cwd.as_path(),
-    );
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &turn_cwd);
-    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
-    );
+    let base_profile = turn.config.permissions.effective_permission_profile();
+    let permission_profile = [
+        PermissionProfile::read_only(),
+        PermissionProfile::workspace_write()
+            .materialize_project_roots_with_workspace_roots(&[turn_cwd]),
+        PermissionProfile::Disabled,
+    ]
+    .into_iter()
+    .find(|candidate| {
+        *candidate != base_profile
+            && turn
+                .config
+                .permissions
+                .can_set_permission_profile(candidate)
+                .is_ok()
+    })
+    .unwrap_or(base_profile);
     turn.initial_environments.environments.clear();
     Arc::make_mut(&mut turn.config)
         .permissions

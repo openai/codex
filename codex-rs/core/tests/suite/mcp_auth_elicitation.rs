@@ -260,7 +260,7 @@ approvals_reviewer = "user"
         "model": session.model, "modelProvider": session.model_provider_id, "cwd": session.cwd,
         "approvalPolicy": app::AskForApproval::from(session.approval_policy),
         "approvalsReviewer": app::ApprovalsReviewer::from(session.approvals_reviewer),
-        "sandbox": app::SandboxPolicy::from(test.config.legacy_sandbox_policy()),
+        "sandbox": app::SandboxPolicy::from(test.config.permissions.effective_permission_profile().to_legacy_sandbox_policy(test.config.cwd.as_path())?),
     }))?;
     client.track_response(
         /*connection_id*/ 1,

@@ -1191,7 +1191,6 @@ flag = false
 async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
 {
     use base64::Engine;
-    use codex_protocol::protocol::SandboxPolicy;
 
     let Some(home) = dirs::home_dir() else {
         return Ok(());
@@ -1230,23 +1229,15 @@ writable_roots = ["~/code"]
         .await?;
 
     let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
-    match &config.legacy_sandbox_policy() {
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: false,
-        } => {
-            assert_eq!(
-                writable_roots
-                    .iter()
-                    .filter(|root| **root == expected_root)
-                    .count(),
-                1,
-            );
-        }
-        other => panic!("expected workspace-write policy, got {other:?}"),
-    }
+    assert_eq!(
+        config.permissions.permission_profile(),
+        &codex_protocol::models::PermissionProfile::workspace_write_with(
+            &[expected_root],
+            codex_protocol::permissions::NetworkSandboxPolicy::Enabled,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ false,
+        )
+    );
 
     assert_eq!(config.permissions.active_permission_profile(), None);
     Ok(())

@@ -2843,7 +2843,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: Some(config.permissions.effective_permission_profile()),
                 summary: Some(
                     config
                         .model_reasoning_summary
@@ -3101,7 +3101,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: Some(config.permissions.effective_permission_profile()),
                 summary: Some(ReasoningSummary::Concise),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,

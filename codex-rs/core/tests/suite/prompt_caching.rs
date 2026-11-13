@@ -916,7 +916,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_sandbox_policy = &config.legacy_sandbox_policy();
+    let default_permission_profile = config.permissions.effective_permission_profile();
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
@@ -930,7 +930,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
-                sandbox_policy: Some(default_sandbox_policy.clone()),
+                permission_profile: Some(default_permission_profile.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -955,7 +955,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
-                sandbox_policy: Some(default_sandbox_policy.clone()),
+                permission_profile: Some(default_permission_profile.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -1053,7 +1053,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_sandbox_policy = &config.legacy_sandbox_policy();
+    let default_permission_profile = config.permissions.effective_permission_profile();
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
@@ -1067,7 +1067,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
-                sandbox_policy: Some(default_sandbox_policy.clone()),
+                permission_profile: Some(default_permission_profile.clone()),
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,

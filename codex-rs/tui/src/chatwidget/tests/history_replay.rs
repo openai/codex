@@ -2,8 +2,6 @@ use super::helpers::drain_insert_history_transcript;
 use super::*;
 use crate::app_event::HistoryLookupResponse;
 use codex_app_server_protocol::ImageReference;
-use codex_app_server_protocol::NetworkAccess;
-use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ManagedFileSystemPermissions;
@@ -686,10 +684,6 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         },
     };
     let expected_permission_profile = expected_app_server_permission_profile.clone();
-    let expected_core_sandbox = expected_permission_profile
-        .to_legacy_sandbox_policy(expected_cwd.as_path())
-        .expect("permission profile should project to legacy sandbox policy");
-    let expected_sandbox = SandboxPolicy::from(expected_core_sandbox);
     let configured = crate::session_state::ThreadSessionState {
         read_only_history: false,
         daybreak_enabled: false,
@@ -721,8 +715,6 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         AskForApproval::from(chat.config_ref().permissions.approval_policy.value()),
         AskForApproval::Never
     );
-    let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
-    assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
         chat.config_ref().permissions.effective_permission_profile(),
         expected_app_server_permission_profile
@@ -818,9 +810,6 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         network: NetworkSandboxPolicy::Restricted,
     };
     let expected_permission_profile = expected_app_server_permission_profile.clone();
-    let expected_sandbox = SandboxPolicy::ExternalSandbox {
-        network_access: NetworkAccess::Restricted,
-    };
     let configured = crate::session_state::ThreadSessionState {
         read_only_history: false,
         daybreak_enabled: false,
@@ -848,8 +837,6 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
 
     chat.handle_thread_session(configured);
 
-    let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
-    assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
         chat.config_ref().permissions.effective_permission_profile(),
         expected_app_server_permission_profile

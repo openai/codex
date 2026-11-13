@@ -253,8 +253,12 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
                     .then(|| config.permissions.user_visible_workspace_roots().to_vec()),
                 approval_policy: (!server_owned).then_some(AskForApproval::OnRequest),
                 approvals_reviewer: None,
-                sandbox_policy: (!server_owned && !preserve)
-                    .then(|| config.legacy_sandbox_policy().into()),
+                sandbox_policy: (!server_owned && !preserve).then(|| config
+                    .permissions
+                    .effective_permission_profile()
+                    .to_legacy_sandbox_policy(config.cwd.as_path())
+                    .expect("test permissions fit the legacy wire format")
+                    .into()),
                 cyber_access_program: rollout_enabled.then_some(if daybreak {
                     CyberAccessProgram::DaybreakBlue.into()
                 } else {
