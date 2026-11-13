@@ -153,8 +153,6 @@ impl FileSystemSandboxRunner {
             })?
             .into_command_request();
         request.sandbox_override = sandbox.sandbox_override;
-        let policy = request.permission_profile.file_system_sandbox_policy();
-        tracing::Span::current().record("permission_entries", policy.entries.len());
         Ok(request)
     }
 }
@@ -535,6 +533,32 @@ mod tests {
         assert_eq!(request.env.get(&path_key), Some(&path));
     }
 
+    #[test]
+    fn sandbox_command_rejects_non_native_policy_cwd() {
+        #[cfg(unix)]
+        let foreign_uri = "file://server/share/checkout";
+        #[cfg(windows)]
+        let foreign_uri = "file:///usr/local/checkout";
+        let cwd = PathUri::parse(foreign_uri).expect("valid foreign URI");
+        let sandbox = sandbox_context_with_cwd(&FileSystemSandboxPolicy::read_only(), cwd.clone());
+        let paths = ExecServerRuntimeOptions::new(
+            std::env::current_exe().expect("current executable"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+
+        let error = FileSystemSandboxRunner::new(paths)
+            .sandbox_command(&sandbox)
+            .expect_err("non-native policy cwd should be rejected");
+        assert_eq!(
+            error,
+            crate::rpc::invalid_request(format!(
+                "'{cwd}' is invalid on '{}'",
+                std::env::consts::OS
+            ))
+        );
+    }
+
     /// Removing the selected directory must not change permission anchoring or prevent launch.
     #[test]
     fn sandbox_exec_request_uses_filesystem_root_and_preserves_policy_cwd() {
@@ -655,45 +679,113 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn helper_permissions_include_only_the_helper_executable() {
-        let codex_self_exe = std::env::current_exe().expect("current exe");
-        let codex_self_exe = codex_self_exe.canonicalize().expect("canonical helper");
-        let runtime_paths =
-            ExecServerRuntimeOptions::new(codex_self_exe, /*codex_linux_sandbox_exe*/ None)
-                .expect("runtime paths");
-        // :root covers the cwd's drive. The helper needs an exact read on its own drive.
-        let drive = if runtime_paths.codex_self_exe.as_path().starts_with(r"C:\") {
-            r"D:\"
-        } else {
-            r"C:\"
-        };
-        let cwd = AbsolutePathBuf::from_absolute_path(drive).expect("absolute cwd");
-        let parent = runtime_paths
-            .codex_self_exe
-            .parent()
-            .expect("current exe parent");
-        let sibling = parent.join("credentials.json");
+    fn windows_helper_binds_executable_and_workspace_grants() {
+        const CHILD: &str = "CODEX_TEST_WINDOWS_HELPER_GRANTS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Preparing the token wrapper persists capability SIDs under CODEX_HOME.
+            let home = tempfile::tempdir().expect("isolated Codex home");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "fs_sandbox::tests::windows_helper_binds_executable_and_workspace_grants",
+                ])
+                .env(CHILD, "1")
+                .env("CODEX_HOME", home.path())
+                .output()
+                .expect("run isolated Windows helper test");
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "isolated helper test: {output:?}"
+            );
+            return;
+        }
 
-        let context = crate::FileSystemSandboxContext {
-            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::RestrictedToken,
-            ..sandbox_context_with_cwd(
-                &FileSystemSandboxPolicy::read_only(),
-                PathUri::from_abs_path(&cwd),
-            )
+        let workspace = tempfile::tempdir().expect("workspace");
+        let other = tempfile::tempdir().expect("other workspace");
+        let roots = [workspace.path(), other.path()].map(|path| {
+            AbsolutePathBuf::from_absolute_path(path.canonicalize().expect("canonical workspace"))
+                .expect("absolute workspace")
+        });
+        let drive = roots[0].ancestors().last().expect("workspace drive");
+        // An unused drive also avoids resolving a mapped drive back into the workspace.
+        let helper = ('D'..='Z')
+            .rev()
+            .map(|letter| std::path::PathBuf::from(format!(r"{letter}:\")))
+            .find(|root| !root.exists())
+            .expect("unused drive for the helper policy")
+            .join(r"codex-test-runtime\helper.exe");
+        let helper = AbsolutePathBuf::from_absolute_path(helper).expect("helper");
+        let helper_dir = helper.parent().expect("helper directory");
+        let runtime_paths = ExecServerRuntimeOptions::new(
+            helper.to_path_buf(),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let runner = FileSystemSandboxRunner {
+            runtime_paths,
+            helper_env: HashMap::new(),
         };
-        let request = FileSystemSandboxRunner::new(runtime_paths.clone())
-            .sandbox_command(&context)
-            .expect("sandbox command");
-        let policy = request.permission_profile.file_system_sandbox_policy();
-
-        assert!(
-            policy.can_read_local_path_with_cwd(
-                runtime_paths.codex_self_exe.as_path(),
-                cwd.as_path(),
-            )
-        );
-        assert!(!policy.can_read_local_path_with_cwd(parent.as_path(), cwd.as_path()));
-        assert!(!policy.can_read_local_path_with_cwd(sibling.as_path(), cwd.as_path()));
+        let policy = restricted_policy(vec![
+            special_entry(FileSystemSpecialPath::Root, FileSystemAccessMode::Read),
+            special_entry(
+                FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        for (grants, policy_cwd, wrapper_roots, writable) in [
+            (&roots[..], &roots[0], &roots[..], [true, true]),
+            // The wrapper encodes the command's drive root when no write roots were granted.
+            (
+                &roots[..0],
+                &roots[0],
+                std::slice::from_ref(&drive),
+                [false, false],
+            ),
+            (&roots[1..], &roots[1], &roots[1..], [false, true]),
+        ] {
+            let sandbox = crate::FileSystemSandboxContext {
+                workspace_roots: grants.iter().map(PathUri::from_abs_path).collect(),
+                windows_sandbox_selection:
+                    codex_file_system::WindowsSandboxSelection::RestrictedToken,
+                ..sandbox_context_with_cwd(&policy, PathUri::from_abs_path(policy_cwd))
+            };
+            let request = runner
+                .sandbox_command(&sandbox)
+                .expect("prepare Windows helper");
+            let args = &request.command;
+            assert_eq!(
+                args.windows(2)
+                    .filter(|pair| pair[0] == "--workspace-root")
+                    .map(|pair| std::path::Path::new(&pair[1]))
+                    .collect::<Vec<_>>(),
+                wrapper_roots
+                    .iter()
+                    .map(AbsolutePathBuf::as_path)
+                    .collect::<Vec<_>>()
+            );
+            let profile = args
+                .windows(2)
+                .find(|pair| pair[0] == "--permission-profile")
+                .expect("serialized helper policy");
+            let profile: PermissionProfile =
+                serde_json::from_str(&profile[1]).expect("helper policy");
+            let fs = profile.file_system_sandbox_policy();
+            assert_eq!(
+                roots
+                    .each_ref()
+                    .map(|root| fs.can_write_local_path_with_cwd(root, policy_cwd)),
+                writable
+            );
+            assert_eq!(
+                fs.resolve_access_for_local_path_with_cwd(&helper, policy_cwd),
+                FileSystemAccessMode::Read
+            );
+            assert!(!fs.can_read_local_path_with_cwd(&helper_dir, policy_cwd));
+            assert!(
+                !fs.can_read_local_path_with_cwd(&helper_dir.join("credentials.json"), policy_cwd)
+            );
+        }
     }
 
     #[cfg(unix)]

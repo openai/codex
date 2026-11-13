@@ -113,7 +113,10 @@ impl PreparedLaunchPolicy {
             });
         };
         let cwd = native_path(policy_cwd, "sandbox policy cwd")?;
-        let workspace_roots = native_workspace_roots(roots)?;
+        let workspace_roots = roots
+            .iter()
+            .map(|root| native_path(root, "sandbox workspace root"))
+            .collect::<io::Result<Vec<_>>>()?;
         let (file_system, network) = permissions.to_runtime_permissions();
         for entry in &file_system.entries {
             if let FileSystemPath::Path { path } = &entry.path {
@@ -123,6 +126,7 @@ impl PreparedLaunchPolicy {
         let mut file_system =
             file_system.materialize_project_roots_with_workspace_roots(&workspace_roots);
         let permissions = if is_file_system_helper {
+            tracing::Span::current().record("permission_entries", file_system.entries.len());
             if !file_system.has_full_disk_read_access() {
                 let minimal = FileSystemSandboxEntry::new(
                     FileSystemPath::Special {
@@ -168,13 +172,6 @@ impl PreparedLaunchPolicy {
             workspace_roots,
         })
     }
-}
-
-pub(super) fn native_workspace_roots(roots: &[PathUri]) -> io::Result<Vec<AbsolutePathBuf>> {
-    roots
-        .iter()
-        .map(|root| native_path(root, "sandbox workspace root"))
-        .collect::<io::Result<Vec<_>>>()
 }
 
 fn native_path(path: &PathUri, field: &str) -> io::Result<AbsolutePathBuf> {

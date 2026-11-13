@@ -149,17 +149,6 @@ pub struct SandboxTransformRequest<'a> {
     pub windows_sandbox_level: WindowsSandboxLevel,
 }
 
-/// Bundled arguments for a sandbox transformation whose result will be spawned
-/// directly from argv.
-///
-/// Direct-spawn callers will not run a later platform-specific launcher, so the
-/// returned command must encode any sandbox wrapper it needs.
-pub struct SandboxDirectSpawnTransformRequest<'a> {
-    pub transform: SandboxTransformRequest<'a>,
-    pub workspace_roots: &'a [AbsolutePathBuf],
-    pub windows_sandbox_proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
-}
-
 // TODO(anp): Revisit this preparation type once this module's PathUri migration is complete.
 struct PendingSandboxedExecRequest {
     native_command_cwd: AbsolutePathBuf,
@@ -624,15 +613,22 @@ impl SandboxManager {
             }
             SandboxType::WindowsRestrictedToken => {
                 exec.permission_profile = pending?.effective_permission_profile;
-                #[cfg(windows)]
                 if is_file_system_helper {
-                    wrap_windows_sandbox_exec_request_for_direct_spawn(
-                        &mut exec,
-                        &policy.workspace_roots,
-                        /*codex_home*/ None,
-                        request.sandbox_exe,
-                        codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
-                    )?;
+                    #[cfg(not(windows))]
+                    return Err(SandboxTransformError::SandboxUnavailable);
+                    #[cfg(windows)]
+                    {
+                        let codex_home =
+                            codex_utils_home_dir::find_codex_home().map_err(|err| {
+                                SandboxTransformError::WindowsSandboxPreparation(err.to_string())
+                            })?;
+                        wrap_windows_file_system_helper(
+                            &mut exec,
+                            &policy.workspace_roots,
+                            &codex_home,
+                            request.sandbox_exe,
+                        )?;
+                    }
                 }
             }
         }
@@ -679,67 +675,15 @@ impl SandboxManager {
         exec.arg0 = Some(arg0.to_owned());
         Ok(())
     }
-
-    pub fn transform_for_direct_spawn(
-        &self,
-        request: SandboxDirectSpawnTransformRequest<'_>,
-    ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        #[cfg(windows)]
-        {
-            self.transform_for_direct_spawn_with_codex_home(request, /*codex_home*/ None)
-        }
-        #[cfg(not(windows))]
-        {
-            self.transform(request.transform)
-                .map(WrappedSandboxCommand::into_command_request)
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn transform_for_direct_spawn_with_codex_home(
-        &self,
-        request: SandboxDirectSpawnTransformRequest<'_>,
-        codex_home: Option<&Path>,
-    ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        let roots = request.transform.workspace_roots;
-        let fallback_roots = request.workspace_roots;
-        let proxy_settings_mode = request.windows_sandbox_proxy_settings_mode;
-        let sandbox_exe = request.transform.sandbox_exe;
-        let mut request = self.transform(request.transform)?.into_command_request();
-        if request.sandbox != SandboxType::WindowsRestrictedToken {
-            return Ok(request);
-        }
-        let workspace_roots = roots
-            .map(launch::native_workspace_roots)
-            .transpose()
-            .map_err(SandboxTransformError::InvalidPolicy)?;
-        wrap_windows_sandbox_exec_request_for_direct_spawn(
-            &mut request,
-            workspace_roots.as_deref().unwrap_or(fallback_roots),
-            codex_home,
-            sandbox_exe,
-            proxy_settings_mode,
-        )?;
-        Ok(request)
-    }
 }
 
 #[cfg(target_os = "windows")]
-fn wrap_windows_sandbox_exec_request_for_direct_spawn(
+fn wrap_windows_file_system_helper(
     request: &mut SandboxExecRequest,
     workspace_roots: &[AbsolutePathBuf],
-    codex_home: Option<&Path>,
+    codex_home: &Path,
     sandbox_exe: Option<&Path>,
-    proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
 ) -> Result<(), SandboxTransformError> {
-    let owned_codex_home;
-    let codex_home = if let Some(codex_home) = codex_home {
-        codex_home
-    } else {
-        owned_codex_home = codex_utils_home_dir::find_codex_home()
-            .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
-        owned_codex_home.as_path()
-    };
     let sandbox_exe = sandbox_exe.ok_or_else(|| {
         SandboxTransformError::WindowsSandboxPreparation(
             "missing Codex executable path".to_string(),
@@ -821,7 +765,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             request.windows_sandbox_level,
             proxy_enforced,
             network_proxy_restricting_sid.as_deref(),
-            proxy_settings_mode,
+            codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
