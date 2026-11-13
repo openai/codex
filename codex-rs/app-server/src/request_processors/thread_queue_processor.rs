@@ -1,4 +1,6 @@
 use crate::config_manager::ConfigManager;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::error_code::internal_error;
@@ -79,13 +81,18 @@ impl ThreadQueueRequestProcessor {
         params: ThreadQueueAddParams,
     ) -> Result<ThreadQueueAddResponse, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
-        let (thread_id, loaded_thread, source) = self.require_thread(&params.thread_id).await?;
+        let (thread_id, loaded_thread, source, cwd) =
+            self.require_thread(&params.thread_id).await?;
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
             .enqueue_with_metadata(
                 thread_id,
-                submission_into_turn_input(params.input, Some(params.client_user_message_id)),
+                submission_into_turn_input(
+                    params.input,
+                    Some(params.client_user_message_id),
+                    &cwd,
+                )?,
                 params.responsesapi_client_metadata,
             )
             .await
@@ -99,7 +106,7 @@ impl ThreadQueueRequestProcessor {
         &self,
         params: ThreadQueueListParams,
     ) -> Result<ThreadQueueListResponse, JSONRPCErrorError> {
-        let (thread_id, _, _) = self.require_thread(&params.thread_id).await?;
+        let (thread_id, ..) = self.require_thread(&params.thread_id).await?;
         let offset = params
             .cursor
             .as_deref()
@@ -137,14 +144,19 @@ impl ThreadQueueRequestProcessor {
         params: ThreadQueueUpdateParams,
     ) -> Result<ThreadQueueUpdateResponse, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
-        let (thread_id, loaded_thread, source) = self.require_thread(&params.thread_id).await?;
+        let (thread_id, loaded_thread, source, cwd) =
+            self.require_thread(&params.thread_id).await?;
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
             .update_with_metadata(
                 thread_id,
                 params.queued_submission_id.clone(),
-                submission_into_turn_input(params.input, /*client_user_message_id*/ None),
+                submission_into_turn_input(
+                    params.input,
+                    /*client_user_message_id*/ None,
+                    &cwd,
+                )?,
                 params.responsesapi_client_metadata,
             )
             .await
@@ -164,7 +176,7 @@ impl ThreadQueueRequestProcessor {
         &self,
         params: ThreadQueueDeleteParams,
     ) -> Result<ThreadQueueDeleteResponse, JSONRPCErrorError> {
-        let (thread_id, _, _) = self.require_thread(&params.thread_id).await?;
+        let (thread_id, ..) = self.require_thread(&params.thread_id).await?;
         let deleted = self
             .service()?
             .delete(thread_id, params.queued_submission_id)
@@ -177,7 +189,7 @@ impl ThreadQueueRequestProcessor {
         &self,
         params: ThreadQueueReorderParams,
     ) -> Result<ThreadQueueReorderResponse, JSONRPCErrorError> {
-        let (thread_id, _, _) = self.require_thread(&params.thread_id).await?;
+        let (thread_id, ..) = self.require_thread(&params.thread_id).await?;
         self.service()?
             .reorder(thread_id, params.queued_submission_ids)
             .await
@@ -190,7 +202,7 @@ impl ThreadQueueRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadQueueStartParams,
     ) -> Result<ThreadQueueStartResponse, JSONRPCErrorError> {
-        let (_, loaded_thread, source) = self.require_thread(&params.thread_id).await?;
+        let (_, loaded_thread, source, _) = self.require_thread(&params.thread_id).await?;
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let thread = loaded_thread
             .ok_or_else(|| invalid_request("resume the thread before starting a queued message"))?;
@@ -255,10 +267,11 @@ impl ThreadQueueRequestProcessor {
     async fn require_thread(
         &self,
         raw_thread_id: &str,
-    ) -> Result<(ThreadId, Option<Arc<CodexThread>>, SessionSource), JSONRPCErrorError> {
+    ) -> Result<(ThreadId, Option<Arc<CodexThread>>, SessionSource, PathBuf), JSONRPCErrorError>
+    {
         let thread_id = ThreadId::from_string(raw_thread_id)
             .map_err(|error| invalid_request(format!("invalid thread id: {error}")))?;
-        let (loaded_thread, source) = if let Ok(thread) =
+        let (loaded_thread, source, cwd) = if let Ok(thread) =
             self.thread_manager.get_thread(thread_id).await
         {
             let snapshot = thread.config_snapshot().await;
@@ -267,7 +280,8 @@ impl ThreadQueueRequestProcessor {
                     "ephemeral thread does not support queued submissions: {thread_id}"
                 )));
             }
-            (Some(thread), snapshot.session_source)
+            let cwd = snapshot.cwd().to_path_buf();
+            (Some(thread), snapshot.session_source, cwd)
         } else {
             let stored = self
                 .thread_store
@@ -288,10 +302,10 @@ impl ThreadQueueRequestProcessor {
                     "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
                 )));
             }
-            (None, stored.source)
+            (None, stored.source, stored.cwd)
         };
 
-        Ok((thread_id, loaded_thread, source))
+        Ok((thread_id, loaded_thread, source, cwd))
     }
 }
 
@@ -315,13 +329,27 @@ fn ensure_direct_input_allowed(
 }
 
 fn submission_into_turn_input(
-    input: Vec<UserInput>,
+    mut input: Vec<UserInput>,
     client_user_message_id: Option<String>,
-) -> TurnInput {
-    TurnInput::UserInput {
+    cwd: &Path,
+) -> Result<TurnInput, JSONRPCErrorError> {
+    for item in &mut input {
+        if let UserInput::LocalImage { path, .. } | UserInput::LocalAudio { path } = item
+            && path.is_relative()
+        {
+            let resolved = cwd.join(&*path);
+            if !resolved.is_absolute() {
+                return Err(invalid_request(
+                    "local queued attachment path cannot be resolved against the thread working directory",
+                ));
+            }
+            *path = resolved;
+        }
+    }
+    Ok(TurnInput::UserInput {
         content: input.into_iter().map(UserInput::into_core).collect(),
         client_id: client_user_message_id,
-    }
+    })
 }
 
 pub(super) fn queue_error(error: QueueServiceError) -> JSONRPCErrorError {

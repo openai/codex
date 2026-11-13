@@ -9,6 +9,8 @@ use app_test_support::create_escalated_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -267,6 +269,63 @@ async fn queue_crud_preserves_identity_order_and_notifications() -> Result<()> {
     let drain_change: ThreadQueueChangedNotification =
         timeout(READ_TIMEOUT, app.read_notification("thread/queue/changed")).await??;
     assert_eq!(drain_change, ThreadQueueChangedNotification { thread_id });
+    Ok(())
+}
+
+#[tokio::test]
+async fn queue_attachments_resolve_relative_paths_against_thread_cwd() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "uses app-server-local attachments and a local thread cwd"
+    );
+
+    const RED_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+    const BLUE_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC";
+
+    let (mut app, codex_home, _server) = queue_app(vec![blocked_turn_response()?]).await?;
+    let workspace = TempDir::new()?;
+    // The test app-server starts in CODEX_HOME.
+    let server_image = codex_home.path().join("sample.png");
+    let workspace_image = workspace.path().join("sample.png");
+    std::fs::write(&server_image, STANDARD.decode(RED_PNG)?)?;
+    std::fs::write(&workspace_image, STANDARD.decode(BLUE_PNG)?)?;
+    let start_id = app
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let started: ThreadStartResponse = timeout(READ_TIMEOUT, app.read_response(start_id)).await??;
+    let thread_id = started.thread.id;
+    let _ = start_blocked_turn(&mut app, &thread_id).await?;
+
+    let input: Vec<_> = ["sample.png".into(), workspace_image, server_image]
+        .into_iter()
+        .map(|path| UserInput::LocalImage { path, detail: None })
+        .collect();
+    let queued = queue_item(
+        &mut app,
+        ThreadQueueAddParams {
+            input: input.clone(),
+            ..submission(&thread_id, "attachment")
+        },
+    )
+    .await?;
+    assert_eq!(queued.input[0], queued.input[1]);
+    assert_ne!(queued.input[0], queued.input[2]);
+
+    let updated: ThreadQueueUpdateResponse = app
+        .request(|request_id| ClientRequest::ThreadQueueUpdate {
+            request_id,
+            params: ThreadQueueUpdateParams {
+                thread_id,
+                queued_submission_id: queued.id,
+                input,
+                responsesapi_client_metadata: None,
+            },
+        })
+        .await?;
+    assert_eq!(updated.queued_submission.input, queued.input);
     Ok(())
 }
 
