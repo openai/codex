@@ -96,6 +96,20 @@ X-Local = "no"
         timeout(Duration::from_secs(/*secs*/ 60), server.read_response(id)).await??;
     assert_eq!(started.model_provider, "gateway");
 
+    let id = server
+        .send_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "openai"})),
+        )
+        .await?;
+    let rejected = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(
+        rejected.error.data,
+        Some(json!({"config_write_error_code": "configRequirementReadonly"}))
+    );
+
     for (key, value) in [
         ("model_provider", json!("openai")),
         (

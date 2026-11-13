@@ -121,15 +121,17 @@ denial limit, and interrupted status; neither emits a separate `Error` event.
 
 # Model catalog provider requirements
 
-`model/list` accepts an optional `modelProvider` to list models for a configured provider
-other than the startup default. For example, `{"modelProvider": "my_gateway"}` returns that
-provider's models after the user's default changes. Omit it to retain the startup provider
-and caching behavior. Explicit selections use the provider definitions loaded at startup. Restart the server
-to pick up edits to those definitions. An unknown selector returns JSON-RPC error
+`modelProvider/default/set` selects a configured provider for new threads and unscoped model lists.
+Send `{"providerId": "my_gateway"}`. The response uses the same `ConfigWriteResponse` as other config writes.
+An effective selection refreshes the catalog on its next read. Editing the active provider through
+`modelProvider/config/write` also refreshes that snapshot.
+
+`model/list` uses the current default when `modelProvider` is omitted. Pass a provider ID to list
+models for a chat that retained its provider after a default change. An unknown selector returns JSON-RPC error
 `-32600` with `data.type = "modelProviderNotConfigured"` and the requested `modelProvider`.
 
 `model/list` checks its selected provider, and periodic model catalog refreshes check the
-startup provider, against current managed provider requirements. If that provider no longer
+current default provider, against current managed provider requirements. If that provider no longer
 complies, `model/list` returns JSON-RPC error `-32600` asking the client to restart Codex,
 and background refreshes skip the old endpoint. Requirement load failures also block these
 operations. Checks apply even when the catalog is cached.

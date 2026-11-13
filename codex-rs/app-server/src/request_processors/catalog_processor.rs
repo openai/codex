@@ -187,12 +187,10 @@ impl CatalogRequestProcessor {
         let (config, models_manager) = match params.model_provider.as_deref() {
             None => (active_config, active_models_manager),
             Some(provider_id) => {
-                let config = config_for_provider(&self.config, provider_id)?;
-                if provider_id == active_config.model_provider_id
-                    && config.model_provider == active_config.model_provider
-                {
+                if provider_id == active_config.model_provider_id {
                     (active_config, active_models_manager)
                 } else {
+                    let config = config_for_provider(&active_config, provider_id)?;
                     // Temporary catalogs must not replace the active provider's disk cache.
                     let manager = self.thread_manager.temporary_models_manager_for_config(
                         &config,

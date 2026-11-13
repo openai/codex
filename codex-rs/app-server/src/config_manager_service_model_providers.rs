@@ -3,7 +3,11 @@
 use super::ConfigManager;
 use super::ConfigManagerError;
 use super::TomlValue;
+use codex_app_server_protocol::ConfigWriteErrorCode;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::GatewayAuth;
+use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::ModelProviderDefaultSetParams;
 use codex_app_server_protocol::ModelProviderListParams;
 use codex_app_server_protocol::ModelProviderListResponse;
 use codex_app_server_protocol::ModelProviderSummary;
@@ -62,6 +66,50 @@ pub(super) fn valid_endpoint(value: &str) -> bool {
 }
 
 impl ConfigManager {
+    pub(crate) async fn model_provider_default_set(
+        &self,
+        params: ModelProviderDefaultSetParams,
+    ) -> Result<ConfigWriteResponse, ConfigManagerError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigManagerError::io("failed to read providers", err))?;
+        let user_layer =
+            writable_user_layer(&layers, self.loader_overrides()).ok_or_else(|| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigLayerReadonly,
+                    "The user configuration is not writable.",
+                )
+            })?;
+        let provider_id = params.provider_id;
+        if !built_in_model_providers(/*openai_base_url*/ None).contains_key(&provider_id)
+            && layers
+                .effective_config()
+                .get("model_providers")
+                .and_then(|providers| providers.get(&provider_id))
+                .is_none()
+        {
+            return Err(ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Model provider `{provider_id}` is not configured."),
+            ));
+        }
+        let user_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
+        self.persist_user_edits(
+            &layers,
+            user_layer,
+            user_path,
+            vec![(
+                "model_provider".into(),
+                provider_id.into(),
+                MergeStrategy::Replace,
+            )],
+        )
+        .await
+    }
+
     pub(crate) async fn model_provider_list(
         &self,
         _params: ModelProviderListParams,

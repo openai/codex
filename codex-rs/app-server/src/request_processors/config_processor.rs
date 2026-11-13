@@ -240,6 +240,25 @@ impl ConfigRequestProcessor {
         Ok(response)
     }
 
+    pub(crate) fn model_provider_default_set(
+        &self,
+        params: codex_app_server_protocol::ModelProviderDefaultSetParams,
+    ) -> futures::future::BoxFuture<'_, Result<ClientResponsePayload, JSONRPCErrorError>> {
+        // Keep provider config resolution off the shared request dispatcher stack.
+        Box::pin(async move {
+            let result = self
+                .config_manager
+                .model_provider_default_set(params)
+                .await
+                .map_err(map_error);
+            let response = self.handle_config_mutation_result(result).await?;
+            if response.status == codex_app_server_protocol::WriteStatus::Ok {
+                self.model_catalog.invalidate().await;
+            }
+            Ok(ClientResponsePayload::ModelProviderDefaultSet(response))
+        })
+    }
+
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {

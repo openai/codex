@@ -2566,6 +2566,18 @@
       ],
       "type": "object"
     },
+    "ModelProviderDefaultSetParams": {
+      "properties": {
+        "providerId": {
+          "description": "Configured provider to use by default for new threads and unscoped model lists.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerId"
+      ],
+      "type": "object"
+    },
     "ModelProviderListParams": {
       "type": "object"
     },
@@ -8382,6 +8394,30 @@
         "params"
       ],
       "title": "ModelProvider/config/writeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/default/set"
+          ],
+          "title": "ModelProvider/default/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderDefaultSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/default/setRequest",
       "type": "object"
     },
     {

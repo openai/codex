@@ -5,12 +5,14 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ModelProviderConfigWriteResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -307,7 +309,20 @@ name = 'Other'
         )
         .await?;
     let _: ModelProviderConfigWriteResponse = server.read_response(id).await?;
-    assert_eq!(list_models(&mut server).await?.data[0].id, "saved-model");
+    let saved = list_models(&mut server).await?;
+    assert_eq!(saved.data[0].id, "saved-model");
+    let id = server
+        .send_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "other"})),
+        )
+        .await?;
+    let _: ConfigWriteResponse = server.read_response(id).await?;
+    let id = server
+        .send_request("model/list", Some(json!({"modelProvider": "gateway"})))
+        .await?;
+    let retained: ModelListResponse = server.read_response(id).await?;
+    assert_eq!(retained, saved);
     Ok(())
 }
 
@@ -454,6 +469,39 @@ requires_openai_auth = true
     assert_eq!(selected.data[0].id, "second-model");
     let disk_catalog: ModelsResponse = serde_json::from_slice(&std::fs::read(&cache_path)?)?;
     assert_eq!(disk_catalog, initial_cache);
+    assert_eq!(list_models(&mut server).await?, initial);
+
+    let id = server
+        .send_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "second"})),
+        )
+        .await?;
+    let saved: ConfigWriteResponse = server.read_response(id).await?;
+    assert_eq!(saved.status, WriteStatus::Ok);
+    assert_eq!(list_models(&mut server).await?, selected);
+
+    let id = server
+        .send_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "missing"})),
+        )
+        .await?;
+    let rejected = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(
+        rejected.error.data,
+        Some(json!({"config_write_error_code": "configValidationError"}))
+    );
+    assert_eq!(list_models(&mut server).await?, selected);
+    let id = server
+        .send_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "first"})),
+        )
+        .await?;
+    let _: ConfigWriteResponse = server.read_response(id).await?;
     assert_eq!(list_models(&mut server).await?, initial);
     Ok(())
 }

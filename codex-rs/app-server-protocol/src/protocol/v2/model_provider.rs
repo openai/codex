@@ -248,3 +248,11 @@ pub struct ModelProviderConfigWriteParams {
 pub struct ModelProviderConfigWriteResponse {
     pub provider: ModelProviderSummary,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderDefaultSetParams {
+    /// Configured provider to use by default for new threads and unscoped model lists.
+    pub provider_id: String,
+}

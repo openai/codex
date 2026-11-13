@@ -349,6 +349,7 @@ export type { ModelProviderCapabilitiesReadParams } from "./ModelProviderCapabil
 export type { ModelProviderCapabilitiesReadResponse } from "./ModelProviderCapabilitiesReadResponse";
 export type { ModelProviderConfigWriteParams } from "./ModelProviderConfigWriteParams";
 export type { ModelProviderConfigWriteResponse } from "./ModelProviderConfigWriteResponse";
+export type { ModelProviderDefaultSetParams } from "./ModelProviderDefaultSetParams";
 export type { ModelProviderError } from "./ModelProviderError";
 export type { ModelProviderListParams } from "./ModelProviderListParams";
 export type { ModelProviderListResponse } from "./ModelProviderListResponse";

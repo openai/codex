@@ -3455,6 +3455,29 @@ async fn cloud_desktop_storage_requirements_control_reads_and_writes() {
 }
 
 #[tokio::test]
+async fn model_provider_default_set_reports_a_cli_override() -> Result<()> {
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![("model_provider".into(), TomlValue::String("openai".into()))],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleLoader::default(),
+    );
+    let result = service
+        .model_provider_default_set(codex_app_server_protocol::ModelProviderDefaultSetParams {
+            provider_id: "amazon-bedrock".into(),
+        })
+        .await?;
+    assert_eq!(result.status, WriteStatus::OkOverridden);
+    assert_eq!(
+        result.overridden_metadata.unwrap().effective_value,
+        serde_json::json!("openai")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_provider_list_allows_user_overrides_of_system_defaults() -> Result<()> {
     use codex_app_server_protocol::ModelProviderListParams;
 
@@ -3550,6 +3573,20 @@ async fn model_provider_list_allows_user_overrides_of_system_defaults() -> Resul
             .model_provider_list(ModelProviderListParams {})
             .await?;
         assert_eq!(response.can_change_default, can_change_default);
+        if ignore_user_config {
+            let error = service
+                .model_provider_default_set(
+                    codex_app_server_protocol::ModelProviderDefaultSetParams {
+                        provider_id: "openai".into(),
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.write_error_code(),
+                Some(ConfigWriteErrorCode::ConfigLayerReadonly)
+            );
+        }
         assert_eq!(response.default_provider_id, "team");
         assert_eq!(
             serde_json::to_value(response.data)?,

@@ -1212,6 +1212,12 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ModelProviderConfigWriteResponse,
     },
+    ModelProviderDefaultSet => "modelProvider/default/set" {
+        params: v2::ModelProviderDefaultSetParams,
+        serialization: global("config"),
+        manual_payload_conversion: manual,
+        response: v2::ConfigWriteResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,

@@ -347,13 +347,24 @@ impl ConfigManager {
             ));
         }
 
+        self.persist_user_edits(&layers, &user_layer, provided_path, edits)
+            .await
+    }
+
+    async fn persist_user_edits(
+        &self,
+        layers: &ConfigLayerStack,
+        user_layer: &ConfigLayerEntry,
+        provided_path: AbsolutePathBuf,
+        edits: Vec<(String, JsonValue, MergeStrategy)>,
+    ) -> Result<ConfigWriteResponse, ConfigManagerError> {
         let mut user_config = user_layer.config.clone();
         let mut credential_provider_edits = CredentialProviderEdits::new(&user_config);
         let mut parsed_segments = Vec::new();
         let mut config_edits = Vec::new();
 
         for (key_path, value, strategy) in edits.into_iter() {
-            let mut segments = writable_key_path(&layers, &key_path)?;
+            let mut segments = writable_key_path(layers, &key_path)?;
             if (value.is_null() || matches!(strategy, MergeStrategy::Upsert))
                 && let Some(pattern) = shell_environment_filter_entry(&user_config, &segments)
                     .map(|(pattern, _)| pattern.clone())

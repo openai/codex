@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "providerId": {
+      "description": "Configured provider to use by default for new threads and unscoped model lists.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "providerId"
+  ],
+  "title": "ModelProviderDefaultSetParams",
+  "type": "object"
+}

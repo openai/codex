@@ -2977,6 +2977,19 @@ class ModelProviderCapabilitiesReadResponse(BaseModel):
     web_search: Annotated[bool, Field(alias="webSearch")]
 
 
+class ModelProviderDefaultSetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    provider_id: Annotated[
+        str,
+        Field(
+            alias="providerId",
+            description="Configured provider to use by default for new threads and unscoped model lists.",
+        ),
+    ]
+
+
 class ModelProviderMismatchModelProviderError(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8169,6 +8182,17 @@ class ModelProviderListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["modelProvider/list"], Field(title="ModelProvider/listRequestMethod")]
     params: ModelProviderListParams
+
+
+class ModelProviderDefaultSetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["modelProvider/default/set"], Field(title="ModelProvider/default/setRequestMethod")
+    ]
+    params: ModelProviderDefaultSetParams
 
 
 class ModelProviderCapabilitiesReadRequest(BaseModel):
@@ -13922,6 +13946,7 @@ class ClientRequest(
         | AccountGatewayOAuthCancelRequest
         | ModelProviderListRequest
         | ModelProviderConfigWriteRequest
+        | ModelProviderDefaultSetRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
@@ -14034,6 +14059,7 @@ class ClientRequest(
         | AccountGatewayOAuthCancelRequest
         | ModelProviderListRequest
         | ModelProviderConfigWriteRequest
+        | ModelProviderDefaultSetRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
