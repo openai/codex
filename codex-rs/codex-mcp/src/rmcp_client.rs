@@ -859,29 +859,51 @@ pub(crate) async fn list_tools_for_client_uncached(
         let meta = &meta;
         let first_page = params.as_ref().is_none_or(|params| params.cursor.is_none());
         async move {
-            let response = client
-                .list_tools_with_connector_ids(params, timeout)
-                .await?;
+            let (tools, next_cursor, response_meta) = if is_codex_apps_mcp_server {
+                let response = client
+                    .list_tools_with_connector_ids(params, timeout)
+                    .await?;
+                let tools = response
+                    .tools
+                    .into_iter()
+                    .map(|tool| {
+                        codex_apps_tool_info_from_listed_tool(
+                            server_name,
+                            server_instructions,
+                            tool,
+                        )
+                    })
+                    .collect();
+                (tools, response.next_cursor, response.meta)
+            } else {
+                let response = client.list_tools(params, timeout).await?;
+                let tools = response
+                    .tools
+                    .into_iter()
+                    .map(|tool| {
+                        regular_mcp_tool_info_from_listed_tool(
+                            server_name,
+                            server_instructions,
+                            tool,
+                        )
+                    })
+                    .collect();
+                (
+                    tools,
+                    response.next_cursor,
+                    response.meta.map(|meta| serde_json::json!(meta)),
+                )
+            };
             if first_page {
                 *meta
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    response.meta.map(Arc::new);
+                    response_meta.map(Arc::new);
             }
-            Ok((response.tools, response.next_cursor))
+            Ok((tools, next_cursor))
         }
     })
-    .await?
-    .into_iter()
-    .map(|tool| {
-        tool_info_from_listed_tool(
-            server_name,
-            is_codex_apps_mcp_server,
-            server_instructions,
-            tool,
-        )
-    })
-    .collect();
+    .await?;
     if is_codex_apps_mcp_server {
         emit_duration(
             MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
@@ -990,19 +1012,6 @@ pub(crate) fn prepare_regular_mcp_tools_for_model(
     tools
 }
 
-fn tool_info_from_listed_tool(
-    server_name: &str,
-    is_codex_apps_mcp_server: bool,
-    server_instructions: Option<&str>,
-    tool: ToolWithConnectorId,
-) -> ToolInfo {
-    if is_codex_apps_mcp_server {
-        codex_apps_tool_info_from_listed_tool(server_name, server_instructions, tool)
-    } else {
-        regular_mcp_tool_info_from_listed_tool(server_name, server_instructions, tool)
-    }
-}
-
 /// Converts a Codex Apps tool by preserving connector fields, removing connector prefixes from
 /// model-visible names and titles, and using the connector description for its tool namespace.
 fn codex_apps_tool_info_from_listed_tool(
@@ -1054,18 +1063,17 @@ fn codex_apps_tool_info_from_listed_tool(
 fn regular_mcp_tool_info_from_listed_tool(
     server_name: &str,
     server_instructions: Option<&str>,
-    tool: ToolWithConnectorId,
+    mut tool: RmcpTool,
 ) -> ToolInfo {
-    let mut tool_def = tool.tool;
-    strip_untrusted_connector_meta(&mut tool_def);
+    strip_untrusted_connector_meta(&mut tool);
     ToolInfo {
         server_key: McpServerKey::unscoped(server_name),
         supports_parallel_tool_calls: false,
         server_origin: None,
-        callable_name: tool_def.name.to_string(),
+        callable_name: tool.name.to_string(),
         callable_namespace: server_name.to_string(),
         namespace_description: server_instructions.map(str::to_string),
-        tool: tool_def,
+        tool,
         openai_file_input_optional_fields: HashMap::new(),
         connector_id: None,
         connector_name: None,
@@ -1778,9 +1786,8 @@ mod tests {
         let tool = tool_with_connector_meta();
         let expected_tool = tool.clone();
 
-        let tool_info = tool_info_from_listed_tool(
+        let tool_info = codex_apps_tool_info_from_listed_tool(
             CODEX_APPS_MCP_SERVER_NAME,
-            /*is_codex_apps_mcp_server*/ true,
             /*server_instructions*/ None,
             ToolWithConnectorId {
                 tool,

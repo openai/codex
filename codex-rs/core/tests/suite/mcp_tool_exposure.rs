@@ -1065,6 +1065,65 @@ startup_timeout_sec = 0.1
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apps_tool_pages_expose_shared_connector_namespaces_to_the_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
+        .and(body_partial_json(json!({"method": "tools/list"})))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("tools/list request");
+            let cursor = body["params"]["cursor"].as_str();
+            let (id, name, description) = match cursor {
+                None => ("connector_a", "Calendar", "Plan events."),
+                Some("page2") => ("connector_b", "Notes", "Find notes."),
+                _ => panic!("unexpected tools/list cursor: {cursor:?}"),
+            };
+            let mut result = json!({
+                "tools": [{
+                    "name": format!("{id}.search"),
+                    "description": "Search records.",
+                    "inputSchema": {"type": "object"},
+                    "_meta": {"connector_id": id}
+                }],
+                "_meta": {"openai/apps": [{
+                    "connectorId": id,
+                    "connectorName": name,
+                    "connectorDescription": description
+                }]}
+            });
+            if cursor.is_none() {
+                result["nextCursor"] = json!("page2");
+            }
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": body["id"], "result": result
+            }))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let response = mount_sse_sequence(&server, completed_response_sequence(/*count*/ 1)).await;
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url)
+        .with_config(configure_deferred_tool_world_state_without_agents);
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+    test.submit_turn("Which apps are available?").await?;
+
+    let tools_state = tools_state_sections(&response.single_request()).join("\n");
+    assert!(
+        tools_state.contains("- mcp__codex_apps__calendar: Plan events."),
+        "{tools_state}"
+    );
+    assert!(
+        tools_state.contains("- mcp__codex_apps__notes: Find notes."),
+        "{tools_state}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn elevated_apps_catalog_limit_requires_host_owned_registration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
