@@ -178,7 +178,7 @@ pub(crate) fn new_cyber_policy_error_event(
                 ("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL),
                 (
                     "Apply for Daybreak",
-                    "https://openai.com/form/enterprise-trusted-access-for-cyber/",
+                    "https://chatgpt.com/admin/status-and-access",
                 ),
             ],
         ),
@@ -188,7 +188,10 @@ pub(crate) fn new_cyber_policy_error_event(
         ),
         Notice::Astra => (
             "Daybreak isn’t available for Astra. Some cybersecurity requests may still be limited.",
-            &[("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL)],
+            &[(
+                "Learn more",
+                "https://help.openai.com/en/articles/20001258-openai-daybreak-trusted-access-for-cyber-overview#reduced-refusals-behavior-by-model",
+            )],
         ),
         Notice::Enabled => (
             "Some cybersecurity requests are still limited, even when Daybreak is on.",
