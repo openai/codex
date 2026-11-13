@@ -24,7 +24,7 @@ runs:
       working-directory: codex-rs
       env:
         BASE_BINARIES: "codex codex-app-server codex-code-mode-host codex-exec-server"
-        WINDOWS_ONLY_BINARIES: "codex-command-runner codex-windows-sandbox-setup"
+        WINDOWS_ONLY_BINARIES: "codex-command-runner codex-windows-sandbox-setup codex-windows-sandbox-service"
         BUILD_MODE: ${{ inputs.build-mode }}
         BUILD_SYSTEM: ${{ inputs.build-system }}
         PACKAGE_ACTION_PATH: ${{ github.action_path }}

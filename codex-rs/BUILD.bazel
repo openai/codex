@@ -59,6 +59,7 @@ runtime_archive(
         "@platforms//os:windows": [
             "//codex-rs/windows-sandbox-rs:command-runner-release_files",
             "//codex-rs/windows-sandbox-rs:sandbox-setup-release_files",
+            "//codex-rs/windows-sandbox-service:release_files",
         ],
         "//conditions:default": [],
     }),
