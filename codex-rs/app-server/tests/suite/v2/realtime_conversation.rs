@@ -2681,7 +2681,7 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
     assert_call_create_multipart(
         harness.call_capture.single_request(),
         "v=offer\r\n",
-        r#"{"audio":{"output":{"voice":"cove"}},"delegation":{"ack_filler":false,"type":"client"},"instructions":"backend prompt\n\nstartup context","model":"gpt-live-1-codex"}"#,
+        r#"{"audio":{"output":{"voice":"marin"}},"delegation":{"ack_filler":false,"type":"client"},"instructions":"backend prompt\n\nstartup context","model":"gpt-live-1.1-codex"}"#,
         "/v1/live",
     )?;
     assert!(
@@ -2708,6 +2708,75 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
         "Frameless WebRTC sideband must not send a second session.update"
     );
 
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[test_case(None, None, "marin"; "cleared setting uses API default")]
+#[test_case(Some("maple"), None, "maple"; "changed setting takes effect")]
+#[test_case(Some("maple"), Some("marin"), "marin"; "explicit voice overrides setting")]
+#[tokio::test]
+async fn webrtc_v3_uses_current_voice_setting(
+    saved_voice: Option<&str>,
+    requested_voice: Option<&str>,
+    expected_voice: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        no_main_loop_responses(),
+        realtime_sideband(vec![open_realtime_sideband_connection(vec![vec![]])]),
+    )
+    .await?;
+    let config_path = harness._codex_home.path().join("config.toml");
+    let original_config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        original_config.replace("[realtime]", "[realtime]\nvoice = \"cove\""),
+    )?;
+    let request_id = harness
+        .mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let thread: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(request_id)).await??;
+
+    // The thread retains Cove. The next call must use the current setting, including removal.
+    let updated_config = match saved_voice {
+        Some(voice) => {
+            original_config.replace("[realtime]", &format!("[realtime]\nvoice = {voice:?}"))
+        }
+        None => original_config,
+    };
+    std::fs::write(config_path, updated_config)?;
+    let request_id = harness
+        .mcp
+        .send_thread_realtime_start_request(serde_json::from_value(json!({
+            "threadId": thread.thread.id,
+            "version": "v3",
+            "transport": {"type": "webrtc", "sdp": "v=offer\r\n"},
+            "outputModality": "audio",
+            "includeStartupContext": false,
+            "prompt": "voice selection test",
+            "voice": requested_voice,
+        }))?)
+        .await?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(request_id)).await??;
+    let _: ThreadRealtimeSdpNotification = harness.read_notification("thread/realtime/sdp").await?;
+    assert_call_create_multipart(
+        harness.call_capture.single_request(),
+        "v=offer\r\n",
+        &json!({
+            "audio": {"output": {"voice": expected_voice}},
+            "delegation": {"type": "client"},
+            "instructions": "backend prompt",
+            "model": "gpt-live-1.1-codex",
+        })
+        .to_string(),
+        "/v1/live",
+    )?;
     harness.shutdown().await;
     Ok(())
 }

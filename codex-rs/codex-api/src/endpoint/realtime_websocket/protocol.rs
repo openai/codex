@@ -44,7 +44,19 @@ pub struct RealtimeSessionConfig {
     pub event_parser: RealtimeEventParser,
     pub session_mode: RealtimeSessionMode,
     pub output_modality: RealtimeOutputModality,
-    pub voice: RealtimeVoice,
+    /// Leave unset to select the default for the API or ChatGPT call destination.
+    pub voice: Option<RealtimeVoice>,
+}
+
+impl RealtimeSessionConfig {
+    pub(super) fn voice_or_default(&self) -> RealtimeVoice {
+        self.voice.unwrap_or(match self.event_parser {
+            RealtimeEventParser::V1 => RealtimeVoice::Cove,
+            RealtimeEventParser::FramelessBidi | RealtimeEventParser::RealtimeV2 => {
+                RealtimeVoice::Marin
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

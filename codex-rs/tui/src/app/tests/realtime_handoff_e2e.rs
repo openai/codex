@@ -134,7 +134,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
         &app.config,
         &thread,
         "v=offer\r\n".to_string(),
-        codex_protocol::protocol::RealtimeVoicesList::builtin().default_v1,
+        /*voice*/ None,
     )
     .await?;
     assert_eq!(String::from(call.answer_sdp), "v=answer\r\n");

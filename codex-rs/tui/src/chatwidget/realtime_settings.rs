@@ -58,9 +58,8 @@ impl ChatWidget {
         current: Option<RealtimeVoice>,
         voices: RealtimeVoicesList,
     ) {
-        // The TUI uses V3, which shares the V1 voice catalog.
         let mut items: Vec<SelectionItem> = voices
-            .v1
+            .v3
             .into_iter()
             .map(|voice| SelectionItem {
                 name: voice.wire_name().to_string(),

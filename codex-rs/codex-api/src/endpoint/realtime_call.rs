@@ -10,6 +10,7 @@ use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
+use codex_protocol::protocol::RealtimeVoice;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
@@ -129,7 +130,7 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
     pub async fn create_with_session_and_headers(
         &self,
         sdp: String,
-        session_config: RealtimeSessionConfig,
+        mut session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
         trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
@@ -137,6 +138,10 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         // session payload is sent with call creation. Legacy sidebands still send session.update
         // after joining; Frameless sidebands attach to the session that is already running.
         validate_avas_session_config(&session_config)?;
+        if self.uses_backend_request_shape() {
+            // ChatGPT keeps its own default; API calls use the wire adapter's default.
+            session_config.voice.get_or_insert(RealtimeVoice::Cove);
+        }
         let event_parser = session_config.event_parser;
         let path = self.path_for_session(event_parser);
         let mut session = realtime_session_json(session_config)?;
@@ -396,14 +401,14 @@ mod tests {
             event_parser: RealtimeEventParser::V1,
             session_mode: RealtimeSessionMode::Conversational,
             output_modality: RealtimeOutputModality::Audio,
-            voice: RealtimeVoice::Cove,
+            voice: Some(RealtimeVoice::Cove),
         }
     }
 
     fn realtime_v2_session_config(session_id: &str) -> RealtimeSessionConfig {
         RealtimeSessionConfig {
             event_parser: RealtimeEventParser::RealtimeV2,
-            voice: RealtimeVoice::Marin,
+            voice: Some(RealtimeVoice::Marin),
             ..realtime_session_config(session_id)
         }
     }
@@ -559,32 +564,38 @@ mod tests {
 
     #[tokio::test]
     async fn sends_frameless_session_call_to_live_without_legacy_query_params() {
-        let transport = CapturingTransport::with_location("/v1/live/rtc_frameless");
-        let client = RealtimeCallClient::new(
-            transport.clone(),
-            provider("https://api.openai.com/v1"),
-            Arc::new(DummyAuth),
-        );
+        for (voice, expected_voice) in [
+            (None, "marin"),
+            (Some(RealtimeVoice::Marin), "marin"),
+            (Some(RealtimeVoice::Cove), "cove"),
+        ] {
+            let transport = CapturingTransport::with_location("/v1/live/rtc_frameless");
+            let client = RealtimeCallClient::new(
+                transport.clone(),
+                provider("https://api.openai.com/v1"),
+                Arc::new(DummyAuth),
+            );
 
-        let response = client
-            .create_with_session(
-                "v=offer\r\n".to_string(),
-                frameless_bidi_session_config("sess-api"),
-            )
-            .await
-            .expect("request should succeed");
+            let mut session_config = frameless_bidi_session_config("sess-api");
+            session_config.voice = voice;
+            let response = client
+                .create_with_session("v=offer\r\n".to_string(), session_config)
+                .await
+                .expect("request should succeed");
 
-        assert_eq!(response.call_id, "rtc_frameless");
-        let request = transport.last_request.lock().unwrap().clone().unwrap();
-        assert_eq!(request.method, Method::POST);
-        assert_eq!(request.url, "https://api.openai.com/v1/live");
-        let Some(RequestBody::Raw(body)) = request.body else {
-            panic!("multipart body should be raw");
-        };
-        let body = std::str::from_utf8(&body).expect("multipart body should be utf-8");
-        assert!(body.contains("\"model\":\"gpt-realtime\""));
-        assert!(body.contains("\"delegation\":{\"type\":\"client\"}"));
-        assert!(!body.contains("\"id\":\"sess-api\""));
+            assert_eq!(response.call_id, "rtc_frameless");
+            let request = transport.last_request.lock().unwrap().clone().unwrap();
+            assert_eq!(request.method, Method::POST);
+            assert_eq!(request.url, "https://api.openai.com/v1/live");
+            let Some(RequestBody::Raw(body)) = request.body else {
+                panic!("multipart body should be raw");
+            };
+            let body = std::str::from_utf8(&body).expect("multipart body should be utf-8");
+            assert!(body.contains("\"model\":\"gpt-realtime\""));
+            assert!(body.contains("\"delegation\":{\"type\":\"client\"}"));
+            assert!(!body.contains("\"id\":\"sess-api\""));
+            assert!(body.contains(&format!("\"voice\":\"{expected_voice}\"")));
+        }
     }
 
     #[tokio::test]
@@ -696,56 +707,60 @@ mod tests {
 
     #[tokio::test]
     async fn sends_backend_frameless_session_call_to_realtime_calls() {
-        let transport = CapturingTransport::with_location("/v1/live/rtc_backend_frameless");
-        let client = RealtimeCallClient::new(
-            transport.clone(),
-            provider("https://chatgpt.com/backend-api/codex"),
-            Arc::new(DummyAuth),
-        );
-        let mut session_config = frameless_bidi_session_config("sess-backend");
-        session_config.initial_items = vec![
-            ConversationTextParams {
-                text: "Remember this.".to_string(),
-                role: ConversationTextRole::Developer,
-            },
-            ConversationTextParams {
-                text: "Understood.".to_string(),
-                role: ConversationTextRole::Assistant,
-            },
-        ];
-
-        let response = client
-            .create_with_session("v=offer\r\n".to_string(), session_config)
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.call_id, "rtc_backend_frameless");
-        let request = transport.last_request.lock().unwrap().clone().unwrap();
-        assert_eq!(request.method, Method::POST);
-        assert_eq!(
-            request.url,
-            "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
-        );
-        let Some(RequestBody::Json(body)) = request.body else {
-            panic!("backend request body should be JSON");
-        };
-        assert_eq!(body["session"]["delegation"]["type"], "client");
-        assert!(body["session"].get("id").is_none());
-        assert_eq!(
-            body["session"]["initial_items"],
-            serde_json::json!([
-                {
-                    "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": "Remember this."}],
+        for (voice, expected_voice) in [(None, "cove"), (Some(RealtimeVoice::Maple), "maple")] {
+            let transport = CapturingTransport::with_location("/v1/live/rtc_backend_frameless");
+            let client = RealtimeCallClient::new(
+                transport.clone(),
+                provider("https://chatgpt.com/backend-api/codex"),
+                Arc::new(DummyAuth),
+            );
+            let mut session_config = frameless_bidi_session_config("sess-backend");
+            session_config.voice = voice;
+            session_config.initial_items = vec![
+                ConversationTextParams {
+                    text: "Remember this.".to_string(),
+                    role: ConversationTextRole::Developer,
                 },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "Understood."}],
+                ConversationTextParams {
+                    text: "Understood.".to_string(),
+                    role: ConversationTextRole::Assistant,
                 },
-            ])
-        );
+            ];
+
+            let response = client
+                .create_with_session("v=offer\r\n".to_string(), session_config)
+                .await
+                .expect("request should succeed");
+
+            assert_eq!(response.call_id, "rtc_backend_frameless");
+            let request = transport.last_request.lock().unwrap().clone().unwrap();
+            assert_eq!(request.method, Method::POST);
+            assert_eq!(
+                request.url,
+                "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
+            );
+            let Some(RequestBody::Json(body)) = request.body else {
+                panic!("backend request body should be JSON");
+            };
+            assert_eq!(body["session"]["delegation"]["type"], "client");
+            assert_eq!(body["session"]["audio"]["output"]["voice"], expected_voice);
+            assert!(body["session"].get("id").is_none());
+            assert_eq!(
+                body["session"]["initial_items"],
+                serde_json::json!([
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": "Remember this."}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Understood."}],
+                    },
+                ])
+            );
+        }
     }
 
     #[tokio::test]

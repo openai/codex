@@ -34,7 +34,7 @@ pub(crate) async fn create(
     config: &Config,
     thread: &Thread,
     offer: String,
-    voice: RealtimeVoice,
+    voice: Option<RealtimeVoice>,
 ) -> Result<CreatedCall> {
     ensure!(
         config.realtime.session_type == RealtimeWsMode::Conversational,
@@ -76,7 +76,7 @@ pub(crate) async fn create(
             config
                 .experimental_realtime_ws_model
                 .clone()
-                .unwrap_or_else(|| "gpt-live-1-codex".to_string()),
+                .unwrap_or_else(|| "gpt-live-1.1-codex".to_string()),
         ),
         session_id: Some(id),
         event_parser: RealtimeEventParser::FramelessBidi,

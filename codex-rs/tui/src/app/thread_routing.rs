@@ -919,10 +919,7 @@ impl App {
                 let tx = self.app_event_tx.clone();
                 tokio::spawn(async move {
                     let create = async {
-                        let voices = Self::realtime_voices(&server).await?;
-                        let voice = Self::effective_realtime_voice(&server, &cwd, &voices)
-                            .await?
-                            .unwrap_or(voices.default_v1);
+                        let voice = Self::effective_realtime_voice(&server, &cwd).await?;
                         let thread = server
                             .thread_read(thread_id, /*include_turns*/ false)
                             .await?;

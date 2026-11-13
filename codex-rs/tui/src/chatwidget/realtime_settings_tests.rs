@@ -66,7 +66,7 @@ async fn voice_settings_uses_server_catalog() {
     chat.open_realtime_voices(
         Some(RealtimeVoice::Cove),
         RealtimeVoicesList {
-            v1: vec![RealtimeVoice::Cove, RealtimeVoice::Maple],
+            v3: vec![RealtimeVoice::Cove, RealtimeVoice::Maple],
             ..RealtimeVoicesList::builtin()
         },
     );

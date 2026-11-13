@@ -1752,9 +1752,8 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                     serde_json::json!("future_voice");
                             }
                             if custom_voice_catalog && let Ok(value) = &mut result {
-                                value["voices"]["v1"] =
+                                value["voices"]["v3"] =
                                     serde_json::json!(["maple", "cove", "juniper"]);
-                                value["voices"]["defaultV1"] = serde_json::json!("maple");
                             }
                             if background {
                                 let terminal = r#"{"data":[{"itemId":"x","processId":"x","command":"x","cwd":"/"}],"nextCursor":null}"#;

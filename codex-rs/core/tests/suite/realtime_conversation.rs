@@ -741,7 +741,7 @@ async fn conversation_websocket_transports_send_codex_headers_without_creating_a
     .expect("realtime websocket connection failed");
     let (expected_uri, expected_realtime_session_id) = match transport {
         ConversationStartTransport::Websocket => (
-            "/v1/live?model=gpt-live-1-codex",
+            "/v1/live?model=gpt-live-1.1-codex",
             Some(conversation.thread_id.to_string()),
         ),
         ConversationStartTransport::ExistingCall { .. } => ("/v1/live/rtc_existing", None),
@@ -804,15 +804,15 @@ async fn conversation_websocket_transports_send_codex_headers_without_creating_a
     Ok(())
 }
 
-#[test_case(None, "gpt-live-1-codex", None, None; "default model without source")]
+#[test_case(None, "gpt-live-1.1-codex", None, None; "default model without source")]
 #[test_case(Some("session-override-model"), "session-override-model", None, None; "explicit model without source")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::User), Some("user".to_string()); "user source")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::Feature("voice_chat".to_string())), Some("voice_chat".to_string()); "voice chat source")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::Feature("realtime_voice".to_string())), Some("realtime_voice".to_string()); "realtime voice source")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::GuardianReview), Some("guardian_review".to_string()); "child shares parent session")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::Feature("x".repeat(/*n*/ 256))), Some("x".repeat(/*n*/ 256)); "source at byte limit")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::Feature("x".repeat(/*n*/ 257))), None; "oversized source omitted")]
-#[test_case(None, "gpt-live-1-codex", Some(ThreadSource::Feature("é\r\n\"".to_string())), Some("é\r\n\"".to_string()); "source escaped for headers")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::User), Some("user".to_string()); "user source")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::Feature("voice_chat".to_string())), Some("voice_chat".to_string()); "voice chat source")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::Feature("realtime_voice".to_string())), Some("realtime_voice".to_string()); "realtime voice source")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::GuardianReview), Some("guardian_review".to_string()); "child shares parent session")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::Feature("x".repeat(/*n*/ 256))), Some("x".repeat(/*n*/ 256)); "source at byte limit")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::Feature("x".repeat(/*n*/ 257))), None; "oversized source omitted")]
+#[test_case(None, "gpt-live-1.1-codex", Some(ThreadSource::Feature("é\r\n\"".to_string())), Some("é\r\n\"".to_string()); "source escaped for headers")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
     model: Option<&str>,
@@ -985,11 +985,13 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
             "sdp": body["sdp"],
             "delegation": body["session"]["delegation"]["type"],
             "model": body["session"]["model"],
+            "voice": body["session"]["audio"]["output"]["voice"],
         }),
         json!({
             "sdp": "v=offer\r\n",
             "delegation": "client",
             "model": expected_model,
+            "voice": "cove",
         })
     );
 
@@ -1769,7 +1771,7 @@ async fn conversation_webrtc_default_v1_rejects_explicit_v2_voice() -> Result<()
                 sdp: "v=offer\r\n".to_string(),
             }),
             version: None,
-            voice: Some(RealtimeVoice::Cedar),
+            voice: Some(Some(RealtimeVoice::Cedar)),
         }))
         .await?;
 
@@ -3028,14 +3030,28 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
     Ok(())
 }
 
+#[test_case(RealtimeConversationVersion::V1, None, Some(RealtimeVoice::Breeze), "breeze"; "v1 explicit voice")]
+#[test_case(RealtimeConversationVersion::V3, None, None, "marin"; "v3 API default")]
+#[test_case(RealtimeConversationVersion::V3, None, Some(RealtimeVoice::Marin), "marin"; "v3 explicit API voice")]
+#[test_case(RealtimeConversationVersion::V3, Some(RealtimeVoice::Cove), Some(RealtimeVoice::Marin), "marin"; "explicit voice overrides config")]
+#[test_case(RealtimeConversationVersion::V3, Some(RealtimeVoice::Cove), None, "cove"; "v3 configured voice")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_uses_explicit_start_voice() -> Result<()> {
+async fn conversation_selects_realtime_voice(
+    version: RealtimeConversationVersion,
+    configured_voice: Option<RealtimeVoice>,
+    voice: Option<RealtimeVoice>,
+    expected_voice: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     // Responses prewarm can reconnect; give realtime its own scripted connections.
     let startup_server = start_websocket_server(vec![vec![]]).await;
     let server = start_websocket_server(vec![vec![vec![json!({
-        "type": "session.updated",
+        "type": if version == RealtimeConversationVersion::V3 {
+            "session.started"
+        } else {
+            "session.updated"
+        },
         "session": { "id": "sess_voice", "instructions": "backend prompt" }
     })]]])
     .await;
@@ -3043,6 +3059,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
         let realtime_base_url = server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.voice = configured_voice;
         }
     });
     let test = builder.build_with_websocket_server(&startup_server).await?;
@@ -3073,8 +3090,8 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
             realtime_session_id: None,
             voice_session_id: None,
             transport: None,
-            version: None,
-            voice: Some(RealtimeVoice::Breeze),
+            version: Some(version),
+            voice: voice.map(Some),
         }))
         .await?;
 
@@ -3094,7 +3111,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
     let connections = server.connections();
     assert_eq!(
         connections[0][0].body_json()["session"]["audio"]["output"]["voice"],
-        "breeze"
+        expected_voice
     );
 
     startup_server.shutdown().await;
@@ -3209,7 +3226,7 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
             voice_session_id: None,
             transport: None,
             version: None,
-            voice: Some(RealtimeVoice::Cove),
+            voice: Some(Some(RealtimeVoice::Cove)),
         }))
         .await?;
 

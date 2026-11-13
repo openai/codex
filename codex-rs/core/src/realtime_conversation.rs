@@ -114,7 +114,7 @@ const HANDOFF_STREAM_TRUNCATION_MARKER: &str = "\n…output truncated…\n";
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
-const DEFAULT_FRAMELESS_REALTIME_MODEL: &str = "gpt-live-1-codex";
+const DEFAULT_FRAMELESS_REALTIME_MODEL: &str = "gpt-live-1.1-codex";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
 const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
@@ -1795,11 +1795,10 @@ pub(crate) async fn build_realtime_session_config(
         ConfiguredRealtimeVoice::Use => config.realtime.voice,
         ConfiguredRealtimeVoice::Ignore => None,
     };
-    let voice = params
-        .voice
-        .or(config_voice)
-        .unwrap_or_else(|| default_realtime_voice(version));
-    validate_realtime_voice(version, voice)?;
+    let voice = params.voice.unwrap_or(config_voice);
+    if let Some(voice) = voice {
+        validate_realtime_voice(version, voice)?;
+    }
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         initial_items: params.initial_items.clone(),
@@ -1816,14 +1815,6 @@ pub(crate) async fn build_realtime_session_config(
         output_modality: params.output_modality,
         voice,
     })
-}
-
-fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
-    let voices = RealtimeVoicesList::builtin();
-    match version {
-        RealtimeWsVersion::V1 | RealtimeWsVersion::V3 => voices.default_v1,
-        RealtimeWsVersion::V2 => voices.default_v2,
-    }
 }
 
 fn prefix_realtime_text(text: String, prefix: &str, session_kind: RealtimeSessionKind) -> String {

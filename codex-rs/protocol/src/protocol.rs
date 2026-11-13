@@ -224,7 +224,8 @@ pub struct ConversationStartParams {
     pub transport: Option<ConversationStartTransport>,
     /// Overrides the configured realtime protocol version for this session only.
     pub version: Option<RealtimeConversationVersion>,
-    pub voice: Option<RealtimeVoice>,
+    /// None inherits the thread setting; Some(None) selects the provider default.
+    pub voice: Option<Option<RealtimeVoice>>,
 }
 
 /// Controls when an in-process realtime attachment may establish a connection.
@@ -413,6 +414,7 @@ impl RealtimeVoicesList {
                 RealtimeVoice::Arbor,
                 RealtimeVoice::Sol,
                 RealtimeVoice::Cove,
+                RealtimeVoice::Marin,
                 RealtimeVoice::Aube,
                 RealtimeVoice::Bubbie,
                 RealtimeVoice::Haetsal,

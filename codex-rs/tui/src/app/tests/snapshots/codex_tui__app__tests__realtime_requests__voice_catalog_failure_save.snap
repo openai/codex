@@ -1,5 +1,0 @@
----
-source: tui/src/app/tests/realtime_requests.rs
-expression: messages
----
-■ Voice preference was saved, but the effective voice could not be confirmed: thread/realtime/listVoices failed: method not found (code -32601)
