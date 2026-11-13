@@ -877,11 +877,11 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
             else {
                 return None;
             };
-            matches!(envelope.item, ResponseItem::Message { role, .. } if role == "developer")
-                .then(|| envelope.metadata.map(|metadata| metadata.client_authored))
+            matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "developer")
+                .then(|| envelope.is_always_retained())
         })
         .collect::<Vec<_>>();
-    assert_eq!(persisted_developer_metadata, vec![Some(false), Some(true)]);
+    assert_eq!(persisted_developer_metadata, vec![false, true]);
 
     Ok(())
 }

@@ -1807,13 +1807,7 @@ async fn tool_output_retention_is_submission_metadata() -> anyhow::Result<()> {
             else {
                 return None;
             };
-            Some((
-                name.as_deref().unwrap(),
-                envelope
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.client_authored),
-            ))
+            Some((name.as_deref().unwrap(), envelope.is_always_retained()))
         })
         .collect::<Vec<_>>();
     assert_eq!(

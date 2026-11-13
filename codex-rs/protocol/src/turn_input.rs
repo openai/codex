@@ -10,6 +10,7 @@ use crate::protocol::W3cTraceContext;
 use crate::user_input::UserInput;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -50,6 +51,55 @@ pub struct ResponseItemAnnotations {
     /// Request compaction retention for a function-call output.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub retain: bool,
+}
+
+/// A Responses item for history injection. Wrapped items must specify a policy.
+#[derive(Clone, Debug)]
+pub struct InjectedResponseItem {
+    pub item: ResponseItem,
+    pub retention: ItemRetention,
+}
+
+impl<'de> Deserialize<'de> for InjectedResponseItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WrappedItem {
+            item: ResponseItem,
+            retention: ItemRetention,
+        }
+
+        let value = Value::deserialize(deserializer)?;
+        if value.get("type").is_some() {
+            return ResponseItem::deserialize(value)
+                .map(Self::from)
+                .map_err(serde::de::Error::custom);
+        }
+
+        let WrappedItem { item, retention } =
+            WrappedItem::deserialize(value).map_err(serde::de::Error::custom)?;
+        Ok(Self { item, retention })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemRetention {
+    /// Raw items use the thread's configured retention rules.
+    #[serde(skip)]
+    Unspecified,
+    /// Apply ordinary history rules even when the thread retains client developer messages.
+    Default,
+    /// Carry the item into later context windows and newly spawned children.
+    Always,
+}
+
+impl From<ResponseItem> for InjectedResponseItem {
+    fn from(item: ResponseItem) -> Self {
+        Self {
+            item,
+            retention: ItemRetention::Unspecified,
+        }
+    }
 }
 
 /// One turn input and the context that follows it through submission.

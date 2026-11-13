@@ -7,12 +7,14 @@ use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::compact_pending_input::is_retained_pending_mail;
+use crate::compact_remote_v2::retained_client_items;
 use crate::context::BaseInstructionsFragment;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context::world_state::split_prefix_updates;
+use crate::context_manager::ContextManager;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -20,6 +22,7 @@ use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CompactionTurnMetadata;
+use crate::session::FileAudioDurations;
 use crate::session::RequestEffortUsage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -379,7 +382,6 @@ async fn run_compact_task_inner_impl(
     };
 
     let history_snapshot = sess.clone_history().await;
-    let history_items = history_snapshot.annotated_items();
     let summary_suffix = if matches!(compaction_metadata.phase(), CompactionPhase::PostTurn) {
         get_last_assistant_message_from_turn(compaction_response.output.iter())
             .filter(|summary| !summary.trim().is_empty())
@@ -392,9 +394,8 @@ async fn run_compact_task_inner_impl(
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_annotated_user_messages(history_items);
 
-    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    let mut new_history = build_compacted_history(&history_snapshot, &summary_text);
     if let Some(summary_item) = new_history.last_mut() {
         // This replacement history skips `record_conversation_items`; only the appended summary
         // belongs to this compaction turn.
@@ -407,6 +408,9 @@ async fn run_compact_task_inner_impl(
         let summary = new_history
             .pop()
             .ok_or_else(|| CodexErr::Fatal("local compaction summary is missing".to_string()))?;
+        // A client may also have explicitly retained this mail. Use the final
+        // compactor input for pending mail so each delivery appears once.
+        new_history.retain(|item| !is_retained_pending_mail(item, first));
         new_history.extend(
             history
                 .annotated_items()
@@ -606,13 +610,13 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUser
         .collect()
 }
 
-pub(crate) fn collect_annotated_user_messages(
+fn annotated_user_messages(
     items: &[ResponseItemEnvelope],
-) -> Vec<CompactedUserMessage<'_>> {
-    items
-        .iter()
-        .filter_map(|envelope| compacted_user_message(&envelope.item, envelope.metadata.as_ref()))
-        .collect()
+) -> impl DoubleEndedIterator<Item = (usize, CompactedUserMessage<'_>)> {
+    items.iter().enumerate().filter_map(|(position, envelope)| {
+        let message = compacted_user_message(&envelope.item, envelope.metadata.as_ref())?;
+        Some((position, message))
+    })
 }
 
 fn compacted_user_message<'a>(
@@ -714,28 +718,33 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
 }
 
 pub(crate) fn build_compacted_history(
-    initial_context: Vec<ResponseItemEnvelope>,
-    user_messages: &[CompactedUserMessage<'_>],
+    history: &ContextManager,
     summary_text: &str,
 ) -> Vec<ResponseItemEnvelope> {
     build_compacted_history_with_limit(
-        initial_context,
-        user_messages,
+        history.annotated_items(),
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
+        &history.file_audio_durations,
     )
 }
 
 fn build_compacted_history_with_limit(
-    mut history: Vec<ResponseItemEnvelope>,
-    user_messages: &[CompactedUserMessage<'_>],
+    items: &[ResponseItemEnvelope],
     summary_text: &str,
     max_tokens: usize,
+    audio_durations: &FileAudioDurations,
 ) -> Vec<ResponseItemEnvelope> {
-    let mut selected_messages = Vec::new();
+    // An injected user message can qualify under both budgets. Its position
+    // identifies the occurrence even if another message has the same client ID.
+    let mut selected = retained_client_items(
+        items,
+        audio_durations,
+        ResponseItemEnvelope::is_always_retained,
+    );
     if max_tokens > 0 {
         let mut remaining = max_tokens;
-        for message in user_messages.iter().rev() {
+        for (position, message) in annotated_user_messages(items).rev() {
             if remaining == 0 {
                 break;
             }
@@ -749,6 +758,10 @@ fn build_compacted_history_with_limit(
             else {
                 continue;
             };
+            if selected.contains_key(&position) {
+                remaining = remaining.saturating_sub(tokens);
+                continue;
+            }
             let mut harness_metadata = message.harness_metadata.cloned();
             let preserve_content = tokens <= remaining
                 && content
@@ -806,18 +819,17 @@ fn build_compacted_history_with_limit(
             {
                 metadata.mark_retained_sources_incomplete();
             }
-            selected_messages.push(ResponseItemEnvelope {
-                item,
-                metadata: harness_metadata,
-            });
-            if tokens > remaining {
-                break;
-            }
+            selected.insert(
+                position,
+                ResponseItemEnvelope {
+                    item,
+                    metadata: harness_metadata,
+                },
+            );
             remaining = remaining.saturating_sub(tokens);
         }
-        selected_messages.reverse();
     }
-    history.extend(selected_messages);
+    let mut history: Vec<_> = selected.into_values().collect();
 
     let summary_text = if summary_text.is_empty() {
         "(no summary available)".to_string()

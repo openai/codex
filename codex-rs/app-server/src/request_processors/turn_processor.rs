@@ -18,6 +18,7 @@ use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::turn_input::AnnotatedResponseItem;
+use codex_protocol::turn_input::InjectedResponseItem;
 use codex_protocol::turn_input::ResponseItemAnnotations;
 use codex_utils_path_uri::PathUri;
 
@@ -1081,15 +1082,17 @@ impl TurnRequestProcessor {
             .into_iter()
             .enumerate()
             .map(|(index, value)| {
-                serde_json::from_value::<ResponseItem>(value)
+                serde_json::from_value::<InjectedResponseItem>(value)
                     .map_err(|err| format!("items[{index}] is not a valid response item: {err}"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(invalid_request)?;
-        validate_response_item_image_urls(&items)?;
+        for item in &items {
+            validate_response_item_image_urls(std::slice::from_ref(&item.item))?;
+        }
 
         thread
-            .inject_response_items(items)
+            .inject_response_items_with_retention(items)
             .await
             .map_err(|err| match err.details() {
                 CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),

@@ -1,6 +1,7 @@
 //! Snapshots pending mail across remote compaction, restart, and normal inference.
 
 use super::*;
+use codex_protocol::turn_input::InjectedResponseItem;
 use core_test_support::responses::strip_metadata_from_json;
 use pretty_assertions::assert_eq;
 
@@ -52,8 +53,20 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
         "author": "/root/worker", "recipient": "/root",
         "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nThe worker found a release blocker."}],
     });
+    let call: InjectedResponseItem = serde_json::from_value(json!({
+        "item": {"type": "function_call", "call_id": "release-check", "name": "check_release", "arguments": "{}"},
+        "retention": "always"
+    }))?;
+    let result: InjectedResponseItem = serde_json::from_value(json!({
+        "item": {"type": "function_call_output", "call_id": "release-check", "output": "The release candidate passed."},
+        "retention": "always"
+    }))?;
     test.codex
-        .inject_response_items(vec![serde_json::from_value(mail.clone())?])
+        .inject_response_items_with_retention(vec![
+            call,
+            result,
+            serde_json::from_value::<ResponseItem>(mail.clone())?.into(),
+        ])
         .await?;
     for compaction in 0..2 {
         test.codex.submit(Op::Compact).await?;

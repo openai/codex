@@ -1017,6 +1017,10 @@ impl Session {
                     SessionId::from(thread_id)
                 }
             });
+        let inherited_items = agent_control
+            .runtime()
+            .retained_items_for_fresh_child(&initial_history, &session_source)
+            .await;
         let has_provided_agent_control =
             matches!(&agent_control, AgentControlInit::Provided { .. });
         let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
@@ -2129,6 +2133,7 @@ impl Session {
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
             Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_inherited_items(inherited_items)).await?;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
                     /*window_number*/ 0,

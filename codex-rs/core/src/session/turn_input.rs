@@ -1127,7 +1127,7 @@ async fn pending_turn_input(
         SubmittedTurnInput::AnnotatedResponseItem(input) => input.annotations.retain,
         _ => false,
     };
-    let mut input = match input {
+    match input {
         SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
             content,
             client_id,
@@ -1143,7 +1143,7 @@ async fn pending_turn_input(
                 ResponseItem::FunctionCallOutput { call_id: None, .. }
             ) =>
         {
-            let metadata = if let Some(fragment) = sender_messages {
+            let mut metadata = if let Some(fragment) = sender_messages {
                 let mut messages = SenderUserMessages {
                     receiver_turn_id: turn_id.to_owned(),
                     receiver_message_id: fragment.delivery.clone(),
@@ -1158,6 +1158,12 @@ async fn pending_turn_input(
             } else {
                 None
             };
+            if retain
+                && session.enabled(Feature::RetainClientToolOutputs)
+                && matches!(item, ResponseItem::FunctionCallOutput { name: Some(_), .. })
+            {
+                metadata.get_or_insert_default().retain_across_windows = Some(true);
+            }
             TurnInput::FunctionCallOutput(ResponseItemEnvelope { item, metadata })
         }
         SubmittedTurnInput::ResponseItem(item)
@@ -1167,13 +1173,5 @@ async fn pending_turn_input(
         SubmittedTurnInput::InterAgentCommunication(communication) => {
             TurnInput::InterAgentCommunication(communication.into())
         }
-    };
-    if retain
-        && let TurnInput::ResponseItem(envelope) | TurnInput::FunctionCallOutput(envelope) =
-            &mut input
-        && matches!(envelope.item, ResponseItem::FunctionCallOutput { .. })
-    {
-        envelope.metadata.get_or_insert_default().client_authored = true;
     }
-    input
 }

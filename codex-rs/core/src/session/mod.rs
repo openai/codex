@@ -225,8 +225,6 @@ use uuid::Uuid;
 use crate::client::ModelClient;
 use crate::codex_thread::CodexThreadSettingsOverrides;
 use crate::codex_thread::ThreadConfigSnapshot;
-#[cfg(test)]
-use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::ConstraintResult;
 use crate::config::PermissionProfileSnapshot;
@@ -689,7 +687,15 @@ impl Session {
         })
     }
 
-    async fn spawn_internal(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
+    // Construct the startup future outside the caller's poll frame.
+    #[inline(never)]
+    fn spawn_internal(
+        args: SessionSpawnArgs,
+    ) -> BoxFuture<'static, CodexResult<(Arc<Self>, SessionIo)>> {
+        Box::pin(Self::initialize(args))
+    }
+
+    async fn initialize(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
         args.config
             .config_layer_stack
             .ensure_config_server_applied()?;
@@ -5472,24 +5478,16 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         let history = self.clone_history().await;
         let input_goal_ids = crate::context::UserGoalUpdate::message_ids(history.raw_items());
-        let retained_client_items =
-            crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
-                history
-                    .annotated_items()
-                    .iter()
-                    .filter(|item| {
-                        (self.enabled(Feature::RetainClientToolOutputs)
-                            && crate::compact_retained_tool_outputs::is_retained_tool_output(item))
-                            || (self.enabled(Feature::RetainClientDeveloperMessages)
-                                && crate::compact_remote_v2::is_client_authored_developer_message(
-                                    item,
-                                ))
-                    })
-                    .cloned()
-                    .collect(),
-                crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET,
-                &history.file_audio_durations,
-            );
+        let retained_client_items = crate::compact_remote_v2::retained_client_items(
+            history.annotated_items(),
+            &history.file_audio_durations,
+            |item| {
+                crate::compact_remote_v2::should_retain_client_item(
+                    item,
+                    &turn_context.config.features,
+                )
+            },
+        );
         // Resolve the roster before allocating a new context window.
         let rendered = world_state.render_full_with_host_roster().await;
         let (window_number, window_ids) = self.state.lock().await.start_new_context_window();
@@ -5499,7 +5497,7 @@ impl Session {
             crate::context_manager::updates::merge_world_state_updates(context_updates)
                 .into_iter()
                 .map(ResponseItemEnvelope::new)
-                .chain(retained_client_items)
+                .chain(retained_client_items.into_values())
                 .collect();
         let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(

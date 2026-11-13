@@ -766,7 +766,7 @@ fn recorded_call(call: &ToolCall) -> (ExecutedToolCall, usize) {
     (ExecutedToolCall::new(name, arguments), original_bytes)
 }
 
-fn input_call_id(item: &ResponseItem) -> Option<&str> {
+pub(crate) fn input_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::FunctionCall { call_id, .. }
         | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
@@ -776,11 +776,31 @@ fn input_call_id(item: &ResponseItem) -> Option<&str> {
     }
 }
 
-fn output_call_id(item: &ResponseItem) -> Option<&str> {
+pub(crate) fn output_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. }
         | ResponseItem::ToolSearchOutput { call_id, .. } => call_id.as_deref(),
         ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
         _ => None,
     }
+}
+
+pub(crate) fn is_matching_tool_output(call: &ResponseItem, output: &ResponseItem) -> bool {
+    let Some(call_id) = input_call_id(call) else {
+        return false;
+    };
+    output_call_id(output) == Some(call_id)
+        && matches!(
+            (call, output),
+            (
+                ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. },
+                ResponseItem::FunctionCallOutput { .. }
+            ) | (
+                ResponseItem::CustomToolCall { .. },
+                ResponseItem::CustomToolCallOutput { .. }
+            ) | (
+                ResponseItem::ToolSearchCall { .. },
+                ResponseItem::ToolSearchOutput { .. }
+            )
+        )
 }

@@ -1,4 +1,5 @@
 use codex_login::AuthOwner;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -18,8 +19,7 @@ use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_pending_input::MAX_RETAINED_AGENT_MESSAGE_TOKENS;
 use crate::compact_pending_input::is_retained_pending_mail;
-use crate::compact_remote_history::HistoryItemGroup;
-use crate::compact_remote_history::history_item_groups;
+use crate::compact_remote_history::newest_history_item_groups;
 use crate::context::world_state::WorldState;
 use crate::context_manager::estimate_item_token_count;
 use crate::context_manager::estimate_item_token_count_with_audio;
@@ -510,20 +510,18 @@ fn build_v2_compacted_history(
             &prompt_input,
         );
     let pending_sequence = crate::compact_pending_input::pending_mail_sequence(&prompt_input);
-    let retained = v2_history_item_groups(prompt_input)
-        .filter(|group| {
-            is_retained_for_remote_compaction_v2(&group.source, features)
-                || pending_sequence
-                    .is_some_and(|first| is_retained_pending_mail(&group.source, first))
-        })
-        .flat_map(HistoryItemGroup::into_items)
-        .collect::<Vec<_>>();
-    let retained = truncate_retained_messages(
-        retained,
+    let retained = select_retained_items(
+        &prompt_input,
+        |item| {
+            is_retained_for_remote_compaction_v2(item, features)
+                || pending_sequence.is_some_and(|first| is_retained_pending_mail(item, first))
+        },
         RETAINED_MESSAGE_TOKEN_BUDGET,
         image_budget,
         audio_durations,
-    );
+    )
+    .into_values()
+    .collect::<Vec<_>>();
     let retained_image_count = retained
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
@@ -540,6 +538,20 @@ fn build_v2_compacted_history(
     (retained, retained_image_count)
 }
 
+pub(crate) fn retained_client_items(
+    items: &[ResponseItemEnvelope],
+    audio_durations: &FileAudioDurations,
+    should_retain: impl Fn(&ResponseItemEnvelope) -> bool,
+) -> BTreeMap<usize, ResponseItemEnvelope> {
+    select_retained_items(
+        items,
+        should_retain,
+        RETAINED_MESSAGE_TOKEN_BUDGET,
+        RetainedImageBudget::Disabled,
+        audio_durations,
+    )
+}
+
 pub(crate) fn is_client_authored_developer_message(item: &ResponseItemEnvelope) -> bool {
     item.metadata
         .as_ref()
@@ -547,26 +559,20 @@ pub(crate) fn is_client_authored_developer_message(item: &ResponseItemEnvelope) 
         && matches!(&item.item, ResponseItem::Message { role, .. } if role == "developer")
 }
 
-fn v2_history_item_groups(
-    items: Vec<ResponseItemEnvelope>,
-) -> impl Iterator<Item = HistoryItemGroup<ResponseItemEnvelope>> {
-    history_item_groups(items).flat_map(|mut group| {
-        let client_message = group
-            .attached_notice
-            .take_if(|item| is_client_authored_developer_message(item))
-            .map(|source| HistoryItemGroup {
-                source,
-                attached_notice: None,
-            });
-        std::iter::once(group).chain(client_message)
-    })
+pub(crate) fn should_retain_client_item(item: &ResponseItemEnvelope, features: &Features) -> bool {
+    if let Some(retain) = item.metadata.as_ref().and_then(|m| m.retain_across_windows) {
+        return retain;
+    }
+    (features.enabled(Feature::RetainClientDeveloperMessages)
+        && is_client_authored_developer_message(item))
+        || (features.enabled(Feature::RetainClientToolOutputs) && is_retained_tool_output(item))
 }
 
 fn is_retained_for_remote_compaction_v2(
     envelope: &ResponseItemEnvelope,
     features: &Features,
 ) -> bool {
-    if features.enabled(Feature::RetainClientToolOutputs) && is_retained_tool_output(envelope) {
+    if should_retain_client_item(envelope, features) {
         return true;
     }
     let item = &envelope.item;
@@ -605,10 +611,6 @@ fn is_retained_for_remote_compaction_v2(
             crate::event_mapping::parse_turn_item(item),
             Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
         ),
-        "developer" => {
-            features.enabled(Feature::RetainClientDeveloperMessages)
-                && is_client_authored_developer_message(envelope)
-        }
         _ => false,
     }
 }
@@ -651,19 +653,32 @@ fn truncate_retained_messages(
     image_budget: RetainedImageBudget,
     audio_durations: &FileAudioDurations,
 ) -> Vec<ResponseItemEnvelope> {
+    select_retained_items(&items, |_| true, max_tokens, image_budget, audio_durations)
+        .into_values()
+        .collect()
+}
+
+/// Select newest first, then return the items at their original positions.
+fn select_retained_items(
+    items: &[ResponseItemEnvelope],
+    should_retain: impl Fn(&ResponseItemEnvelope) -> bool,
+    max_tokens: usize,
+    image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
+) -> BTreeMap<usize, ResponseItemEnvelope> {
     let mut remaining = max_tokens;
-    let mut truncated_reversed = Vec::with_capacity(items.len());
-    for group in v2_history_item_groups(items)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+    let mut selected = BTreeMap::new();
+    for group in newest_history_item_groups(items) {
         if remaining == 0 {
+            break;
+        }
+        if !should_retain(group.source) {
             continue;
         }
 
-        let client_developer = is_client_authored_developer_message(&group.source);
-        let image_budget = if client_developer {
+        let charge_full_item =
+            group.source.is_always_retained() || is_client_authored_developer_message(group.source);
+        let image_budget = if charge_full_item {
             RetainedImageBudget::Disabled
         } else {
             image_budget
@@ -677,7 +692,7 @@ fn truncate_retained_messages(
         // Charged media is truncated newest-first as a message boundary. Each
         // modality still defines its own grouping and token cost in `media`.
         let requires_media_boundary_truncation = has_budgeted_image || has_file_audio;
-        let notice_tokens = group.attached_notice.as_ref().map_or(0, |notice| {
+        let notice_tokens = group.attached_notice.map_or(0, |notice| {
             retained_message_token_count(
                 &notice.item,
                 RetainedImageBudget::Disabled,
@@ -685,11 +700,10 @@ fn truncate_retained_messages(
             )
             .max(1)
         });
-        // Client-authored developer messages already charge non-text content via
-        // the serialized estimate. Preserve their text-only boundary correction.
+        // Explicitly retained items and client developer messages also pay for their media.
         let content_tokens =
             retained_message_token_count(&group.source.item, image_budget, audio_durations);
-        let source_tokens = if client_developer {
+        let source_tokens = if charge_full_item {
             usize::try_from(estimate_item_token_count_with_audio(
                 &group.source.item,
                 audio_durations,
@@ -698,19 +712,23 @@ fn truncate_retained_messages(
         } else {
             content_tokens.max(1)
         };
-        let token_count = source_tokens.saturating_add(notice_tokens);
-        if token_count <= remaining {
-            if let Some(notice) = group.attached_notice {
-                truncated_reversed.push(notice);
-            }
-            truncated_reversed.push(group.source);
+        let token_count = if group.tool_call.is_some() {
+            usize::try_from(group.estimated_token_count(audio_durations)).unwrap_or(usize::MAX)
+        } else {
+            source_tokens.saturating_add(notice_tokens)
+        };
+        let source = if token_count <= remaining {
             remaining = remaining.saturating_sub(token_count);
-        } else if is_retained_tool_output(&group.source) {
-            // Keep outputs whole and stop before older items to preserve newest-first ordering.
+            group.source.clone()
+        } else if is_retained_tool_output(group.source)
+            || (group.source.is_always_retained()
+                && !matches!(group.source.item, ResponseItem::Message { .. }))
+        {
+            // Structured items such as tool results must stay whole.
             break;
         } else if remaining > notice_tokens {
             let available_tokens = remaining - notice_tokens;
-            let content_budget = if client_developer {
+            let content_budget = if charge_full_item {
                 available_tokens.saturating_sub(source_tokens.saturating_sub(content_tokens))
             } else {
                 available_tokens
@@ -722,18 +740,18 @@ fn truncate_retained_messages(
             }
             let truncated_item = if requires_media_boundary_truncation {
                 media::truncate_message_to_token_budget(
-                    group.source,
+                    group.source.clone(),
                     content_budget,
                     image_budget,
                     audio_durations,
                 )
             } else {
-                truncate_message_text_to_token_budget(group.source, content_budget)
+                truncate_message_text_to_token_budget(group.source.clone(), content_budget)
             };
             let Some(mut truncated_item) = truncated_item else {
                 continue;
             };
-            if client_developer {
+            if charge_full_item {
                 let item_tokens = usize::try_from(estimate_item_token_count_with_audio(
                     &truncated_item.item,
                     audio_durations,
@@ -768,17 +786,16 @@ fn truncate_retained_messages(
                     truncated_item = adjusted;
                 }
             }
-            if let Some(notice) = group.attached_notice {
-                truncated_reversed.push(notice);
-            }
-            truncated_reversed.push(truncated_item);
             remaining = 0;
+            truncated_item
         } else if requires_media_boundary_truncation {
-            remaining = 0;
-        }
+            break;
+        } else {
+            continue;
+        };
+        group.keep(&mut selected, source);
     }
-    truncated_reversed.reverse();
-    truncated_reversed
+    selected
 }
 
 fn retained_message_token_count(

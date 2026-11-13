@@ -439,11 +439,7 @@ async fn remote_compact_v2_retains_only_client_developer_messages_when_enabled(
         .context("remote compaction should persist a checkpoint")?;
     let retained_client_developers = replacement_history
         .iter()
-        .filter(|item| {
-            item.metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.client_authored)
-        })
+        .filter(|item| item.is_always_retained())
         .count();
     assert_eq!(retained_client_developers, usize::from(enabled));
     Ok(())

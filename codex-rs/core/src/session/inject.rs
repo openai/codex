@@ -7,6 +7,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Uploaded files need the admission checks on typed turn input before entering history.
 pub(crate) fn validate_injected_response_item(item: &ResponseItem) -> CodexResult<()> {
@@ -19,6 +21,45 @@ pub(crate) fn validate_injected_response_item(item: &ResponseItem) -> CodexResul
 }
 
 impl Session {
+    /// History injection can precede the first turn. Capture full initial context
+    /// only when the thread has no reference context, including after compaction.
+    pub(crate) async fn history_injection_context(
+        self: &Arc<Self>,
+    ) -> CodexResult<Arc<TurnContext>> {
+        if self.reference_context_item().await.is_some() {
+            let turn = self.new_inject_items_context().await;
+            // Compaction can clear the baseline while we build this context.
+            // Rebuilding initial context requires a full skills snapshot.
+            if self.reference_context_item().await.is_some() {
+                return Ok(turn);
+            }
+        }
+        let turn = self.new_default_turn().await;
+        if self.reference_context_item().await.is_none() {
+            let step = self
+                .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
+                .await?;
+            self.record_context_updates_and_set_reference_context_item(step.as_ref())
+                .await?;
+        }
+        Ok(turn)
+    }
+
+    pub(crate) async fn record_inherited_items(
+        self: &Arc<Self>,
+        items: Vec<ResponseItemEnvelope>,
+    ) -> CodexResult<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let turn = self.history_injection_context().await?;
+        // The parent already prepared the images and their dimension notices.
+        self.record_prepared_conversation_items(&turn, turn.model_info(), items, Vec::new())
+            .await;
+        self.flush_rollout().await?;
+        Ok(())
+    }
+
     /// Returns the input if there is no active turn to inject into.
     #[expect(
         clippy::await_holding_invalid_type,
@@ -76,19 +117,19 @@ impl Session {
         Ok(())
     }
 
-    /// Preserves trusted client provenance while items wait for an active turn.
+    /// Applies client developer-message retention before queueing or recording items.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
     pub(crate) async fn inject_client_response_items(
         &self,
-        items: Vec<ResponseItem>,
+        items: Vec<impl Into<ResponseItemEnvelope>>,
         turn_context: &TurnContext,
     ) {
         let items = items
             .into_iter()
-            .map(ResponseItemEnvelope::new)
+            .map(Into::into)
             .map(|item| self.annotate_client_response_item(item))
             .collect::<Vec<_>>();
         let mut active = self.active_turn.lock().await;
@@ -120,7 +161,11 @@ impl Session {
         if self.enabled(Feature::RetainClientDeveloperMessages)
             && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "developer")
         {
-            envelope.metadata.get_or_insert_default().client_authored = true;
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .retain_across_windows
+                .get_or_insert(true);
         }
         envelope
     }

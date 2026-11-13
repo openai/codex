@@ -104,8 +104,10 @@ Settings:
 -- request 2 (compaction; Remote /compact request) --
 08:message/assistant:
     The release plan has three steps.
-09:agent_message
-10:compaction_trigger
+09:function_call/check_release:{}
+10:function_call_output:The release candidate passed.
+11:agent_message
+12:compaction_trigger
 
 ## Window 2 (after request 2: input diverged at item 07)
 Settings: same as window 1
@@ -194,9 +196,11 @@ Settings: same as window 1
     </environment_context>
 06:message/user:
     Plan the release.
-07:compaction:encrypted=true; chars=31; hash=8255caf138edede8
-08:agent_message
-09:compaction_trigger
+07:function_call/check_release:{}
+08:function_call_output:The release candidate passed.
+09:compaction:encrypted=true; chars=31; hash=8255caf138edede8
+10:agent_message
+11:compaction_trigger
 
 ## Window 3 (after request 3: input diverged at item 02)
 Settings: same as window 1
@@ -298,22 +302,24 @@ Settings: same as window 1
     </environment_context>
 06:message/user:
     Plan the release.
-07:compaction:encrypted=true; chars=22; hash=5180312a53382d23
-08:agent_message
-09:message/developer:
+07:function_call/check_release:{}
+08:function_call_output:The release candidate passed.
+09:compaction:encrypted=true; chars=22; hash=5180312a53382d23
+10:agent_message
+11:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
     Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
     </permissions instructions>
-10:message/user:
+12:message/user:
     <environment_context>
       <current_date><CURRENT_DATE></current_date>
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=46e2a5c52f0891de]
     </environment_context>
-11:message/user:
+13:message/user:
     Continue with the first step.
 -- request 5 (compaction; Compaction after mail was sampled) --
-12:message/assistant:
+14:message/assistant:
     Start by validating the release candidate.
-13:compaction_trigger
+15:compaction_trigger

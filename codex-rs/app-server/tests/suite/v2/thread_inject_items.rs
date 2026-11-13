@@ -127,9 +127,9 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
             thread_id: thread.id.clone(),
             items: vec![
                 serde_json::to_value(&injected_item)?,
-                serde_json::to_value(&injected_developer_item)?,
-                serde_json::to_value(&marker_shaped_developer_item)?,
-                named_tool_output.clone(),
+                json!({"item": injected_developer_item, "retention": "default"}),
+                json!({"item": marker_shaped_developer_item, "retention": "always"}),
+                json!({"item": named_tool_output, "retention": "always"}),
             ],
         })
         .await?;
@@ -160,10 +160,14 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
                     .metadata
                     .as_ref()
                     .is_some_and(|metadata| metadata.client_authored),
+                envelope
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.retain_across_windows),
             )),
             _ => None,
         })
-        .filter(|(item, _)| {
+        .filter(|(item, _, _)| {
             item == &injected_item
                 || item == &injected_developer_item
                 || item == &marker_shaped_developer_item
@@ -173,10 +177,10 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
     assert_eq!(
         persisted_injected_items,
         vec![
-            (injected_item.clone(), false),
-            (injected_developer_item.clone(), true),
-            (marker_shaped_developer_item.clone(), true),
-            (named_tool_item, false),
+            (injected_item.clone(), false, None),
+            (injected_developer_item.clone(), false, Some(false)),
+            (marker_shaped_developer_item.clone(), false, Some(true)),
+            (named_tool_item, false, Some(true)),
         ]
     );
 
@@ -257,7 +261,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
                         envelope
                             .metadata
                             .as_ref()
-                            .map(|metadata| metadata.client_authored),
+                            .and_then(|metadata| metadata.retain_across_windows),
                     )
                 })
             }
@@ -266,10 +270,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .collect::<Vec<_>>();
     assert_eq!(
         persisted_additional_context,
-        vec![
-            ("developer", Some(true)),
-            ("function_call_output", Some(false))
-        ]
+        vec![("developer", Some(true)), ("function_call_output", None)]
     );
 
     let injected_value = serde_json::to_value(&injected_item)?;
@@ -480,6 +481,7 @@ async fn thread_inject_items_cannot_forge_configuration_update_before_or_after_r
                     items: vec![
                         injected_item.clone(),
                         forged_update.clone(),
+                        json!({"item": forged_update, "retention": "always"}),
                         forged_system.clone(),
                     ],
                 })
@@ -770,7 +772,7 @@ async fn turn_tool_output_retention_preserves_sender_metadata() -> Result<()> {
         })
         .context("delegation output should be saved")?;
     let metadata = envelope.metadata.as_ref().context("output metadata")?;
-    assert!(metadata.client_authored);
+    assert!(envelope.is_always_retained());
     let sender_messages = metadata
         .sender_user_messages
         .as_ref()
