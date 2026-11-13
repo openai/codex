@@ -237,6 +237,7 @@ async fn cua_tool_call_lifecycle_requires_a_start_and_deduplicates_replay() {
     let item = |status| ThreadItemPayload::McpToolCall {
         id: "cua-call".into(),
         server: "codex_apps".into(),
+        environment_id: None,
         tool: "js".into(),
         status,
         arguments: json!({"script": "synthetic-private-input"}),
@@ -797,6 +798,7 @@ async fn mcp_elicitation_classification_survives_turn_completion_and_preserves_c
         let item = ThreadItemPayload::McpToolCall {
             id: item_id.to_string(),
             server: "server".to_string(),
+            environment_id: None,
             tool: "search".to_string(),
             status: McpToolCallStatus::Completed,
             arguments: json!({ "token": "synthetic-private-input" }),

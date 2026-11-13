@@ -25,6 +25,7 @@ fn make_view() -> (
     tokio::sync::mpsc::UnboundedReceiver<UserVerificationDecision>,
 ) {
     make_view_for_request(UserVerificationRequest {
+        environment_id: None,
         title: "Production deployment needs your approval.".to_string(),
         description: "Approve deploying the reviewed release?".to_string(),
         thread_label: None,
@@ -158,6 +159,7 @@ fn full_screen_request_is_available_before_and_during_verification() {
 #[test]
 fn long_url_tokens_remain_visible_in_a_narrow_verification_prompt() {
     let (mut view, _) = make_view_for_request(UserVerificationRequest {
+        environment_id: None,
         title: "Approve https://example.com/production/release/candidate?".to_string(),
         description: "Deploy https://example.com/production/critical-release-candidate".to_string(),
         thread_label: None,
@@ -205,6 +207,7 @@ fn long_url_tokens_remain_visible_in_a_narrow_verification_prompt() {
 #[tokio::test]
 async fn full_screen_pager_reaches_the_end_of_a_long_request() -> std::io::Result<()> {
     let (view, _) = make_view_for_request(UserVerificationRequest {
+        environment_id: None,
         title: "Approve release?".to_string(),
         description: format!(
             "{}Final approval details.",

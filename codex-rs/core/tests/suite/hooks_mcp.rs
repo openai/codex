@@ -1,3 +1,4 @@
+use codex_mcp::McpServerKey;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -602,7 +603,7 @@ async fn mcp_tool_hook_starts_cached_model_hidden_tools(
             .thread
             .mcp_connection_statuses(&mcp_config)
             .await
-            .get(RMCP_SERVER),
+            .get(&McpServerKey::unscoped(RMCP_SERVER)),
         Some(&McpServerConnectionStatus::NotStarted),
     );
     subagent
@@ -630,7 +631,7 @@ async fn mcp_tool_hook_starts_cached_model_hidden_tools(
             .thread
             .mcp_connection_statuses(&mcp_config)
             .await
-            .get("unused"),
+            .get(&McpServerKey::unscoped("unused")),
         Some(&McpServerConnectionStatus::NotStarted),
         "a hook must leave unrelated cached servers dormant",
     );
@@ -748,7 +749,7 @@ async fn mcp_tool_hook_timeout_includes_cached_server_startup() -> Result<()> {
             .thread
             .mcp_connection_statuses(&mcp_config)
             .await
-            .get(RMCP_SERVER),
+            .get(&McpServerKey::unscoped(RMCP_SERVER)),
         Some(&McpServerConnectionStatus::NotStarted),
     );
     subagent

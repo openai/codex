@@ -18,7 +18,8 @@ use std::collections::VecDeque;
 
 impl McpToolCallCell {
     pub(super) fn compact_tool_name(&self) -> String {
-        self.invocation
+        let mut label = self
+            .invocation
             .arguments
             .as_ref()
             .filter(|_| self.result_kind() == McpResultKind::NodeRepl)
@@ -26,7 +27,11 @@ impl McpToolCallCell {
             .and_then(serde_json::Value::as_str)
             .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| format!("{}.{}", self.invocation.server, self.invocation.tool))
+            .unwrap_or_else(|| format!("{}.{}", self.invocation.server, self.invocation.tool));
+        if let Some(environment_id) = &self.invocation.environment_id {
+            label.push_str(&format!(" (environment {environment_id})"));
+        }
+        label
     }
 
     pub(super) fn compact_mcp_lines(&self, width: u16) -> Vec<HyperlinkLine> {

@@ -397,6 +397,7 @@ impl App {
                 if let Some(params) = AppLinkViewParams::from_url_app_server_request(
                     thread_id,
                     &params.server_name,
+                    params.environment_id.as_deref(),
                     request_id.clone(),
                     &params.request,
                 ) {
@@ -419,6 +420,7 @@ impl App {
                                 thread_id,
                                 thread_label,
                                 server_name: params.server_name.clone(),
+                                environment_id: params.environment_id.clone(),
                                 request_id: request_id.clone(),
                                 message: message.clone(),
                             }),
@@ -430,6 +432,7 @@ impl App {
                             request: crate::bottom_pane::user_verification::UserVerificationRequest {
                                 thread_label,
                                 server_name: params.server_name.clone(),
+                                environment_id: params.environment_id.clone(),
                                 request_id: request_id.clone(),
                                 title: title.clone(),
                                 description: description.clone(),
@@ -2060,6 +2063,7 @@ impl App {
                 AppLinkViewParams::from_url_app_server_request(
                     thread_id,
                     &params.server_name,
+                    params.environment_id.as_deref(),
                     request_id.clone(),
                     request,
                 )

@@ -12,6 +12,8 @@ expression: rendered
   • deferred: not started (0 tools)
   • disabled: disabled (0 tools)
   • failed: failed (0 tools)
+  • notes (environment env-a): unknown (0 tools)
+  • notes (environment env-b): unknown (0 tools)
   • starting: starting (0 tools)
   • unknown: unknown (0 tools)
 

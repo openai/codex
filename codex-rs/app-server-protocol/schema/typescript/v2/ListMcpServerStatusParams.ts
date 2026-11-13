@@ -20,4 +20,9 @@ detail?: McpServerStatusDetail | null, threadId?: string | null,
 /**
  * Limit discovery to one server. With a thread ID, reuse that thread's MCP connection.
  */
-serverName?: string | null, };
+serverName?: string | null,
+/**
+ * Select this environment's registration. Requires `serverName` and `threadId`.
+ * When omitted, a named request uses the same server as older clients.
+ */
+environmentId?: string | null, };

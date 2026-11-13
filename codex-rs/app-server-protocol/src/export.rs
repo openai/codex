@@ -2437,6 +2437,8 @@ mod tests {
                         && matches!(field_prefix.trim(), "startedAtMs?" | "completedAtMs?"))
                     || (path == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
                         && field_prefix.trim() == "loginId?")
+                    || (path == Path::new("v2/McpServerStatus.ts")
+                        && field_prefix.trim() == "environmentId?")
                     || (path == Path::new("v2/ProcessExitedNotification.ts")
                         && field_prefix.trim() == "outputDrainTimedOut?")
                     || (path == Path::new("v2/MisalignmentErrorDetails.ts")

@@ -13,6 +13,7 @@ async fn external_writer_snapshot_freezes_active_command_and_mcp_rows() {
             chat.transcript.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
                 "mcp-running".to_string(),
                 McpInvocation {
+                    environment_id: None,
                     server: "server".to_string(),
                     tool: "tool".to_string(),
                     arguments: None,
@@ -134,6 +135,7 @@ async fn replayed_completion_preserves_unrelated_running_command() {
             chat.transcript.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
                 "mcp-running".to_string(),
                 McpInvocation {
+                    environment_id: None,
                     server: "server".to_string(),
                     tool: "tool".to_string(),
                     arguments: None,

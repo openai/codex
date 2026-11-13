@@ -205,6 +205,7 @@ async fn daybreak_access_respects_plugin_provenance(case: AccessCall) -> Result<
         .request(|request_id| ClientRequest::McpServerToolCall {
             request_id,
             params: McpServerToolCallParams {
+                environment_id: None,
                 thread_id: thread.id.clone(),
                 server: "sample".to_string(),
                 tool: "get_daybreak_access".to_string(),

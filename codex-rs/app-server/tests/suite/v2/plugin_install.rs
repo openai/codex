@@ -2563,6 +2563,7 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 
     let request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            environment_id: None,
             thread_id: thread.id,
             server: "sample-mcp".to_string(),
             tool: "echo".to_string(),
@@ -2579,6 +2580,7 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 
     let request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            environment_id: None,
             server_name: None,
             cursor: None,
             limit: None,

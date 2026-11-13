@@ -22,6 +22,7 @@ use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_mcp::McpServerKey;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -782,10 +783,11 @@ impl Session {
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
-        server_name: String,
+        server_key: McpServerKey,
         request_id: RequestId,
         request: ElicitationRequest,
     ) -> Option<ElicitationResponse> {
+        let server_name = server_key.name().to_owned();
         // This callback carries a request ID, not a reliable tool invocation owner.
         // Do not report its human wait as ordinary tool execution.
         if turn_context
@@ -827,6 +829,7 @@ impl Session {
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
             turn_id: Some(turn_context.sub_id.clone()),
             server_name,
+            environment_id: server_key.scoped_environment_id().map(str::to_owned),
             id,
             request,
         });

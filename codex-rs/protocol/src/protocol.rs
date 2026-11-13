@@ -3034,6 +3034,10 @@ pub struct AgentReasoningSectionBreakEvent {
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
+    /// Registration scope, not necessarily the server's execution environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub environment_id: Option<String>,
     /// Name of the tool as given by the MCP server.
     pub tool: String,
     /// Arguments to the tool call.
@@ -4199,6 +4203,10 @@ pub struct TurnDiffEvent {
 pub struct McpStartupUpdateEvent {
     /// Server name being started.
     pub server: String,
+    /// Registration scope, not necessarily the server's execution environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub environment_id: Option<String>,
     /// Current startup status.
     pub status: McpStartupStatus,
 }
@@ -5844,6 +5852,7 @@ mod tests {
             item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "server".into(),
+                environment_id: None,
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
                 connector_id: Some("connector".into()),
@@ -5974,6 +5983,7 @@ mod tests {
             item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "server".into(),
+                environment_id: None,
                 tool: "tool".into(),
                 arguments: json!({"arg": "value"}),
                 connector_id: Some("connector".into()),
@@ -6853,6 +6863,7 @@ mod tests {
             id: "init".to_string(),
             msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
                 server: "srv".to_string(),
+                environment_id: None,
                 status: McpStartupStatus::Failed {
                     error: "boom".to_string(),
                     reason: Some(McpStartupFailureReason::ReauthenticationRequired),

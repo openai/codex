@@ -781,6 +781,7 @@ async fn misalignment_buffered_replay_preserves_input_after_continuation() {
     let failed_turn = Turn {
         error: Some(error.clone()),
         items: vec![ThreadItem::untimed(ThreadItemPayload::McpToolCall {
+            environment_id: None,
             id: "tool-call".into(),
             server: "sample".into(),
             tool: "inspect".into(),

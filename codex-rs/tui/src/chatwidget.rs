@@ -642,11 +642,11 @@ pub(crate) struct ChatWidget {
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Exits observed during the pending list request take precedence over its response.
     pending_terminal_restore: Option<(uuid::Uuid, HashSet<String>)>,
-    /// Latest status per server in the active startup round. Its presence keeps
+    /// Latest status per (server name, environment ID) in the active startup round. Its presence keeps
     /// the composer busy, and its terminal outcomes determine the round's summary.
-    mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    mcp_startup_status: Option<HashMap<(String, Option<String>), McpStartupStatus>>,
     /// Last diagnostic per server, so replayed terminal updates are only reported once.
-    mcp_startup_last_diagnostics: HashMap<String, McpStartupStatus>,
+    mcp_startup_last_diagnostics: HashMap<(String, Option<String>), McpStartupStatus>,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,

@@ -285,6 +285,7 @@ async fn next_model_step_uses_the_in_flight_apps_refresh() -> anyhow::Result<()>
         Duration::from_secs(10),
         fixture.codex.mcp_server_status_snapshot(
             CODEX_APPS_MCP_SERVER_NAME,
+            /*environment_id*/ None,
             McpSnapshotDetail::ToolsAndAuthOnly,
             /*expected_registration*/ None,
         ),

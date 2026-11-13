@@ -2586,6 +2586,7 @@ mod tests {
         let mcp_oauth = ClientRequest::McpServerOauthLogin {
             request_id: request_id(),
             params: v2::McpServerOauthLoginParams {
+                environment_id: None,
                 name: "server-a".to_string(),
                 thread_id: None,
                 client_registration: None,
@@ -2603,6 +2604,7 @@ mod tests {
         let mcp_resource_read = ClientRequest::McpResourceRead {
             request_id: request_id(),
             params: v2::McpResourceReadParams {
+                environment_id: None,
                 meta: None,
                 thread_id: Some("thread-1".to_string()),
                 origin_call_id: None,
@@ -2799,6 +2801,7 @@ mod tests {
         let mcp_resource_read = ClientRequest::McpResourceRead {
             request_id: request_id(),
             params: v2::McpResourceReadParams {
+                environment_id: None,
                 meta: None,
                 thread_id: None,
                 origin_call_id: None,
@@ -3193,6 +3196,7 @@ mod tests {
             thread_id: "thr_123".to_string(),
             turn_id: Some("turn_123".to_string()),
             server_name: "codex_apps".to_string(),
+            environment_id: None,
             request: v2::McpServerElicitationRequest::Form {
                 meta: Some(json!({
                     "suggestion_id": "request_plugin_install_install-github"
@@ -3214,6 +3218,7 @@ mod tests {
                     "threadId": "thr_123",
                     "turnId": "turn_123",
                     "serverName": "codex_apps",
+                    "environmentId": null,
                     "mode": "form",
                     "_meta": {
                         "suggestion_id": "request_plugin_install_install-github"

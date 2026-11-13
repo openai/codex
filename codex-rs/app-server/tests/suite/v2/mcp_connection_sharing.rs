@@ -155,6 +155,7 @@ async fn call_servers(
             .request(|request_id| ClientRequest::McpServerToolCall {
                 request_id,
                 params: McpServerToolCallParams {
+                    environment_id: None,
                     thread_id: thread_id.to_string(),
                     server: name.to_string(),
                     tool: "echo".to_string(),

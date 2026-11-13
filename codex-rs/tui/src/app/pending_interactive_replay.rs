@@ -301,6 +301,7 @@ mod tests {
         ServerRequest::McpServerElicitationRequest {
             request_id: AppServerRequestId::String(request_id.to_string()),
             params: McpServerElicitationRequestParams {
+                environment_id: None,
                 thread_id: "thread-1".to_string(),
                 turn_id: Some(turn_id.to_string()),
                 server_name: server_name.to_string(),

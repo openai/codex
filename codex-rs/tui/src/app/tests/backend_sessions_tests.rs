@@ -63,6 +63,7 @@ async fn backend_sessions_parked_request_does_not_hide_disconnect() -> Result<()
     });
     let failure = ServerNotification::McpServerStatusUpdated(
         codex_app_server_protocol::McpServerStatusUpdatedNotification {
+            environment_id: None,
             thread_id: Some(thread_id.to_string()),
             name: "tools".into(),
             status: McpServerStartupState::Failed,

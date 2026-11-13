@@ -3026,14 +3026,24 @@ async fn slash_mcp_login_targets_the_active_thread() {
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
 
-    submit_composer_text(&mut chat, "/mcp login enterprise");
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::StartMcpLogin { name, thread_id: actual_thread_id })
-            if name == "enterprise" && actual_thread_id == thread_id
-    );
+    for (args, expected_name, expected_environment_id) in [
+        ("enterprise", "enterprise", None),
+        ("Team's notes", "Team's notes", None),
+        (
+            "\"Team notes\" --environment env-b",
+            "Team notes",
+            Some("env-b"),
+        ),
+    ] {
+        submit_composer_text(&mut chat, &format!("/mcp login {args}"));
+        assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartMcpLogin { name, environment_id, thread_id: actual_thread_id })
+                if name == expected_name && environment_id.as_deref() == expected_environment_id
+                    && actual_thread_id == thread_id
+        );
+    }
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
@@ -3050,7 +3060,7 @@ async fn slash_mcp_invalid_args_show_usage() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("Usage: /mcp [verbose | login <name>]"),
+        rendered.contains("Usage: /mcp [verbose | login <name> [--environment <id>]]"),
         "expected usage message, got: {rendered:?}"
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/mcp full");

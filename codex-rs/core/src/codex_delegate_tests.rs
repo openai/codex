@@ -76,6 +76,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
     for msg in [
         EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
             server: "pending".to_string(),
+            environment_id: None,
             status: McpStartupStatus::Starting,
         }),
         EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),

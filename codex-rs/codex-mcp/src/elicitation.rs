@@ -275,9 +275,10 @@ impl ElicitationRequestRouter {
         &self,
         events: Option<Sender<Event>>,
         authority: &ElicitationAuthority,
-        server_name: String,
+        server_key: McpServerKey,
         request: ElicitationRequest,
     ) -> Result<ElicitationResponse> {
+        let server_name = server_key.name().to_owned();
         let Some(events) = events else {
             return Ok(ElicitationResponse {
                 action: ElicitationAction::Decline,
@@ -319,6 +320,7 @@ impl ElicitationRequestRouter {
             msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                 turn_id: None,
                 server_name,
+                environment_id: server_key.scoped_environment_id().map(str::to_owned),
                 id: ProtocolRequestId::String(public_request_id),
                 request,
             }),
@@ -684,7 +686,7 @@ impl ElicitationRequestManager {
                     },
                 };
                 router
-                    .request_user_interaction(tx_event, &authority, server_name, request)
+                    .request_user_interaction(tx_event, &authority, server_key, request)
                     .await
             }
             .boxed()

@@ -3,6 +3,13 @@
   "properties": {
     "_meta": true,
     "arguments": true,
+    "environmentId": {
+      "description": "Exact registration scope; omission preserves legacy name-only selection.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "server": {
       "type": "string"
     },

@@ -14,11 +14,12 @@ use crate::mcp::effective_mcp_servers;
 
 impl McpRuntime {
     /// Reuses the selected connection and catalog without starting unrelated servers.
-    /// Configuration and metadata belong to the same captured runtime publication.
+    /// Resolves the selector, configuration, and metadata in one captured runtime publication.
     /// An expected registration excludes mismatched connections before discovery.
     pub async fn server_status_snapshot(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         detail: McpSnapshotDetail,
         expected_registration: Option<&ResolvedMcpServer>,
         runtime_context: &McpRuntimeContext,
@@ -34,16 +35,15 @@ impl McpRuntime {
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("MCP runtime is not configured"))?,
         );
+        let server = config
+            .mcp_server_catalog
+            .resolve_server_key(server, environment_id);
         let mut servers = effective_mcp_servers(&config, current.auth.as_ref());
-        servers.retain(|name, _| {
-            Some(name) == config.mcp_server_catalog.resolve_server_name(server)
+        servers.retain(|key, _| {
+            key == &server
                 && expected_registration
-                    .is_none_or(|expected| config.mcp_server_catalog.server(name) == Some(expected))
+                    .is_none_or(|expected| config.mcp_server_catalog.server(key) == Some(expected))
         });
-        let servers = servers
-            .into_values()
-            .map(|value| (server.to_owned(), value))
-            .collect::<std::collections::HashMap<_, _>>();
         if config.xaa_enabled
             && servers
                 .values()
@@ -52,7 +52,7 @@ impl McpRuntime {
             // Finish selected startup and any rejected-grant cleanup before reading auth.
             current
                 .connections
-                .list_available_server_infos(|name| name == server)
+                .list_available_server_infos(|name| name == &server)
                 .await;
         }
         let auth_statuses = compute_auth_statuses(

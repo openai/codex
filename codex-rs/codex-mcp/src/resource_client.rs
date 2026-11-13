@@ -346,7 +346,10 @@ impl McpResourceClient {
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
         let params = ReadResourceRequestParams::new(uri.to_string());
-        let result = self.runtime.latest_read_resource(server, params).await?;
+        let result = self
+            .runtime
+            .latest_read_resource(server, /*environment_id*/ None, params)
+            .await?;
         let contents = result
             .contents
             .into_iter()

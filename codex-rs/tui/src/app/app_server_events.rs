@@ -367,13 +367,10 @@ impl App {
                     pending.completions.push(notification.clone());
                     return;
                 }
-                if notification.login_id.is_some() {
-                    if notification.login_id.as_ref()
-                        != self.active_mcp_login_ids.get(&notification.name)
-                    {
-                        return;
-                    }
-                    self.active_mcp_login_ids.remove(&notification.name);
+                if let Some(login_id) = &notification.login_id
+                    && self.active_mcp_login_ids.remove(login_id).is_none()
+                {
+                    return;
                 }
             }
 

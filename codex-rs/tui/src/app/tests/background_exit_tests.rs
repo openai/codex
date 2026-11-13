@@ -742,6 +742,7 @@ async fn daemon_ctrl_c_during_mcp_startup_does_not_show_background_exit_menu() -
     let thread_id = prepare_local_daemon_thread(&mut app)?;
     app.chat_widget.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            environment_id: None,
             thread_id: Some(thread_id.to_string()),
             name: "slow".to_string(),
             status: McpServerStartupState::Starting,

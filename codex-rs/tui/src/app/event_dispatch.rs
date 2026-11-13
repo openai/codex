@@ -1900,7 +1900,7 @@ impl App {
             AppEvent::FetchMcpInventory { detail, thread_id } => {
                 self.fetch_mcp_inventory(app_server, detail, thread_id);
             }
-            AppEvent::StartMcpLogin { name, thread_id } => {
+            AppEvent::StartMcpLogin { name, environment_id, thread_id } => {
                 if self.pending_mcp_login_start.is_some() {
                     self.chat_widget.add_info_message(
                         "MCP sign-in is starting. Wait for it to finish before trying again.".to_string(),
@@ -1912,10 +1912,11 @@ impl App {
                 self.pending_mcp_login_start = Some(PendingMcpLoginStart {
                     request_id: request_id.clone(),
                     name: name.clone(),
+                    environment_id: environment_id.clone(),
                     thread_id,
                     completions: Vec::new(),
                 });
-                self.start_mcp_login(app_server, request_id, name, thread_id);
+                self.start_mcp_login(app_server, request_id, name, environment_id, thread_id);
             }
             AppEvent::McpLoginStarted { request_id, result } => {
                 if let Some(pending) = self
@@ -1924,11 +1925,13 @@ impl App {
                 {
                     match result {
                         Ok(response) => {
-                            // Track the latest attempt per server: unrelated OAuth logins can
-                            // remain open while a user retries this server.
+                            // Replace this target's old attempt, not another environment's
+                            // login to a server with the same name.
                             if let Some(login_id) = response.login_id.as_ref() {
+                                let target = (pending.name.clone(), pending.environment_id);
+                                self.active_mcp_login_ids.retain(|_, current| current != &target);
                                 self.active_mcp_login_ids
-                                    .insert(pending.name.clone(), login_id.clone());
+                                    .insert(login_id.clone(), target);
                             }
                             let completed = pending.completions.iter().any(|completion| {
                                 completion.login_id == response.login_id
@@ -1956,13 +1959,10 @@ impl App {
                     // A rejected start leaves the old attempt current. A successful replacement
                     // has changed its ID, so the old cancellation is discarded here.
                     for completion in pending.completions {
-                        if completion.login_id.is_some() {
-                            if completion.login_id.as_ref()
-                                != self.active_mcp_login_ids.get(&completion.name)
-                            {
-                                continue;
-                            }
-                            self.active_mcp_login_ids.remove(&completion.name);
+                        if let Some(login_id) = &completion.login_id
+                            && self.active_mcp_login_ids.remove(login_id).is_none()
+                        {
+                            continue;
                         }
                         if let Some(thread_id) = completion.thread_id.as_deref()
                             .and_then(|id| ThreadId::from_string(id).ok())

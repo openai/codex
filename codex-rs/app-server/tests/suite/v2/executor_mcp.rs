@@ -1382,6 +1382,7 @@ startup_timeout_sec = 10
 
     let request_id = app_server
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            environment_id: None,
             thread_id: selected_thread.clone(),
             server: HTTP_MCP_SERVER_NAME.to_string(),
             tool: "echo".to_string(),
@@ -1398,6 +1399,7 @@ startup_timeout_sec = 10
 
     let request_id = app_server
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            environment_id: None,
             thread_id: selected_thread.clone(),
             server: OAUTH_MCP_SERVER_NAME.to_string(),
             tool: "echo".to_string(),
@@ -1443,6 +1445,7 @@ startup_timeout_sec = 10
 
     let request_id = app_server
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            environment_id: None,
             thread_id: selected_thread.clone(),
             server: REFRESH_PROBE_SERVER_NAME.to_string(),
             tool: "echo".to_string(),
@@ -1562,6 +1565,7 @@ async fn mcp_server_statuses(
 ) -> Result<Vec<McpServerStatus>> {
     let request_id = app_server
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            environment_id: None,
             server_name: None,
             cursor: None,
             limit: None,

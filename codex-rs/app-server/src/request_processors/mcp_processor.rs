@@ -137,6 +137,7 @@ impl McpRequestProcessor {
     ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
         let McpServerOauthLoginParams {
             name,
+            environment_id,
             thread_id,
             client_registration,
             scopes,
@@ -165,13 +166,12 @@ impl McpRequestProcessor {
             }
         };
         let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-        let Some((key, server)) = mcp_config
+        let key = mcp_config
             .mcp_server_catalog
-            .resolve_server_name(&name)
-            .and_then(|key| effective_servers.get(key).map(|server| (key, server)))
-        else {
+            .resolve_server_key(&name, environment_id.as_deref());
+        let Some(server) = effective_servers.get(&key) else {
             return Err(invalid_request(format!(
-                "No MCP server named '{name}' found."
+                "No MCP server named '{key}' found."
             )));
         };
         let redirect_mode = if server.is_agent_plugin() {
@@ -417,12 +417,22 @@ impl McpRequestProcessor {
             (thread.as_ref(), params.server_name.as_deref())
         {
             thread
-                .mcp_server_status_snapshot(server, detail, /*expected_registration*/ None)
+                .mcp_server_status_snapshot(
+                    server,
+                    params.environment_id.as_deref(),
+                    detail,
+                    /*expected_registration*/ None,
+                )
                 .await
                 .map_err(|error| {
                     internal_error(format!("failed to read MCP server status: {error:#}"))
                 })?
         } else {
+            if params.environment_id.is_some() {
+                return Err(invalid_request(
+                    "environmentId requires serverName and threadId",
+                ));
+            }
             let config = match thread.as_ref() {
                 Some(thread) => {
                     let thread_config = thread.config().await;
@@ -455,6 +465,11 @@ impl McpRequestProcessor {
                     ),
                 ),
             };
+            let selected_server = params.server_name.as_deref().map(|name| {
+                mcp_config
+                    .mcp_server_catalog
+                    .resolve_server_key(name, /*environment_id*/ None)
+            });
             let mut snapshot = collect_mcp_server_status_snapshot_with_detail(
                 &mcp_config,
                 auth.as_ref(),
@@ -464,7 +479,7 @@ impl McpRequestProcessor {
                 mcp_manager.codex_apps_tools_cache(),
                 mcp_manager.tool_catalog_cache(),
                 detail,
-                params.server_name.as_deref(),
+                selected_server.as_ref(),
             )
             .await;
             if mcp_config.xaa_enabled
@@ -472,16 +487,18 @@ impl McpRequestProcessor {
             {
                 // EMA can only use its admitted thread connection. Keep ordinary
                 // status discovery unchanged and replace the threadless EMA results.
-                for (name, server) in mcp_config.mcp_server_catalog.configured_servers() {
-                    if !matches!(server.auth, McpServerAuth::EmaAuth) {
+                for (key, server) in mcp_config.mcp_server_catalog.servers() {
+                    if !matches!(server.config().auth, McpServerAuth::EmaAuth) {
                         continue;
                     }
-                    let Some(key) = mcp_config.mcp_server_catalog.resolve_server_name(&name) else {
-                        continue;
-                    };
-                    let registration = mcp_config.mcp_server_catalog.server(key);
-                    let (selected_config, mut selected) = thread
-                        .mcp_server_status_snapshot(&name, detail, registration)
+                    let registration = Some(server);
+                    let (selected_config, selected) = thread
+                        .mcp_server_status_snapshot(
+                            key.name(),
+                            key.scoped_environment_id(),
+                            detail,
+                            registration,
+                        )
                         .await
                         .map_err(|error| {
                             internal_error(format!("failed to read MCP server status: {error:#}"))
@@ -489,27 +506,25 @@ impl McpRequestProcessor {
                     if selected_config.mcp_server_catalog.server(key) != registration {
                         continue;
                     }
-                    snapshot.server_infos.remove(&name);
+                    snapshot.server_infos.remove(key);
                     snapshot.server_infos.extend(selected.server_infos);
-                    snapshot.server_capabilities.remove(&name);
-                    if let Some(capabilities) = selected.server_capabilities.remove(&name) {
-                        snapshot
-                            .server_capabilities
-                            .insert(name.clone(), capabilities);
-                    }
-                    snapshot.tools_by_server.remove(&name);
+                    snapshot.server_capabilities.remove(key);
+                    snapshot
+                        .server_capabilities
+                        .extend(selected.server_capabilities);
+                    snapshot.tools_by_server.remove(key);
                     snapshot.tools_by_server.extend(selected.tools_by_server);
-                    snapshot.tool_list_meta.remove(&name);
+                    snapshot.tool_list_meta.remove(key);
                     snapshot.tool_list_meta.extend(selected.tool_list_meta);
-                    snapshot.tools_errors.remove(&name);
+                    snapshot.tools_errors.remove(key);
                     snapshot.tools_errors.extend(selected.tools_errors);
-                    snapshot.resources.remove(&name);
+                    snapshot.resources.remove(key);
                     snapshot.resources.extend(selected.resources);
-                    snapshot.resource_templates.remove(&name);
+                    snapshot.resource_templates.remove(key);
                     snapshot
                         .resource_templates
                         .extend(selected.resource_templates);
-                    snapshot.auth_statuses.remove(&name);
+                    snapshot.auth_statuses.remove(key);
                     snapshot.auth_statuses.extend(selected.auth_statuses);
                 }
             }
@@ -529,26 +544,27 @@ impl McpRequestProcessor {
             mut resources,
             mut resource_templates,
             mut auth_statuses,
-            mut server_names,
+            mut server_keys,
         } = snapshot;
-        server_names.extend(runtime_statuses.keys().cloned());
-        server_names.extend(
+        server_keys.extend(runtime_statuses.keys().cloned());
+        server_keys.extend(
             auth_statuses
                 .keys()
                 .cloned()
                 .chain(resources.keys().cloned())
                 .chain(resource_templates.keys().cloned()),
         );
-        server_names.sort();
-        server_names.dedup();
-        server_names.retain(|name| {
-            params
-                .server_name
-                .as_deref()
-                .is_none_or(|server| name == server)
+        server_keys.sort();
+        server_keys.dedup();
+        server_keys.retain(|key| {
+            params.server_name.as_deref().is_none_or(|server| {
+                *key == mcp_config
+                    .mcp_server_catalog
+                    .resolve_server_key(server, params.environment_id.as_deref())
+            })
         });
 
-        let total = server_names.len();
+        let total = server_keys.len();
         let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = limit.min(total);
         let start = match params.cursor {
@@ -567,15 +583,14 @@ impl McpRequestProcessor {
 
         let end = start.saturating_add(effective_limit).min(total);
 
-        let data: Vec<McpServerStatus> = server_names[start..end]
+        let data: Vec<McpServerStatus> = server_keys[start..end]
             .iter()
-            .map(|name| McpServerStatus {
-                name: name.clone(),
-                runtime_status: runtime_statuses.get(name).copied().map(Into::into),
-                plugin_id: mcp_config
-                    .mcp_server_catalog
-                    .server_by_name(name)
-                    .and_then(|server| match server.source() {
+            .map(|key| McpServerStatus {
+                name: key.name().to_owned(),
+                environment_id: key.scoped_environment_id().map(str::to_owned),
+                runtime_status: runtime_statuses.get(key).copied().map(Into::into),
+                plugin_id: mcp_config.mcp_server_catalog.server(key).and_then(
+                    |server| match server.source() {
                         McpServerSource::Plugin(plugin)
                         | McpServerSource::SelectedPlugin(plugin) => {
                             Some(plugin.plugin_id().to_owned())
@@ -583,9 +598,12 @@ impl McpRequestProcessor {
                         McpServerSource::Config
                         | McpServerSource::Compatibility { .. }
                         | McpServerSource::Extension { .. } => None,
-                    }),
-                http_origin: mcp_config.mcp_server_catalog.server_by_name(name).and_then(
-                    |server| match &server.config().transport {
+                    },
+                ),
+                http_origin: mcp_config
+                    .mcp_server_catalog
+                    .server(key)
+                    .and_then(|server| match &server.config().transport {
                         McpServerTransportConfig::StreamableHttp { url, .. } => {
                             url::Url::parse(url).ok().and_then(|url| {
                                 matches!(url.scheme(), "http" | "https")
@@ -593,17 +611,16 @@ impl McpRequestProcessor {
                             })
                         }
                         McpServerTransportConfig::Stdio { .. } => None,
-                    },
-                ),
-                server_info: server_infos.remove(name),
-                server_capabilities: server_capabilities.remove(name),
-                tool_list_meta: tool_list_meta.remove(name).map(Arc::unwrap_or_clone),
-                tools: tools_by_server.remove(name).unwrap_or_default(),
-                tools_error: tools_errors.remove(name),
-                resources: resources.remove(name).unwrap_or_default(),
-                resource_templates: resource_templates.remove(name).unwrap_or_default(),
+                    }),
+                server_info: server_infos.remove(key),
+                server_capabilities: server_capabilities.remove(key),
+                tool_list_meta: tool_list_meta.remove(key).map(Arc::unwrap_or_clone),
+                tools: tools_by_server.remove(key).unwrap_or_default(),
+                tools_error: tools_errors.remove(key),
+                resources: resources.remove(key).unwrap_or_default(),
+                resource_templates: resource_templates.remove(key).unwrap_or_default(),
                 auth_status: auth_statuses
-                    .remove(name)
+                    .remove(key)
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)
                     .into(),
             })
@@ -629,6 +646,7 @@ impl McpRequestProcessor {
             thread_id,
             origin_call_id,
             server,
+            environment_id,
             uri,
             connector_id,
             target,
@@ -636,6 +654,11 @@ impl McpRequestProcessor {
         let mut resource_params = ReadResourceRequestParams::new(uri);
         let mut meta = meta.unwrap_or_default();
         let is_codex_apps = server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+        if is_codex_apps && origin_call_id.is_some() && environment_id.is_some() {
+            return Err(invalid_request(
+                "originCallId requires the unscoped codex_apps registration",
+            ));
+        }
         let reserved_key = meta.iter().find_map(|(key, value)| match key.as_str() {
             "x-codex-turn-metadata"
             | MCP_THREAD_ID_META_KEY
@@ -664,6 +687,7 @@ impl McpRequestProcessor {
             && let Some(target) = target
         {
             if !is_codex_apps
+                || environment_id.is_some()
                 || target.connector_id.trim().is_empty()
                 || target
                     .link_id
@@ -671,7 +695,7 @@ impl McpRequestProcessor {
                     .is_some_and(|id| id.trim().is_empty() || id.starts_with("synthetic_link::"))
             {
                 return Err(invalid_request(
-                    "target requires codex_apps, a connectorId, and a real linkId or null",
+                    "target requires unscoped codex_apps, a connectorId, and a real linkId or null",
                 ));
             }
             meta.insert(
@@ -696,7 +720,11 @@ impl McpRequestProcessor {
                             .read_mcp_resource_for_call(call_id, resource_params)
                             .await
                     }
-                    None => thread.read_mcp_resource(&server, resource_params).await,
+                    None => {
+                        thread
+                            .read_mcp_resource(&server, environment_id.as_deref(), resource_params)
+                            .await
+                    }
                 };
                 Self::send_mcp_resource_read_response(
                     outgoing,
@@ -741,6 +769,7 @@ impl McpRequestProcessor {
                 codex_apps_tools_cache,
                 tool_catalog_cache,
                 &server,
+                environment_id.as_deref(),
                 resource_params,
             )
             .await
@@ -793,7 +822,13 @@ impl McpRequestProcessor {
 
         let task = async move {
             let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
+                .call_mcp_tool(
+                    &params.server,
+                    params.environment_id.as_deref(),
+                    &params.tool,
+                    params.arguments,
+                    meta,
+                )
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(mcp_operation_error);

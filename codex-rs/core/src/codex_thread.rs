@@ -1264,7 +1264,10 @@ impl CodexThread {
     pub async fn mcp_connection_statuses(
         &self,
         config: &codex_mcp::McpConfig,
-    ) -> std::collections::HashMap<String, codex_protocol::mcp::McpServerConnectionStatus> {
+    ) -> std::collections::HashMap<
+        codex_mcp::McpServerKey,
+        codex_protocol::mcp::McpServerConnectionStatus,
+    > {
         self.session
             .services
             .mcp_runtime
@@ -1388,6 +1391,7 @@ impl CodexThread {
     pub async fn read_mcp_resource(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<serde_json::Value> {
         self.session.refresh_mcp_if_dirty().await;
@@ -1395,7 +1399,7 @@ impl CodexThread {
             .session
             .services
             .mcp_runtime
-            .latest_read_resource(server, params)
+            .latest_read_resource(server, environment_id, params)
             .await?;
 
         Ok(serde_json::to_value(result)?)
@@ -1405,6 +1409,7 @@ impl CodexThread {
     pub async fn mcp_server_status_snapshot(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         detail: codex_mcp::McpSnapshotDetail,
         expected_registration: Option<&codex_mcp::ResolvedMcpServer>,
     ) -> anyhow::Result<(
@@ -1416,7 +1421,13 @@ impl CodexThread {
         self.session
             .services
             .mcp_runtime
-            .server_status_snapshot(server, detail, expected_registration, &runtime_context)
+            .server_status_snapshot(
+                server,
+                environment_id,
+                detail,
+                expected_registration,
+                &runtime_context,
+            )
             .await
     }
 
@@ -1460,6 +1471,7 @@ impl CodexThread {
     pub async fn call_mcp_tool(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
@@ -1468,7 +1480,7 @@ impl CodexThread {
         self.session
             .services
             .mcp_runtime
-            .latest_call_tool_without_attribution(server, tool, arguments, meta)
+            .latest_call_tool_without_attribution(server, environment_id, tool, arguments, meta)
             .await
     }
 

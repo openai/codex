@@ -3117,6 +3117,13 @@
     },
     "McpServerStatusUpdatedNotification": {
       "properties": {
+        "environmentId": {
+          "description": "Registration scope, not necessarily the server's execution environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "error": {
           "type": [
             "string",
@@ -5289,6 +5296,13 @@
               "format": "int64",
               "type": [
                 "integer",
+                "null"
+              ]
+            },
+            "environmentId": {
+              "description": "Registration scope, not necessarily the server's execution environment.",
+              "type": [
+                "string",
                 "null"
               ]
             },

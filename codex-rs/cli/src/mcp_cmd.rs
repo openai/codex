@@ -710,8 +710,7 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
             runtime_config
                 .mcp_server_catalog
                 .resolve_server_name(name)
-                .and_then(|key| effective_mcp_servers.get(key))
-                .map(|server| (name, server))
+                .and_then(|key| effective_mcp_servers.get_key_value(key))
         }),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
@@ -720,7 +719,10 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         &runtime_config.ema_state,
         &runtime_context,
     )
-    .await;
+    .await
+    .into_iter()
+    .map(|(key, status)| (key.name().to_owned(), status))
+    .collect::<HashMap<_, _>>();
 
     if list_args.json {
         let json_entries: Vec<_> = entries

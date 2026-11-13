@@ -152,6 +152,7 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn(
     test.codex
         .call_mcp_tool(
             "plugin_tools",
+            /*environment_id*/ None,
             "calendar_list_events",
             /*arguments*/ None,
             /*meta*/ None,
@@ -227,6 +228,7 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn(
         test.codex
             .call_mcp_tool(
                 "plugin_tools",
+                /*environment_id*/ None,
                 "calendar_list_events",
                 /*arguments*/ None,
                 /*meta*/ None,
@@ -239,6 +241,7 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn(
     test.codex
         .call_mcp_tool(
             "hook_observer",
+            /*environment_id*/ None,
             "calendar_list_events",
             /*arguments*/ None,
             /*meta*/ None,
@@ -273,6 +276,7 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn(
         test.codex
             .call_mcp_tool(
                 "plugin_tools",
+                /*environment_id*/ None,
                 "calendar_list_events",
                 /*arguments*/ None,
                 /*meta*/ None,

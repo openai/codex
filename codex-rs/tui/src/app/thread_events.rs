@@ -1112,6 +1112,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let notification = ServerNotification::McpServerStatusUpdated(
             codex_app_server_protocol::McpServerStatusUpdatedNotification {
+                environment_id: None,
                 thread_id: Some(thread_id.to_string()),
                 name: "sentry".to_string(),
                 status: codex_app_server_protocol::McpServerStartupState::Failed,

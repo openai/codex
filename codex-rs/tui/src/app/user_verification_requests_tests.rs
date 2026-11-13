@@ -16,6 +16,7 @@ fn verification_request() -> ServerRequest {
     ServerRequest::McpServerElicitationRequest {
         request_id: RequestId::Integer(7),
         params: McpServerElicitationRequestParams {
+            environment_id: None,
             thread_id: ThreadId::new().to_string(),
             turn_id: None,
             server_name: "deployments".to_string(),

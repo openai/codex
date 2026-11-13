@@ -216,6 +216,7 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
             ),
             "mcp" => app.chat_widget.handle_server_notification(
                 ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    environment_id: None,
                     thread_id: Some(id.to_string()),
                     name: "slow".into(),
                     status: McpServerStartupState::Starting,

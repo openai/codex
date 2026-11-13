@@ -655,6 +655,7 @@ async fn timeout_refresh_replaces_pending_startup_and_reuses_ready_connection() 
         .codex
         .call_mcp_tool(
             "ready",
+            /*environment_id*/ None,
             "calendar_list_events",
             /*arguments*/ None,
             /*meta*/ None,
@@ -675,7 +676,11 @@ async fn timeout_refresh_replaces_pending_startup_and_reuses_ready_connection() 
     // Publish without waiting for the held initialize to finish.
     let error = test
         .codex
-        .read_mcp_resource("unknown", ReadResourceRequestParams::new("test://resource"))
+        .read_mcp_resource(
+            "unknown",
+            /*environment_id*/ None,
+            ReadResourceRequestParams::new("test://resource"),
+        )
         .await
         .expect_err("the unknown server should not exist");
     assert_eq!(error.to_string(), "unknown MCP server 'unknown'");
@@ -688,6 +693,7 @@ async fn timeout_refresh_replaces_pending_startup_and_reuses_ready_connection() 
             .codex
             .call_mcp_tool(
                 name,
+                /*environment_id*/ None,
                 "calendar_list_events",
                 /*arguments*/ None,
                 /*meta*/ None,
@@ -913,6 +919,7 @@ startup_timeout_sec = 0.1
         .codex
         .read_mcp_resource(
             "refreshed",
+            /*environment_id*/ None,
             ReadResourceRequestParams::new("test://resource"),
         )
         .await;

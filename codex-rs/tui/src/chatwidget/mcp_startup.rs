@@ -7,7 +7,9 @@
 //! already shown the same diagnostic in an earlier round.
 //! Initial and runtime diagnostics remain in retained history and the warnings viewer;
 //! compact history hides their full text behind the persistent warning notice.
+//! Server-name/environment pairs keep same-named registrations independent.
 
+use crate::app_server_approval_conversions::mcp_server_label;
 use codex_app_server_protocol::McpServerStartupFailureReason;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
@@ -37,7 +39,11 @@ impl McpStartupStatus {
 impl ChatWidget {
     /// The server announces eager starts before outcomes. On attach or after lag,
     /// an outcome can arrive without its corresponding start.
-    fn update_mcp_startup_status(&mut self, server: String, status: McpStartupStatus) {
+    fn update_mcp_startup_status(
+        &mut self,
+        server: (String, Option<String>),
+        status: McpStartupStatus,
+    ) {
         let report_diagnostic = if status.is_diagnostic() {
             self.mcp_startup_last_diagnostics
                 .insert(server.clone(), status.clone())
@@ -74,26 +80,28 @@ impl ChatWidget {
         let total = current.len();
         let mut starting: Vec<_> = current
             .iter()
-            .filter_map(|(name, state)| {
+            .filter_map(|(server, state)| {
                 if matches!(state, McpStartupStatus::Starting) {
-                    Some(name)
+                    Some(server)
                 } else {
                     None
                 }
             })
             .collect();
         starting.sort();
-        let first = starting.first()?;
         let completed = total.saturating_sub(starting.len());
         let max_to_show = 3;
         let mut to_show: Vec<String> = starting
             .iter()
             .take(max_to_show)
-            .map(ToString::to_string)
+            .map(|(server_name, environment_id)| {
+                mcp_server_label(server_name, environment_id.as_deref())
+            })
             .collect();
         if starting.len() > max_to_show {
             to_show.push("…".to_string());
         }
+        let first = to_show.first()?;
         Some(if total > 1 {
             format!(
                 "{MCP_STARTUP_MULTI_HEADER_PREFIX} ({completed}/{total}): {}",
@@ -104,26 +112,35 @@ impl ChatWidget {
         })
     }
 
-    fn report_mcp_startup_failure(&mut self, server: &str, status: &McpStartupStatus) {
+    fn report_mcp_startup_failure(
+        &mut self,
+        (server_name, environment_id): &(String, Option<String>),
+        status: &McpStartupStatus,
+    ) {
         if let McpStartupStatus::Failed {
             error,
             failure_reason,
         } = status
         {
-            self.add_mcp_startup_warning(vec![error.clone()], [server.to_owned()], *failure_reason);
+            self.add_mcp_startup_warning(
+                vec![error.clone()],
+                [mcp_server_label(server_name, environment_id.as_deref())],
+                *failure_reason,
+            );
         }
     }
 
     fn report_mcp_startup_summary<'a>(
         &mut self,
-        outcomes: impl IntoIterator<Item = (&'a String, &'a McpStartupStatus)>,
+        outcomes: impl IntoIterator<Item = (&'a (String, Option<String>), &'a McpStartupStatus)>,
     ) {
         let mut failed = Vec::new();
         let mut cancelled = Vec::new();
-        for (server, status) in outcomes {
+        for ((server_name, environment_id), status) in outcomes {
+            let server = mcp_server_label(server_name, environment_id.as_deref());
             match status {
-                McpStartupStatus::Failed { .. } => failed.push(server.clone()),
-                McpStartupStatus::Cancelled => cancelled.push(server.clone()),
+                McpStartupStatus::Failed { .. } => failed.push(server),
+                McpStartupStatus::Cancelled => cancelled.push(server),
                 McpStartupStatus::Starting | McpStartupStatus::Ready => {}
             }
         }
@@ -206,19 +223,28 @@ impl ChatWidget {
         notification: McpServerStatusUpdatedNotification,
     ) {
         let refresh_connector_mentions = notification.name == "codex_apps"
+            && notification.environment_id.is_none()
             && notification.status == McpServerStartupState::Ready;
         let status = match notification.status {
             McpServerStartupState::Starting => McpStartupStatus::Starting,
             McpServerStartupState::Ready => McpStartupStatus::Ready,
-            McpServerStartupState::Failed => McpStartupStatus::Failed {
-                failure_reason: notification.failure_reason,
-                error: notification.error.unwrap_or_else(|| {
-                    format!("MCP client for `{}` failed to start", notification.name)
-                }),
-            },
+            McpServerStartupState::Failed => {
+                let server =
+                    mcp_server_label(&notification.name, notification.environment_id.as_deref());
+                McpStartupStatus::Failed {
+                    failure_reason: notification.failure_reason,
+                    error: match notification.error {
+                        Some(error) if notification.environment_id.is_some() => {
+                            format!("{server}: {error}")
+                        }
+                        Some(error) => error,
+                        None => format!("MCP client for `{server}` failed to start"),
+                    },
+                }
+            }
             McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
         };
-        self.update_mcp_startup_status(notification.name, status);
+        self.update_mcp_startup_status((notification.name, notification.environment_id), status);
         if refresh_connector_mentions {
             self.refresh_connector_mentions(/*force_refresh*/ false);
         }

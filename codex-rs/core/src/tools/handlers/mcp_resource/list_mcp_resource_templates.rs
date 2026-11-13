@@ -66,15 +66,22 @@ impl ListMcpResourceTemplatesHandler {
 
         let arguments = resource_arguments(&payload)?;
         let args = ListResourceArgs::parse(arguments.clone())?;
+        let target = args.target(&step_context);
 
         let invocation = McpInvocation {
             server: args.server.clone().unwrap_or_else(|| "codex".to_string()),
+            environment_id: target
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .and_then(|(key, _)| key.scoped_environment_id())
+                .map(str::to_owned),
             tool: "list_mcp_resource_templates".to_string(),
             arguments: arguments.clone(),
         };
 
         run_resource_operation(&session, &step_context, &call_id, invocation, async {
-            if let Some((server_key, params)) = args.target(&step_context)? {
+            if let Some((server_key, params)) = target? {
                 let result = mcp
                     .list_resource_templates(server_key, params)
                     .await

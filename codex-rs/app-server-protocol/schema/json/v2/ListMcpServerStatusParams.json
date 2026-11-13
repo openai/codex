@@ -28,6 +28,13 @@
       ],
       "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
     },
+    "environmentId": {
+      "description": "Select this environment's registration. Requires `serverName` and `threadId`. When omitted, a named request uses the same server as older clients.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "limit": {
       "description": "Optional page size; defaults to a server-defined value.",
       "format": "uint32",

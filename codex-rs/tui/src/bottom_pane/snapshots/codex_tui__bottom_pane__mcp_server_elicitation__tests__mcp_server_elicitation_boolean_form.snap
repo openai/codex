@@ -4,14 +4,14 @@ expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
 ---
                                                                                                                         
   Field 1/1 (1 required unanswered)                                                                                     
+  Server: server-1 (environment env-b)                                                                                  
+                                                                                                                        
   Allow this request?                                                                                                   
                                                                                                                         
   Confirm                                                                                                               
   Approve the pending action.                                                                                           
   › 1. True                                                                                                             
     2. False                                                                                                            
-                                                                                                                        
-                                                                                                                        
                                                                                                                         
                                                                                                                         
                                                                                                                         

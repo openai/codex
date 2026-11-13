@@ -4,8 +4,8 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 
 
-⚠ MCP client for `alpha` failed to start: handshake failed
-⚠ MCP startup incomplete (failed: alpha)
+⚠ notes (environment env-a): MCP client for `notes` failed to start: handshake failed
+⚠ MCP startup incomplete (failed: notes (environment env-a))
 
 
 › Ask Codex to do anything

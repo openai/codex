@@ -520,6 +520,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
 
     app.handle_mcp_inventory_result(
         Ok(vec![McpServerStatus {
+            environment_id: None,
             server_capabilities: None,
             tool_list_meta: None,
             tools_error: None,
@@ -7324,6 +7325,7 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
     let request = ServerRequest::McpServerElicitationRequest {
         request_id: AppServerRequestId::Integer(9),
         params: McpServerElicitationRequestParams {
+            environment_id: None,
             thread_id: thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
@@ -7364,6 +7366,7 @@ async fn inactive_thread_invalid_url_elicitation_is_declined() {
     let request = ServerRequest::McpServerElicitationRequest {
         request_id: AppServerRequestId::Integer(10),
         params: McpServerElicitationRequestParams {
+            environment_id: None,
             thread_id: thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
@@ -8293,6 +8296,7 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                environment_id: None,
                 thread_id: Some(child_thread_id.to_string()),
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
@@ -8371,6 +8375,7 @@ async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                environment_id: None,
                 thread_id: None,
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
@@ -8451,6 +8456,7 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
             &app_server,
             codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
                 ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    environment_id: None,
                     thread_id: Some(side_thread_id.to_string()),
                     name: name.to_string(),
                     status,

@@ -6,6 +6,7 @@ fn computer_item(
     status: codex_app_server_protocol::McpToolCallStatus,
 ) -> AppServerThreadItemPayload {
     AppServerThreadItemPayload::McpToolCall {
+        environment_id: None,
         id: id.to_string(),
         server: "cua_repl".to_string(),
         tool: "js".to_string(),

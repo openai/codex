@@ -868,6 +868,7 @@ async fn thread_plugin_selection_disables_executor_hooks_without_disabling_their
         .codex
         .call_mcp_tool(
             "node_repl",
+            /*environment_id*/ None,
             "js",
             Some(json!({"code": "1 + 1"})),
             /*meta*/ None,
@@ -1385,6 +1386,7 @@ async fn executor_stop_hook_rejects_mismatched_environment() -> Result<()> {
         .codex
         .call_mcp_tool(
             "node_repl",
+            /*environment_id*/ None,
             "js",
             Some(json!({"code": "1 + 1"})),
             /*meta*/ None,
@@ -1550,6 +1552,7 @@ async fn executor_browser_and_computer_use_cleanup_hooks_use_separate_mcp_routes
             .codex
             .call_mcp_tool(
                 "node_repl",
+                /*environment_id*/ None,
                 "js",
                 Some(json!({ "code": "1 + 1" })),
                 /*meta*/ None,

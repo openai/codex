@@ -1389,6 +1389,7 @@ async fn replayed_mcp_tool_call_stays_active_until_completion() {
     let _ = drain_insert_history(&mut rx);
 
     let mut item = AppServerThreadItemPayload::McpToolCall {
+        environment_id: None,
         id: "mcp-1".to_string(),
         server: "copilot-bridge".to_string(),
         tool: "copilot".to_string(),
@@ -1434,6 +1435,7 @@ async fn failed_repl_mcp_tool_call_preserves_status_and_result() {
 
         chat.handle_server_notification(
             ServerNotification::ItemCompleted(ItemCompletedNotification::new("thread-1".to_string(), "turn-1".to_string(), AppServerThreadItemPayload::McpToolCall {
+                    environment_id: None,
                     id: "mcp-failed".to_string(),
                     server: server.to_string(),
                     tool: "js".to_string(),
@@ -1500,6 +1502,7 @@ async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
     ));
 
     chat.on_mcp_tool_call_started(AppServerThreadItemPayload::McpToolCall {
+        environment_id: None,
         id: "mcp-deferred".to_string(),
         server: "copilot-bridge".to_string(),
         tool: "copilot".to_string(),
@@ -1518,6 +1521,7 @@ async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
 
     chat.stream_controller = None;
     chat.on_mcp_tool_call_completed(AppServerThreadItemPayload::McpToolCall {
+        environment_id: None,
         id: "mcp-deferred".to_string(),
         server: "copilot-bridge".to_string(),
         tool: "copilot".to_string(),

@@ -178,6 +178,7 @@ impl ChatWidget {
         let ThreadItemPayload::McpToolCall {
             id,
             server,
+            environment_id,
             tool,
             arguments,
             ..
@@ -188,6 +189,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         let invocation = McpInvocation {
             server,
+            environment_id,
             tool,
             arguments: Some(arguments),
         };

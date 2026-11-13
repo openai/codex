@@ -198,19 +198,19 @@ impl McpConnectionSet {
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.servers.len()))]
     pub(crate) async fn list_tools_with_errors(
         &self,
-        include_server: impl Fn(&str) -> bool,
-    ) -> (Vec<ToolInfo>, HashMap<String, String>) {
+        include_server: impl Fn(&McpServerKey) -> bool,
+    ) -> (Vec<ToolInfo>, HashMap<McpServerKey, String>) {
         let (tools, errors, _) = self.list_catalogs_with_errors(include_server).await;
         (tools, errors)
     }
 
     pub(crate) async fn list_catalogs_with_errors(
         &self,
-        include_server: impl Fn(&str) -> bool,
+        include_server: impl Fn(&McpServerKey) -> bool,
     ) -> (
         Vec<ToolInfo>,
-        HashMap<String, String>,
-        HashMap<String, Arc<serde_json::Value>>,
+        HashMap<McpServerKey, String>,
+        HashMap<McpServerKey, Arc<serde_json::Value>>,
     ) {
         let mut metadata = HashMap::new();
         let mut tools = Vec::new();
@@ -223,7 +223,8 @@ impl McpConnectionSet {
             .map(|config| config.mcp_server_catalog.exposure())
             .unwrap_or_default();
         let server_results = join_all(
-            self.legacy_servers()
+            self.servers
+                .iter()
                 .filter(|(name, _)| include_server(name))
                 .map(|(server_name, view)| async move {
                     view.connection.client.reconnect_failed_startup().await;
@@ -234,7 +235,7 @@ impl McpConnectionSet {
                         .startup_complete
                         .load(Ordering::Acquire);
                     let server_tools = view
-                        .listed_catalog(server_name, &self.tool_plugin_context, exposure)
+                        .listed_catalog(server_name.name(), &self.tool_plugin_context, exposure)
                         .instrument(trace_span!(
                             "list_tools_for_server",
                             server_name = %server_name,

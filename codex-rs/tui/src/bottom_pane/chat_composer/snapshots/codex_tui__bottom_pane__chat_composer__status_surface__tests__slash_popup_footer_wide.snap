@@ -1,15 +1,15 @@
 ---
 source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
-assertion_line: 344
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 80, height: 8 },
+    area: Rect { x: 0, y: 0, width: 80, height: 9 },
     content: [
         "  /model     choose what model and reasoning effort to use                      ",
         "› /memories  configure memory use and generation                                ",
         "  /mention   mention a file                                                     ",
-        "  /mcp       list MCP tools; use /mcp verbose or /mcp login <name>              ",
+        "  /mcp       list MCP tools; /mcp verbose or /mcp login <name> [--environment   ",
+        "             <id>]                                                              ",
         "                                                                                ",
         "› /m                                                                            ",
         "                                                                                ",
@@ -32,8 +32,10 @@ Buffer {
         x: 3, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 13, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 66, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 1, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 77, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 13, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 18, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

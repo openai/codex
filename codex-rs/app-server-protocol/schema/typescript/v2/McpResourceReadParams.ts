@@ -12,7 +12,11 @@ _meta?: { [key in string]?: JsonValue } | null, threadId?: string | null,
 /**
  * Originating MCP tool call used to select the resource's app.
  */
-originCallId?: string | null, server: string, uri: string, connectorId?: string | null,
+originCallId?: string | null, server: string,
+/**
+ * Exact registration scope; omission preserves legacy name-only selection.
+ */
+environmentId?: string | null, uri: string, connectorId?: string | null,
 /**
  * Explicit hosted app/account. Omit to retain legacy resource discovery.
  */

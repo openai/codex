@@ -45,11 +45,12 @@ impl McpConnectionSet {
     /// Returns resources from servers selected by `include_server`.
     pub async fn list_all_resources(
         &self,
-        include_server: impl Fn(&str) -> bool,
-    ) -> HashMap<String, Vec<Resource>> {
+        include_server: impl Fn(&McpServerKey) -> bool,
+    ) -> HashMap<McpServerKey, Vec<Resource>> {
         let mut join_set = JoinSet::new();
         for (server_name, view) in self
-            .legacy_servers()
+            .servers
+            .iter()
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.to_owned();
@@ -91,10 +92,10 @@ impl McpConnectionSet {
     /// Returns resource templates from servers selected by `include_server`.
     pub async fn list_all_resource_templates(
         &self,
-        include_server: impl Fn(&str) -> bool,
-    ) -> HashMap<String, Vec<ResourceTemplate>> {
+        include_server: impl Fn(&McpServerKey) -> bool,
+    ) -> HashMap<McpServerKey, Vec<ResourceTemplate>> {
         let mut join_set = JoinSet::new();
-        for (server_name, view) in self.legacy_servers().filter(|(server_name, view)| {
+        for (server_name, view) in self.servers.iter().filter(|(server_name, view)| {
             include_server(server_name)
                 && !self.skips_resource_template_listing(&view.metadata.server_key)
         }) {

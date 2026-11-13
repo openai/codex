@@ -151,7 +151,7 @@ struct CodexAppsStartupReconnectState {
 #[derive(Clone)]
 struct CodexAppsStartupStatusContext {
     submit_id: String,
-    server_name: String,
+    server_key: McpServerKey,
     tx_event: Sender<Event>,
 }
 
@@ -173,12 +173,12 @@ impl CodexAppsStartupReconnect {
     fn with_startup_status_context(
         mut self,
         submit_id: String,
-        server_name: String,
+        server_key: McpServerKey,
         tx_event: Option<Sender<Event>>,
     ) -> Self {
         self.startup_status_context = tx_event.map(|tx_event| CodexAppsStartupStatusContext {
             submit_id,
-            server_name,
+            server_key,
             tx_event,
         });
         self
@@ -247,7 +247,11 @@ impl CodexAppsStartupReconnect {
                     .send(Event {
                         id: context.submit_id,
                         msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
-                            server: context.server_name,
+                            server: context.server_key.name().to_owned(),
+                            environment_id: context
+                                .server_key
+                                .scoped_environment_id()
+                                .map(str::to_owned),
                             status: McpStartupStatus::Ready,
                         }),
                     })
@@ -505,7 +509,7 @@ impl AsyncManagedClient {
     ) -> Self {
         let server_name = server_key.name().to_owned();
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
-        let reconnect_server_name = server_name;
+        let reconnect_server_key = server_key.clone();
         let reconnect_tx_event = tx_event.clone();
         let cached_server_info = if is_codex_apps_mcp_server {
             codex_apps_tools_cache_context
@@ -614,7 +618,7 @@ impl AsyncManagedClient {
                 }))
                 .with_startup_status_context(
                     startup_submit_id,
-                    reconnect_server_name,
+                    reconnect_server_key,
                     reconnect_tx_event,
                 ),
             )

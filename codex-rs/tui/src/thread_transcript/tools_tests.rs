@@ -37,6 +37,7 @@ fn command_item(status: CommandExecutionStatus) -> ThreadItemPayload {
 
 fn mcp_item(server: &str, id: &str) -> ThreadItemPayload {
     ThreadItemPayload::McpToolCall {
+        environment_id: None,
         id: id.to_string(),
         server: server.to_string(),
         tool: "js".to_string(),

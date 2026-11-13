@@ -1,5 +1,6 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
-• Calling search.find_docs({"query":"ratatui styling","limit":3})
+• Calling
+  └ search.find_docs({"query":"ratatui styling","limit":3}) (environment a)

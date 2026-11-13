@@ -230,6 +230,7 @@ async fn spawned_agent_inherits_selected_executor_skill(
         }
         let status_id = app_server
             .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+                environment_id: None,
                 thread_id: Some(request.header("thread-id").expect("agent thread ID")),
                 server_name: None,
                 cursor: None,

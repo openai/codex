@@ -2031,6 +2031,13 @@
                 "null"
               ]
             },
+            "environmentId": {
+              "description": "Registration scope, not necessarily the server's execution environment.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "error": {
               "anyOf": [
                 {

@@ -182,7 +182,13 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
         )]))?;
         let _ = test.codex.refresh_mcp_config(current, updated).await;
         test.codex
-            .call_mcp_tool("echo_service", "echo", ready.clone(), /*meta*/ None)
+            .call_mcp_tool(
+                "echo_service",
+                /*environment_id*/ None,
+                "echo",
+                ready.clone(),
+                /*meta*/ None,
+            )
             .await?;
         test.submit_text_turn(prompt).await?;
     }
@@ -240,7 +246,13 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
         let _ = test.codex.refresh_mcp_config(current, updated).await;
         let result = test
             .codex
-            .call_mcp_tool("echo_service", "echo", ready.clone(), /*meta*/ None)
+            .call_mcp_tool(
+                "echo_service",
+                /*environment_id*/ None,
+                "echo",
+                ready.clone(),
+                /*meta*/ None,
+            )
             .await;
         if tools.is_empty() {
             assert!(result.is_err(), "removed tools must not remain callable");

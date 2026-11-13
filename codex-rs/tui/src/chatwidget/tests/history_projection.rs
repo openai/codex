@@ -77,6 +77,7 @@ async fn older_tool_projection_matches_initial_replay() {
             });
         }
         items.push(AppServerThreadItemPayload::McpToolCall {
+            environment_id: None,
             id: id.to_string(),
             server: server.to_string(),
             tool: "js".to_string(),

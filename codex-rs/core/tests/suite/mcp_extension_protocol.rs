@@ -415,6 +415,7 @@ async fn hosted_apps_protocol_override_preserves_native_verification() -> anyhow
         caller
             .call_mcp_tool(
                 CODEX_APPS_MCP_SERVER_NAME,
+                /*environment_id*/ None,
                 "verify_action",
                 /*arguments*/ None,
                 /*meta*/ None,

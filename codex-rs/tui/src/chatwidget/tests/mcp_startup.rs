@@ -5,6 +5,7 @@ use pretty_assertions::assert_eq;
 fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            environment_id: None,
             thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status,
@@ -18,6 +19,7 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
 fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            environment_id: None,
             thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status: McpServerStartupState::Failed,
@@ -48,6 +50,7 @@ async fn mcp_startup_ignores_status_for_other_thread() {
     ] {
         chat.handle_server_notification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                environment_id: None,
                 thread_id: Some(child_thread_id.to_string()),
                 name: "sentry".to_string(),
                 status,
@@ -78,6 +81,7 @@ async fn mcp_apps_readiness_retries_an_in_flight_installed_mention_lookup() {
 
     chat.refresh_connector_mentions(/*force_refresh*/ false);
     chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+        environment_id: None,
         thread_id: None,
         name: "codex_apps".to_string(),
         status: McpServerStartupState::Ready,
@@ -540,47 +544,72 @@ async fn turn_start_replaces_idle_completed_mcp_startup_header() {
 async fn app_server_mcp_startup_failure_renders_warning_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
+    let width: u16 = 120;
 
-    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
-    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    for environment_id in ["env-a", "env-b"] {
+        chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+            thread_id: None,
+            name: "notes".to_string(),
+            environment_id: Some(environment_id.to_string()),
+            status: McpServerStartupState::Starting,
+            error: None,
+            failure_reason: None,
+        });
+    }
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Starting MCP servers (0/2): notes (environment env-a), notes (environment env-b)"
+    );
 
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.bottom_pane.is_task_running());
 
-    notify_mcp_status_error(
-        &mut chat,
-        "alpha",
-        "MCP client for `alpha` failed to start: handshake failed",
-    );
-    notify_mcp_status_error(
-        &mut chat,
-        "alpha",
-        "MCP client for `alpha` failed to start: handshake failed",
-    );
+    for _ in 0..2 {
+        chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+            thread_id: None,
+            name: "notes".to_string(),
+            environment_id: Some("env-a".to_string()),
+            status: McpServerStartupState::Failed,
+            error: Some("MCP client for `notes` failed to start: handshake failed".to_string()),
+            failure_reason: None,
+        });
+    }
 
-    let failure_cells = drain_insert_history(&mut rx);
+    let failure_cells = drain_insert_history_with(&mut rx, |cell| cell.transcript_lines(width));
     let failure_text = failure_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(failure_text.contains("MCP client for `alpha` failed to start: handshake failed"));
+    assert_eq!(
+        failure_text,
+        "⚠ notes (environment env-a): MCP client for `notes` failed to start: handshake failed\n"
+    );
     assert!(!failure_text.contains("MCP startup incomplete"));
     assert!(chat.bottom_pane.is_task_running());
 
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.bottom_pane.is_task_running());
 
-    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+    chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+        thread_id: None,
+        name: "notes".to_string(),
+        environment_id: Some("env-b".to_string()),
+        status: McpServerStartupState::Ready,
+        error: None,
+        failure_reason: None,
+    });
 
     let summary_cells = drain_insert_history(&mut rx);
     let summary_text = summary_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
+    assert_eq!(
+        summary_text,
+        "⚠ MCP startup incomplete (failed: notes (environment env-a))\n"
+    );
     assert!(!chat.bottom_pane.is_task_running());
 
-    let width: u16 = 120;
     let ui_height: u16 = chat.desired_height(width);
     let vt_height: u16 = ui_height.saturating_add(1).max(10);
     let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);

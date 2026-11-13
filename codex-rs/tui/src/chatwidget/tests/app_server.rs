@@ -590,6 +590,7 @@ async fn tool_suggestion_install_url_is_validated_before_opening() {
         chat.handle_elicitation_request_now(
             codex_app_server_protocol::RequestId::Integer(9),
             codex_app_server_protocol::McpServerElicitationRequestParams {
+                environment_id: None,
                 thread_id: request_thread_id.to_string(),
                 turn_id: Some("turn-install".to_string()),
                 server_name: "connector-server".to_string(),
@@ -654,6 +655,7 @@ async fn invalid_url_elicitation_is_declined() {
     chat.handle_elicitation_request_now(
         codex_app_server_protocol::RequestId::Integer(9),
         codex_app_server_protocol::McpServerElicitationRequestParams {
+            environment_id: Some("env-a".to_string()),
             thread_id: request_thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),

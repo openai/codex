@@ -200,6 +200,7 @@ async fn assert_standard_form_elicitation_round_trip(
             thread_id: fixture.thread_id.clone(),
             turn_id: Some(fixture.turn_id.clone()),
             server_name: "codex_apps".to_string(),
+            environment_id: None,
             request: McpServerElicitationRequest::Form {
                 meta: None,
                 message: ELICITATION_MESSAGE.to_string(),
@@ -246,6 +247,7 @@ async fn mcp_server_openai_form_elicitation_round_trip() -> Result<()> {
             thread_id: fixture.thread_id.clone(),
             turn_id: Some(fixture.turn_id.clone()),
             server_name: "codex_apps".to_string(),
+            environment_id: None,
             request: McpServerElicitationRequest::OpenAiForm {
                 meta: None,
                 message: OPENAI_FORM_MESSAGE.to_string(),
@@ -285,6 +287,7 @@ async fn mcp_server_openai_elicitation_form_round_trip() -> Result<()> {
             thread_id: fixture.thread_id.clone(),
             turn_id: Some(fixture.turn_id.clone()),
             server_name: "codex_apps".to_string(),
+            environment_id: None,
             request: McpServerElicitationRequest::OpenAiElicitationForm {
                 meta: Some(json!({ "example/request": "template-picker" })),
                 message: OPENAI_FORM_MESSAGE.to_string(),

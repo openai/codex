@@ -490,6 +490,7 @@ async fn turn_event_counts_completed_tool_items() {
     let mcp_tool_call_item = |status, duration_ms| ThreadItemPayload::McpToolCall {
         id: "mcp-1".to_string(),
         server: "server".to_string(),
+        environment_id: None,
         tool: "search".to_string(),
         status,
         arguments: json!({}),

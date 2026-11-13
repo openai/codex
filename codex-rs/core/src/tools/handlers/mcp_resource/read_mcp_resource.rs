@@ -70,16 +70,21 @@ impl ReadMcpResourceHandler {
             uri,
             environment_id,
         } = ReadResourceArgs::parse(arguments.clone())?;
+        let server_key = resolve_resource_server(&step_context, &server, environment_id.as_deref());
 
         let invocation = McpInvocation {
             server: server.clone(),
+            environment_id: server_key
+                .as_ref()
+                .ok()
+                .and_then(|key| key.scoped_environment_id())
+                .map(str::to_owned),
             tool: "read_mcp_resource".to_string(),
             arguments: arguments.clone(),
         };
 
         run_resource_operation(&session, &step_context, &call_id, invocation, async {
-            let server_key =
-                resolve_resource_server(&step_context, &server, environment_id.as_deref())?;
+            let server_key = server_key?;
             let result = mcp
                 .read_resource(server_key, ReadResourceRequestParams::new(uri.clone()))
                 .await

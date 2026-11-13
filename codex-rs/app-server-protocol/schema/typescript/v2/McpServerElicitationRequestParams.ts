@@ -13,4 +13,8 @@ export type McpServerElicitationRequestParams = { threadId: string,
  * context is app-server correlation rather than part of the protocol identity of the
  * elicitation itself.
  */
-turnId: string | null, serverName: string, } & ({ "mode": "form", _meta: JsonValue | null, message: string, requestedSchema: McpElicitationSchema, } | { "mode": "openai/form", _meta: JsonValue | null, message: string, requestedSchema: JsonValue, } | { "mode": "openaiForm", _meta: JsonValue | null, message: string, requestedSchema: JsonValue, } | { "mode": "url", _meta: JsonValue | null, message: string, url: string, elicitationId: string, });
+turnId: string | null, serverName: string,
+/**
+ * Registration scope, not necessarily the server's execution environment.
+ */
+environmentId: string | null, } & ({ "mode": "form", _meta: JsonValue | null, message: string, requestedSchema: McpElicitationSchema, } | { "mode": "openai/form", _meta: JsonValue | null, message: string, requestedSchema: JsonValue, } | { "mode": "openaiForm", _meta: JsonValue | null, message: string, requestedSchema: JsonValue, } | { "mode": "url", _meta: JsonValue | null, message: string, url: string, elicitationId: string, });

@@ -91,7 +91,7 @@ async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<(
             })
             .map_err(anyhow::Error::msg)?;
         servers.insert(
-            name.to_string(),
+            McpServerKey::unscoped(name),
             EffectiveMcpServer::from_host_config(server),
         );
     }
@@ -119,8 +119,8 @@ async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<(
             .map(|(name, entry)| (name, entry.auth_state))
             .collect::<HashMap<_, _>>(),
         HashMap::from([
-            ("first".to_string(), McpAuthState::BearerToken),
-            ("second".to_string(), McpAuthState::BearerToken),
+            (McpServerKey::unscoped("first"), McpAuthState::BearerToken),
+            (McpServerKey::unscoped("second"), McpAuthState::BearerToken),
         ]),
     );
     drop(lease);
@@ -173,7 +173,7 @@ async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures()
         }
         manager.insert_test_client(name, client);
         auth_status_entries.insert(
-            name.to_string(),
+            McpServerKey::unscoped(name),
             McpAuthStatusEntry {
                 config: name.starts_with("ema-").then(|| {
                     serde_json::from_value(serde_json::json!({
@@ -186,26 +186,29 @@ async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures()
         );
     }
 
-    let server_names = auth_status_entries.keys().cloned().collect();
+    let server_keys = auth_status_entries.keys().cloned().collect();
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &manager,
         auth_status_entries,
-        server_names,
+        server_keys,
         McpSnapshotDetail::ToolsAndAuthOnly,
     )
     .await;
 
     assert_eq!(
         snapshot.auth_statuses,
-        HashMap::from([
-            ("oauth-failed".to_string(), McpAuthStatus::NotLoggedIn),
-            ("oauth-ready".to_string(), McpAuthStatus::OAuth),
-            ("oauth-provider-error".to_string(), McpAuthStatus::OAuth),
-            ("ema-failed".to_string(), McpAuthStatus::NotLoggedIn),
-            ("ema-ready".to_string(), McpAuthStatus::BearerToken),
-            ("ema-provider-error".to_string(), McpAuthStatus::BearerToken),
-            ("bearer".to_string(), McpAuthStatus::BearerToken),
-        ]),
+        HashMap::from(
+            [
+                ("oauth-failed", McpAuthStatus::NotLoggedIn),
+                ("oauth-ready", McpAuthStatus::OAuth),
+                ("oauth-provider-error", McpAuthStatus::OAuth),
+                ("ema-failed", McpAuthStatus::NotLoggedIn),
+                ("ema-ready", McpAuthStatus::BearerToken),
+                ("ema-provider-error", McpAuthStatus::BearerToken),
+                ("bearer", McpAuthStatus::BearerToken),
+            ]
+            .map(|(name, status)| (McpServerKey::unscoped(name), status)),
+        ),
     );
 }
 

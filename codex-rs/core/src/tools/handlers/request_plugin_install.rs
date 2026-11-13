@@ -8,6 +8,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpServerKey;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
@@ -254,7 +255,7 @@ impl RequestPluginInstallHandler {
         let response = session
             .request_mcp_server_elicitation(
                 turn.as_ref(),
-                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
                 request_id,
                 request,
             )

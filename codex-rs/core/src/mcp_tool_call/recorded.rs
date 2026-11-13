@@ -32,6 +32,10 @@ pub(crate) async fn prepare_approval_action(
         .map_err(|err| FunctionCallError::RespondToModel(format!("{err:#}")))?;
     let mcp_invocation = McpInvocation {
         server: advertised_tool.server_name().to_owned(),
+        environment_id: advertised_tool
+            .server_key()
+            .scoped_environment_id()
+            .map(str::to_owned),
         tool: advertised_tool.tool.name.to_string(),
         arguments,
     };

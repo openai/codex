@@ -4292,6 +4292,7 @@ mod tests {
                         ThreadItemPayload::McpToolCall {
                             id: keys[2].item_id.clone(),
                             server: "server".to_string(),
+                            environment_id: None,
                             tool: "tool".to_string(),
                             status: McpToolCallStatus::Failed,
                             arguments: serde_json::json!({}),

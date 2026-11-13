@@ -5,6 +5,7 @@ use super::super::rmcp_client::remote_aware_stdio_server_bin;
 use anyhow::Result;
 use codex_core::ConfigRefreshOutcome;
 use codex_features::Feature;
+use codex_mcp::McpServerKey;
 use codex_protocol::mcp::McpServerConnectionStatus;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
@@ -142,7 +143,7 @@ async fn mcp_resource_messages(tool_mode: ToolMode) -> Result<()> {
         test.codex
             .mcp_connection_statuses(&config)
             .await
-            .get("resources"),
+            .get(&McpServerKey::unscoped("resources")),
         Some(&McpServerConnectionStatus::NotStarted)
     );
     test.submit_turn("Query the deferred server by name and read its example note.")

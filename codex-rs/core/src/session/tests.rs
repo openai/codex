@@ -731,7 +731,7 @@ async fn request_mcp_server_elicitation_waits_for_user_response(
             session
                 .request_mcp_server_elicitation(
                     &turn_context,
-                    "codex_apps".to_string(),
+                    codex_mcp::McpServerKey::unscoped("codex_apps"),
                     RequestId::String("request-1".into()),
                     request,
                 )
@@ -750,6 +750,7 @@ async fn request_mcp_server_elicitation_waits_for_user_response(
         codex_protocol::approvals::ElicitationRequestEvent {
             turn_id: Some(turn_context.sub_id.clone()),
             server_name: "codex_apps".to_string(),
+            environment_id: None,
             id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
             request,
         }

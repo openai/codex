@@ -355,6 +355,7 @@ impl ChatWidget {
         if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_url_app_server_request(
             thread_id,
             &params.server_name,
+            params.environment_id.as_deref(),
             request_id.clone(),
             &params.request,
         ) {
@@ -373,6 +374,7 @@ impl ChatWidget {
                         thread_id,
                         thread_label: None,
                         server_name: params.server_name,
+                        environment_id: params.environment_id,
                         request_id,
                         message,
                     });
@@ -387,6 +389,7 @@ impl ChatWidget {
                         crate::bottom_pane::user_verification::UserVerificationRequest {
                             thread_label: None,
                             server_name: params.server_name,
+                            environment_id: params.environment_id,
                             request_id,
                             title,
                             description,

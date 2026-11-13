@@ -34,6 +34,7 @@ async fn trusted_server_without_policy_support_keeps_caller_metadata() -> anyhow
         .codex
         .call_mcp_tool(
             "legacy",
+            /*environment_id*/ None,
             "network_policy_meta",
             /*arguments*/ None,
             Some(json!({"caller": "keep", "codex/network-policy-meta": {"enabled": true}})),

@@ -3095,6 +3095,7 @@ fn append_resume_redaction_history(
             call_id: "mcp-1".to_string(),
             invocation: McpInvocation {
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 arguments: Some(json!({"secret":"argument"})),
             },

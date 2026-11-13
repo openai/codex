@@ -28,11 +28,6 @@ pub(super) async fn route(
         });
     };
     router
-        .request_user_interaction(
-            Some(events),
-            &authority,
-            server_key.name().to_owned(),
-            request,
-        )
+        .request_user_interaction(Some(events), &authority, server_key, request)
         .await
 }

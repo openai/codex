@@ -17,6 +17,7 @@ fn request(thread_id: ThreadId) -> ServerRequestPayload {
         thread_id: thread_id.to_string(),
         turn_id: Some("turn-1".into()),
         server_name: "plugin-service".into(),
+        environment_id: None,
         request: McpServerElicitationRequest::UserVerification {
             meta: None,
             title: "Approve".into(),

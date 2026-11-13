@@ -961,6 +961,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItemPayload::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
+            environment_id: payload.invocation.environment_id.clone(),
             tool: payload.invocation.tool.clone(),
             status: McpToolCallStatus::InProgress,
             arguments: payload
@@ -1019,6 +1020,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItemPayload::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
+            environment_id: payload.invocation.environment_id.clone(),
             tool: payload.invocation.tool.clone(),
             status,
             arguments: payload
@@ -3590,6 +3592,7 @@ mod tests {
                 call_id: "mcp-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
+                    environment_id: None,
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
@@ -3655,6 +3658,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".into(),
                 server: "docs".into(),
+                environment_id: None,
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
@@ -3689,6 +3693,7 @@ mod tests {
                 call_id: "mcp-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
+                    environment_id: None,
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
@@ -3726,6 +3731,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".into(),
                 server: "docs".into(),
+                environment_id: None,
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
@@ -4135,6 +4141,7 @@ mod tests {
             item: CoreTurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "slack".into(),
+                environment_id: None,
                 tool: "search".into(),
                 arguments: serde_json::json!({"query": "incident"}),
                 connector_id: None,

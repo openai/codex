@@ -186,6 +186,7 @@ async fn local_mcp_startup_and_refresh_use_configured_http_client() -> Result<()
         .codex
         .call_mcp_tool(
             SERVER_NAME,
+            /*environment_id*/ None,
             "calendar_create_event",
             Some(json!({
                 "title": "Proxy refresh",

@@ -526,6 +526,7 @@ async fn paginated_mcp_history_caps_large_results() {
     let tool_call = McpToolCallItem {
         id: "mcp-1".to_string(),
         server: "test".to_string(),
+        environment_id: None,
         tool: "large_result".to_string(),
         arguments: arguments.clone(),
         connector_id: None,

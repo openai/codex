@@ -2,6 +2,7 @@
 //! Tool output previews share a three-row budget across all result blocks;
 //! the expanded transcript retains the full text.
 //! Invocation and result rows retain exact logical source ranges through wrapping and gutters.
+//! Environment ownership is rendered separately from raw server names used by special handlers.
 
 use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
@@ -60,6 +61,7 @@ pub(crate) struct McpToolCallCell {
 #[derive(Debug, Clone)]
 pub(crate) struct McpInvocation {
     pub(crate) server: String,
+    pub(crate) environment_id: Option<String>,
     pub(crate) tool: String,
     pub(crate) arguments: Option<serde_json::Value>,
 }
@@ -177,14 +179,7 @@ impl McpToolCallCell {
             .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|title| !title.is_empty());
         let invocation_line = if compact {
-            Line::from(
-                title
-                    .clone()
-                    .unwrap_or_else(|| {
-                        format!("{}.{}", self.invocation.server, self.invocation.tool)
-                    })
-                    .fg(accent_color()),
-            )
+            Line::from(self.compact_tool_name().fg(accent_color()))
         } else {
             line_to_static(&format_mcp_invocation(&self.invocation))
         };
@@ -661,7 +656,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     ];
 
     let mut statuses = statuses.iter().collect::<Vec<_>>();
-    statuses.sort_by(|a, b| a.name.cmp(&b.name));
+    statuses.sort_by(|a, b| (&a.name, &a.environment_id).cmp(&(&b.name, &b.environment_id)));
 
     let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());
     if !has_any_tools && matches!(detail, McpServerStatusDetail::Full) {
@@ -699,10 +694,14 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         };
         let count = status.tools.len();
         let unit = if count == 1 { "tool" } else { "tools" };
+        let name = match &status.environment_id {
+            Some(environment_id) => format!("{} (environment {environment_id})", status.name),
+            None => status.name.clone(),
+        };
         lines.push(
             vec![
                 "  • ".set_style(style),
-                status.name.clone().bold(),
+                name.bold(),
                 ": ".into(),
                 label.set_style(style),
                 format!(" ({count} {unit})").dim(),
@@ -853,7 +852,7 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> Line<'_> {
         })
         .unwrap_or_default();
 
-    let invocation_spans = vec![
+    let mut invocation_spans = vec![
         invocation.server.as_str().fg(accent_color()),
         ".".into(),
         invocation.tool.as_str().fg(accent_color()),
@@ -861,5 +860,8 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> Line<'_> {
         args_str.dim(),
         ")".into(),
     ];
+    if let Some(environment_id) = &invocation.environment_id {
+        invocation_spans.push(format!(" (environment {environment_id})").dim());
+    }
     invocation_spans.into()
 }

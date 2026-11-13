@@ -978,6 +978,7 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
         .codex
         .call_mcp_tool(
             "allowed",
+            /*environment_id*/ None,
             "echo",
             Some(json!({ "message": "ready" })),
             /*meta*/ None,
@@ -3369,6 +3370,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             call_id: call_id.to_string(),
             invocation: McpInvocation {
                 server: server_name.to_string(),
+                environment_id: None,
                 tool: "image".to_string(),
                 arguments: Some(json!({})),
             },
@@ -3396,6 +3398,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         end.invocation,
         McpInvocation {
             server: server_name.to_string(),
+            environment_id: None,
             tool: "image".to_string(),
             arguments: Some(json!({})),
         }

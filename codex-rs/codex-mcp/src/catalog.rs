@@ -801,7 +801,20 @@ impl ResolvedMcpCatalog {
         })
     }
 
-    pub(crate) fn servers(&self) -> impl Iterator<Item = (&McpServerKey, &ResolvedMcpServer)> {
+    /// Resolves a client target, preserving name-only routing when the scope is omitted.
+    /// The operation using this key checks whether the registration exists.
+    pub fn resolve_server_key(&self, name: &str, environment_id: Option<&str>) -> McpServerKey {
+        match environment_id {
+            Some(environment_id) => McpServerKey::in_environment(environment_id, name),
+            None => self
+                .resolve_server_name(name)
+                .cloned()
+                .unwrap_or_else(|| McpServerKey::unscoped(name)),
+        }
+    }
+
+    /// Iterates every resolved registration, including same-named scoped peers.
+    pub fn servers(&self) -> impl Iterator<Item = (&McpServerKey, &ResolvedMcpServer)> {
         self.servers.iter()
     }
 

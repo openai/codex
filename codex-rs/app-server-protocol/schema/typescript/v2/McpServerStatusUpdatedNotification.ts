@@ -4,4 +4,8 @@
 import type { McpServerStartupFailureReason } from "./McpServerStartupFailureReason";
 import type { McpServerStartupState } from "./McpServerStartupState";
 
-export type McpServerStatusUpdatedNotification = { threadId: string | null, name: string, status: McpServerStartupState, error: string | null, failureReason: McpServerStartupFailureReason | null, };
+export type McpServerStatusUpdatedNotification = { threadId: string | null, name: string,
+/**
+ * Registration scope, not necessarily the server's execution environment.
+ */
+environmentId: string | null, status: McpServerStartupState, error: string | null, failureReason: McpServerStartupFailureReason | null, };

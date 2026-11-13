@@ -25,6 +25,7 @@ use futures::future::join_all;
 use tokio::sync::OnceCell;
 use tracing::warn;
 
+use crate::McpServerKey;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 use crate::server::has_explicit_http_authorization;
@@ -205,9 +206,9 @@ pub async fn compute_auth_statuses<'a, I>(
     auth_manager: Option<&std::sync::Arc<codex_login::AuthManager>>,
     ema_state: &crate::EmaState,
     runtime_context: &McpRuntimeContext,
-) -> HashMap<String, McpAuthStatusEntry>
+) -> HashMap<McpServerKey, McpAuthStatusEntry>
 where
-    I: IntoIterator<Item = (&'a String, &'a EffectiveMcpServer)>,
+    I: IntoIterator<Item = (&'a McpServerKey, &'a EffectiveMcpServer)>,
 {
     // Share successful, missing, and failed reads without starting storage work for non-EMA servers.
     let account_grant = OnceCell::new();
@@ -223,7 +224,7 @@ where
         let runtime_context = runtime_context.clone();
         async move {
             let auth_state = match compute_auth_status(
-                &name,
+                name.name(),
                 &config,
                 store_mode,
                 keyring_backend_kind,

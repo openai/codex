@@ -4,7 +4,7 @@ expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72))
 ---
 
   Action required
-  Server: payments
+  Server: payments (environment env-b)
 
   Review the payment details to continue.
 

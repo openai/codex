@@ -873,8 +873,38 @@ impl ChatWidget {
                     && !name.trim().is_empty()
                 {
                     if let Some(thread_id) = self.thread_id {
+                        // Keep the old name-only syntax intact, including spaces and quotes.
+                        let (name, environment_id) = if name.split_whitespace().any(|word| {
+                            word == "--environment" || word.starts_with("--environment=")
+                        }) {
+                            let args = match super::slash_command_args::parse(
+                                name,
+                                &["--environment"],
+                                &[],
+                                &[],
+                            ) {
+                                Ok(args) => args,
+                                Err(error) => {
+                                    self.add_error_message(error);
+                                    return;
+                                }
+                            };
+                            if args.positionals.is_empty() {
+                                self.add_error_message(
+                                    "Usage: /mcp login <name> [--environment <id>]".to_string(),
+                                );
+                                return;
+                            }
+                            (
+                                args.positionals.join(" "),
+                                args.value("--environment").map(str::to_owned),
+                            )
+                        } else {
+                            (name.trim().to_string(), None)
+                        };
                         self.app_event_tx.send(AppEvent::StartMcpLogin {
-                            name: name.trim().to_string(),
+                            name,
+                            environment_id,
                             thread_id,
                         });
                     } else {
@@ -883,7 +913,9 @@ impl ChatWidget {
                         );
                     }
                 } else {
-                    self.add_error_message("Usage: /mcp [verbose | login <name>]".to_string());
+                    self.add_error_message(
+                        "Usage: /mcp [verbose | login <name> [--environment <id>]]".to_string(),
+                    );
                 }
             }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {

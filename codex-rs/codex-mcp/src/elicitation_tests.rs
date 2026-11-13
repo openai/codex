@@ -31,13 +31,13 @@ async fn abandonment_is_ordered_and_exactly_once_when_the_native_waiter_is_dropp
     let mut first = Box::pin(router.request_user_interaction(
         Some(tx),
         &authority,
-        "server".into(),
+        McpServerKey::in_environment("first", "server"),
         request.clone(),
     ));
     let mut sibling = Box::pin(router.request_user_interaction(
         Some(replacement_tx),
         &authority,
-        "server".into(),
+        McpServerKey::in_environment("second", "server"),
         request,
     ));
     assert!(futures::poll!(&mut first).is_pending());
@@ -50,6 +50,19 @@ async fn abandonment_is_ordered_and_exactly_once_when_the_native_waiter_is_dropp
     else {
         panic!("expected sibling request");
     };
+    assert_eq!(
+        [
+            (
+                first_request.server_name.as_str(),
+                first_request.environment_id.as_deref()
+            ),
+            (
+                sibling_request.server_name.as_str(),
+                sibling_request.environment_id.as_deref()
+            ),
+        ],
+        [("server", Some("first")), ("server", Some("second"))],
+    );
     drop(first);
     let EventMsg::ElicitationAbandoned(abandoned) = events.recv().await.unwrap().msg else {
         panic!("expected abandonment");
@@ -107,7 +120,7 @@ async fn bounded_sources_preserve_backpressure_across_close() {
     let mut pending = Box::pin(router.request_user_interaction(
         Some(tx),
         &authority,
-        "server".into(),
+        McpServerKey::unscoped("server"),
         ElicitationRequest::Form {
             meta: None,
             message: "Continue".into(),
@@ -150,7 +163,7 @@ async fn abandonment_closed_receiver_cleans_up_without_delivery_or_replay() {
         let mut pending = Box::pin(router.request_user_interaction(
             Some(tx),
             &authority,
-            "server".into(),
+            McpServerKey::unscoped("server"),
             ElicitationRequest::Form {
                 meta: None,
                 message: "Continue".into(),
@@ -188,7 +201,7 @@ async fn abandonment_close_joins_elected_actions_and_rejects_retained_router_adm
     let mut pending = Box::pin(router.request_user_interaction(
         Some(tx.clone()),
         &authority,
-        "server".into(),
+        McpServerKey::unscoped("server"),
         request.clone(),
     ));
     assert!(futures::poll!(&mut pending).is_pending());
@@ -213,7 +226,7 @@ async fn abandonment_close_joins_elected_actions_and_rejects_retained_router_adm
             .request_user_interaction(
                 Some(tx.clone()),
                 &authority,
-                "server".into(),
+                McpServerKey::unscoped("server"),
                 request.clone(),
             )
             .await
@@ -240,7 +253,12 @@ async fn abandonment_close_joins_elected_actions_and_rejects_retained_router_adm
     router.close().await;
     assert!(
         retained_router
-            .request_user_interaction(Some(tx), &authority, "server".into(), request,)
+            .request_user_interaction(
+                Some(tx),
+                &authority,
+                McpServerKey::unscoped("server"),
+                request
+            )
             .await
             .is_err()
     );
@@ -256,7 +274,7 @@ async fn abandonment_close_invalidates_a_published_responder_before_returning() 
     let mut pending = Box::pin(router.request_user_interaction(
         Some(tx),
         &authority,
-        "server".into(),
+        McpServerKey::unscoped("server"),
         ElicitationRequest::Form {
             meta: None,
             message: "Continue".into(),

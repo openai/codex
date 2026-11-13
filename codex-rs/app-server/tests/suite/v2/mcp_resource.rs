@@ -190,6 +190,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
                 .request(|request_id| ClientRequest::McpResourceRead {
                     request_id,
                     params: McpResourceReadParams {
+                        environment_id: None,
                         meta: Some(serde_json::Map::from_iter([(
                             "example/trace".into(),
                             metadata_value.clone(),
@@ -239,6 +240,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     ] {
         let request_id = mcp
             .send_mcp_resource_read_request(McpResourceReadParams {
+                environment_id: None,
                 thread_id: Some(thread.id.clone()),
                 origin_call_id,
                 meta: Some(serde_json::Map::from_iter([(key.into(), value)])),
@@ -314,6 +316,7 @@ async fn mcp_resource_read_preserves_protocol_errors(protocol: ProtocolVersion) 
         for thread_id in [Some(thread.id.clone()), None] {
             let request_id = mcp
                 .send_mcp_resource_read_request(McpResourceReadParams {
+                    environment_id: None,
                     meta: None,
                     thread_id,
                     origin_call_id: None,
@@ -531,6 +534,7 @@ apps = true
         .request(|request_id| ClientRequest::McpResourceRead {
             request_id,
             params: McpResourceReadParams {
+                environment_id: None,
                 meta: None,
                 thread_id: None,
                 origin_call_id: None,
@@ -546,6 +550,7 @@ apps = true
         .request(|request_id| ClientRequest::McpResourceRead {
             request_id,
             params: McpResourceReadParams {
+                environment_id: None,
                 meta: None,
                 thread_id: None,
                 origin_call_id: None,
@@ -589,6 +594,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
         .request(ClientRequest::McpResourceRead {
             request_id: RequestId::Integer(1),
             params: McpResourceReadParams {
+                environment_id: None,
                 meta: None,
                 thread_id: Some("00000000-0000-4000-8000-000000000000".to_string()),
                 origin_call_id: None,
@@ -717,6 +723,7 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
                 sender.request(ClientRequest::McpResourceRead {
                     request_id: RequestId::Integer(7),
                     params: McpResourceReadParams {
+                        environment_id: None,
                         meta: None,
                         thread_id: Some(thread.id.clone()),
                         origin_call_id: None,
@@ -729,6 +736,7 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
                 sender.request(ClientRequest::McpServerToolCall {
                     request_id: RequestId::Integer(8),
                     params: McpServerToolCallParams {
+                        environment_id: None,
                         thread_id: thread.id.clone(),
                         server: "resource_server".to_string(),
                         tool: "best_buy_product_search".to_string(),

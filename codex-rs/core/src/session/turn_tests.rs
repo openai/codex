@@ -164,6 +164,7 @@ fn realtime_user_verification_notice_excludes_request_payload() {
     let event = EventMsg::ElicitationRequest(codex_protocol::approvals::ElicitationRequestEvent {
         turn_id: None,
         server_name: "private-server-name".to_string(),
+        environment_id: None,
         id: codex_protocol::mcp::RequestId::String("private-request-id".to_string()),
         request: codex_protocol::approvals::ElicitationRequest::UserVerification {
             meta: None,
