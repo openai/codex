@@ -225,6 +225,9 @@ fn install_network_seccomp_filter_on_current_thread(
         deny_syscall(&mut rules, libc::SYS_ptrace);
         deny_syscall(&mut rules, libc::SYS_process_vm_readv);
         deny_syscall(&mut rules, libc::SYS_process_vm_writev);
+        // request_key can invoke host helpers that perform network requests
+        // outside the sandbox's network namespace and proxy policy.
+        deny_syscall(&mut rules, libc::SYS_request_key);
     }
     // io_uring can create AF_VSOCK sockets without a socket() syscall, so
     // keep it unavailable in every mode with socket-family restrictions.

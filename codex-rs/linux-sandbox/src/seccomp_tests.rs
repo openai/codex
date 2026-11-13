@@ -3,10 +3,65 @@
 #![cfg(test)]
 
 use super::NetworkSeccompMode;
+use super::install_network_seccomp_filter_on_current_thread;
 use super::network_seccomp_mode;
+use super::set_no_new_privs;
 use super::should_install_network_seccomp;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
+use seccompiler::BpfProgram;
+use seccompiler::SeccompAction;
+use seccompiler::SeccompFilter;
+use seccompiler::apply_filter;
+use std::collections::BTreeMap;
+use test_case::test_case;
+
+#[test_case(NetworkSeccompMode::Restricted, libc::EPERM; "restricted")]
+#[test_case(NetworkSeccompMode::ProxyRouted, libc::EPERM; "proxy_routed")]
+#[test_case(NetworkSeccompMode::VmSocketRestricted, libc::ENOSYS; "vm_socket_only")]
+fn request_key_respects_network_policy(mode: NetworkSeccompMode, expected_errno: i32) {
+    // Filters apply only to this thread, leaving the test runner unrestricted.
+    std::thread::spawn(move || {
+        set_no_new_privs().expect("set no_new_privs");
+
+        // Intercept the syscall before it can invoke a host helper. A distinct
+        // errno also prevents inherited EPERM filters from hiding regressions:
+        // the most recently installed matching ERRNO filter takes precedence.
+        let baseline: BpfProgram = SeccompFilter::new(
+            BTreeMap::from([(libc::SYS_request_key, vec![])]),
+            SeccompAction::Allow,
+            SeccompAction::Errno(libc::ENOSYS as u32),
+            std::env::consts::ARCH
+                .try_into()
+                .expect("supported architecture"),
+        )
+        .expect("build baseline filter")
+        .try_into()
+        .expect("compile baseline filter");
+        apply_filter(&baseline).expect("install baseline filter");
+
+        let request_key_result = || {
+            // Null pointers also keep the probe harmless if it reaches the kernel.
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_request_key,
+                    std::ptr::null::<libc::c_char>(),
+                    std::ptr::null::<libc::c_char>(),
+                    std::ptr::null::<libc::c_char>(),
+                    0 as libc::c_long,
+                )
+            };
+            (result, std::io::Error::last_os_error().raw_os_error())
+        };
+        assert_eq!(request_key_result(), (-1, Some(libc::ENOSYS)));
+
+        install_network_seccomp_filter_on_current_thread(mode, /*managed_network*/ None)
+            .expect("install network filter");
+        assert_eq!(request_key_result(), (-1, Some(expected_errno)));
+    })
+    .join()
+    .expect("seccomp probe thread");
+}
 
 #[test]
 fn managed_network_enforces_seccomp_even_for_full_network_policy() {
