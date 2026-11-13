@@ -7,6 +7,7 @@
 use codex_context_fragments::ContextualUserFragment;
 use codex_core::context::GuardianBudgetOmission;
 use codex_guardian_context::RequestBudget;
+use codex_guardian_context::ReservedElasticItemIds;
 use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TruncationObservation;
 use codex_guardian_context::estimate_input_tokens;
@@ -64,17 +65,20 @@ impl LunaSamplingRequest {
             .map(|item| estimate_input_tokens(&item.item))
             .fold(0usize, usize::saturating_add);
         let maximum = max_input_tokens.saturating_sub(INPUT_TOKEN_MARGIN);
-        if let Some(policy) = &evidence.elastic {
-            context = context
+        let ids = if let Some(policy) = &evidence.elastic {
+            let prepared = context
                 .prepare_elastic_entries(policy)
                 .ok()?
                 .prepare_delivery(history)
-                .ok()?
+                .ok()?;
+            let ids = ReservedElasticItemIds::reserve(&prepared, &self.item_id_generator);
+            context = prepared
                 .enforce_budget(
                     RequestBudget {
                         max_input_tokens: maximum,
                         existing_context_tokens: existing_context_tokens
-                            .saturating_add(setup_tokens),
+                            .saturating_add(setup_tokens)
+                            .saturating_add(ids.tokens()),
                     },
                     GuardianBudgetOmission
                         .render()
@@ -82,11 +86,17 @@ impl LunaSamplingRequest {
                         .unwrap_or_default(),
                 )
                 .ok()?;
-        }
+            Some(ids)
+        } else {
+            None
+        };
         let truncations = std::mem::take(&mut context.truncations);
         let section_costs = context.section_costs().collect();
-        let (mut input, new_input_tokens) =
-            LunaSampler::finish_input(self, setup, context.into_annotated_messages());
+        let mut suffix = context.into_annotated_messages();
+        if let Some(ids) = ids {
+            ids.assign(&mut suffix).ok()?;
+        }
+        let (mut input, new_input_tokens) = LunaSampler::finish_input(self, setup, suffix);
         let input_tokens = existing_context_tokens.saturating_add(new_input_tokens);
         if input_tokens > maximum {
             return None;

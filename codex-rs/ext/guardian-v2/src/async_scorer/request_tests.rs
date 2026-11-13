@@ -1,4 +1,5 @@
 use super::*;
+use crate::async_scorer::sampler::INPUT_TOKEN_MARGIN;
 use crate::async_scorer::transcript::CollectedTranscript;
 use crate::async_scorer::transcript::ContextInput;
 use crate::async_scorer::transcript::TranscriptConfig;
@@ -235,6 +236,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
 #[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
 #[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
 fn rejected_preparation_preserves_committed_history_and_cursor(mode: ContextBudgeting) {
+    const FRESH_REQUEST_HEADROOM: usize = 128;
     let mut history = History {
         items: vec![responses::user_message_item("Inspect README.md.")],
         version: 1,
@@ -244,7 +246,8 @@ fn rejected_preparation_preserves_committed_history_and_cursor(mode: ContextBudg
     let first = config
         .prepare_retained(&collect(&history, &[], mode), &mut state, INPUT_BUDGET)
         .unwrap();
-    let limit = first.input_tokens + 256;
+    // Leave room for the fresh request's allocation estimate and ID reservation.
+    let limit = first.input_tokens + INPUT_TOKEN_MARGIN + FRESH_REQUEST_HEADROOM;
     let mut committed = first.input;
     committed.push(responses::user_message_item(&"output ".repeat(/*n*/ 400)).into());
     state.complete_review(first.cursor);
@@ -278,6 +281,62 @@ fn rejected_preparation_preserves_committed_history_and_cursor(mode: ContextBudg
     assert_eq!(state.snapshot().unwrap().history(), &committed);
 }
 
+#[test]
+fn elastic_fits_ids_without_resetting_committed_history() {
+    const ID_PADDING_BYTES: usize = 1_024;
+    let mode = ContextBudgeting::Elastic;
+    let mut config = sample_request("parent");
+    let original_generator = std::sync::Arc::clone(&config.item_id_generator);
+    let padding = "x".repeat(ID_PADDING_BYTES);
+    config.item_id_generator = std::sync::Arc::new(move |prefix| {
+        ResponseItemId::from_server(format!("{}{padding}", original_generator(prefix)))
+    });
+    let mut history = History {
+        items: vec![responses::user_message_item("Inspect README.md.")],
+        version: 1,
+    };
+    let mut state = ConversationState::default();
+    let first = config
+        .prepare_retained(&collect(&history, &[], mode), &mut state, INPUT_BUDGET)
+        .unwrap();
+    state.complete_review(first.cursor);
+    state.commit_snapshot(first.input.clone());
+    history
+        .items
+        .push(responses::user_message_item("Inspect LICENSE next."));
+    let image = ContentItem::InputImage {
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,b3B0aW9uYWw=".to_owned(),
+        },
+        detail: None,
+    };
+    let evidence = collect(&history, std::slice::from_ref(&image), mode);
+    let mut generous = ConversationState::from(state.snapshot().unwrap().clone());
+    let full = config
+        .prepare_retained(&evidence, &mut generous, INPUT_BUDGET)
+        .unwrap();
+    assert!(full.input.iter().any(|item| matches!(
+        &item.item, ResponseItem::Message { content, .. } if content.contains(&image)
+    )));
+    let maximum = full.input_tokens - 1;
+    let bounded = config
+        .prepare_retained(&evidence, &mut state, maximum + INPUT_TOKEN_MARGIN)
+        .expect("allocate evidence with room for IDs");
+    assert_eq!(&bounded.input[..first.input.len()], first.input);
+    assert!(bounded.input_tokens <= maximum);
+    assert!(bounded.input.iter().all(|item| item.id().is_some()));
+    let suffix = serde_json::to_string(
+        &bounded.input[first.input.len()..]
+            .iter()
+            .map(|item| &item.item)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert!(suffix.contains("Inspect LICENSE next."));
+    assert!(!suffix.contains("data:image/png;base64,b3B0aW9uYWw="));
+    assert!(suffix.contains("<guardian_context_omission>"));
+}
+
 #[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
 #[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
 fn complete_budget_counts_setup_checkpoint_images_and_trusted_evidence(mode: ContextBudgeting) {
@@ -307,13 +366,32 @@ fn complete_budget_counts_setup_checkpoint_images_and_trusted_evidence(mode: Con
         config.parent_compaction.as_ref()
     );
     assert!(request.input_tokens > 10_000);
-    assert!(
-        config
-            .prepare_retained(&evidence, &mut state, request.input_tokens + 255)
-            .is_none()
-    );
-    // The complete input fits exactly at the reserved-output boundary.
-    config
-        .prepare_retained(&evidence, &mut state, request.input_tokens + 256)
-        .unwrap();
+    let maximum = request.input_tokens - 1;
+    let smaller = config.prepare_retained(&evidence, &mut state, maximum + INPUT_TOKEN_MARGIN);
+    match mode {
+        ContextBudgeting::Fixed => {
+            assert!(smaller.is_none());
+            let exact = config
+                .prepare_retained(
+                    &evidence,
+                    &mut state,
+                    request.input_tokens + INPUT_TOKEN_MARGIN,
+                )
+                .unwrap();
+            assert_eq!(exact.input_tokens, request.input_tokens);
+            assert!(exact.input.iter().any(|item| matches!(
+                &item.item, ResponseItem::Message { content, .. } if content.contains(&images[0])
+            )));
+        }
+        ContextBudgeting::Elastic => {
+            let smaller = smaller.expect("Elastic can shed optional evidence");
+            assert!(smaller.input_tokens <= maximum);
+            assert!(
+                smaller
+                    .input
+                    .iter()
+                    .any(|item| Some(&item.item) == config.parent_compaction.as_ref())
+            );
+        }
+    }
 }

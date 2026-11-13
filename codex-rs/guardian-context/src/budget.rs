@@ -571,7 +571,7 @@ impl ByteCount {
         Self::measure(|counter| serde_json::to_writer(counter, item))
     }
 
-    fn measure(serialize: impl FnOnce(&mut Self) -> serde_json::Result<()>) -> usize {
+    pub(super) fn measure(serialize: impl FnOnce(&mut Self) -> serde_json::Result<()>) -> usize {
         let mut count = Self::default();
         if serialize(&mut count).is_err() {
             return usize::MAX;

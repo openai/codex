@@ -2,8 +2,68 @@
 
 use super::*;
 use crate::ElasticSectionLimits;
+use crate::estimate_input_tokens;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+
+#[test]
+fn reserves_escaped_ids_for_user_messages_and_native_call_outputs() {
+    let call: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "function_call",
+        "id": "fc_committed",
+        "call_id": "call",
+        "name": "read_file",
+        "arguments": "{}",
+    }))
+    .unwrap();
+    let call_id = call.id().cloned();
+    let sections = [
+        SectionOutput {
+            id: "conversation_transcript",
+            delivery: SectionDelivery::user_content(vec![Budgeted::required(input_text("before"))]),
+        },
+        SectionOutput {
+            id: "conversation_transcript",
+            delivery: SectionDelivery::Message(Budgeted::required(Box::new(call.into()))),
+        },
+        SectionOutput {
+            id: "budget_omission",
+            delivery: SectionDelivery::user_content(vec![Budgeted::required(input_text("after"))]),
+        },
+    ];
+    let prepared = PreparedElasticContext {
+        context: ComposedContext {
+            sections: sections.to_vec(),
+            truncations: Vec::new(),
+        },
+        config: &ElasticBudgetConfig::default(),
+        delivered_omissions: None,
+    };
+    let uuid = uuid_v7_item_id_generator_for_test();
+    let generator: ItemIdGenerator =
+        Arc::new(move |prefix| ResponseItemId::from_server(format!("{}\"\\", uuid(prefix))));
+    let reserved = ReservedElasticItemIds::reserve(&prepared, &generator);
+    let mut suffix = prepared.context.into_annotated_messages();
+    let measure = |items: &[ResponseItemEnvelope]| {
+        items
+            .iter()
+            .map(|item| estimate_input_tokens(&item.item))
+            .sum::<usize>()
+    };
+    let before = measure(&suffix);
+    reserved.assign(&mut suffix).unwrap();
+    assert!(suffix.iter().all(|item| item.id().is_some()));
+    let delivered_call = suffix
+        .iter()
+        .find(|item| matches!(item.item, ResponseItem::FunctionCall { .. }))
+        .unwrap();
+    assert_eq!(delivered_call.id(), call_id.as_ref());
+    assert!(measure(&suffix) - before <= reserved.tokens());
+}
 
 #[test]
 fn groups_select_recent_whole_entries_and_redistribute_packing_gaps() {

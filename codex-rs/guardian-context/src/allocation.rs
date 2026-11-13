@@ -1,6 +1,7 @@
 //! Funds fixed section minimums and scales only the headroom up to section maxima.
 //! Required records precede Optional records within each section.
 //! Protected framing and exact actions use global space. Selection preserves prepared bytes and order.
+//! Async callers can reserve wire space for IDs in the new suffix before selection.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -21,7 +22,10 @@ use crate::budget::section_tokens;
 use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::ItemIdGenerator;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::protocol::TruncationPolicy;
 
 const REQUEST_BUDGET_EXCEEDED: SectionError = SectionError::EvidenceLimitExceeded {
     section: "request_budget",
@@ -278,6 +282,92 @@ impl PreparedElasticContext<'_> {
             return Err(REQUEST_BUDGET_EXCEEDED);
         }
         Ok(context)
+    }
+}
+
+const MESSAGE_ID_PREFIX: &str = "msg";
+const ID_FIELD_FRAMING: &str = r#","id":"#;
+
+/// Actual IDs reserved for possible new messages and their conservative wire token cost.
+pub struct ReservedElasticItemIds {
+    by_prefix: BTreeMap<&'static str, Vec<ResponseItemId>>,
+    tokens: usize,
+}
+
+impl ReservedElasticItemIds {
+    /// Reserves IDs for the largest possible emitted suffix before dropping evidence.
+    /// Removing a native item can merge adjacent user messages, never split them.
+    pub fn reserve(prepared: &PreparedElasticContext<'_>, generate: &ItemIdGenerator) -> Self {
+        let mut reserved = Self {
+            by_prefix: BTreeMap::new(),
+            tokens: 0,
+        };
+        let mut has_user_content = false;
+        let mut reserve = |prefix| {
+            let id = generate(prefix);
+            // Measure the wire string, including escaping and the optional field framing.
+            let wire_bytes =
+                ByteCount::measure(|counter| serde_json::to_writer(counter, id.as_str()))
+                    .saturating_add(ID_FIELD_FRAMING.len());
+            reserved.tokens = reserved
+                .tokens
+                .saturating_add(TruncationPolicy::Bytes(wire_bytes).token_budget());
+            reserved.by_prefix.entry(prefix).or_default().push(id);
+        };
+        for section in &prepared.context.sections {
+            match &section.delivery {
+                SectionDelivery::UserContent(items) => {
+                    // Omission-state changes may add framing to retained instructions.
+                    has_user_content |=
+                        !items.is_empty() || section.id == "retained_user_instructions";
+                }
+                SectionDelivery::Message(message) => {
+                    if std::mem::take(&mut has_user_content) {
+                        reserve(MESSAGE_ID_PREFIX);
+                    }
+                    let item = &message.content.item;
+                    if item.id().is_none()
+                        && let Some(prefix) = item.id_prefix()
+                    {
+                        reserve(prefix);
+                    }
+                    if let Some(prefix) = crate::native_tool_call::evidence_output(item)
+                        .and_then(|output| output.id_prefix())
+                    {
+                        reserve(prefix);
+                    }
+                }
+            }
+        }
+        // The final user message can consist solely of the allocation omission notice.
+        reserve(MESSAGE_ID_PREFIX);
+        reserved
+    }
+    /// Global request overhead, separate from section evidence quotas.
+    pub fn tokens(&self) -> usize {
+        self.tokens
+    }
+
+    /// Uses the same IDs that were measured without touching the existing prefix.
+    pub fn assign(&self, suffix: &mut [ResponseItemEnvelope]) -> Result<(), SectionError> {
+        let mut ids = self
+            .by_prefix
+            .iter()
+            .map(|(&prefix, ids)| (prefix, ids.iter()))
+            .collect::<BTreeMap<_, _>>();
+        for item in suffix {
+            if item.id().is_none()
+                && let Some(prefix) = item.id_prefix()
+            {
+                let id = ids.get_mut(prefix).and_then(Iterator::next).ok_or(
+                    SectionError::UnsupportedDelivery {
+                        section: "response_item_ids",
+                    },
+                )?;
+                item.set_id(Some(id.clone()));
+            }
+        }
+        Ok(())
     }
 }
 
