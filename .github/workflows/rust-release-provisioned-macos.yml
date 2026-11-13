@@ -98,6 +98,10 @@ jobs:
           key-name: ${{ secrets.AKV_CODESIGN_KEY_NAME }}
           key-version: ${{ secrets.AKV_CODESIGN_KEY_VERSION || '' }}
           certificate-sha256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 }}
+          signer-service-enabled: ${{ vars.CODEX_PUBLIC_MACOS_SIGNER_SERVICE_ENABLED || 'false' }}
+          signer-service-endpoint: ${{ vars.CODEX_PUBLIC_MACOS_SIGNER_SERVICE_ENDPOINT }}
+          signer-service-purpose: ${{ vars.CODEX_PUBLIC_MACOS_SIGNER_SERVICE_PURPOSE }}
+          signer-service-key-id: ${{ vars.CODEX_PUBLIC_MACOS_SIGNER_SERVICE_KEY_ID }}
       - name: Sign and notarize the provisioned bundle
         env:
           APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}

@@ -42,6 +42,23 @@ inputs:
     required: false
     default: ""
 
+  signer-service-enabled:
+    description: Opt in to signer-service for signing only; Azure still supplies tools, certificates, and notarization.
+    required: false
+    default: "false"
+  signer-service-endpoint:
+    description: Approved signer-service HTTPS origin and GitHub OIDC audience.
+    required: false
+    default: ""
+  signer-service-purpose:
+    description: Approved signer-service purpose for this release caller.
+    required: false
+    default: ""
+  signer-service-key-id:
+    description: Exact signer-service key ID matching the pinned signing certificate.
+    required: false
+    default: ""
+
 outputs:
   pkcs11-library:
     description: Path to the downloaded AKV PKCS11 provider library.
@@ -60,6 +77,7 @@ runs:
       shell: bash
       env:
         SETUP_MODE: ${{ inputs.setup-mode }}
+        SIGNER_SERVICE_ENABLED: ${{ inputs.signer-service-enabled }}
         RCODESIGN_BLOB_URI: ${{ inputs.rcodesign-blob-uri }}
         RCODESIGN_SHA256: ${{ inputs.rcodesign-sha256 }}
         AKV_PKCS11_LIBRARY_BLOB_URI: ${{ inputs.akv-pkcs11-library-blob-uri }}
@@ -68,6 +86,18 @@ runs:
         KEY_NAME: ${{ inputs.key-name }}
       run: |
         set -euo pipefail
+
+        case "$SIGNER_SERVICE_ENABLED" in
+          true|false) ;;
+          *)
+            echo "signer-service-enabled must be 'true' or 'false'." >&2
+            exit 1
+            ;;
+        esac
+        if [[ "$SIGNER_SERVICE_ENABLED" == true && "$SETUP_MODE" != signing ]]; then
+          echo "signer-service requires setup-mode=signing." >&2
+          exit 1
+        fi
 
         case "$SETUP_MODE" in
           signing|tools-only)
@@ -346,4 +376,49 @@ runs:
           if [[ -n "$KEY_VERSION" ]]; then
             echo "AZURE_KEYVAULT_KEY_VERSION=$KEY_VERSION"
           fi
+        } >> "$GITHUB_ENV"
+
+    - name: Select signer-service for PKCS11 signing
+      if: ${{ inputs.signer-service-enabled == 'true' }}
+      shell: bash
+      env:
+        SIGNER_SERVICE_ENDPOINT: ${{ inputs.signer-service-endpoint }}
+        SIGNER_SERVICE_PURPOSE: ${{ inputs.signer-service-purpose }}
+        SIGNER_SERVICE_KEY_ID: ${{ inputs.signer-service-key-id }}
+        CERTIFICATE_SHA256: ${{ inputs.certificate-sha256 }}
+      run: |
+        set -euo pipefail
+
+        : "${CERTIFICATE_SHA256:?A pinned signing certificate is required}"
+        : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC is required}"
+        : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC is required}"
+        if [[ -v SIGNER_SERVICE_OIDC_TOKEN ]]; then
+          echo "The provider must obtain its own fresh GitHub OIDC token." >&2
+          exit 1
+        fi
+        if [[ ! "$SIGNER_SERVICE_ENDPOINT" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ||
+              ! "$SIGNER_SERVICE_PURPOSE" =~ ^[A-Z][A-Z0-9_]+$ ||
+              ! "$SIGNER_SERVICE_KEY_ID" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
+          echo "An approved HTTPS origin, purpose, and exact key ID are required." >&2
+          exit 1
+        fi
+
+        # An older Azure-only provider ignores signer-service configuration.
+        # Keep artifact SHA-256 verification above and reject that silent fallback.
+        for marker in AKV_PKCS11_BACKEND SIGNER_SERVICE_ENDPOINT SIGNER_SERVICE_KEY_ID SIGNER_SERVICE_OIDC_TOKEN; do
+          if ! grep -aFq "$marker" "$OAI_AKV_PKCS11_LIBRARY"; then
+            echo "The pinned PKCS11 provider does not support signer-service." >&2
+            exit 1
+          fi
+        done
+
+        # The provider checks GetPublicKeys against the certificate and exact key
+        # ID, and verifies every returned signature. Authorization errors fail closed.
+        {
+          echo "AKV_PKCS11_BACKEND=signer-service"
+          echo "SIGNER_SERVICE_ENDPOINT=$SIGNER_SERVICE_ENDPOINT"
+          echo "SIGNER_SERVICE_PURPOSE=$SIGNER_SERVICE_PURPOSE"
+          echo "SIGNER_SERVICE_KEY_ID=$SIGNER_SERVICE_KEY_ID"
+          echo "SIGNER_SERVICE_KEY_LABEL=$OAI_AKV_KEY_LABEL"
+          echo "SIGNER_SERVICE_CERTIFICATE_FILE=$OAI_AKV_SIGNING_CERTIFICATE_PEM"
         } >> "$GITHUB_ENV"
