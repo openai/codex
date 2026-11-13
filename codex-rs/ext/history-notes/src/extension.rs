@@ -24,23 +24,15 @@ use codex_protocol::openai_models::NotesToolMessages;
 use codex_utils_output_truncation::TruncationPolicy;
 use serde_json::json;
 
-use crate::backend::HistoryNotesBackend;
-use crate::tools::HistoryNotesAction;
-use crate::tools::HistoryNotesTool;
+use crate::backend::HttpBackend;
+use crate::backend::HttpContext;
+use crate::tools::history_notes_tools;
 
 // Bound model context even when note paths are unusually long.
 const MAX_THREAD_HINT_BYTES: usize = 4_000;
 
 struct HistoryNotesExtension {
     auth_manager: Arc<AuthManager>,
-}
-
-struct HistoryNotesExtensionConfig {
-    backend: HistoryNotesBackend,
-}
-
-struct HistoryNotesAgentIdentity {
-    agent_name: String,
 }
 
 impl HistoryNotesExtension {
@@ -59,15 +51,15 @@ impl HistoryNotesExtension {
             .is_some_and(|token_budget| token_budget.use_history_notes_extension)
             && config.model_provider.is_openai()
             && auth.credentials.current_auth_uses_codex_backend()
+            && let Some(context) = thread_store.get::<HttpContext>()
         {
-            thread_store.insert(HistoryNotesExtensionConfig {
-                backend: HistoryNotesBackend::new(
-                    auth.model_provider(config.model_provider.clone()),
-                    config.http_client_factory(),
-                ),
-            });
+            thread_store.insert(HttpBackend::new(
+                auth.model_provider(config.model_provider.clone()),
+                config.http_client_factory(),
+                context,
+            ));
         } else {
-            thread_store.remove::<HistoryNotesExtensionConfig>();
+            thread_store.remove::<HttpBackend>();
         }
     }
 }
@@ -78,14 +70,14 @@ impl ThreadLifecycleContributor<Config> for HistoryNotesExtension {
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let agent_name = input
-                .session_source
-                .get_agent_path()
-                .unwrap_or_else(AgentPath::root)
-                .to_string();
-            input
-                .thread_store
-                .insert(HistoryNotesAgentIdentity { agent_name });
+            input.thread_store.insert(HttpContext {
+                session_id: input.session_store.level_id().to_owned(),
+                current_agent_name: input
+                    .session_source
+                    .get_agent_path()
+                    .unwrap_or_else(AgentPath::root)
+                    .to_string(),
+            });
             self.update_config(input.thread_store, input.config);
         })
     }
@@ -110,10 +102,7 @@ impl ContextContributor for HistoryNotesExtension {
         thread_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(async move {
-            let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
-                return Vec::new();
-            };
-            let Some(identity) = thread_store.get::<HistoryNotesAgentIdentity>() else {
+            let Some(backend) = thread_store.get::<HttpBackend>() else {
                 return Vec::new();
             };
             let track_status = |status| {
@@ -125,12 +114,9 @@ impl ContextContributor for HistoryNotesExtension {
                     });
                 }
             };
-            let Ok(result) = config
-                .backend
+            let Ok(result) = backend
                 .call(
                     "alpha/notes/v2/thread_hint",
-                    session_store.level_id(),
-                    &identity.agent_name,
                     json!({}),
                     TruncationPolicy::Bytes(MAX_THREAD_HINT_BYTES),
                 )
@@ -164,11 +150,10 @@ impl ContextContributor for HistoryNotesExtension {
 impl ToolContributor for HistoryNotesExtension {
     fn tools(
         &self,
-        session_store: &ExtensionData,
+        _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
         self.tools_with_messages(
-            session_store,
             thread_store,
             /*history_messages*/ None,
             /*notes_messages*/ None,
@@ -177,14 +162,13 @@ impl ToolContributor for HistoryNotesExtension {
 
     fn tools_for_step(
         &self,
-        session_store: &ExtensionData,
+        _session_store: &ExtensionData,
         thread_store: &ExtensionData,
         step_store: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
         let history_messages = step_store.get::<HistoryToolMessages>();
         let notes_messages = step_store.get::<NotesToolMessages>();
         self.tools_with_messages(
-            session_store,
             thread_store,
             history_messages.as_deref(),
             notes_messages.as_deref(),
@@ -195,35 +179,18 @@ impl ToolContributor for HistoryNotesExtension {
 impl HistoryNotesExtension {
     fn tools_with_messages(
         &self,
-        session_store: &ExtensionData,
         thread_store: &ExtensionData,
         history_messages: Option<&HistoryToolMessages>,
         notes_messages: Option<&NotesToolMessages>,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
+        let Some(backend) = thread_store.get::<HttpBackend>() else {
             return Vec::new();
         };
-        let Some(identity) = thread_store.get::<HistoryNotesAgentIdentity>() else {
-            return Vec::new();
-        };
-
-        HistoryNotesAction::ALL
-            .into_iter()
-            .map(|action| {
-                Arc::new(HistoryNotesTool::new(
-                    action,
-                    config.backend.clone(),
-                    session_store.level_id().to_string(),
-                    identity.agent_name.clone(),
-                    history_messages,
-                    notes_messages,
-                )) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
-            })
-            .collect()
+        history_notes_tools((*backend).clone(), history_messages, notes_messages)
     }
 }
 
-/// Installs the standalone history and notes tools backed by the Codex backend.
+/// Installs the standalone history and notes tools.
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Arc<AuthManager>) {
     let extension = Arc::new(HistoryNotesExtension { auth_manager });
     registry.thread_lifecycle_contributor(extension.clone());

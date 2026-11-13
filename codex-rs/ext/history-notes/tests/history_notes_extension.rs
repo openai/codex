@@ -175,7 +175,10 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .expect("notes.read_file should be exposed");
     let call = tool_call(
         ToolName::namespaced("notes", "read_file"),
-        json!({"path": "notes.md"}),
+        json!({
+            "path": "notes.md",
+            "future_catalog_parameter": 42,
+        }),
     );
     let output = read_file.handle(call.clone()).await?;
     let ResponseInputItem::FunctionCallOutput { output, .. } =
@@ -212,6 +215,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
         json!({
             "path": "notes.md",
+            "future_catalog_parameter": 42,
             "context": {
                 "session_id": "session-123",
                 "current_agent_name": "/root/worker",

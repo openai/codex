@@ -18,7 +18,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::ENCRYPTED_TOOL_ARGUMENTS_HEADER;
-use super::HistoryNotesBackend;
+use super::HttpBackend;
+use super::HttpContext;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn routes_through_codex_backend_and_injects_trusted_session_agent_context() {
@@ -45,16 +47,18 @@ async fn routes_through_codex_backend_and_injects_trusted_session_agent_context(
         ))),
         Some(auth_manager),
     );
-    let backend = HistoryNotesBackend::new(
+    let backend = HttpBackend::new(
         provider,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        Arc::new(HttpContext {
+            session_id: "session-123".to_owned(),
+            current_agent_name: "/root/worker".to_owned(),
+        }),
     );
 
     let response = backend
         .call(
             "alpha/notes/v2/read_file",
-            "session-123",
-            "/root/worker",
             json!({
                 "path": "notes.md",
                 "context": {
@@ -121,7 +125,7 @@ async fn marks_encrypted_history_and_notes_arguments_without_changing_the_json_b
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::Headers(AuthHeaders::new(HeaderMap::new())));
-    let backend = HistoryNotesBackend::new(
+    let backend = HttpBackend::new(
         create_model_provider(
             ModelProviderInfo::create_openai_provider(Some(format!(
                 "{}/backend-api/codex",
@@ -130,14 +134,16 @@ async fn marks_encrypted_history_and_notes_arguments_without_changing_the_json_b
             Some(auth_manager),
         ),
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        Arc::new(HttpContext {
+            session_id: "session-123".to_owned(),
+            current_agent_name: "/root".to_owned(),
+        }),
     );
 
     for (route, arguments) in cases {
         backend
             .call(
                 &format!("alpha/{route}"),
-                "session-123",
-                "/root",
                 arguments.clone(),
                 TruncationPolicy::Bytes(1024),
             )
