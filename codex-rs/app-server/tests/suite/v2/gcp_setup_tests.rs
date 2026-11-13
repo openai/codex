@@ -116,7 +116,9 @@ async fn setup_gcp_saves_overrides_restores_adc_and_refreshes_catalog() -> Resul
         "model_catalog_json": catalog_path,
         "model_providers": {"gcp": {"http_headers": {"X-Existing": "preserved"}}}
     });
-    std::fs::write(&config_path, toml::to_string(&expected_config)?)?;
+    let mut initial_config = expected_config.clone();
+    initial_config["model_providers"]["gcp"]["base_url"] = json!("https://vertex.example.com/v1");
+    std::fs::write(&config_path, toml::to_string(&initial_config)?)?;
     let selected = home.join("selected.json");
     let ambient = home.join("ambient.json");
     for file in [&selected, &ambient] {
@@ -206,7 +208,8 @@ async fn setup_gcp_rejects_invalid_inputs_and_credentials_before_saving() -> Res
     let home = TempDir::new()?;
     let home = home.path();
     let config_path = home.join("config.toml");
-    std::fs::write(&config_path, "")?;
+    let initial_config = "[model_providers.gcp]\nbase_url = 'https://vertex.example.com/v1'\n";
+    std::fs::write(&config_path, initial_config)?;
     let invalid = home.join("invalid.json");
     std::fs::write(&invalid, r#"["authorized_user"]"#)?;
     let mut server = gcp_app_server(
@@ -231,7 +234,7 @@ async fn setup_gcp_rejects_invalid_inputs_and_credentials_before_saving() -> Res
     std::fs::write(home.join("fail"), "")?;
     let error = setup_error(&mut server, params).await?;
     assert_eq!(error.data, Some(json!({"reason": "authCommandFailed"})));
-    assert_eq!(std::fs::read_to_string(config_path)?, "");
+    assert_eq!(std::fs::read_to_string(config_path)?, initial_config);
     Ok(())
 }
 
@@ -278,7 +281,7 @@ async fn setup_gcp_rejects_policy_and_endpoint_conflicts_before_saving() -> Resu
         (
             "managed_config.toml",
             "[model_providers.gcp]\nbase_url = 'https://vertex.example.com/v1'",
-            "Google Cloud has a custom `base_url`",
+            "Cannot configure `model_providers.gcp.base_url`: Overridden by legacy managed_config.toml",
         ),
         (
             "requirements.toml",

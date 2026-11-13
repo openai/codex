@@ -929,9 +929,11 @@ If the active profile inherits `model_providers.gcp.credential_file` from the ba
 Setup returns an error without saving changes. To use ADC, remove the inherited
 setting from the file named in the error and retry.
 
-Setup rejects a GCP `base_url` override or higher-priority settings that conflict
-with the request. It fetches an access token before saving the settings and
-selecting GCP, then returns `{}`. The next `model/list` reloads the catalog.
+Setup uses the requested project and location to determine the Vertex AI endpoint.
+If another configuration layer would still supply `model_providers.gcp.base_url`
+or otherwise conflict with the request, setup fails. Once it obtains an access
+token, setup clears the active user configuration’s `base_url` override, saves
+the settings, and selects GCP. It returns `{}`. The next `model/list` reloads the catalog.
 `account/read` reports `{ "account": { "type": "gcp" }, "requiresOpenaiAuth": false }`.
 Use a model request to verify Vertex model access.
 
