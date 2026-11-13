@@ -22,8 +22,10 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::launcher::exec_bwrap;
 use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
+use crate::managed_tcp::Relay;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use crate::seccomp::ProxyRouting;
 use crate::seccomp::apply_sandbox_policies_to_current_thread;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::Result as CodexResult;
@@ -41,7 +43,6 @@ static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 const FORWARDED_SIGNALS: &[libc::c_int] =
     &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
-const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
 const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
 
@@ -105,6 +106,14 @@ pub struct LinuxSandboxCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Transparently route outbound TCP through the managed SOCKS proxy.
+    #[arg(long)]
+    pub transparent_tcp: bool,
+
+    /// Private TUN and resolver handoff from the trusted outer helper.
+    #[arg(long, hide = true, value_delimiter = ',')]
+    transparent_tcp_fd: Vec<std::os::fd::RawFd>,
+
     /// Inherited fallback mounts that must be authenticated before sandboxed code runs.
     #[arg(long = "verify-fd-mount", hide = true)]
     pub verify_fd_mounts: Vec<String>,
@@ -141,12 +150,27 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         managed_network,
         proxy_route_spec,
+        transparent_tcp,
+        transparent_tcp_fd,
         verify_fd_mounts,
         no_proc,
         inherit_pid_namespace,
         command,
     } = LinuxSandboxCommand::parse();
     let allow_network_for_proxy = managed_network.is_some();
+    let routing = if transparent_tcp {
+        ProxyRouting::TransparentTcp
+    } else {
+        ProxyRouting::Explicit
+    };
+    if transparent_tcp
+        && (!allow_network_for_proxy || use_legacy_landlock || inherit_pid_namespace || no_proc)
+    {
+        panic!("transparent TCP requires managed networking and private bubblewrap namespaces");
+    }
+    if transparent_tcp_fd.is_empty() == (transparent_tcp && apply_seccomp_then_exec) {
+        panic!("invalid transparent TCP namespace handoff");
+    }
 
     if command.is_empty() {
         panic!("No command specified to execute.");
@@ -169,50 +193,38 @@ pub fn run_main() -> ! {
             panic!("failed to verify descriptor-backed bubblewrap mount: {err}");
         }
 
-        let mut capability_header = [LINUX_CAPABILITY_VERSION_3, 0];
-        let mut capability_sets = [[0_u32; 3]; 2];
-        // SAFETY: capability ABI version 3 uses a [version, pid] header and
-        // two [effective, permitted, inheritable] capability-set entries.
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_capget,
-                capability_header.as_mut_ptr(),
-                capability_sets.as_mut_ptr(),
-            )
-        };
-        if result < 0 {
-            panic!(
-                "failed to verify Linux sandbox capabilities: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-        if capability_sets
-            .into_iter()
-            .any(|[effective, permitted, _]| effective != 0 || permitted != 0)
-        {
+        let caps = rustix::thread::capabilities(None)
+            .unwrap_or_else(|err| panic!("failed to verify Linux sandbox capabilities: {err}"));
+        if !caps.effective.is_empty() || !caps.permitted.is_empty() {
             panic!("Linux sandbox retained effective or permitted capabilities");
         }
 
-        if allow_network_for_proxy {
+        let socks_bridge = if allow_network_for_proxy {
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
-            if let Err(err) = activate_proxy_routes_in_netns(spec) {
-                panic!("error activating Linux proxy routing bridge: {err}");
-            }
-        }
-        let proxy_routing_active = allow_network_for_proxy;
+            activate_proxy_routes_in_netns(spec)
+                .unwrap_or_else(|err| panic!("error activating Linux proxy routing bridge: {err}"))
+        } else {
+            None
+        };
         if let Err(e) = apply_sandbox_policies_to_current_thread(
             &file_system_sandbox_policy,
             network_sandbox_policy,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             managed_network.as_ref(),
-            proxy_routing_active,
+            allow_network_for_proxy.then_some(routing),
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
 
+        // Keep the TUN and resolver descriptors in the reaper. Start networking
+        // threads only after the single-threaded workload fork.
+        let transport = transparent_tcp.then(|| {
+            Relay::prepare(transparent_tcp_fd, socks_bridge)
+                .unwrap_or_else(|err| panic!("failed to prepare transparent TCP: {err}"))
+        });
         let signal_mask = ForwardedSignalMask::block();
         let command_pid = unsafe { libc::fork() };
         if command_pid < 0 {
@@ -221,12 +233,24 @@ pub fn run_main() -> ! {
         }
 
         if command_pid == 0 {
+            if let Some((relay, mut reader)) = transport {
+                drop(relay);
+                reader
+                    .read_exact(&mut [0])
+                    .unwrap_or_else(|err| panic!("transparent TCP relay failed to start: {err}"));
+            }
             reset_forwarded_signal_handlers_to_default();
             signal_mask.restore();
             exec_or_panic(command);
         }
 
         let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
+        if let Some((relay, reader)) = transport {
+            drop(reader);
+            relay
+                .serve()
+                .unwrap_or_else(|err| panic!("failed to start transparent TCP relay: {err}"));
+        }
         signal_mask.restore();
         loop {
             let mut status = 0;
@@ -255,7 +279,7 @@ pub fn run_main() -> ! {
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             managed_network.as_ref(),
-            /*proxy_routing_active*/ false,
+            /*proxy_routing*/ None,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -267,10 +291,11 @@ pub fn run_main() -> ! {
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
         let (proxy_route_spec, proxy_controls) = if let Some(context) = managed_network.as_ref() {
-            // Older explicit-proxy callers may omit the port list.
-            let ports =
-                (!context.loopback_ports.is_empty()).then_some(context.loopback_ports.as_slice());
-            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec(ports)
+            // Older explicit-proxy callers may omit ports. The new transparent
+            // switch always requires the executor's trusted ingress port list.
+            let ports = (transparent_tcp || !context.loopback_ports.is_empty())
+                .then_some(context.loopback_ports.as_slice());
+            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec(ports, routing)
                 .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
             (Some(proxy_route_spec), controls)
         } else {
@@ -317,6 +342,7 @@ pub fn run_main() -> ! {
             options,
             inner,
             proxy_controls,
+            transparent_tcp,
         );
     }
 
@@ -327,7 +353,7 @@ pub fn run_main() -> ! {
         &sandbox_policy_cwd,
         /*apply_landlock_fs*/ true,
         managed_network.as_ref(),
-        /*proxy_routing_active*/ false,
+        /*proxy_routing*/ None,
     ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
@@ -399,13 +425,21 @@ fn run_bwrap_with_proc_fallback(
     mut options: BwrapOptions,
     inner: Vec<String>,
     proxy_controls: Vec<File>,
+    transparent_tcp: bool,
 ) -> ! {
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
     // Select before the preflight, whose synthetic policy omits writable roots.
-    initialize_bwrap_launcher(file_system_sandbox_policy, sandbox_policy_cwd);
+    initialize_bwrap_launcher(
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        transparent_tcp,
+    );
 
-    if options.mount_proc
+    // Transparent TCP must mount procfs for the private PID namespace. Let the
+    // real bwrap launch fail if it cannot, since a root bind can expose host procfs.
+    if !transparent_tcp
+        && options.mount_proc
         && !preflight_proc_mount_support(options)
             .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
@@ -414,6 +448,12 @@ fn run_bwrap_with_proc_fallback(
         options.mount_proc = false;
     }
 
+    let tcp_files = transparent_tcp.then(|| {
+        let files = crate::tcp_namespace::create()
+            .unwrap_or_else(|err| panic!("failed to create private TCP namespace: {err}"));
+        options.network_mode = BwrapNetworkMode::PreparedProxy;
+        files
+    });
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
@@ -422,6 +462,15 @@ fn run_bwrap_with_proc_fallback(
         options,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+    if let Some(files) = tcp_files {
+        crate::tcp_net_setup::prepare(
+            files,
+            &mut bwrap_args,
+            file_system_sandbox_policy,
+            sandbox_policy_cwd,
+        )
+        .unwrap_or_else(|err| panic!("failed to prepare transparent TCP namespace: {err}"));
+    }
     bwrap_args.preserved_files.extend(proxy_controls);
     apply_inner_command_argv0(&mut bwrap_args.args);
     run_or_exec_bwrap(bwrap_args);

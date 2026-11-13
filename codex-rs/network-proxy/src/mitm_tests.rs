@@ -61,7 +61,10 @@ fn policy_ctx(
 #[tokio::test]
 async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
     let app_state = Arc::new(network_proxy_state_for_policy({
-        let mut network = NetworkProxyConfig::default();
+        let mut network = NetworkProxyConfig {
+            allow_local_binding: Some(true),
+            ..NetworkProxyConfig::default()
+        };
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network
     }));
@@ -211,6 +214,7 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Full,
+        allow_local_binding: Some(true),
         ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
@@ -392,6 +396,7 @@ async fn mitm_policy_blocks_encoded_path_traversal_for_repository_allowlist() {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Full,
+        allow_local_binding: Some(true),
         ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["github.com".to_string()]);
@@ -460,6 +465,7 @@ async fn mitm_policy_blocks_matching_hooked_write_in_limited_mode() {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Limited,
+        allow_local_binding: Some(true),
         ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
@@ -509,6 +515,7 @@ async fn mitm_policy_records_hook_denials_in_full_mode() {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Full,
+        allow_local_binding: Some(true),
         ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);

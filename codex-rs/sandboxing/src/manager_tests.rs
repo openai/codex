@@ -593,7 +593,15 @@ fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_name()
 
 #[cfg(unix)]
 #[tokio::test]
-async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Result<()> {
+async fn linux_helper_uses_effective_managed_policy() -> anyhow::Result<()> {
+    for transparent_tcp in [false, true] {
+        check_linux_managed_policy(transparent_tcp).await?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()> {
     use codex_network_proxy::ConfigReloader;
     use codex_network_proxy::ConfigReloaderFuture;
     use codex_network_proxy::ConfigState;
@@ -647,7 +655,7 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
     let denied = ManagedNetworkSandboxContext::default();
     let cwd = AbsolutePathBuf::current_dir()?;
     let cwd_uri = PathUri::from_abs_path(&cwd);
-    let manager = SandboxManager::new();
+    let manager = SandboxManager::new().with_linux_sandbox_transparent_tcp(transparent_tcp);
     for (label, context, live_proxy, enforce_managed_network, expected) in [
         (
             "missing policy stays managed with restrictive defaults",
@@ -707,9 +715,13 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;
-        let transported_context = prepared
-            .into_command_request()
-            .command
+        let command = prepared.into_command_request().command;
+        assert_eq!(
+            command.iter().any(|arg| arg == "--transparent-tcp"),
+            transparent_tcp && expected.is_some(),
+            "{label}"
+        );
+        let transported_context = command
             .windows(2)
             .find(|args| args[0] == "--managed-network")
             .map(|args| serde_json::from_str::<ManagedNetworkSandboxContext>(&args[1]))

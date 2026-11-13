@@ -187,7 +187,9 @@ confidence-threshold = 0.8
 exceptions = [
     # Each entry is the crate and version constraint, and its specific allow
     # list
-    #{ allow = ["Zlib"], crate = "adler32" },
+    # The bundled Linux TCP stack and its storage library are both 0BSD.
+    { allow = ["0BSD"], crate = "managed@0.8.0" },
+    { allow = ["0BSD"], crate = "smoltcp@0.14.0" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,

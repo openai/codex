@@ -500,6 +500,26 @@ async fn native_request_preserves_native_launch_fields() {
     assert_eq!(prepared.cwd, cwd);
     assert_eq!(prepared.env, env);
     assert_eq!(prepared.arg0, params.arg0);
+
+    let mut legacy = params;
+    legacy.enforce_managed_network = true;
+    let mut runtime = ExecServerRuntimeOptions::new(
+        std::env::current_exe().unwrap(),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .unwrap();
+    runtime.tcp_upstream_proxy = Some("127.0.0.1:8088".parse().unwrap());
+    let error = prepare_exec_request(
+        &legacy,
+        env,
+        Some(&runtime),
+        /*network_policy_decider*/ None,
+        /*network_policy_audit_observer*/ None,
+    )
+    .await
+    .err()
+    .expect("legacy enforcement must require the mandatory upstream");
+    assert!(error.message.contains("executor-local managed proxy"));
 }
 
 #[test_case(false, None, &["-c", "true"]; "unmasked")]

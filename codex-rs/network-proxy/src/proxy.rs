@@ -2528,6 +2528,14 @@ mod tests {
 
     #[tokio::test]
     async fn remote_launch_config_carries_execution_scope() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let ca = crate::certs::ManagedMitmCa::for_test(dir.path())?;
+        crate::certs::TEST_MITM_CA
+            .scope(ca, check_remote_launch_config_execution_scope())
+            .await
+    }
+
+    async fn check_remote_launch_config_execution_scope() -> Result<()> {
         #[cfg(target_os = "windows")]
         let _permit = WINDOWS_INGRESS_TEST_LOCK.acquire().await.unwrap();
         let mut config = NetworkProxyConfig {

@@ -37,6 +37,8 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use url::Url;
 
+#[path = "managed_tcp.rs"]
+mod managed_tcp;
 #[path = "managed_proxy_unix_sockets_tests.rs"]
 mod unix_sockets;
 
@@ -89,7 +91,10 @@ fn is_bwrap_unavailable_output(output: &Output) -> bool {
 }
 
 async fn should_skip_bwrap_tests() -> bool {
-    let mut env = create_env_from_core_vars();
+    should_skip_bwrap_tests_with_env(create_env_from_core_vars()).await
+}
+
+async fn should_skip_bwrap_tests_with_env(mut env: HashMap<String, String>) -> bool {
     strip_proxy_env(&mut env);
 
     let output = run_linux_sandbox_direct(
@@ -112,11 +117,14 @@ fn is_managed_proxy_permission_error(stderr: &str) -> bool {
 }
 
 async fn managed_proxy_skip_reason() -> Option<String> {
-    if should_skip_bwrap_tests().await {
+    managed_proxy_skip_reason_with_env(create_env_from_core_vars()).await
+}
+
+async fn managed_proxy_skip_reason_with_env(mut env: HashMap<String, String>) -> Option<String> {
+    if should_skip_bwrap_tests_with_env(env.clone()).await {
         return Some("bubblewrap is unavailable in this environment".to_string());
     }
 
-    let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);
     env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
 
@@ -164,6 +172,22 @@ fn linux_sandbox_command(
     allow_network_for_proxy: bool,
     env: HashMap<String, String>,
 ) -> Command {
+    linux_sandbox_command_with_options(
+        command,
+        permission_profile,
+        allow_network_for_proxy.then_some("{}"),
+        env,
+        &[],
+    )
+}
+
+fn linux_sandbox_command_with_options(
+    command: &[&str],
+    permission_profile: &PermissionProfile,
+    managed_network: Option<&str>,
+    env: HashMap<String, String>,
+    options: &[&str],
+) -> Command {
     let cwd = std::env::current_dir().expect("current directory should exist");
     let permission_profile_json =
         serde_json::to_string(permission_profile).expect("permission profile should serialize");
@@ -174,10 +198,11 @@ fn linux_sandbox_command(
         "--permission-profile".to_string(),
         permission_profile_json,
     ];
-    if allow_network_for_proxy {
+    if let Some(context) = managed_network {
         args.push("--managed-network".to_string());
-        args.push("{}".to_string());
+        args.push(context.to_string());
     }
+    args.extend(options.iter().map(|arg| (*arg).to_string()));
     args.push("--".to_string());
     args.extend(command.iter().map(|entry| (*entry).to_string()));
 

@@ -280,6 +280,7 @@ impl std::error::Error for SandboxTransformError {
 #[derive(Clone, Default)]
 pub struct SandboxManager {
     linux_sandbox_pid_namespace: LinuxSandboxPidNamespace,
+    linux_sandbox_transparent_tcp: bool,
     operation: SandboxOperation,
     #[cfg(target_os = "macos")]
     allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
@@ -315,6 +316,12 @@ impl SandboxManager {
     /// Applies a trusted executor startup policy, never a command or repository setting.
     pub fn with_linux_sandbox_pid_namespace(mut self, mode: LinuxSandboxPidNamespace) -> Self {
         self.linux_sandbox_pid_namespace = mode;
+        self
+    }
+
+    /// Route managed Linux command traffic through the transparent TCP adapter.
+    pub fn with_linux_sandbox_transparent_tcp(mut self, enabled: bool) -> Self {
+        self.linux_sandbox_transparent_tcp = enabled;
         self
     }
 
@@ -662,6 +669,9 @@ impl SandboxManager {
         // Only the startup opt-in requires a helper that understands PID inheritance.
         if self.linux_sandbox_pid_namespace == LinuxSandboxPidNamespace::Inherit {
             args.insert(0, "--inherit-pid-namespace".to_owned());
+        }
+        if self.linux_sandbox_transparent_tcp && managed_network.is_some() {
+            args.insert(0, "--transparent-tcp".to_owned());
         }
         exec.command = std::iter::once(program).chain(args).collect();
         // Without bwrap --argv0, the Linux helper uses its own argv[0] as the inner executable.

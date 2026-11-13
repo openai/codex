@@ -135,7 +135,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
         prepare_managed_network(
             params,
             credential_brokers,
-            runtime_paths.is_some_and(|paths| paths.proxy_private_ips_via_upstream),
+            runtime_paths,
             env,
             network_policy_decider,
             network_policy_audit_observer,
@@ -182,7 +182,8 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     });
     runtime_readable_paths.extend(managed_mitm_ca_trust_bundle_path);
     let sandbox_manager = SandboxManager::new()
-        .with_linux_sandbox_pid_namespace(runtime_paths.linux_sandbox_pid_namespace);
+        .with_linux_sandbox_pid_namespace(runtime_paths.linux_sandbox_pid_namespace)
+        .with_linux_sandbox_transparent_tcp(runtime_paths.linux_sandbox_transparent_tcp);
     #[cfg(target_os = "macos")]
     let sandbox_manager = sandbox_manager
         .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone());
@@ -304,7 +305,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
 async fn prepare_managed_network(
     params: &ExecParams,
     credential_brokers: &RemoteCredentialBrokerCache,
-    proxy_private_ips_via_upstream: bool,
+    runtime_paths: Option<&ExecServerRuntimeOptions>,
     env: HashMap<String, String>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
@@ -318,8 +319,18 @@ async fn prepare_managed_network(
     ),
     JSONRPCErrorError,
 > {
+    let without_executor_proxy = |env| {
+        if (params.enforce_managed_network || params.managed_network.is_some())
+            && runtime_paths.is_some_and(|paths| paths.tcp_upstream_proxy.is_some())
+        {
+            return Err(invalid_params(
+                "a mandatory TCP upstream requires an executor-local managed proxy".to_string(),
+            ));
+        }
+        Ok((env, params.managed_network.clone(), None, None))
+    };
     let Some(launch) = &params.network_proxy else {
-        return Ok((env, params.managed_network.clone(), None, None));
+        return without_executor_proxy(env);
     };
     #[cfg(windows)]
     let routing = match params
@@ -331,7 +342,7 @@ async fn prepare_managed_network(
             // Native Windows commands have no sandbox token SID for shared ingress.
             let mut native_env = env;
             codex_network_proxy::strip_managed_proxy_env(&mut native_env);
-            return Ok((native_env, params.managed_network.clone(), None, None));
+            return without_executor_proxy(native_env);
         }
         Some(WindowsSandboxSelection::Mxc) => ManagedProxyRouting::DedicatedListeners,
         Some(
@@ -358,7 +369,12 @@ async fn prepare_managed_network(
             ))
         })?
         .credential_broker;
-    state.set_proxy_private_ips_via_upstream(proxy_private_ips_via_upstream);
+    if let Some(paths) = runtime_paths {
+        state.set_proxy_private_ips_via_upstream(paths.proxy_private_ips_via_upstream);
+        if let Some(proxy) = &paths.tcp_upstream_proxy {
+            state.set_tcp_upstream_proxy(proxy.clone());
+        }
+    }
     if let Some(observer) = network_policy_audit_observer {
         state.set_policy_audit_observer(observer);
     }

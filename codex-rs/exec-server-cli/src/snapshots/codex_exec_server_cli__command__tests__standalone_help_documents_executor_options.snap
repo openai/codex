@@ -1,6 +1,6 @@
 ---
 source: exec-server-cli/src/exec_server_args_tests.rs
-assertion_line: 318
+assertion_line: 338
 expression: help
 ---
 [EXPERIMENTAL] Run the standalone exec-server service
@@ -32,6 +32,13 @@ Options:
           dedicated environment
 
           [default: isolate]
+
+      --linux-sandbox-transparent-tcp
+          Route managed Linux sandbox TCP through the SOCKS proxy
+
+      --tcp-upstream-proxy <HOST:PORT>
+          Require this HTTP CONNECT proxy for raw TCP from the managed SOCKS
+          listener
 
       --proxy-private-ips-via-upstream
           Allow permitted private IP destinations to use the configured upstream

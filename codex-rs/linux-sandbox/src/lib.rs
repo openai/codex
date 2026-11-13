@@ -19,9 +19,9 @@ mod fd_mount;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_run_main;
-#[cfg(all(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 mod managed_tcp;
-#[cfg(all(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 mod managed_tcp_dns;
 #[cfg(target_os = "linux")]
 mod proxy_lifecycle;
@@ -29,6 +29,10 @@ mod proxy_lifecycle;
 mod proxy_routing;
 #[cfg(target_os = "linux")]
 mod seccomp;
+#[cfg(target_os = "linux")]
+mod tcp_namespace;
+#[cfg(target_os = "linux")]
+mod tcp_net_setup;
 #[cfg(target_os = "linux")]
 mod wslg;
 

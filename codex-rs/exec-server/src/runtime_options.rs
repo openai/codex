@@ -15,8 +15,12 @@ pub struct ExecServerRuntimeOptions {
     pub codex_linux_sandbox_exe: Option<AbsolutePathBuf>,
     /// Trusted startup policy; requests and repository config cannot change PID isolation.
     pub linux_sandbox_pid_namespace: LinuxSandboxPidNamespace,
+    /// Enable transparent TCP for managed Linux command launches.
+    pub linux_sandbox_transparent_tcp: bool,
     /// Trusted startup routing; request policy still controls destination access.
     pub proxy_private_ips_via_upstream: bool,
+    /// Mandatory next hop for opaque SOCKS TCP when set by provisioning.
+    pub tcp_upstream_proxy: Option<codex_network_proxy::TcpUpstreamProxy>,
     /// Only the sandbox preference from CLI flags, never other startup config or secrets.
     pub prefer_mxc: Option<bool>,
     /// User-config opt-out of writable-root symlink checks beneath this host's home.
@@ -44,7 +48,9 @@ impl ExecServerRuntimeOptions {
     ) -> std::io::Result<Self> {
         Ok(Self {
             linux_sandbox_pid_namespace: LinuxSandboxPidNamespace::default(),
+            linux_sandbox_transparent_tcp: false,
             proxy_private_ips_via_upstream: false,
+            tcp_upstream_proxy: None,
             prefer_mxc: None,
             codex_self_exe: absolute_path(codex_self_exe)?,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.map(absolute_path).transpose()?,
@@ -56,6 +62,11 @@ impl ExecServerRuntimeOptions {
     /// Applies the PID namespace policy chosen by trusted executor provisioning.
     pub fn with_linux_sandbox_pid_namespace(mut self, mode: LinuxSandboxPidNamespace) -> Self {
         self.linux_sandbox_pid_namespace = mode;
+        self
+    }
+
+    pub fn with_linux_sandbox_transparent_tcp(mut self, enabled: bool) -> Self {
+        self.linux_sandbox_transparent_tcp = enabled;
         self
     }
 

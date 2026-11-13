@@ -41,6 +41,14 @@ pub struct ExecServerCommand {
     #[arg(long, value_name = "MODE", default_value = "isolate", global = true)]
     linux_sandbox_pid_namespace: codex_sandboxing::LinuxSandboxPidNamespace,
 
+    /// Route managed Linux sandbox TCP through the SOCKS proxy.
+    #[arg(long, global = true)]
+    linux_sandbox_transparent_tcp: bool,
+
+    /// Require this HTTP CONNECT proxy for raw TCP from the managed SOCKS listener.
+    #[arg(long, value_name = "HOST:PORT", global = true)]
+    tcp_upstream_proxy: Option<codex_exec_server::TcpUpstreamProxy>,
+
     /// Allow permitted private IP destinations to use the configured upstream proxy.
     /// If no valid upstream proxy applies to the request protocol, connect directly.
     /// Loopback stays local. This flag does not require upstream routing.
@@ -203,7 +211,9 @@ impl ExecServerCommand {
             arg0_paths.codex_linux_sandbox_exe.clone(),
         )?
         .with_linux_sandbox_pid_namespace(self.linux_sandbox_pid_namespace)
+        .with_linux_sandbox_transparent_tcp(self.linux_sandbox_transparent_tcp)
         .with_proxy_private_ips_via_upstream(self.proxy_private_ips_via_upstream);
+        runtime_paths.tcp_upstream_proxy = self.tcp_upstream_proxy.take();
         // Config loading below owns error handling (non-strict stdio can proceed
         // without config). Never retain other startup flags in the executor.
         if let Ok(overrides) = root_config_overrides.parse_overrides() {

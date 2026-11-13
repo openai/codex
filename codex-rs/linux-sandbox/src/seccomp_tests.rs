@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::NetworkSeccompMode;
+use super::ProxyRouting;
 use super::install_network_seccomp_filter_on_current_thread;
 use super::network_seccomp_mode;
 use super::set_no_new_privs;
@@ -17,7 +18,8 @@ use std::collections::BTreeMap;
 use test_case::test_case;
 
 #[test_case(NetworkSeccompMode::Restricted, libc::EPERM; "restricted")]
-#[test_case(NetworkSeccompMode::ProxyRouted, libc::EPERM; "proxy_routed")]
+#[test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::Explicit), libc::EPERM; "explicit_proxy")]
+#[test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::TransparentTcp), libc::EPERM; "transparent_tcp")]
 #[test_case(NetworkSeccompMode::VmSocketRestricted, libc::ENOSYS; "vm_socket_only")]
 fn request_key_respects_network_policy(mode: NetworkSeccompMode, expected_errno: i32) {
     // Filters apply only to this thread, leaving the test runner unrestricted.
@@ -103,9 +105,9 @@ fn managed_proxy_routes_use_proxy_routed_seccomp_mode() {
         network_seccomp_mode(
             NetworkSandboxPolicy::Enabled,
             /*allow_network_for_proxy*/ true,
-            /*proxy_routed_network*/ true,
+            Some(ProxyRouting::Explicit),
         ),
-        Some(NetworkSeccompMode::ProxyRouted)
+        Some(NetworkSeccompMode::ProxyRouted(ProxyRouting::Explicit))
     );
 }
 
@@ -115,7 +117,7 @@ fn restricted_network_without_proxy_routing_uses_restricted_mode() {
         network_seccomp_mode(
             NetworkSandboxPolicy::Restricted,
             /*allow_network_for_proxy*/ false,
-            /*proxy_routed_network*/ false,
+            /*proxy_routed_network*/ None,
         ),
         Some(NetworkSeccompMode::Restricted)
     );
@@ -127,7 +129,7 @@ fn full_network_without_managed_proxy_skips_network_seccomp_mode() {
         network_seccomp_mode(
             NetworkSandboxPolicy::Enabled,
             /*allow_network_for_proxy*/ false,
-            /*proxy_routed_network*/ false,
+            /*proxy_routed_network*/ None,
         ),
         None
     );
@@ -149,7 +151,8 @@ fn syscall_result(nr: i64, arg0: i64) -> std::result::Result<i64, i32> {
 
 #[cfg(target_arch = "x86_64")]
 #[test_case::test_case(NetworkSeccompMode::Restricted; "restricted")]
-#[test_case::test_case(NetworkSeccompMode::ProxyRouted; "proxy_routed")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::Explicit); "explicit_proxy")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::TransparentTcp); "transparent_tcp")]
 #[test_case::test_case(NetworkSeccompMode::VmSocketRestricted; "vm_socket_restricted")]
 fn x32_restricted_syscalls_are_denied(mode: NetworkSeccompMode) {
     std::thread::spawn(move || {
@@ -207,7 +210,8 @@ fn x32_restricted_syscalls_are_denied(mode: NetworkSeccompMode) {
 
 #[cfg(target_arch = "x86_64")]
 #[test_case::test_case(NetworkSeccompMode::Restricted; "restricted")]
-#[test_case::test_case(NetworkSeccompMode::ProxyRouted; "proxy_routed")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::Explicit); "explicit_proxy")]
+#[test_case::test_case(NetworkSeccompMode::ProxyRouted(ProxyRouting::TransparentTcp); "transparent_tcp")]
 #[test_case::test_case(NetworkSeccompMode::VmSocketRestricted; "vm_socket_restricted")]
 fn x32_preserves_allowed_calls_and_socket_conditions(mode: NetworkSeccompMode) {
     std::thread::spawn(move || {
@@ -215,13 +219,17 @@ fn x32_preserves_allowed_calls_and_socket_conditions(mode: NetworkSeccompMode) {
             NetworkSeccompMode::Restricted | NetworkSeccompMode::VmSocketRestricted => {
                 libc::AF_UNIX
             }
-            NetworkSeccompMode::ProxyRouted => libc::AF_INET,
+            NetworkSeccompMode::ProxyRouted(_) => libc::AF_INET,
         };
-        let allowed = [
+        let mut allowed = vec![
             (libc::SYS_getpid, 0),
             (libc::SYS_socket, i64::from(socket_domain)),
             (libc::SYS_socketpair, i64::from(libc::AF_UNIX)),
         ];
+        if mode == NetworkSeccompMode::ProxyRouted(ProxyRouting::TransparentTcp) {
+            // syscall_result supplies protocol zero (NETLINK_ROUTE).
+            allowed.push((libc::SYS_socket, i64::from(libc::AF_NETLINK)));
+        }
         let probes = allowed
             .into_iter()
             .flat_map(|(nr, arg0)| [(nr, arg0), (nr | 0x4000_0000, arg0)])

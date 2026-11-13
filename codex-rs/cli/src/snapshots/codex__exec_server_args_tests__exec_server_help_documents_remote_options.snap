@@ -39,6 +39,13 @@ Options:
 
           [default: isolate]
 
+      --linux-sandbox-transparent-tcp
+          Route managed Linux sandbox TCP through the SOCKS proxy
+
+      --tcp-upstream-proxy <HOST:PORT>
+          Require this HTTP CONNECT proxy for raw TCP from the managed SOCKS
+          listener
+
       --proxy-private-ips-via-upstream
           Allow permitted private IP destinations to use the configured upstream
           proxy. If no valid upstream proxy applies to the request protocol,

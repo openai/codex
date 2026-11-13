@@ -135,6 +135,7 @@ fn translate_legacy_bwrap_fd_mounts(argv: &mut Vec<String>) -> Result<(), String
 pub(crate) fn initialize_bwrap_launcher(
     file_system_policy: &FileSystemSandboxPolicy,
     sandbox_policy_cwd: &Path,
+    require_system: bool,
 ) {
     LAUNCHER.get_or_init(|| {
         if let Some(path) = find_system_bwrap_in_path(file_system_policy, sandbox_policy_cwd)
@@ -143,6 +144,9 @@ pub(crate) fn initialize_bwrap_launcher(
             return BubblewrapLauncher::System(launcher);
         }
 
+        if require_system {
+            panic!("transparent TCP requires a supported distro bubblewrap on PATH");
+        }
         match bundled_bwrap::launcher() {
             Some(launcher) => BubblewrapLauncher::Bundled(launcher),
             None => BubblewrapLauncher::Unavailable,

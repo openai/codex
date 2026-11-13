@@ -16,9 +16,18 @@ use hickory_proto::serialize::binary::BinDecoder;
 use hickory_proto::serialize::binary::BinEncodable;
 use indexmap::IndexSet;
 use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
+use std::net::TcpListener;
+use std::net::TcpStream;
+use std::net::UdpSocket;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 const MAX_NAMES: usize = 8192;
 const V4_BASE: u32 = u32::from_be_bytes([198, 18, 0, 0]);
@@ -110,6 +119,57 @@ impl Names {
         reply.add_query(query);
         reply.to_vec().ok()
     }
+}
+
+pub(super) fn serve(names: Arc<Mutex<Names>>, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
+    let udp_names = Arc::clone(&names);
+    thread::Builder::new().spawn(move || {
+        let mut buf = [0; 4096];
+        while let Ok((n, peer)) = udp.recv_from(&mut buf) {
+            let reply = udp_names
+                .lock()
+                .ok()
+                .and_then(|mut table| table.answer(&buf[..n]));
+            if let Some(reply) = reply {
+                let _ = udp.send_to(&reply, peer);
+            }
+        }
+    })?;
+    // Fixed workers bound concurrent DNS-over-TCP exchanges. Some resolvers
+    // pipeline A and AAAA queries on the same connection.
+    for _ in 0..4 {
+        let listener = tcp.try_clone()?;
+        let names = Arc::clone(&names);
+        thread::Builder::new().spawn(move || {
+            while let Ok(stream) = crate::managed_tcp::accept_with_backoff(&listener) {
+                let _ = answer_tcp(stream, &names);
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn answer_tcp(mut stream: TcpStream, names: &Mutex<Names>) -> io::Result<()> {
+    let timeout = Some(Duration::from_secs(2));
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
+    let mut buf = [0; 4096];
+    for _ in 0..32 {
+        let mut size = [0; 2];
+        stream.read_exact(&mut size)?;
+        let query = buf
+            .get_mut(..usize::from(u16::from_be_bytes(size)))
+            .ok_or_else(|| io::Error::other("oversized DNS query"))?;
+        stream.read_exact(query)?;
+        let reply = names
+            .lock()
+            .map_err(|_| io::Error::other("DNS name table is unavailable"))?
+            .answer(query)
+            .ok_or_else(|| io::Error::other("invalid DNS query"))?;
+        stream.write_all(&(reply.len() as u16).to_be_bytes())?;
+        stream.write_all(&reply)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

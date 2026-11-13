@@ -109,6 +109,10 @@ fn parse_absolute_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 
 #[derive(Debug, Parser)]
 pub struct LandlockCommand {
+    /// Route outbound TCP through the managed SOCKS proxy.
+    #[arg(long)]
+    pub transparent_tcp: bool,
+
     #[command(flatten)]
     pub sandbox_state: SandboxStateArgs,
 

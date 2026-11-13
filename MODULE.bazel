@@ -537,6 +537,10 @@ crate.annotation(
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+managed_tcp_test_bwrap = use_repo_rule("//codex-rs/linux-sandbox:managed_tcp_test_bwrap.bzl", "managed_tcp_test_bwrap")
+
+managed_tcp_test_bwrap(name = "managed_tcp_test_bubblewrap_noble_amd64")
+
 # Cargo keeps vendored OpenSSL for musl; Bazel already supplies its own OpenSSL.
 # Replace this crate's generated build, not Cargo's feature resolution.
 http_archive(

@@ -17,6 +17,7 @@ doctest = false
 workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+async-lock = "3"
 clap = { workspace = true, features = ["derive"] }
 codex-install-context = { workspace = true }
 codex-network-proxy = { workspace = true }
@@ -25,24 +26,26 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+etherparse = { version = "=0.21.0", default-features = false }
+hickory-proto = "=0.26.3"
 ignore = { workspace = true }
 indexmap = { workspace = true }
 landlock = { workspace = true }
+rand = { workspace = true }
 libc = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["process", "thread"] }
 seccompiler = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+smoltcp = { version = "=0.14.0", default-features = false, features = ["std", "phy-tuntap_interface", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp"] }
+socks5-protocol = { version = "=0.3.5", features = ["sync"] }
 url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 codex-core = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-hickory-proto = "=0.26.3"
 pretty_assertions = { workspace = true }
-socks5-protocol = { version = "=0.3.5", features = ["sync"] }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 tokio = { workspace = true, features = [
@@ -51,4 +54,5 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
     "signal",
+    "sync",
 ] }

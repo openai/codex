@@ -48,12 +48,12 @@ pub(crate) fn apply_sandbox_policies_to_current_thread(
     cwd: &Path,
     apply_landlock_fs: bool,
     managed_network: Option<&ManagedNetworkSandboxContext>,
-    proxy_routing_active: bool,
+    proxy_routing: Option<ProxyRouting>,
 ) -> Result<()> {
     let network_seccomp_mode = network_seccomp_mode(
         network_sandbox_policy,
         managed_network.is_some(),
-        proxy_routing_active,
+        proxy_routing,
     )
     .or_else(|| {
         // VM sockets can reach host services outside the filesystem sandbox.
@@ -100,8 +100,14 @@ pub(crate) fn apply_sandbox_policies_to_current_thread(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NetworkSeccompMode {
     Restricted,
-    ProxyRouted,
+    ProxyRouted(ProxyRouting),
     VmSocketRestricted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProxyRouting {
+    Explicit,
+    TransparentTcp,
 }
 
 fn should_install_network_seccomp(
@@ -116,12 +122,12 @@ fn should_install_network_seccomp(
 fn network_seccomp_mode(
     network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
-    proxy_routed_network: bool,
+    proxy_routed_network: Option<ProxyRouting>,
 ) -> Option<NetworkSeccompMode> {
     if !should_install_network_seccomp(network_sandbox_policy, allow_network_for_proxy) {
         None
-    } else if proxy_routed_network {
-        Some(NetworkSeccompMode::ProxyRouted)
+    } else if let Some(routing) = proxy_routed_network {
+        Some(NetworkSeccompMode::ProxyRouted(routing))
     } else {
         Some(NetworkSeccompMode::Restricted)
     }
@@ -267,11 +273,11 @@ fn install_network_seccomp_filter_on_current_thread(
             add_syscall_rules(&mut rules, libc::SYS_socket, vec![unix_only_rule.clone()]);
             add_syscall_rules(&mut rules, libc::SYS_socketpair, vec![unix_only_rule]);
         }
-        NetworkSeccompMode::ProxyRouted => {
+        NetworkSeccompMode::ProxyRouted(routing) => {
             // In proxy-routed mode we allow IP sockets in the isolated
             // namespace (used to reach the local TCP bridge). Standalone Unix
-            // sockets require an explicit managed-policy grant; all other
-            // socket families remain denied.
+            // sockets require an explicit managed-policy grant. Transparent TCP
+            // also permits route enumeration in its private network namespace.
             let mut denied_socket_conditions = vec![
                 SeccompCondition::new(
                     0,
@@ -294,14 +300,40 @@ fn install_network_seccomp_filter_on_current_thread(
                     libc::AF_UNIX as u64,
                 )?);
             }
-            let deny_non_ip_socket = SeccompRule::new(denied_socket_conditions)?;
+            let mut socket_rules = Vec::new();
+            if routing == ProxyRouting::TransparentTcp {
+                // Native clients use getifaddrs to enumerate their interfaces. Route
+                // mutation requires CAP_NET_ADMIN in the parent user namespace that
+                // owns the TUN. The workload has no capabilities there.
+                denied_socket_conditions.push(SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_NETLINK as u64,
+                )?);
+                socket_rules.push(SeccompRule::new(vec![
+                    SeccompCondition::new(
+                        0,
+                        SeccompCmpArgLen::Dword,
+                        SeccompCmpOp::Eq,
+                        libc::AF_NETLINK as u64,
+                    )?,
+                    SeccompCondition::new(
+                        2,
+                        SeccompCmpArgLen::Dword,
+                        SeccompCmpOp::Ne,
+                        libc::NETLINK_ROUTE as u64,
+                    )?,
+                ])?);
+            }
+            socket_rules.push(SeccompRule::new(denied_socket_conditions)?);
             let deny_non_unix_socketpair = SeccompRule::new(vec![SeccompCondition::new(
                 0,
                 SeccompCmpArgLen::Dword,
                 SeccompCmpOp::Ne,
                 libc::AF_UNIX as u64,
             )?])?;
-            add_syscall_rules(&mut rules, libc::SYS_socket, vec![deny_non_ip_socket]);
+            add_syscall_rules(&mut rules, libc::SYS_socket, socket_rules);
             add_syscall_rules(
                 &mut rules,
                 libc::SYS_socketpair,
