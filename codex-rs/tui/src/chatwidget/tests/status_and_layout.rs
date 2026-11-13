@@ -3981,6 +3981,13 @@ async fn status_line_workspace_headline_renders_cached_value() {
         status_line_text(&chat),
         Some("Workspace maintenance starts at 5pm".to_string())
     );
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["account"],
+        serde_json::json!({
+            "workspace": {"headline": "Workspace maintenance starts at 5pm"}
+        })
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "workspace-headline should be a valid status line item"

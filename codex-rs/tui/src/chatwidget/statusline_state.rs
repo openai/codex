@@ -1,5 +1,6 @@
 //! Projects the displayed conversation into the provider-facing statusline snapshot.
 
+mod account;
 mod usage;
 
 use super::ChatWidget;
@@ -21,6 +22,7 @@ use strum_macros::Display;
 
 #[derive(Serialize)]
 pub(crate) struct StatuslineState {
+    account: account::Account,
     app: StatuslineStateApp,
     config: StatuslineStateConfig,
     thread: StatuslineStateThread,
@@ -244,6 +246,7 @@ impl ChatWidget {
                 enforcement: permissions.effective_permission_profile().into(),
             });
         Some(StatuslineState {
+            account: self.into(),
             app,
             config,
             thread: StatuslineStateThread {
