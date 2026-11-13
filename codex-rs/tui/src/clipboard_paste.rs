@@ -272,24 +272,24 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     // TODO: We'll improve the implementation/unit tests over time, as appropriate.
     // Possibly use typed-path: https://github.com/openai/codex/pull/2567/commits/3cc92b78e0a1f94e857cf4674d3a9db918ed352e
     //
-    // Detect unquoted Windows paths and bypass POSIX shlex which
-    // treats backslashes as escapes (e.g., C:\Users\Alice\file.png).
-    // Also handles UNC paths (\\server\share\path).
-    if let Some(path) = normalize_windows_path(unquoted) {
-        return Some(path);
-    }
-
-    // shell-escaped single path → unescaped
-    let parts: Vec<String> = shlex::Shlex::new(pasted).collect();
-    if parts.len() == 1 {
-        let part = parts.into_iter().next()?;
-        if let Some(path) = normalize_windows_path(&part) {
-            return Some(path);
+    // Bypass POSIX shlex for Windows paths, where backslashes are separators.
+    let path = if is_windows_drive_path(unquoted) || unquoted.starts_with("\\\\") {
+        unquoted.to_owned()
+    } else {
+        let mut parts = shlex::Shlex::new(pasted);
+        let part = parts.next()?;
+        if parts.next().is_some() {
+            return None;
         }
-        return Some(PathBuf::from(part));
+        part
+    };
+
+    #[cfg(target_os = "linux")]
+    if is_windows_drive_path(&path) && is_probably_wsl() {
+        return convert_windows_path_to_wsl(&path);
     }
 
-    None
+    Some(PathBuf::from(path))
 }
 
 #[cfg(target_os = "linux")]
@@ -310,60 +310,84 @@ pub(crate) fn is_probably_wsl() -> bool {
 
 #[cfg(target_os = "linux")]
 fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
-    if input.starts_with("\\\\") {
-        return None;
-    }
-
-    let drive_letter = input.chars().next()?.to_ascii_lowercase();
-    if !drive_letter.is_ascii_lowercase() {
-        return None;
-    }
-
-    if input.get(1..2) != Some(":") {
-        return None;
-    }
-
-    let mut result = PathBuf::from(format!("/mnt/{drive_letter}"));
-    for component in input
-        .get(2..)?
-        .trim_start_matches(['\\', '/'])
-        .split(['\\', '/'])
-        .filter(|component| !component.is_empty())
-    {
-        result.push(component);
-    }
-
-    Some(result)
+    convert_windows_path(input, Path::new("/bin/wslpath"), || {
+        std::fs::read("/proc/self/mountinfo")
+    })
 }
 
-fn normalize_windows_path(input: &str) -> Option<PathBuf> {
-    // Drive letter path: C:\ or C:/
-    let drive = input
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_alphabetic())
-        .unwrap_or(false)
-        && input.get(1..2) == Some(":")
-        && input
-            .get(2..3)
-            .map(|s| s == "\\" || s == "/")
-            .unwrap_or(false);
-    // UNC path: \\server\share
-    let unc = input.starts_with("\\\\");
-    if !drive && !unc {
+#[cfg(target_os = "linux")]
+fn convert_windows_path(
+    input: &str,
+    wslpath: &Path,
+    read_mountinfo: impl FnOnce() -> std::io::Result<Vec<u8>>,
+) -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::io::ErrorKind;
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Command;
+    use std::process::Stdio;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    if !is_windows_drive_path(input) {
         return None;
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        if is_probably_wsl()
-            && let Some(converted) = convert_windows_path_to_wsl(input)
-        {
-            return Some(converted);
+    match std::fs::metadata(wslpath) {
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return windows_path_on_default_mount(input, &read_mountinfo().ok()?);
         }
+        Err(_) => return None,
     }
 
-    Some(PathBuf::from(input))
+    // Use the WSL-installed helper without looking in the working directory or PATH.
+    let mut command = Command::new(wslpath);
+    command
+        .args(["-u", input])
+        // wslpath reads its working directory even for absolute paths.
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    let output = crate::command_output::command_stdout_before_deadline(
+        &mut command,
+        Instant::now() + Duration::from_secs(/*secs*/ 1),
+    )?;
+    let path = Path::new(OsStr::from_bytes(output.strip_suffix(b"\n")?));
+    path.is_absolute().then(|| path.to_path_buf())
+}
+
+#[cfg(target_os = "linux")]
+fn windows_path_on_default_mount(input: &str, mountinfo: &[u8]) -> Option<PathBuf> {
+    let drive = char::from(input.as_bytes()[0].to_ascii_lowercase());
+    let mount_point = format!("/mnt/{drive}");
+    // Field five is the mount point in this process's mount namespace.
+    // An ordinary directory at the same path is insufficient.
+    if !mountinfo
+        .split(|byte| *byte == b'\n')
+        .any(|line| line.split(|byte| *byte == b' ').nth(4) == Some(mount_point.as_bytes()))
+    {
+        return None;
+    }
+
+    let mut path = PathBuf::from(&mount_point);
+    for component in input[2..].split(['\\', '/']) {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if path == Path::new(&mount_point) {
+                    return None;
+                }
+                path.pop();
+            }
+            component => path.push(component),
+        }
+    }
+    Some(path)
+}
+
+fn is_windows_drive_path(input: &str) -> bool {
+    matches!(input.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic())
 }
 
 /// Infer an image format for the provided path based on its extension.
@@ -396,6 +420,7 @@ mod pasted_search_query_tests {
 #[cfg(test)]
 mod pasted_paths_tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[cfg(not(windows))]
     #[test]
@@ -403,23 +428,6 @@ mod pasted_paths_tests {
         let input = "file:///tmp/example.png";
         let result = normalize_pasted_path(input).expect("should parse file URL");
         assert_eq!(result, PathBuf::from("/tmp/example.png"));
-    }
-
-    #[test]
-    fn normalize_file_url_windows() {
-        let input = r"C:\Temp\example.png";
-        let result = normalize_pasted_path(input).expect("should parse file URL");
-        #[cfg(target_os = "linux")]
-        let expected = if is_probably_wsl()
-            && let Some(converted) = convert_windows_path_to_wsl(input)
-        {
-            converted
-        } else {
-            PathBuf::from(r"C:\Temp\example.png")
-        };
-        #[cfg(not(target_os = "linux"))]
-        let expected = PathBuf::from(r"C:\Temp\example.png");
-        assert_eq!(result, expected);
     }
 
     #[test]
@@ -476,58 +484,64 @@ mod pasted_paths_tests {
     }
 
     #[test]
-    fn normalize_single_quoted_windows_path() {
-        let input = r"'C:\\Users\\Alice\\My File.jpeg'";
-        let unquoted = r"C:\\Users\\Alice\\My File.jpeg";
-        let result =
-            normalize_pasted_path(input).expect("should trim single quotes on windows path");
+    fn normalize_windows_paths_with_spaces() {
+        let unquoted = r"C:\Users\Alice\My File.jpeg";
+        let expected = Some(PathBuf::from(unquoted));
         #[cfg(target_os = "linux")]
-        let expected = if is_probably_wsl()
-            && let Some(converted) = convert_windows_path_to_wsl(unquoted)
-        {
-            converted
+        let expected = if is_probably_wsl() {
+            use std::os::unix::ffi::OsStringExt;
+
+            // A container on a WSL kernel may lack the distro's wslpath symlink.
+            let Ok(mut output) = std::process::Command::new("/bin/wslpath")
+                .args(["-u", unquoted])
+                .current_dir("/")
+                .output()
+            else {
+                return;
+            };
+            output.status.success().then(|| {
+                assert_eq!(output.stdout.pop(), Some(b'\n'));
+                PathBuf::from(std::ffi::OsString::from_vec(output.stdout))
+            })
         } else {
-            PathBuf::from(unquoted)
+            expected
         };
-        #[cfg(not(target_os = "linux"))]
-        let expected = PathBuf::from(unquoted);
-        assert_eq!(result, expected);
+
+        for input in [
+            unquoted,
+            r"'C:\Users\Alice\My File.jpeg'",
+            r#""C:\Users\Alice\My File.jpeg""#,
+        ] {
+            assert_eq!(normalize_pasted_path(input), expected, "{input}");
+        }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn normalize_double_quoted_windows_path() {
-        let input = r#""C:\\Users\\Alice\\My File.jpeg""#;
-        let unquoted = r"C:\\Users\\Alice\\My File.jpeg";
-        let result =
-            normalize_pasted_path(input).expect("should trim double quotes on windows path");
-        #[cfg(target_os = "linux")]
-        let expected = if is_probably_wsl()
-            && let Some(converted) = convert_windows_path_to_wsl(unquoted)
-        {
-            converted
-        } else {
-            PathBuf::from(unquoted)
-        };
-        #[cfg(not(target_os = "linux"))]
-        let expected = PathBuf::from(unquoted);
-        assert_eq!(result, expected);
-    }
+    fn windows_path_fallback_requires_missing_wslpath_and_default_mount() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_wslpath = directory.path().join("wslpath");
+        let mountinfo = b"24 23 0:21 / /mnt/c rw - 9p none rw\n\
+                          25 23 0:22 / /mnt/d/Users rw - 9p none rw\n";
 
-    #[test]
-    fn normalize_unquoted_windows_path_with_spaces() {
-        let input = r"C:\\Users\\Alice\\My Pictures\\example image.png";
-        let result = normalize_pasted_path(input).expect("should accept unquoted windows path");
-        #[cfg(target_os = "linux")]
-        let expected = if is_probably_wsl()
-            && let Some(converted) = convert_windows_path_to_wsl(input)
-        {
-            converted
-        } else {
-            PathBuf::from(r"C:\\Users\\Alice\\My Pictures\\example image.png")
-        };
-        #[cfg(not(target_os = "linux"))]
-        let expected = PathBuf::from(r"C:\\Users\\Alice\\My Pictures\\example image.png");
-        assert_eq!(result, expected);
+        assert_eq!(
+            convert_windows_path(r"C:\Users\Alice/My File.jpeg", &missing_wslpath, || {
+                Ok(mountinfo.to_vec())
+            }),
+            Some(PathBuf::from("/mnt/c/Users/Alice/My File.jpeg"))
+        );
+        assert_eq!(
+            convert_windows_path(r"D:\Users\Alice\My File.jpeg", &missing_wslpath, || {
+                Ok(mountinfo.to_vec())
+            }),
+            None
+        );
+        assert_eq!(
+            convert_windows_path(r"C:\..\etc\image.png", &missing_wslpath, || {
+                Ok(mountinfo.to_vec())
+            }),
+            None
+        );
     }
 
     #[test]
@@ -553,22 +567,6 @@ mod pasted_paths_tests {
         assert_eq!(
             pasted_image_format(Path::new(r"C:\\a\\b\\noext")),
             EncodedImageFormat::Other
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn normalize_windows_path_in_wsl() {
-        // This test only runs on actual WSL systems
-        if !is_probably_wsl() {
-            // Skip test if not on WSL
-            return;
-        }
-        let input = r"C:\\Users\\Alice\\Pictures\\example image.png";
-        let result = normalize_pasted_path(input).expect("should convert windows path on wsl");
-        assert_eq!(
-            result,
-            PathBuf::from("/mnt/c/Users/Alice/Pictures/example image.png")
         );
     }
 }

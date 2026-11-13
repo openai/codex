@@ -130,6 +130,7 @@ mod clipboard_paste;
 mod clock_format;
 mod collaboration_modes;
 mod color;
+mod command_output;
 mod config_panel;
 mod config_update;
 mod copy_input_guard;
