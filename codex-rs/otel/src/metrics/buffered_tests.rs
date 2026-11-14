@@ -16,7 +16,7 @@ fn client() -> MetricsClient {
 fn observe(buffer: &BufferedMetrics) {
     buffer
         .record(
-            "test.operations",
+            Some("test.operations"),
             "test.duration",
             Duration::from_millis(/*millis*/ 7),
             &[("component", "test")],
@@ -55,12 +55,17 @@ fn startup_limits_and_validation_preserve_whole_pairs() {
     let buffer = BufferedMetrics::new();
     let oversized = "x".repeat(MAX_METADATA_BYTES + 1);
     assert!(matches!(
-        buffer.record("count", "duration", Duration::ZERO, &[("tag", &oversized)]),
+        buffer.record(
+            Some("count"),
+            "duration",
+            Duration::ZERO,
+            &[("tag", &oversized)]
+        ),
         Err(MetricsError::OperationMetadataTooLarge)
     ));
     assert!(matches!(
         buffer.record(
-            "count",
+            Some("count"),
             "duration",
             Duration::ZERO,
             &[("tag", "value"); MAX_TAGS + 1]
@@ -68,17 +73,26 @@ fn startup_limits_and_validation_preserve_whole_pairs() {
         Err(MetricsError::OperationMetadataTooLarge)
     ));
     for name in ["invalid duration", "1duration", &"d".repeat(256)] {
-        assert!(buffer.record("count", name, Duration::ZERO, &[]).is_err());
         assert!(
             buffer
-                .record(name, "duration", Duration::ZERO, &[])
+                .record(/*count_name*/ None, name, Duration::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            buffer
+                .record(Some("count"), name, Duration::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            buffer
+                .record(Some(name), "duration", Duration::ZERO, &[])
                 .is_err()
         );
     }
     assert!(
         buffer
             .record(
-                "count",
+                Some("count"),
                 "duration",
                 Duration::ZERO,
                 &[("tag", "invalid value")]
@@ -94,14 +108,61 @@ fn startup_limits_and_validation_preserve_whole_pairs() {
     buffer.enable(&metrics);
     assert_eq!(totals(&metrics), (0, 0, 0.0));
     for name in ["invalid duration", "1duration", &"d".repeat(256)] {
-        assert!(buffer.record("count", name, Duration::ZERO, &[]).is_err());
         assert!(
             buffer
-                .record(name, "duration", Duration::ZERO, &[])
+                .record(/*count_name*/ None, name, Duration::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            buffer
+                .record(Some("count"), name, Duration::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            buffer
+                .record(Some(name), "duration", Duration::ZERO, &[])
                 .is_err()
         );
     }
     assert_eq!(totals(&metrics), (0, 0, 0.0));
+}
+
+#[test]
+fn standalone_durations_share_startup_limits_and_opt_out() {
+    let buffer = BufferedMetrics::new();
+    for _ in 0..MAX_PENDING_OPERATIONS + 1 {
+        buffer
+            .record(
+                /*count_name*/ None,
+                "test.duration",
+                Duration::from_millis(/*millis*/ 7),
+                &[],
+            )
+            .unwrap();
+    }
+    let metrics = client();
+    buffer.enable(&metrics);
+    assert_eq!(totals(&metrics), (0, 256, 1792.0));
+    buffer.disable();
+    buffer
+        .record(
+            /*count_name*/ None,
+            "test.duration",
+            Duration::from_millis(/*millis*/ 7),
+            &[],
+        )
+        .unwrap();
+    buffer.enable(&metrics);
+    assert_eq!(totals(&metrics), (0, 0, 0.0));
+    buffer
+        .record(
+            /*count_name*/ None,
+            "test.duration",
+            Duration::from_millis(/*millis*/ 7),
+            &[],
+        )
+        .unwrap();
+    assert_eq!(totals(&metrics), (0, 1, 7.0));
 }
 
 #[test]

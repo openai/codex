@@ -1,5 +1,5 @@
 //! Buffers bounded operation counts and durations until process metrics are configured.
-//! Each pair is admitted together; lifecycle transitions serialize with local SDK recording.
+//! Standalone durations and count/duration pairs share admission limits and lifecycle handling.
 //! Shutting down the active installation resumes buffering until its replacement is ready.
 
 use super::MetricsClient;
@@ -17,7 +17,7 @@ const MAX_METADATA_BYTES: usize = 1024;
 const MAX_TAGS: usize = 16;
 
 struct PendingOperation {
-    count_name: Box<str>,
+    count_name: Option<Box<str>>,
     duration_name: Box<str>,
     duration: Duration,
     tags: Vec<(Box<str>, Box<str>)>,
@@ -46,7 +46,17 @@ pub fn record_global_operation(
     duration: Duration,
     tags: &[(&str, &str)],
 ) -> Result<()> {
-    GLOBAL.record(count_name, duration_name, duration, tags)
+    GLOBAL.record(Some(count_name), duration_name, duration, tags)
+}
+
+/// Records a duration in milliseconds with the same startup limits and opt-out behavior as
+/// `record_global_operation`, without an accompanying counter. Supply only bounded tags.
+pub fn record_global_duration(
+    duration_name: &str,
+    duration: Duration,
+    tags: &[(&str, &str)],
+) -> Result<()> {
+    GLOBAL.record(/*count_name*/ None, duration_name, duration, tags)
 }
 
 impl BufferedMetrics {
@@ -58,21 +68,23 @@ impl BufferedMetrics {
 
     fn record(
         &self,
-        count_name: &str,
+        count_name: Option<&str>,
         duration_name: &str,
         duration: Duration,
         tags: &[(&str, &str)],
     ) -> Result<()> {
         if tags.len() > MAX_TAGS
             || tags.iter().fold(
-                count_name.len().saturating_add(duration_name.len()),
+                count_name
+                    .map_or(0, str::len)
+                    .saturating_add(duration_name.len()),
                 |bytes, (key, value)| bytes.saturating_add(key.len()).saturating_add(value.len()),
             ) > MAX_METADATA_BYTES
         {
             return Err(MetricsError::OperationMetadataTooLarge);
         }
         // Validate both instruments before accepting either half of the pair.
-        for name in [count_name, duration_name] {
+        for name in count_name.into_iter().chain([duration_name]) {
             validate_metric_name(name)?;
             // The SDK otherwise silently builds a no-op instrument for these names.
             if name.len() > 255 || !name.as_bytes()[0].is_ascii_alphabetic() {
@@ -93,7 +105,7 @@ impl BufferedMetrics {
             State::Startup(pending) => {
                 if pending.len() < MAX_PENDING_OPERATIONS {
                     pending.push(PendingOperation {
-                        count_name: count_name.into(),
+                        count_name: count_name.map(Into::into),
                         duration_name: duration_name.into(),
                         duration,
                         tags: tags
@@ -129,7 +141,7 @@ impl BufferedMetrics {
                     .collect();
                 let _ = record(
                     &metrics,
-                    &operation.count_name,
+                    operation.count_name.as_deref(),
                     &operation.duration_name,
                     operation.duration,
                     &tags,
@@ -163,12 +175,14 @@ impl BufferedMetrics {
 
 fn record(
     metrics: &MetricsClient,
-    count_name: &str,
+    count_name: Option<&str>,
     duration_name: &str,
     duration: Duration,
     tags: &[(&str, &str)],
 ) -> Result<()> {
-    metrics.counter(count_name, /*inc*/ 1, tags)?;
+    if let Some(count_name) = count_name {
+        metrics.counter(count_name, /*inc*/ 1, tags)?;
+    }
     metrics.record_duration(duration_name, duration, tags)
 }
 

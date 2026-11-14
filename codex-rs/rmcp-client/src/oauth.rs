@@ -72,6 +72,7 @@ use tracing::warn;
 use self::store_lock::OAuthStore;
 use self::store_lock::OAuthStoreLock;
 use self::store_lock::OAuthStoreLockFailure;
+use self::store_lock::OAuthStoreWriteOperation;
 
 use codex_config::McpServerOAuthConfig;
 use codex_keyring_store::DefaultKeyringStore;
@@ -568,7 +569,8 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
-    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
+    let _store_lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::Secrets, OAuthStoreWriteOperation::Save)?;
     save_oauth_tokens_to_secrets_keyring_with_lock_held(
         keyring_store,
         server_name,
@@ -751,7 +753,8 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
-    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
+    let _store_lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::Secrets, OAuthStoreWriteOperation::Delete)?;
     let codex_home = find_codex_home()?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -1073,7 +1076,8 @@ fn load_oauth_tokens_from_file_with_lock_held(
 /// Saves one credential while holding the File aggregate-store lock across the full
 /// read-modify-write operation.
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
-    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
+    let _store_lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::File, OAuthStoreWriteOperation::Save)?;
     save_oauth_tokens_to_file_with_lock_held(tokens)
 }
 
@@ -1116,7 +1120,8 @@ impl From<&StoredOAuthTokens> for FallbackTokenEntry {
 }
 
 fn delete_oauth_tokens_from_file(server_name: &str, url: &str, key: &str) -> Result<bool> {
-    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
+    let _store_lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::File, OAuthStoreWriteOperation::Delete)?;
     let mut store = match read_fallback_file_unlocked()? {
         Some(store) => store,
         None => return Ok(false),

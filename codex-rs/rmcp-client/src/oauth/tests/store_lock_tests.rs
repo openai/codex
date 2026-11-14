@@ -1,3 +1,6 @@
+#![cfg(test)]
+
+use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -13,6 +16,8 @@ use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
@@ -28,6 +33,7 @@ use super::OAuthStore;
 use super::OAuthStoreLock;
 use super::OAuthStoreLockFailure;
 use super::OAuthStoreLockMode;
+use super::OAuthStoreWriteOperation;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthCredentialSnapshot;
 use crate::oauth::StoredOAuthTokens;
@@ -46,6 +52,7 @@ use crate::oauth::test_support::GatedKeyringStore;
 use crate::oauth::test_support::ReadOutcome;
 use crate::oauth::test_support::TempCodexHome;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_otel::auth_storage::AuthStorageOriginator;
 
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
 // Contention is proven by the tracing event emitted after a real WouldBlock. Keep the timeout
@@ -216,7 +223,7 @@ fn store_lock_is_released_when_holder_process_exits() -> Result<()> {
             env.path(),
             OAuthStore::File,
             Duration::from_millis(/*millis*/ 100),
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         ) {
             Ok(_) => {
                 anyhow::bail!("live holder process should keep the OAuth store lock unavailable")
@@ -236,7 +243,7 @@ fn store_lock_is_released_when_holder_process_exits() -> Result<()> {
             env.path(),
             OAuthStore::File,
             Duration::from_secs(/*secs*/ 1),
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         )?;
         Ok(())
     })();
@@ -256,7 +263,8 @@ fn store_lock_is_released_when_holder_process_exits_child() -> Result<()> {
         Some(path) => std::path::PathBuf::from(path),
         None => return Ok(()),
     };
-    let _lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
+    let _lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::File, OAuthStoreWriteOperation::Save)?;
     std::fs::write(ready_file, b"ready")?;
     loop {
         std::thread::sleep(Duration::from_secs(/*secs*/ 60));
@@ -357,7 +365,8 @@ fn oauth_credential_probes_skip_contended_file_and_secrets_stores() -> Result<()
     };
 
     {
-        let _lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
+        let _lock =
+            OAuthStoreLock::acquire_for_write(OAuthStore::File, OAuthStoreWriteOperation::Save)?;
         assert_eq!(reload(file, direct)?, None);
         assert_eq!(reload(auto, secrets)?, None);
         assert_eq!(probe(file, direct)?, None);
@@ -375,7 +384,8 @@ fn oauth_credential_probes_skip_contended_file_and_secrets_stores() -> Result<()
     let refreshed = refresh(&tokens.url)?.expect("the unlocked store should still contain tokens");
     assert!(!refreshed.store_was_contended());
 
-    let _lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
+    let _lock =
+        OAuthStoreLock::acquire_for_write(OAuthStore::Secrets, OAuthStoreWriteOperation::Save)?;
     assert_eq!(
         probe(auto, secrets)?,
         None,
@@ -440,7 +450,7 @@ where
             codex_home,
             store,
             Duration::from_millis(/*millis*/ 100),
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         )?;
         let (contended_tx, contended_rx) = mpsc::channel();
         let worker = scope.spawn(move || {
@@ -462,7 +472,29 @@ where
 
 #[test]
 fn aggregate_store_readers_share_access_while_writers_remain_exclusive() -> Result<()> {
+    // Isolate process-global metrics from other libtest cases, including under Bazel.
+    if std::env::var_os("CODEX_AUTH_STORAGE_TEST_CHILD").is_none() {
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                std::thread::current().name().unwrap(),
+                "--nocapture",
+            ])
+            .env("CODEX_AUTH_STORAGE_TEST_CHILD", "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
     let env = TempCodexHome::new();
+    let metrics = codex_otel::install_global_metrics(codex_otel::MetricsClient::new(
+        codex_otel::MetricsConfig::in_memory("test", "test", "1", Default::default())
+            .with_runtime_reader(),
+    )?);
 
     for store in [OAuthStore::File, OAuthStore::Secrets] {
         let readers = (0..2)
@@ -480,7 +512,7 @@ fn aggregate_store_readers_share_access_while_writers_remain_exclusive() -> Resu
             env.path(),
             store,
             Duration::from_millis(/*millis*/ 100),
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         ) {
             Ok(_) => anyhow::bail!("an active OAuth store reader must exclude writers"),
             Err(error) => error,
@@ -490,14 +522,201 @@ fn aggregate_store_readers_share_access_while_writers_remain_exclusive() -> Resu
             OAuthStoreLockFailure::Timeout { .. }
         ));
         drop(readers);
-        let _writer = OAuthStoreLock::acquire_in_with_mode(
+        let writer = OAuthStoreLock::acquire_in_with_mode(
             env.path(),
             store,
             Duration::from_millis(/*millis*/ 100),
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         )?;
+        // Busy and successful zero-deadline probes must not enter the waiting population.
+        assert!(matches!(
+            OAuthStoreLock::try_acquire_for_read(store),
+            Err(OAuthStoreLockFailure::Timeout { .. })
+        ));
+        drop(writer);
+        drop(OAuthStoreLock::try_acquire_for_read(store)?);
+
+        for mode in [
+            OAuthStoreLockMode::Shared,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
+        ] {
+            let path = env.path().to_path_buf();
+            drop(complete_after_store_lock_contention(
+                env.path(),
+                store,
+                || Ok(()),
+                move || {
+                    Ok(OAuthStoreLock::acquire_in_with_mode(
+                        &path,
+                        store,
+                        Duration::from_secs(/*secs*/ 1),
+                        mode,
+                    )?)
+                },
+            )?);
+        }
     }
 
+    // Pinned stores must retain their client even on a worker with another ambient originator.
+    let originator = AuthStorageOriginator::from_client_name("codex_vscode");
+    for source in [
+        originator.sync_scope(ResolvedOAuthCredentialStore::file),
+        originator
+            .sync_scope(|| ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Secrets)),
+    ] {
+        std::thread::spawn(move || {
+            AuthStorageOriginator::from_client_name("codex_cli").sync_scope(|| -> Result<()> {
+                let keyring = MockKeyringStore::default();
+                let tokens = sample_tokens();
+                source.save(&keyring, &tokens.server_name, &tokens)?;
+                source
+                    .load(&keyring, &tokens.server_name, &tokens.url)?
+                    .context("saved credential")?;
+                source.save_with_refresh_telemetry(
+                    &keyring,
+                    &tokens.server_name,
+                    Some(&tokens),
+                    &tokens,
+                )?;
+                source.retire_refresh_token_if_matches(
+                    &keyring,
+                    &tokens.server_name,
+                    &tokens.url,
+                    &tokens,
+                )?;
+                assert!(source.delete(&keyring, &tokens.server_name, &tokens.url)?);
+                Ok(())
+            })
+        })
+        .join()
+        .expect("storage worker should finish")?;
+    }
+
+    let snapshot = metrics.snapshot()?;
+    let mut actual = Vec::new();
+    for metric in snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+    {
+        if !metric.name().starts_with("codex.auth_storage.lock_") {
+            continue;
+        }
+        match metric.data() {
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => {
+                for point in sum.data_points() {
+                    actual.push((
+                        metric.name().to_owned(),
+                        point.value(),
+                        point
+                            .attributes()
+                            .map(|a| (a.key.to_string(), a.value.to_string()))
+                            .collect::<BTreeMap<_, _>>(),
+                    ));
+                }
+            }
+            AggregatedMetrics::F64(MetricData::Histogram(histogram)) => {
+                for point in histogram.data_points() {
+                    let tags = point
+                        .attributes()
+                        .map(|a| (a.key.to_string(), a.value.to_string()))
+                        .collect::<BTreeMap<_, _>>();
+                    if tags
+                        .get("outcome")
+                        .is_some_and(|outcome| outcome == "timeout")
+                    {
+                        assert!(
+                            point.sum() >= 100.0,
+                            "timeout wait must include the acquisition deadline"
+                        );
+                    }
+                    actual.push((metric.name().to_owned(), point.count(), tags));
+                }
+            }
+            other => panic!("unexpected metric: {other:?}"),
+        }
+    }
+    let mut expected = Vec::new();
+    for store in ["file", "secrets"] {
+        for name in [
+            "codex.auth_storage.lock_acquire",
+            "codex.auth_storage.lock_wait.duration",
+        ] {
+            for (mode, outcome, contended, count) in [
+                ("shared", "acquired", "false", 2),
+                ("exclusive", "timeout", "true", 1),
+                ("exclusive", "acquired", "false", 3),
+                ("shared", "acquired", "true", 1),
+                ("exclusive", "acquired", "true", 1),
+            ] {
+                expected.push((
+                    name.to_owned(),
+                    count,
+                    BTreeMap::from([
+                        ("store".into(), store.into()),
+                        ("lock_mode".into(), mode.into()),
+                        (
+                            "operation".into(),
+                            if mode == "shared" { "load" } else { "save" }.into(),
+                        ),
+                        ("originator".into(), "none".into()),
+                        ("outcome".into(), outcome.into()),
+                        ("contended".into(), contended.into()),
+                    ]),
+                ));
+            }
+        }
+        for (mode, count) in [("shared", 3), ("exclusive", 4)] {
+            expected.push((
+                "codex.auth_storage.lock_hold.duration".to_owned(),
+                count,
+                BTreeMap::from([
+                    ("store".into(), store.into()),
+                    ("lock_mode".into(), mode.into()),
+                    (
+                        "operation".into(),
+                        if mode == "shared" { "load" } else { "save" }.into(),
+                    ),
+                    ("originator".into(), "none".into()),
+                ]),
+            ));
+        }
+        for operation in ["load", "save", "delete", "retire_refresh_token"] {
+            let count = if operation == "save" { 2 } else { 1 };
+            let mut tags = BTreeMap::from([
+                ("store".into(), store.into()),
+                (
+                    "lock_mode".into(),
+                    if operation == "load" {
+                        "shared"
+                    } else {
+                        "exclusive"
+                    }
+                    .into(),
+                ),
+                ("operation".into(), operation.into()),
+                ("originator".into(), "codex_vscode".into()),
+            ]);
+            expected.push((
+                "codex.auth_storage.lock_hold.duration".to_owned(),
+                count,
+                tags.clone(),
+            ));
+            tags.extend([
+                ("outcome".into(), "acquired".into()),
+                ("contended".into(), "false".into()),
+            ]);
+            for name in [
+                "codex.auth_storage.lock_acquire",
+                "codex.auth_storage.lock_wait.duration",
+            ] {
+                expected.push((name.to_owned(), count, tags.clone()));
+            }
+        }
+    }
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+    metrics.shutdown()?;
     Ok(())
 }
 
@@ -622,7 +841,7 @@ async fn secrets_reads_release_the_file_lock_before_keyring_access() -> Result<(
             home.path(),
             OAuthStore::Secrets,
             Duration::ZERO,
-            OAuthStoreLockMode::Exclusive,
+            OAuthStoreLockMode::Exclusive(OAuthStoreWriteOperation::Save),
         )?;
         release.send(ReadOutcome::Stored)?;
         let result = reader.await??.expect("read captured the stored credential");

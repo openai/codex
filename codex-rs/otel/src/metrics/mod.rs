@@ -10,6 +10,7 @@ pub(crate) mod timer;
 pub(crate) mod validation;
 
 use crate::config::StatsigMetricsSettings;
+pub use crate::metrics::buffered::record_global_duration;
 pub use crate::metrics::buffered::record_global_operation;
 pub use crate::metrics::client::MetricsClient;
 pub use crate::metrics::config::MetricsConfig;
