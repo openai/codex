@@ -134,7 +134,9 @@ pub fn hook_key(
     )
 }
 
+pub use events::model_request::HookCharge;
 pub use events::model_request::ModelRequestHookEvent;
 pub use events::model_request::ModelRequestHookInput;
+pub use events::model_request::ModelRequestHookOutcome;
 pub use events::model_request::ModelRequestStatus;
 pub use events::model_request::SamplingKind;

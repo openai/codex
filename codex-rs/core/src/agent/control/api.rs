@@ -282,8 +282,12 @@ impl AgentControl for LocalAgentControl {
         self.execution_guard(version, source)
     }
 
-    fn record_usage(&self, usage: TokenUsage) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move { self.record_rollout_budget_usage(&usage) })
+    fn record_usage(
+        &self,
+        usage: Option<TokenUsage>,
+        hook_charge: codex_hooks::HookCharge,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move { self.record_rollout_budget_usage(usage.as_ref(), hook_charge) })
     }
 
     fn turn_finished<'a>(

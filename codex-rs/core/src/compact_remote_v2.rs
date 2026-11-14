@@ -1434,16 +1434,26 @@ mod tests {
             total_tokens: 120,
             ..Default::default()
         };
-        let stream = response_stream(vec![Err(CodexErr::new(
-            CodexErrorDetails::ResponseIncomplete(Box::new(
-                codex_protocol::error::ResponseIncompleteError {
+        let stream = response_stream(vec![SamplingEvent {
+            event: Err(CodexErr::new(CodexErrorDetails::ResponseIncomplete(
+                Box::new(codex_protocol::error::ResponseIncompleteError {
                     partial_output: vec![],
                     reason: "max_output_tokens".to_string(),
                     response_id: Some("resp-background".to_string()),
                     token_usage: Some(usage.clone()),
+                }),
+            ))),
+            hook_output: crate::client_common::SamplingCharge {
+                hooks: codex_hooks::ModelRequestHookOutcome {
+                    charge: codex_hooks::HookCharge {
+                        units: 3.0,
+                        overflowed: false,
+                    },
+                    invalid_price: Some("negative sibling price".into()),
                 },
-            )),
-        ))]);
+                ..Default::default()
+            },
+        }]);
         let (mut sess, turn_context, rx) =
             crate::session::tests::make_session_and_context_with_rx().await;
         let accounting = Arc::new(UsageRecorder {
@@ -1484,65 +1494,90 @@ mod tests {
             vec![AgentUsageReport {
                 thread_id: sess.thread_id(),
                 turn_id: turn_context.sub_id.clone(),
-                usage,
+                usage: Some(usage),
+                additional_budget_units: 3.0,
+                additional_budget_units_overflowed: false,
             }]
         );
     }
 
-    #[test_case::test_case(true, false; "background bills a complete response even without a summary")]
-    #[test_case::test_case(false, true; "turn interrupt discards a queued complete response")]
-    #[test_case::test_case(true, true; "session shutdown bills a queued complete response even without a summary")]
+    #[test_case::test_case(false, false, false; "foreground bills a complete response even without a summary")]
+    #[test_case::test_case(true, false, false; "background bills a complete response even without a summary")]
+    #[test_case::test_case(false, true, false; "turn interrupt discards a queued complete response")]
+    #[test_case::test_case(true, true, false; "session shutdown bills a queued complete response even without a summary")]
+    #[test_case::test_case(false, false, true; "a malformed sibling is still reported when valid spending exhausts the account")]
     #[tokio::test]
-    async fn collect_queued_complete_response(background: bool, interrupted: bool) {
+    async fn collect_queued_complete_response(
+        background: bool,
+        interrupted: bool,
+        bad_sibling: bool,
+    ) {
         let (mut sess, turn, _) = crate::session::tests::make_session_and_context_with_rx().await;
         let accounting = Arc::new(UsageRecorder {
             reports: Mutex::new(Vec::new()),
-            decision: UsageAccountingDecision::Continue,
+            decision: if bad_sibling {
+                UsageAccountingDecision::Exhausted
+            } else {
+                UsageAccountingDecision::Continue
+            },
         });
         accounting.install(&mut sess);
-        let usage = TokenUsage {
+        let provider_usage = interrupted.then(|| TokenUsage {
             output_tokens: 42,
             ..Default::default()
-        };
-        let stream = response_stream(vec![Ok(ResponseEvent::Completed {
-            response_id: "resp-compact".into(),
-            token_usage: Some(usage.clone()),
-            usage_metadata: None,
-            reasoning_removals: None,
-            end_turn: Some(true),
-        })]);
+        });
+        let stream = response_stream(vec![SamplingEvent {
+            event: Ok(ResponseEvent::Completed {
+                response_id: "resp-compact".into(),
+                token_usage: provider_usage.clone(),
+                usage_metadata: None,
+                reasoning_removals: None,
+                end_turn: Some(true),
+            }),
+            hook_output: crate::client_common::SamplingCharge {
+                hooks: codex_hooks::ModelRequestHookOutcome {
+                    charge: codex_hooks::HookCharge {
+                        units: 42.0,
+                        overflowed: false,
+                    },
+                    invalid_price: bad_sibling.then(|| "negative sibling price".into()),
+                },
+                ..Default::default()
+            },
+        }]);
         let cancellation = CancellationToken::new();
         if interrupted {
             cancellation.cancel();
         }
-        let result = collect_compaction_output(
-            &sess,
-            &turn,
-            stream,
-            if background {
-                CompactionRequestKind::Background(&cancellation)
-            } else {
-                CompactionRequestKind::Foreground(&cancellation)
-            },
-        )
-        .await;
-
-        if !background {
-            assert!(
-                matches!(result, Err(error) if matches!(error.details(), CodexErrorDetails::TurnAborted))
-            );
+        let kind = if background {
+            CompactionRequestKind::Background(&cancellation)
+        } else {
+            CompactionRequestKind::Foreground(&cancellation)
+        };
+        let result = collect_compaction_output(&sess, &turn, stream, kind).await;
+        let error = result.err().expect("no installable summary");
+        if interrupted && !background {
+            assert!(matches!(error.details(), CodexErrorDetails::TurnAborted));
             assert!(accounting.reports.lock().unwrap().is_empty());
             return;
         }
-        assert!(
-            matches!(result, Err(error) if matches!(error.details(), CodexErrorDetails::Fatal(_)))
-        );
+        if bad_sibling {
+            assert!(
+                matches!(error.details(), CodexErrorDetails::UsageAccountingFailed(message) if message.contains("negative sibling price"))
+            );
+        } else {
+            assert!(
+                matches!(error.details(), CodexErrorDetails::Fatal(message) if message.contains("exactly one compaction output"))
+            );
+        }
         assert_eq!(
             *accounting.reports.lock().unwrap(),
             [AgentUsageReport {
                 thread_id: sess.thread_id(),
                 turn_id: turn.sub_id.clone(),
-                usage,
+                usage: provider_usage,
+                additional_budget_units: 42.0,
+                additional_budget_units_overflowed: false,
             }]
         );
     }

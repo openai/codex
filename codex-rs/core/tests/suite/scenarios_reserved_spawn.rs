@@ -311,7 +311,7 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
         accounting.reports.lock().expect("usage reports").as_slice(),
         [report] if report.thread_id == child_id
             && report.turn_id == turn_id
-            && report.usage.total_tokens == 42
+            && report.usage.as_ref().is_some_and(|usage| usage.total_tokens == 42)
     ));
     let child_request = child_request.single_request();
     assert_eq!(child_request.body_json()["service_tier"], "flex");

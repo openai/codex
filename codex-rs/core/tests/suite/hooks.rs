@@ -6,6 +6,7 @@ use anyhow::Result;
 use codex_config::HookStateToml;
 use codex_config::McpServerConfig;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::AgentRuntimeOwnership;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
@@ -4593,19 +4594,12 @@ async fn local_bundled_cleanup_hook_runs_without_saved_trust(
             .features
             .disable(Feature::ExecutorCapabilityDiscovery)
             .expect("disable executor capability discovery");
-        let repl: McpServerConfig = serde_json::from_value(serde_json::json!({
-            "url": repl_url,
-            "environment_id": super::rmcp_client::remote_aware_environment_id(),
-        }))
-        .expect("valid MCP configuration");
-        config
-            .mcp_servers
-            .set(
-                [(String::from(mcp_server_name), repl)]
-                    .into_iter()
-                    .collect(),
-            )
-            .expect("configure MCP server");
+        configure_hook_mcp(
+            config,
+            mcp_server_name,
+            &repl_url,
+            &super::rmcp_client::remote_aware_environment_id(),
+        );
     });
     let test = builder.build_with_auto_env(&server).await?;
     assert!(!test.config.bypass_hook_trust);
@@ -6058,6 +6052,22 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     Ok(())
 }
 
+fn configure_hook_mcp(
+    config: &mut codex_core::config::Config,
+    name: &str,
+    url: &str,
+    environment_id: &str,
+) {
+    let server: McpServerConfig = serde_json::from_value(json!({
+        "url": url, "environment_id": environment_id,
+    }))
+    .expect("valid MCP configuration");
+    config
+        .mcp_servers
+        .set([(name.to_owned(), server)].into_iter().collect())
+        .expect("configure MCP server");
+}
+
 pub(super) fn write_lifecycle_hooks(home: &Path, events: &[&str]) -> Result<()> {
     let mut hooks = serde_json::Map::new();
     for event in events {
@@ -6190,6 +6200,7 @@ enum ToolDispatchCase {
     SyncHook,
     InterruptedHook,
     ExhaustedHook,
+    OverflowHook(AgentRuntimeOwnership),
 }
 
 #[test_case::test_case(ToolDispatchCase::Eager; "default runs the tool before the response ends")]
@@ -6198,6 +6209,8 @@ enum ToolDispatchCase {
 #[test_case::test_case(ToolDispatchCase::SyncHook; "streaming output and tools precede a synchronous hook")]
 #[test_case::test_case(ToolDispatchCase::InterruptedHook; "interrupt discards the held response and its charge")]
 #[test_case::test_case(ToolDispatchCase::ExhaustedHook; "the response bill blocks its own tool")]
+#[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Host); "the host receives an overflow lower bound and keeps its policy")]
+#[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Controller); "a native overflow closes even the largest allowance")]
 #[tokio::test]
 async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -6206,20 +6219,68 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
     use ToolDispatchCase::Eager;
     use ToolDispatchCase::ExhaustedHook;
     use ToolDispatchCase::InterruptedHook;
+    use ToolDispatchCase::OverflowHook;
     use ToolDispatchCase::SyncHook;
     const MARKER: &str = "tool-dispatched";
     const STREAMED: &str = "Still streaming.";
 
-    let buffered = matches!(case, AfterComplete | InterruptedHook | ExhaustedHook);
+    let buffered = matches!(
+        case,
+        AfterComplete | InterruptedHook | ExhaustedHook | OverflowHook(_)
+    );
     let hook_async = match case {
         Eager | AfterComplete => None,
         AsyncHook => Some(true),
-        SyncHook | InterruptedHook | ExhaustedHook => Some(false),
+        SyncHook | InterruptedHook | ExhaustedHook | OverflowHook(_) => Some(false),
     };
+    // The native controls both spend 98 of 100. Only the successful +3 price
+    // crosses the limit; the failed sibling's reported 999 never counts.
+    let price_tools: &[&str] = match case {
+        SyncHook => &["failed"],
+        InterruptedHook | ExhaustedHook => &["price", "failed"],
+        OverflowHook(_) => &["price", "second_price"],
+        _ => &[],
+    };
+    let pricing = if price_tools.is_empty() {
+        None
+    } else {
+        let server = start_mock_server().await;
+        mount_hook_mcp(&server, "billing", price_tools, move |params| {
+            if matches!(case, OverflowHook(_)) {
+                let output = if params["arguments"]["response_id"] == "first" {
+                    json!({"extra_codex_rollout_budget_units":1e308})
+                } else {
+                    json!({})
+                };
+                json!({"content":[], "structuredContent":output})
+            } else if params["name"] == "failed" {
+                json!({"isError":true, "content":[{"type":"text","text":"failed"}],
+                       "structuredContent":{"extra_codex_rollout_budget_units":999}})
+            } else {
+                // Turn B must report its own 3, not the interrupted first response's 31.
+                let units =
+                    if case == InterruptedHook && params["arguments"]["response_id"] != "second" {
+                        31
+                    } else {
+                        3
+                    };
+                json!({"content":[], "structuredContent":{"extra_codex_rollout_budget_units":units}})
+            }
+        })
+        .await;
+        Some(server)
+    };
+    let pricing_url = pricing
+        .as_ref()
+        .map(|server| format!("{}/repl", server.uri()));
     let (finish_stream, gate) = oneshot::channel();
     let mut completed = ev_completed_with_tokens("first", /*total_tokens*/ 42);
     completed["response"]["usage"]["codex_rollout_budget_units"] =
-        json!(if case == ExhaustedHook { 101 } else { 1 });
+        json!(if matches!(case, SyncHook | ExhaustedHook) {
+            98
+        } else {
+            1
+        });
     let first = vec![
         StreamingSseChunk {
             gate: None,
@@ -6243,9 +6304,16 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             body: sse_event(completed),
         },
     ];
+    let second_bill = if case == InterruptedHook {
+        let mut completed = ev_completed_with_tokens("second", /*total_tokens*/ 7);
+        completed["response"]["usage"]["codex_rollout_budget_units"] = json!(7);
+        completed
+    } else {
+        ev_completed("second")
+    };
     let second = vec![StreamingSseChunk {
         gate: None,
-        body: sse(vec![ev_response_created("second"), ev_completed("second")]),
+        body: sse(vec![ev_response_created("second"), second_bill]),
     }];
     let (server, _) = start_streaming_sse_server(vec![first, second]).await;
     let accounting = Arc::new(super::rollout_budget::HostAccounting::default());
@@ -6262,19 +6330,32 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
                 let post = format!(
                     r#"python3 -c 'import json, socket, sys; json.load(sys.stdin).get("response_id") == "first" and socket.create_connection(("127.0.0.1", {port})).recv(1)'"#
                 );
-                let hooks = json!({"PostModelRequest": [{"hooks": [{
+                let mut group = vec![json!({
                     "type": "command", "command": post, "async": hook_async,
-                }]}]});
+                })];
+                group.extend(price_tools.iter().map(|tool| json!({
+                    "type": "mcp_tool", "server": "billing", "tool": tool,
+                    "input": {"response_id": "${response_id}"}
+                })));
+                let hooks = json!({"PostModelRequest": [{"hooks": group}]});
                 fs::write(home.join("hooks.json"), json!({"hooks": hooks}).to_string())
                     .expect("write hook configuration");
             }
         })
         .with_config(move |config| {
+            if let Some(url) = &pricing_url {
+                configure_hook_mcp(config, "billing", url, codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+            }
             if hook_async.is_some() {
                 trust_discovered_hooks(config);
             }
             if matches!(case, Eager | SyncHook | ExhaustedHook) {
                 config.rollout_budget = Some(super::rollout_budget::rollout_budget());
+            }
+            if case == OverflowHook(AgentRuntimeOwnership::Controller) {
+                let mut budget = super::rollout_budget::rollout_budget();
+                budget.limit_budget = f64::MAX;
+                config.rollout_budget = Some(budget);
             }
             // The builder changes cwd after loading config, so bind the write grant to that cwd.
             config.workspace_roots = vec![config.cwd.clone()];
@@ -6283,7 +6364,10 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             config.permissions.set_permission_profile(restrictive_workspace_write_profile())
                 .expect("allow the fixture's patch inside its temporary workspace");
         });
-    if case == InterruptedHook {
+    if matches!(
+        case,
+        InterruptedHook | OverflowHook(AgentRuntimeOwnership::Host)
+    ) {
         let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
         extensions.thread_lifecycle_contributor(accounting.clone());
         builder = builder.with_extensions(Arc::new(extensions.build()));
@@ -6368,39 +6452,105 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             stopped.run.status_message.as_deref(),
             Some("Hook cancelled because the turn was interrupted"),
         );
-        drop(held_hook);
-        assert!(!marker.exists());
-        let server = start_mock_server().await;
-        let requests = mount_sse_once(&server, responses::sse_completed("resumed")).await;
-        let resumed = test_codex().restart(&server, &test).await?;
-        resumed.submit_turn("continue after interrupt").await?;
-        assert!(
-            !requests
-                .single_request()
-                .input()
-                .iter()
-                .any(|item| item["call_id"] == "call")
-        );
-        assert!(accounting.reports.lock().expect("usage reports").is_empty());
-        return Ok(());
-    }
-    drop(held_hook);
-    if case == ExhaustedHook {
-        let error = wait_for_event_match(&test.codex, |event| match event {
-            EventMsg::Error(error) => Some(error.clone()),
+        // Start and finish B before releasing A's hook gate. A's unread
+        // response must never publish its output or charge either turn.
+        let codex_core::TurnInputSubmission::Started { turn_id, .. } = test
+            .codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "continue after interrupt".into(),
+                text_elements: vec![],
+            }]))
+            .await?
+        else {
+            anyhow::bail!("expected a new turn B");
+        };
+        let done = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::TurnComplete(done) if done.turn_id == turn_id => Some(done.clone()),
             _ => None,
         })
         .await;
+        assert!(done.error.is_none(), "B failed: {:?}", done.error);
+        drop(held_hook);
+        assert!(!marker.exists());
+        test.codex.ensure_rollout_materialized().await;
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        assert!(!history.items.iter().any(|item| {
+            let RolloutItem::ResponseItem(envelope) = item else { return false; };
+            match &envelope.item {
+                ResponseItem::CustomToolCall { call_id, .. }
+                | ResponseItem::CustomToolCallOutput { call_id, .. } => call_id == "call",
+                ResponseItem::Message { role, content, .. } => role == "assistant"
+                    && content.iter().any(|part| matches!(part, ContentItem::OutputText { text, .. } if text == STREAMED)),
+                _ => false,
+            }
+        }));
+        let reports = accounting.reports.lock().expect("usage reports");
+        let [bill] = reports.as_slice() else {
+            anyhow::bail!("expected only B's bill: {reports:?}");
+        };
+        assert_eq!(bill.turn_id, turn_id);
         assert_eq!(
-            error.codex_error_info,
-            Some(codex_protocol::protocol::CodexErrorInfo::SessionBudgetExceeded)
+            bill.usage
+                .as_ref()
+                .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
+                .and_then(serde_json::Number::as_f64),
+            Some(7.0)
         );
+        assert_eq!(bill.additional_budget_units, 3.0);
+        return Ok(());
     }
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
+    drop(held_hook);
+    let done = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(done) => Some(done.clone()),
+        _ => None,
     })
     .await;
+    if let OverflowHook(owner) = case {
+        assert!(
+            done.error
+                .is_some_and(|error| error.message.contains("total hook cost exceeds f64 range"))
+        );
+        assert!(!marker.exists());
+        if owner == AgentRuntimeOwnership::Host {
+            let reports = accounting.reports.lock().expect("usage reports");
+            let [bill] = reports.as_slice() else {
+                anyhow::bail!("expected one partial bill: {reports:?}");
+            };
+            assert_eq!(bill.additional_budget_units, 1e308);
+            assert!(bill.additional_budget_units_overflowed);
+            assert_eq!(
+                bill.usage
+                    .as_ref()
+                    .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
+                    .and_then(serde_json::Number::as_f64),
+                Some(1.0)
+            );
+        }
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "try the next turn".into(),
+                text_elements: vec![],
+            }]))
+            .await?;
+        let done = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::TurnComplete(done) => Some(done.clone()),
+            _ => None,
+        })
+        .await;
+        match owner {
+            AgentRuntimeOwnership::Host => assert!(done.error.is_none()),
+            AgentRuntimeOwnership::Controller => assert_eq!(
+                done.error.and_then(|error| error.codex_error_info),
+                Some(codex_protocol::protocol::CodexErrorInfo::SessionBudgetExceeded),
+            ),
+        }
+        return Ok(());
+    }
     if case == ExhaustedHook {
+        assert_eq!(
+            done.error.and_then(|error| error.codex_error_info),
+            Some(codex_protocol::protocol::CodexErrorInfo::SessionBudgetExceeded)
+        );
         assert!(!marker.exists());
         test.codex.ensure_rollout_materialized().await;
         let history = test.codex.load_history(/*include_archived*/ false).await?;
@@ -6428,6 +6578,11 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             ["tool call", "assistant message", "aborted before dispatch"]
         );
     } else {
+        assert!(
+            done.error.is_none(),
+            "unexpected turn error: {:?}",
+            done.error
+        );
         assert_eq!(fs::read_to_string(marker)?, "ran\n");
     }
     Ok(())

@@ -17,9 +17,10 @@ pub struct HookMcpCall {
     pub timeout: Duration,
 }
 
-/// Text returned by an MCP hook and the callable namespace that supplied it.
+/// The MCP hook's text, structured result, and originating callable namespace.
 pub struct HookMcpOutput {
     pub text: String,
+    pub structured_content: Option<serde_json::Value>,
     pub source_tool_namespace: Option<String>,
 }
 

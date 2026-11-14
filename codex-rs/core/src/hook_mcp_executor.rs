@@ -61,6 +61,7 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
             }
 
             Ok(HookMcpOutput {
+                structured_content: result.structured_content,
                 text,
                 source_tool_namespace: call_result.source_tool_namespace,
             })

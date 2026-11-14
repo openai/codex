@@ -118,6 +118,7 @@ fn handler() -> ConfiguredHandler {
 
 fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
     HandlerRunResult {
+        structured_content: None,
         context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
         started_at: 1,
         completed_at: 2,

@@ -51,11 +51,28 @@ impl RolloutBudget {
     }
 
     /// Records usage and returns whether an enforced budget is exhausted.
-    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> CodexResult<bool> {
+    pub(crate) fn record_usage(
+        &self,
+        usage: Option<&TokenUsage>,
+        hook_charge: codex_hooks::HookCharge,
+    ) -> CodexResult<bool> {
         let Some(mut state) = self.lock() else {
             return Ok(false);
         };
-        let units = if let Some(units) = usage.codex_rollout_budget_units.as_ref() {
+        if !hook_charge.units.is_finite() || hook_charge.units < 0.0 {
+            return Err(CodexErr::Fatal("invalid rollout budget charge".into()));
+        }
+        if hook_charge.overflowed {
+            // All allowances are finite. No future nonnegative receipt can make
+            // this total representable; the remaining allowance is known to be zero.
+            state.posted.add(f64::INFINITY);
+            if state.config.enforce_limit {
+                self.stop_new_tools();
+            }
+        }
+        let provider_units = if let Some(units) =
+            usage.and_then(|usage| usage.codex_rollout_budget_units.as_ref())
+        {
             let units = units.as_f64().unwrap_or(f64::NAN);
             if !units.is_finite() || units < 0.0 {
                 return Err(CodexErr::Fatal(
@@ -64,15 +81,26 @@ impl RolloutBudget {
                 ));
             }
             units
-        } else {
+        } else if let Some(usage) = usage {
             usage.output_tokens.max(0) as f64 * state.config.sampling_token_weight
                 + usage.non_cached_input() as f64 * state.config.prefill_token_weight
+        } else {
+            0.0
         };
-        state.posted.add(units);
+        if state.posted.total().is_infinite() {
+            return Ok(state.config.enforce_limit);
+        }
+        state.posted.add(provider_units);
+        state.posted.add(hook_charge.units);
+        if !state.posted.total().is_finite() {
+            if state.config.enforce_limit {
+                self.stop_new_tools();
+            }
+            return Err(CodexErr::Fatal("invalid rollout budget charge".into()));
+        }
         // Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
         let exhausted = state.config.enforce_limit
-            && (state.posted.total().is_infinite()
-                || state.posted.total() > state.config.limit_budget.next_up());
+            && state.posted.total() > state.config.limit_budget.next_up();
         if exhausted {
             self.stop_new_tools();
         }

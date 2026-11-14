@@ -1,4 +1,6 @@
-//! Observation-only lifecycle hooks. Output is logged, never interpreted as control flow.
+//! Sampling hooks observe attempts. Successful synchronous MCP post-hooks can
+//! add a price to a completed response or to provider-reported incomplete usage.
+use codex_protocol::BudgetUnitsSum;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -8,6 +10,7 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use serde::Deserialize;
 use serde::Serialize;
 
 use super::common;
@@ -157,19 +160,55 @@ pub(crate) fn preview(
     .collect()
 }
 
+/// One response's successful hook prices. On overflow, units is a finite
+/// subtotal of real contributions, not the price of the entire response.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HookCharge {
+    pub units: f64,
+    pub overflowed: bool,
+}
+
+/// A failed observer does not erase prices reported by successful siblings.
+#[derive(Debug, Default)]
+pub struct ModelRequestHookOutcome {
+    pub charge: HookCharge,
+    pub invalid_price: Option<String>,
+}
+
+/// Structured MCP output from a synchronous post-hook. Omitted units add zero
+/// to the provider's charge.
+#[derive(Deserialize)]
+struct PostHookOutput {
+    #[serde(default)]
+    extra_codex_rollout_budget_units: f64,
+}
+
+type ReportedPrice = Result<f64, String>;
+
 pub(crate) async fn run(
     engine: &ClaudeHooksEngine,
     request: ModelRequestHookInput,
     on_completed: impl FnMut(&HookCompletedEvent) + Send,
-) -> Vec<HookCompletedEvent> {
+) -> (Vec<HookCompletedEvent>, ModelRequestHookOutcome) {
     let matched = dispatcher::select_handlers(
         &engine.handlers,
         request.event.hook_event(),
         /*matcher_input*/ None,
     );
     if matched.is_empty() {
-        return Vec::new();
+        return Default::default();
     }
+    let billable = matches!(
+        request.event,
+        ModelRequestHookEvent::PostModelRequest {
+            status: ModelRequestStatus::Completed,
+            ..
+        } | ModelRequestHookEvent::PostModelRequest {
+            status: ModelRequestStatus::Failed,
+            token_usage: Some(_),
+            ..
+        }
+    );
     let input = match serde_json::to_value(&request) {
         Ok(input) => input,
         Err(error) => {
@@ -181,10 +220,12 @@ pub(crate) async fn run(
             for event in &mut events {
                 identify_run(&mut event.run, request.lifecycle_id);
             }
-            return events;
+            return (events, Default::default());
         }
     };
-    dispatcher::execute_handlers_with_progress(
+    // The dispatcher returns synchronous results in configuration order. Prices
+    // become visible together, only after the entire group finishes.
+    let results = dispatcher::execute_handlers_with_progress(
         engine,
         matched,
         &input,
@@ -198,17 +239,40 @@ pub(crate) async fn run(
         },
         on_completed,
     )
-    .await
-    .into_iter()
-    .map(|result| result.completed)
-    .collect()
+    .await;
+    let mut outcome = ModelRequestHookOutcome::default();
+    let mut reported_units = BudgetUnitsSum::default();
+    let mut largest_price = 0.0_f64;
+    let mut events = Vec::with_capacity(results.len());
+    for result in results {
+        if billable && let Some(price) = result.data {
+            match price {
+                Ok(units) => {
+                    largest_price = largest_price.max(units);
+                    reported_units.add(units);
+                }
+                Err(error) => outcome.invalid_price = Some(error),
+            }
+        }
+        events.push(result.completed);
+    }
+    outcome.charge.units = reported_units.total();
+    if !outcome.charge.units.is_finite() {
+        // An individual price is a real lower bound, even if earlier f64 additions rounded up.
+        outcome.charge = HookCharge {
+            units: largest_price,
+            overflowed: true,
+        };
+        outcome.invalid_price = Some("total hook cost exceeds f64 range".into());
+    }
+    (events, outcome)
 }
 
 fn parse_completed(
     handler: &ConfiguredHandler,
     result: HandlerRunResult,
     turn_id: Option<String>,
-) -> dispatcher::ParsedHandler<()> {
+) -> dispatcher::ParsedHandler<Option<ReportedPrice>> {
     let status = if result.error.is_none() && result.exit_code == Some(0) {
         HookRunStatus::Completed
     } else {
@@ -231,12 +295,39 @@ fn parse_completed(
             text: error.clone(),
         });
     }
+    let price = if status == HookRunStatus::Completed {
+        result
+            .structured_content
+            .as_ref()
+            .filter(|body| !body.is_null())
+            .map(|body| {
+                if !body.is_object() {
+                    return Err("post-hook structuredContent must be an object or null".into());
+                }
+                let output: PostHookOutput =
+                    serde_path_to_error::deserialize(body).map_err(|error| {
+                        // Serde's underlying error can contain the raw hook value.
+                        format!("invalid post-hook structuredContent.{}", error.path())
+                    })?;
+                let units = output.extra_codex_rollout_budget_units;
+                if units.is_finite() && units >= 0.0 {
+                    Ok(units)
+                } else {
+                    Err(
+                        "hook extra_codex_rollout_budget_units must be finite and nonnegative"
+                            .into(),
+                    )
+                }
+            })
+    } else {
+        None
+    };
     dispatcher::ParsedHandler {
         completed: HookCompletedEvent {
             turn_id,
             run: dispatcher::completed_summary(handler, &result, status, entries),
         },
-        data: (),
+        data: price,
         completion_order: 0,
     }
 }

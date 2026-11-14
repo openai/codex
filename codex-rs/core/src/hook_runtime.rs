@@ -1133,10 +1133,11 @@ async fn run_model_request_hooks(
     step: &StepContext,
     hooks: &codex_hooks::Hooks,
     request: codex_hooks::ModelRequestHookInput,
-) {
+) -> codex_hooks::ModelRequestHookOutcome {
     emit_hook_started_events(session, &step.turn, hooks.preview_model_request(&request)).await;
-    let events = hooks.run_model_request(request, |_| {}).await;
+    let (events, outcome) = hooks.run_model_request(request, |_| {}).await;
     emit_hook_completed_events(session, &step.turn, events).await;
+    outcome
 }
 
 #[cfg(test)]

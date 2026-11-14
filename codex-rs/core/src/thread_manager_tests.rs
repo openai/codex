@@ -1976,10 +1976,13 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .session
         .services
         .agent_control
-        .record_usage(TokenUsage {
-            output_tokens: 25,
-            ..Default::default()
-        })
+        .record_usage(
+            Some(TokenUsage {
+                output_tokens: 25,
+                ..Default::default()
+            }),
+            codex_hooks::HookCharge::default(),
+        )
         .await
         .expect("record reviewer usage");
     let reminder = parent

@@ -87,18 +87,23 @@ impl ResponseDelivery {
             let owner = attempt.owner_cancellation.clone();
             attempt.start_post_hooks(report).map(|hooks| (owner, hooks))
         });
-        if let Some((owner, hooks)) = hooks {
+        let hook_output = if let Some((owner, hooks)) = hooks {
             tokio::select! {
                 biased;
                 () = tx.closed() => return false,
                 () = owner.cancelled() => return false,
-                () = hooks => {}
+                output = hooks => output,
             }
-        }
+        } else {
+            Default::default()
+        };
         self.attempt = None;
         let terminal = SamplingEvent {
             event,
-            hook_output: Default::default(),
+            hook_output: crate::client_common::SamplingCharge {
+                hooks: hook_output,
+                ..Default::default()
+            },
         };
         let released = self.release(terminal, tx).await;
         match released {

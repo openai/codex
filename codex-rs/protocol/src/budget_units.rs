@@ -1,4 +1,5 @@
-//! Numerical accounting for nonnegative rollout-budget units.
+//! Numerical accounting for nonnegative rollout-budget units. The same sum is
+//! used for one response's hook contributions and for the rollout's posted bills.
 
 /// Accumulate validated, nonnegative `f64` charges without dropping every small
 /// contribution after a large one. An unrepresentable total stays infinite.

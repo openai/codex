@@ -382,7 +382,10 @@ impl Hooks {
         &self,
         request: crate::ModelRequestHookInput,
         on_completed: impl FnMut(&HookCompletedEvent) + Send,
-    ) -> Vec<HookCompletedEvent> {
+    ) -> (
+        Vec<codex_protocol::protocol::HookCompletedEvent>,
+        crate::ModelRequestHookOutcome,
+    ) {
         crate::events::model_request::run(&self.engine, request, on_completed).await
     }
 }

@@ -268,6 +268,7 @@ pub(crate) async fn run_command(
             Err(error) => (None, String::new(), String::new(), Some(error.to_string())),
         };
         return HandlerRunResult {
+            structured_content: None,
             context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
             started_at,
             completed_at: chrono::Utc::now().timestamp(),
@@ -432,6 +433,7 @@ fn finish_command_run(
 ) -> HandlerRunResult {
     Span::current().record("hook.command_outcome", completion.outcome);
     HandlerRunResult {
+        structured_content: None,
         context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
         started_at,
         completed_at: chrono::Utc::now().timestamp(),

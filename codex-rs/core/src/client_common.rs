@@ -121,13 +121,14 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
     }
 }
 
-/// Records whether the response producer has posted the bill.
+/// Carries the hook price and whether the response producer has posted the bill.
 #[derive(Debug, Default)]
 pub(crate) struct SamplingCharge {
+    pub(crate) hooks: codex_hooks::ModelRequestHookOutcome,
     pub(crate) posted: bool,
 }
 
-/// Core consumes a terminal event together with its billing status. Other readers
+/// Core consumes a terminal event and its hook output together. Other readers
 /// of the public response stream still see the provider's unmodified event.
 #[derive(Debug)]
 pub(crate) struct SamplingEvent {
@@ -135,7 +136,8 @@ pub(crate) struct SamplingEvent {
     pub(crate) hook_output: SamplingCharge,
 }
 
-/// Provider usage and billing status for one response.
+/// The provider's usage and the hook's contribution describe the same
+/// response. Keeping them separate preserves the provider's original numbers.
 #[derive(Debug)]
 pub(crate) struct SamplingUsage {
     pub(crate) provider: Option<codex_protocol::protocol::TokenUsage>,
@@ -161,7 +163,7 @@ impl From<Result<ResponseEvent>> for SamplingEvent {
     }
 }
 
-/// A sampling consumer receives the billing status with the provider event.
+/// A sampling consumer receives the hook outcome with the provider event it settles.
 pub(crate) struct SamplingStream {
     pub(crate) routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     pub(crate) rx_event: mpsc::Receiver<SamplingEvent>,

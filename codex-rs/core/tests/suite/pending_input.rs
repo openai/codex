@@ -1732,7 +1732,7 @@ async fn steer_interrupts_and_drains_websocket(
         .lock()
         .expect("usage reports")
         .iter()
-        .filter_map(|report| report.usage.codex_rollout_budget_units.as_ref())
+        .filter_map(|report| report.usage.as_ref()?.codex_rollout_budget_units.as_ref())
         .map(serde_json::Number::as_i64)
         .collect::<Vec<_>>();
     assert_eq!(billed_units, [Some(17)]);

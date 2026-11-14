@@ -5,14 +5,18 @@ use codex_protocol::error::Result;
 use codex_protocol::protocol::TokenUsage;
 use futures::future::BoxFuture;
 
-/// Provider-reported spending for one response, including compaction.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Spending reported for one model response, including compaction.
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentUsageReport {
     pub thread_id: ThreadId,
     pub turn_id: String,
     /// Per-response usage, not cumulative totals. Remote adapters must explicitly
     /// carry `codex_rollout_budget_units`, which `TokenUsage` skips when serialized.
-    pub usage: TokenUsage,
+    pub usage: Option<TokenUsage>,
+    /// Synchronous post-hook contributions, independent of the provider's usage.
+    pub additional_budget_units: f64,
+    /// If f64 summation overflowed, this is the largest individual hook price, not the total.
+    pub additional_budget_units_overflowed: bool,
 }
 
 /// Both decisions mean the host recorded the reported spending.

@@ -9,8 +9,16 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
 
 impl LocalAgentControl {
-    pub(crate) fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
-        if self.runtime.rollout_budget.record_usage(usage)? {
+    pub(crate) fn record_rollout_budget_usage(
+        &self,
+        usage: Option<&TokenUsage>,
+        hook_charge: codex_hooks::HookCharge,
+    ) -> CodexResult<()> {
+        if self
+            .runtime
+            .rollout_budget
+            .record_usage(usage, hook_charge)?
+        {
             return Err(CodexErr::SessionBudgetExceeded);
         }
         Ok(())

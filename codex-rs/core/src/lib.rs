@@ -180,6 +180,7 @@ pub use agent::host::PreparedChildContext;
 pub use agent::host::RestrictRootCapabilities;
 pub use agent::host::ToolInvocationContext;
 pub use agent::host::UsageAccountingDecision;
+pub use codex_hooks::HookCharge;
 pub use thread_spawn::ThreadCreateRequest;
 pub use thread_spawn::ThreadSpawnError;
 pub use thread_spawn::ThreadSpawnResult;

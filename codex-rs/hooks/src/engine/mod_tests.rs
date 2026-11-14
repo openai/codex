@@ -2305,6 +2305,7 @@ impl HookMcpExecutor for StaticMcpExecutor {
             self.calls.lock().expect("lock MCP calls").push(call);
             Ok(HookMcpOutput {
                 text: output,
+                structured_content: None,
                 source_tool_namespace: None,
             })
         }
@@ -2800,6 +2801,7 @@ async fn executor_stop_hooks_do_not_delay_stop_completion() {
                 self.release.notified().await;
                 Ok(HookMcpOutput {
                     text: String::new(),
+                    structured_content: None,
                     source_tool_namespace: None,
                 })
             }

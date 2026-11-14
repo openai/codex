@@ -31,6 +31,7 @@ impl HookMcpExecutor for RecordingExecutor {
         async move {
             self.calls.lock().expect("lock calls").push(call);
             Ok(HookMcpOutput {
+                structured_content: None,
                 text: self.output.clone(),
                 source_tool_namespace: Some("security".into()),
             })

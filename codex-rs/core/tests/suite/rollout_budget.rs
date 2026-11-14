@@ -378,12 +378,15 @@ async fn subagent_usage_draws_from_the_shared_budget(host_accounting: bool) -> R
     .await;
     if host_accounting {
         let mut reports = accounting.reports.lock().expect("usage reports").clone();
-        reports.sort_by_key(|report| report.usage.total_tokens);
+        reports.sort_by_key(|report| report.usage.as_ref().expect("provider usage").total_tokens);
         let root_thread_id = test.session_configured.thread_id;
         assert_eq!(
             reports
                 .iter()
-                .map(|report| (report.thread_id, report.usage.total_tokens))
+                .map(|report| (
+                    report.thread_id,
+                    report.usage.as_ref().expect("provider usage").total_tokens
+                ))
                 .collect::<Vec<_>>(),
             [
                 (root_thread_id, 10),
@@ -618,7 +621,14 @@ async fn compaction_accounting_errors_fail_without_retry(
         let reports = accounting.reports.lock().expect("usage reports");
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].thread_id, test.session_configured.thread_id);
-        assert_eq!(reports[0].usage.total_tokens, 10);
+        assert_eq!(
+            reports[0]
+                .usage
+                .as_ref()
+                .expect("provider usage")
+                .total_tokens,
+            10
+        );
     }
 
     Ok(())
@@ -802,7 +812,7 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
         vec![AgentUsageReport {
             thread_id: test.session_configured.thread_id,
             turn_id: completed.turn_id,
-            usage: TokenUsage {
+            usage: Some(TokenUsage {
                 input_tokens: 60,
                 cached_input_tokens: 40,
                 output_tokens: 15,
@@ -812,7 +822,9 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
                     serde_json::Number::from_f64(40.5).expect("finite budget units"),
                 ),
                 ..Default::default()
-            },
+            }),
+            additional_budget_units: 0.0,
+            additional_budget_units_overflowed: false,
         }]
     );
     Ok(())

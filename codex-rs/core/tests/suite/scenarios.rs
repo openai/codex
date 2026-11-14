@@ -4746,7 +4746,12 @@ async fn async_compaction_reuses_pending_work(
             .lock()
             .expect("usage reports")
             .iter()
-            .any(|report| report.usage.total_tokens == BACKGROUND_TOKENS);
+            .any(|report| {
+                report
+                    .usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.total_tokens == BACKGROUND_TOKENS)
+            });
         release_post.send(()).expect("release the compaction hook");
         assert!(
             !billed_while_held,
@@ -4802,7 +4807,12 @@ async fn async_compaction_reuses_pending_work(
         let reports = accounting.reports.lock().expect("usage reports");
         let charged_turns: Vec<_> = reports
             .iter()
-            .filter(|report| report.usage.total_tokens == BACKGROUND_TOKENS)
+            .filter(|report| {
+                report
+                    .usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.total_tokens == BACKGROUND_TOKENS)
+            })
             .map(|report| &report.turn_id)
             .collect();
         assert_eq!(charged_turns, [&usage("seed").turn_id]);
