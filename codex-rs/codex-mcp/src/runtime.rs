@@ -87,6 +87,13 @@ pub enum McpStartupPolicy {
     DeferCachedServers,
 }
 
+/// Startup behavior for a host-requested MCP tool call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum McpToolStartup {
+    Wait,
+    SkipDormantReplCleanup,
+}
+
 /// A host-requested tool result and its identity in the published MCP catalog.
 pub struct McpToolCallResult {
     pub result: CallToolResult,
@@ -883,8 +890,8 @@ impl McpRuntime {
     }
 
     /// Calls a tool for the host, retaining attribution while its catalogs stay unchanged.
-    /// Waiting calls capture a binding after the selected server starts; non-waiting calls
-    /// use the cached binding. Missing or changed catalogs leave the namespace unknown.
+    /// Capture a binding after the selected server starts. Missing or changed catalogs leave
+    /// the namespace unknown.
     #[allow(clippy::too_many_arguments)]
     pub async fn latest_call_tool(
         &self,
@@ -894,18 +901,30 @@ impl McpRuntime {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
-        wait_for_server: bool,
+        startup: McpToolStartup,
     ) -> anyhow::Result<McpToolCallResult> {
         let current = self.current.load_full();
         let server_key =
             current
                 .connections
                 .resolve_tool_call_server(server, tool, environment_id)?;
-        let attribution = if wait_for_server
-            && current
-                .connections
-                .wait_for_server_startup(server_key)
-                .await
+        if startup == McpToolStartup::SkipDormantReplCleanup
+            && current.connections.is_dormant_private_stdio(server_key)
+        {
+            return Ok(McpToolCallResult {
+                result: CallToolResult {
+                    content: Vec::new(),
+                    structured_content: None,
+                    is_error: None,
+                    meta: None,
+                },
+                source_tool_namespace: None,
+            });
+        }
+        let attribution = if current
+            .connections
+            .wait_for_server_startup(server_key)
+            .await
             && let Some(revisions) = current
                 .connections
                 .stable_catalog_revisions(
@@ -939,7 +958,7 @@ impl McpRuntime {
                 arguments,
                 meta,
                 requested_timeout,
-                wait_for_server,
+                /*wait_for_server*/ true,
             )
             .await?;
         // Host calls use live connections, unlike model calls pinned to a binding.

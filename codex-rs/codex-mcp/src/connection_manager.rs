@@ -233,6 +233,13 @@ impl McpServerConnection {
             .as_ref()
             .is_some_and(|startup_trigger| !*startup_trigger.borrow())
     }
+
+    fn is_dormant_and_private(&self) -> bool {
+        self.startup_is_dormant()
+            && !self.client.cancel_token.is_cancelled()
+            && self.client.connection_slot.is_none()
+            && self.legacy_fallback.is_none()
+    }
 }
 
 impl Drop for McpServerConnection {
@@ -1461,6 +1468,27 @@ impl McpConnectionSet {
         }
         self.validate_tool_call(server_key, tool)?;
         Ok(server_key)
+    }
+
+    /// A private, configured local helper whose startup gate is still closed has no process.
+    pub(crate) fn is_dormant_private_stdio(&self, key: &McpServerKey) -> bool {
+        let view = &self.servers[key];
+        if !view.connection.is_dormant_and_private()
+            || view.protocol_mode != McpProtocolMode::Legacy
+        {
+            return false;
+        }
+        self.config
+            .as_ref()
+            .and_then(|config| config.mcp_server_catalog.server(key))
+            .is_some_and(|server| {
+                matches!(server.source(), McpServerSource::Config)
+                    && server.config().is_local_environment()
+                    && matches!(
+                        server.config().transport,
+                        McpServerTransportConfig::Stdio { .. }
+                    )
+            })
     }
 
     /// Validates an exact client target before startup or execution.

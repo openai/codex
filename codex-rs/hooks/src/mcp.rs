@@ -7,6 +7,8 @@ use serde_json::Value;
 /// One MCP tool call requested by a configured hook handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookMcpCall {
+    /// A bundled REPL cleanup may skip a private local transport whose startup was never requested.
+    pub skip_dormant_repl_cleanup: bool,
     pub server: String,
     pub tool: String,
     pub environment_id: Option<String>,

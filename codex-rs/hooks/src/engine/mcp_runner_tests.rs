@@ -134,6 +134,7 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
     assert_eq!(
         *calls.lock().expect("lock calls"),
         vec![HookMcpCall {
+            skip_dormant_repl_cleanup: false,
             server: "security".to_string(),
             tool: "scan".to_string(),
             environment_id: None,

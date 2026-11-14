@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::models::ContentItemMetadata;
 use regex::Regex;
 use serde_json::Map;
@@ -73,6 +74,9 @@ pub(crate) async fn run_mcp_tool(
         }
         executor
             .execute(HookMcpCall {
+                skip_dormant_repl_cleanup: handler.builtin
+                    && is_node_repl_backed_server(server)
+                    && tool == "turn_ended",
                 server: server.to_string(),
                 tool: tool.to_string(),
                 environment_id,

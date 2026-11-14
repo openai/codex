@@ -684,6 +684,71 @@ async fn stalled_apps_client_publication_expires_at_the_configured_startup_timeo
 }
 
 #[tokio::test]
+async fn cleanup_skips_only_an_unrequested_private_local_stdio_connection() {
+    let name = "node_repl";
+    let key = McpServerKey::unscoped(name);
+    let mut manager = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true);
+    manager.insert_test_client(name, create_ready_async_managed_client(Vec::new()).await);
+    let (trigger, _receiver) = watch::channel(false);
+    Arc::get_mut(
+        &mut manager
+            .servers
+            .get_mut(&key)
+            .expect("registered REPL view")
+            .connection,
+    )
+    .expect("unique test connection")
+    .startup_trigger = Some(trigger.clone());
+    let stdio: McpServerConfig =
+        serde_json::from_value(serde_json::json!({"command":"test-helper"}))
+            .expect("valid test stdio config");
+    let http = reusable_server_config("https://example.com/mcp");
+    let mut remote = stdio.clone();
+    remote.environment_id = "remote".to_string();
+    let configured = |config| crate::McpServerRegistration::from_config(name.to_string(), config);
+    let plugin = crate::McpServerRegistration::from_plugin(
+        name.to_string(),
+        crate::McpPluginAttribution::new("other@example".into(), "Other".into()),
+        /*plugin_order*/ 0,
+        stdio.clone(),
+    );
+    for (registration, expected) in [
+        (configured(http), false),
+        (configured(remote), false),
+        (plugin, false),
+        (configured(stdio), true),
+    ] {
+        let mut runtime_config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
+        let mut catalog = crate::ResolvedMcpCatalog::builder();
+        catalog.register(registration);
+        runtime_config.mcp_server_catalog = catalog.build();
+        manager.config = Some(Arc::new(runtime_config));
+        assert_eq!(manager.is_dormant_private_stdio(&key), expected);
+    }
+    let view = manager.servers.get_mut(&key).expect("registered REPL view");
+    view.protocol_mode = crate::McpProtocolMode::V20260728;
+    assert!(!manager.is_dormant_private_stdio(&key));
+    let view = manager.servers.get_mut(&key).expect("registered REPL view");
+    view.protocol_mode = crate::McpProtocolMode::Legacy;
+    Arc::get_mut(&mut view.connection)
+        .expect("unique test connection")
+        .client
+        .connection_slot = Some(Arc::default());
+    assert!(!manager.is_dormant_private_stdio(&key));
+    let connection = Arc::get_mut(
+        &mut manager
+            .servers
+            .get_mut(&key)
+            .expect("registered REPL view")
+            .connection,
+    )
+    .expect("unique test connection");
+    connection.client.connection_slot = None;
+    trigger.send_replace(true);
+    assert!(!manager.is_dormant_private_stdio(&key));
+}
+
+#[tokio::test]
 async fn connection_statuses_observe_clients_without_starting_them() {
     use codex_protocol::mcp::McpServerConnectionStatus as Status;
 

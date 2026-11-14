@@ -19,6 +19,7 @@ use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::McpToolCatalogCache;
+use codex_mcp::McpToolStartup;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -142,7 +143,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
             })),
             /*meta*/ None,
             /*requested_timeout*/ None,
-            /*wait_for_server*/ true,
+            McpToolStartup::Wait,
         )
         .await?;
     assert_eq!(tool_result.result.is_error, Some(false));
