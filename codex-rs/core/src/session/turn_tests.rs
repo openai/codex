@@ -20,6 +20,7 @@ impl TurnItemContributor for RewriteAgentMessageContributor {
     ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
         Box::pin(async move {
             if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.phase = Some(codex_protocol::models::MessagePhase::Commentary);
                 agent_message.content = vec![AgentMessageContent::Text {
                     text: "plan contributed assistant text".to_string(),
                 }];
@@ -74,7 +75,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let mut state = PlanModeStreamState::new(/*unfinished_plan_id*/ None);
-    let mut last_agent_message = None;
+    let mut last_agent_message = AssistantMessages::default();
     let item = assistant_output_text("original assistant text");
 
     let step_context = StepContext::for_test(Arc::new(turn_context));
@@ -92,9 +93,10 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
 
     assert!(handled);
     assert_eq!(
-        last_agent_message.as_deref(),
+        last_agent_message.trailing_commentary.as_deref(),
         Some("plan contributed assistant text")
     );
+    assert_eq!(last_agent_message.final_answer, None);
 }
 
 /// A model retry can reuse an unfinished plan. A later completion must use its own ID.

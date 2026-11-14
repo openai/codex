@@ -218,7 +218,7 @@ async fn run_remote_compact_task_inner(
             return Err(error);
         }
     }
-    let started_item = if candidate.is_none() {
+    let started_item = if candidate.is_none() && !sess.defer_compaction_start(turn_context, phase) {
         let item = TurnItem::ContextCompaction(ContextCompactionItem::new());
         sess.emit_turn_item_started(turn_context, &item).await;
         Some(item)
@@ -264,7 +264,7 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
-    let result = result.and_then(|installed| sess.check_rollout_budget().map(|()| installed));
+    let result = sess.finish_compaction(turn_context, phase, result);
     match result {
         Ok(installed) => Ok(installed),
         Err(err)

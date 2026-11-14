@@ -27,6 +27,7 @@ pub(super) async fn run_compaction(
     candidate: Option<BackgroundCompactionCandidate>,
     fallback: CompactionFallback,
 ) -> CodexResult<bool> {
+    let mut installed_prefix = false;
     if let Some(candidate) = candidate {
         let installed = build_and_install_compaction(
             sess,
@@ -41,6 +42,7 @@ pub(super) async fn run_compaction(
         )
         .await?;
         if installed {
+            installed_prefix = true;
             let status = crate::session::context_window::context_window_token_status(
                 sess,
                 &replacement_step_context.turn,
@@ -56,7 +58,7 @@ pub(super) async fn run_compaction(
             return Ok(false);
         }
     }
-    build_and_install_compaction(
+    let foreground = build_and_install_compaction(
         sess,
         step_context,
         replacement_step_context,
@@ -67,7 +69,11 @@ pub(super) async fn run_compaction(
         started_item,
         /*candidate*/ None,
     )
-    .await
+    .await;
+    match foreground {
+        Ok(installed) => Ok(installed_prefix || installed),
+        Err(err) => Err(err),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -104,7 +110,8 @@ async fn build_and_install_compaction(
             }),
         turn_context.provider.info().name.as_str(),
     );
-    if needs_start && candidate.is_none() {
+    let defer_start = sess.defer_compaction_start(turn_context, compaction_metadata.phase());
+    if needs_start && candidate.is_none() && !defer_start {
         sess.emit_turn_item_started(turn_context, &compaction_item)
             .await;
     }
@@ -263,6 +270,10 @@ async fn build_and_install_compaction(
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
         };
+        if needs_start && defer_start {
+            sess.emit_turn_item_started(turn_context, &compaction_item)
+                .await;
+        }
         sess.replace_compacted_history(
             new_history,
             replacement_step_context.to_turn_context_item(),

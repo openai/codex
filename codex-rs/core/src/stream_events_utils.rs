@@ -224,9 +224,16 @@ async fn record_stage1_output_usage_for_memory_citation(
 pub(crate) type InFlightFuture<'f> =
     Pin<Box<dyn Future<Output = Result<ResponseItemEnvelope>> + Send + 'f>>;
 
+/// Text the harness actually accepted, together with the phase of that message.
+#[derive(Clone, Debug)]
+pub(crate) struct AssistantText {
+    pub(crate) text: String,
+    pub(crate) is_final_answer: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
-    pub last_agent_message: Option<String>,
+    pub last_agent_message: Option<AssistantText>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
@@ -269,7 +276,7 @@ pub(crate) struct FinalizedTurnItem {
 #[derive(Clone, Default)]
 pub(crate) struct FinalizedTurnItemFacts {
     pub(crate) memory_citation: Option<MemoryCitation>,
-    pub(crate) last_agent_message: Option<String>,
+    pub(crate) last_agent_message: Option<AssistantText>,
     pub(crate) defers_mailbox_delivery_to_next_turn: bool,
 }
 
@@ -291,19 +298,16 @@ pub(crate) async fn finalize_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let last_agent_message = if combined.trim().is_empty() {
-                    None
-                } else {
-                    Some(combined)
-                };
-                let defers_mailbox_delivery_to_next_turn =
-                    assistant_message_defers_mailbox_delivery(agent_message.phase.as_ref(), || {
-                        last_agent_message.is_some()
-                    });
+                let has_text = !combined.trim().is_empty();
+                let is_final_answer =
+                    assistant_message_is_final(agent_message.phase.as_ref(), || has_text);
                 (
                     agent_message.memory_citation.clone(),
-                    last_agent_message,
-                    defers_mailbox_delivery_to_next_turn,
+                    has_text.then_some(AssistantText {
+                        text: combined,
+                        is_final_answer,
+                    }),
+                    is_final_answer,
                 )
             }
             _ => (None, None, false),
@@ -578,7 +582,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
 ) -> bool {
     match item {
         ResponseItem::Message { role, phase, .. } if role == "assistant" => {
-            assistant_message_defers_mailbox_delivery(phase.as_ref(), || {
+            assistant_message_is_final(phase.as_ref(), || {
                 last_assistant_message_from_item(item, plan_mode).is_some()
             })
         }
@@ -586,7 +590,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
     }
 }
 
-fn assistant_message_defers_mailbox_delivery(
+fn assistant_message_is_final(
     phase: Option<&MessagePhase>,
     has_visible_text: impl FnOnce() -> bool,
 ) -> bool {

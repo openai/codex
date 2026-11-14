@@ -1342,6 +1342,14 @@ impl ModelClient {
         Ok(request)
     }
 
+    fn check_generation_start(&self, metadata: &CodexResponsesMetadata) -> Result<()> {
+        if let Some(policy) = &self.budget_policy {
+            let _ = metadata;
+            policy.check_start()?;
+        }
+        Ok(())
+    }
+
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
             // A provider can echo a bare reserved prefix or return an opaque ID.
@@ -2109,6 +2117,7 @@ impl ResponsesHttpExecutor<'_> {
             {
                 continue;
             }
+            self.client.check_generation_start(responses_metadata)?;
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &thread_id,
@@ -2130,9 +2139,6 @@ impl ResponsesHttpExecutor<'_> {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            if let Some(policy) = &self.client.budget_policy {
-                policy.check_start()?;
-            }
             let stream_result = client
                 .stream_request_with_observer(request, options, |wire| {
                     inference_trace_attempt.record_started(
@@ -2441,6 +2447,9 @@ impl ModelClientSession {
                 client_setup.auth.as_ref(),
                 &responses_headers,
             );
+            if !warmup {
+                self.client.check_generation_start(responses_metadata)?;
+            }
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &thread_id,
@@ -2487,9 +2496,6 @@ impl ModelClientSession {
                     ),
                 ],
             );
-            if !warmup && let Some(policy) = &self.client.budget_policy {
-                policy.check_start()?;
-            }
             let stream_result = websocket_connection
                 .stream_request_with_observer(
                     ws_request,

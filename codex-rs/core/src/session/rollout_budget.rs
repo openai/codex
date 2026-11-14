@@ -77,6 +77,42 @@ impl Session {
         }
     }
 
+    pub(crate) fn inline_compaction_allowed(&self, _turn: &TurnContext) -> CodexResult<bool> {
+        self.check_rollout_budget().map(|()| true)
+    }
+
+    /// A final-only root can decline an inline compaction before it sends anything.
+    /// Do not show the client a live compaction item unless a checkpoint will install.
+    pub(crate) fn defer_compaction_start(
+        &self,
+        turn: &TurnContext,
+        phase: codex_analytics::CompactionPhase,
+    ) -> bool {
+        !matches!(phase, codex_analytics::CompactionPhase::StandaloneTurn)
+            && !turn.session_source.is_non_root_agent()
+            && self.work_budget().can_force_root_final()
+    }
+
+    pub(crate) fn finish_compaction(
+        &self,
+        turn: &TurnContext,
+        phase: codex_analytics::CompactionPhase,
+        result: CodexResult<bool>,
+    ) -> CodexResult<bool> {
+        let standalone = matches!(phase, codex_analytics::CompactionPhase::StandaloneTurn);
+        match result {
+            Ok(installed) => {
+                if standalone {
+                    self.check_rollout_budget()?;
+                } else {
+                    self.inline_compaction_allowed(turn)?;
+                }
+                Ok(installed)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     pub(crate) async fn record_rollout_budget_usage(
         &self,
         turn_id: &str,

@@ -1,5 +1,3 @@
-mod gate;
-
 use crate::config::RolloutBudgetConfig;
 use crate::config::rollout_budget_threshold_reached;
 use codex_protocol::BudgetUnitsSum;
@@ -7,12 +5,31 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
-pub use gate::RolloutWorkGate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
+
+#[derive(Debug, Default)]
+struct RolloutWorkGate(OnceLock<()>);
+
+impl RolloutWorkGate {
+    fn stop_budget(&self) {
+        let _ = self.0.set(());
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.0.get().is_some()
+    }
+
+    fn check_start(&self) -> CodexResult<()> {
+        if self.is_stopped() {
+            return Err(CodexErr::SessionBudgetExceeded);
+        }
+        Ok(())
+    }
+}
 
 /// Budget reminder returned by a controller and acknowledged after history insertion.
 pub struct RolloutBudgetReminder {
@@ -203,6 +220,15 @@ impl RolloutBudget {
 
     pub(crate) fn stop_new_work(&self) {
         self.gate.stop_budget();
+    }
+
+    pub(crate) fn can_receive_turn_input(&self, thread: ThreadId, turn: &str) -> bool {
+        let _ = (thread, turn);
+        !self.is_exhausted()
+    }
+
+    pub(crate) fn can_force_root_final(&self) -> bool {
+        false
     }
 
     pub(crate) fn is_exhausted(&self) -> bool {

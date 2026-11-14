@@ -127,7 +127,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let prompt = step_context
         .turn
         .config
@@ -154,8 +154,7 @@ pub(crate) async fn run_inline_auto_compact_task(
             phase,
         ),
     )
-    .await?;
-    Ok(())
+    .await
 }
 
 pub(crate) async fn run_compact_task(
@@ -188,7 +187,7 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let turn_context = Arc::clone(&step_context.turn);
     let trigger = compaction_metadata.trigger();
     let reason = compaction_metadata.reason();
@@ -251,8 +250,9 @@ async fn run_compact_task_inner(
             CompactionAnalyticsDetails::default(),
         )
         .await;
-    // Keep an installed checkpoint and its analytics; stop before continuing the turn.
-    let result = result.and_then(|_| sess.check_rollout_budget());
+    // Keep an installed checkpoint and its analytics. An inline stop hands control
+    // back to the root if the deadline permits its final answer.
+    let result = sess.finish_compaction(&turn_context, phase, result.map(|_| true));
     if let Err(err) = &result
         && !matches!(phase, CompactionPhase::PostTurn)
         && !matches!(err.details(), CodexErrorDetails::Interrupted)
@@ -281,8 +281,11 @@ async fn run_compact_task_inner_impl(
         codex_hooks::SamplingKind::ForegroundCompaction,
     );
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
-    sess.emit_turn_item_started(&turn_context, &compaction_item)
-        .await;
+    let defer_start = sess.defer_compaction_start(&turn_context, compaction_metadata.phase());
+    if !defer_start {
+        sess.emit_turn_item_started(&turn_context, &compaction_item)
+            .await;
+    }
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
@@ -449,6 +452,10 @@ async fn run_compact_task_inner_impl(
     let (prefix, context) = split_prefix_updates(updates);
     let new_history =
         assemble_compaction_history(new_history, prefix, merge_world_state_updates(context));
+    if defer_start {
+        sess.emit_turn_item_started(&turn_context, &compaction_item)
+            .await;
+    }
     sess.replace_compacted_history(
         new_history,
         replacement_step_context.to_turn_context_item(),
