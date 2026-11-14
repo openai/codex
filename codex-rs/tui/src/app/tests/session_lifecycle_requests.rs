@@ -327,7 +327,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     use codex_protocol::models::MessagePhase;
 
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
-    let [original, other] = [ThreadId::new(), ThreadId::new()];
+    let [original, other, failed] = std::array::from_fn(|_| ThreadId::new());
     app.app_server_target = AppServerTarget::Cloud;
     app.enqueue_primary_thread_session(
         test_thread_session(original, app.config.cwd.to_path_buf()),
@@ -421,10 +421,30 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
         crate::ThreadParamsMode::Cloud,
     );
     let backend_id = server.backend_id();
+    let mut failed_row = other_thread.clone();
+    failed_row.id = failed.to_string();
+    failed_row.session_id = failed_row.id.clone();
+    failed_row.history_mode = ThreadHistoryMode::Paginated;
+    let unavailable = failed_row.clone();
     let serve = tokio::spawn(async move {
         let mut resumed_threads = Vec::new();
         while let Some(command) = commands.recv().await {
-            let reply = match command.operation {
+            let (operation, scoped_history) = match command.operation {
+                CloudOperation::PrepareThreadResume {
+                    request_id,
+                    params,
+                    history,
+                } => (
+                    CloudOperation::Request(Box::new(ClientRequest::ThreadResume {
+                        request_id,
+                        params: *params,
+                    })),
+                    Some(history),
+                ),
+                operation => (operation, None),
+            };
+            let mut history_fails = false;
+            let reply = match operation {
                 CloudOperation::Request(request) => match *request {
                     ClientRequest::ThreadRead { params, .. } => {
                         let mut thread = if params.thread_id == original.to_string() {
@@ -438,7 +458,10 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                         Ok(serde_json::json!({"thread": thread}))
                     }
                     ClientRequest::ThreadResume { params, .. } => {
-                        let mut thread = if params.thread_id == original.to_string() {
+                        history_fails = params.thread_id == failed.to_string();
+                        let mut thread = if history_fails {
+                            unavailable.clone()
+                        } else if params.thread_id == original.to_string() {
                             original_thread.clone()
                         } else {
                             other_thread.clone()
@@ -452,7 +475,9 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                                 vec![agent_item("missed-item", "Missed response", None)],
                             ));
                         }
-                        resumed_threads.push(params.thread_id);
+                        if !history_fails {
+                            resumed_threads.push(params.thread_id);
+                        }
                         Ok(serde_json::json!({
                             "thread": thread,
                             "model": "gpt-5.5",
@@ -490,6 +515,34 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 _ => panic!("unexpected Cloud operation while resuming"),
             };
             command.response.send(Ok(reply)).unwrap();
+            if let Some(mut scoped_history) = scoped_history {
+                let commit = scoped_history.recv().await.unwrap();
+                if history_fails {
+                    assert!(matches!(commit.operation, CloudOperation::Request(request)
+                        if matches!(request.as_ref(), ClientRequest::ThreadTurnsList { params, .. } if params.thread_id == failed.to_string())));
+                    commit
+                        .response
+                        .send(Ok(Err(JSONRPCErrorError {
+                            code: -32000,
+                            message: "history unavailable".into(),
+                            data: None,
+                        })))
+                        .unwrap();
+                    assert!(
+                        scoped_history.recv().await.is_none(),
+                        "failed B must not commit"
+                    );
+                    continue;
+                }
+                assert!(matches!(
+                    commit.operation,
+                    CloudOperation::CommitPreparedResume
+                ));
+                commit
+                    .response
+                    .send(Ok(Ok(serde_json::Value::Null)))
+                    .unwrap();
+            }
         }
         resumed_threads
     });
@@ -633,7 +686,34 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     assert!(
         !std::iter::from_fn(|| ops.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
     );
-    server.shutdown().await?;
+    // Use the regular Command Center Enter action to open a task whose history fails.
+    app.app_server_backend_id = Some(backend_id);
+    app.chat_widget
+        .apply_external_edit("Keep this draft".into());
+    app.backend_registry.observe(backend_id, failed);
+    app.agents_overview
+        .threads
+        .insert(failed, Some(failed_row.clone()));
+    let view = app.agents_overview_view(vec![failed_row], Some(failed));
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    while events.try_recv().is_ok() {}
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    Box::pin(app.handle_event(&mut tui, &mut server, events.try_recv()?)).await?;
+    let AppEvent::ResumeBackendSession(target) = events.try_recv()? else {
+        color_eyre::eyre::bail!("Enter must use the owner-routed resume path");
+    };
+    assert_eq!((target.backend_id, target.thread_id), (backend_id, failed));
+    let mut backends = crate::app::backend_sessions::BackendSessions::from_initial(server, vec![]);
+    app.resume_backend_session(&mut tui, &mut backends, target)
+        .await?;
+    assert_eq!(backends.displayed_owner(), backend_id);
+    assert_eq!(app.chat_widget.thread_id(), Some(original));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Keep this draft"
+    );
+    backends.shutdown().await?;
     assert_eq!(
         serve.await?,
         [

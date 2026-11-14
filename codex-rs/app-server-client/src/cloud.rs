@@ -25,6 +25,14 @@ use tokio::sync::oneshot;
 /// Unsupported operations must return an explicit error; they must not claim success.
 pub enum CloudOperation {
     Request(Box<ClientRequest>),
+    /// Opens a provisional attachment and serves its initial history on a scoped channel.
+    PrepareThreadResume {
+        request_id: RequestId,
+        params: Box<codex_app_server_protocol::ThreadResumeParams>,
+        history: mpsc::Receiver<CloudCommand>,
+    },
+    /// Sent on the scoped channel after the caller has prepared the replacement view.
+    CommitPreparedResume,
     /// Host project metadata stays on the private transport, outside the app-server wire.
     StartProjectThread {
         request_id: RequestId,
@@ -307,6 +315,38 @@ impl CloudRequestHandle {
             .send(CloudOperation::SubmitUserMessage(Box::new(params)))
             .await;
         crate::decode_typed_response("cloud/submitUserMessage", response)
+    }
+
+    /// Returns the activation snapshot and a handle restricted to this resume's history.
+    /// Dropping the scoped handle without committing discards the new attachment.
+    pub async fn prepare_thread_resume(
+        &self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::ThreadResumeParams,
+    ) -> Result<(codex_app_server_protocol::ThreadResumeResponse, Self), TypedRequestError> {
+        let (commands, history) = mpsc::channel(/*capacity*/ 1);
+        let response = self
+            .send(CloudOperation::PrepareThreadResume {
+                request_id,
+                params: Box::new(params),
+                history,
+            })
+            .await;
+        let snapshot = crate::decode_typed_response("thread/resume", response)?;
+        Ok((
+            snapshot,
+            Self {
+                commands,
+                reconnect: self.reconnect.clone(),
+                catalog: None,
+            },
+        ))
+    }
+
+    /// Installs the prepared attachment on the worker before its next ordinary command.
+    pub async fn commit_prepared_resume(&self) -> Result<(), TypedRequestError> {
+        let response = self.send(CloudOperation::CommitPreparedResume).await;
+        crate::decode_typed_response("thread/resume", response)
     }
 
     async fn send(&self, operation: CloudOperation) -> io::Result<RequestResult> {

@@ -220,6 +220,80 @@ async fn refreshing_one_backends_pins_preserves_cross_backend_rank() {
 }
 
 #[tokio::test]
+async fn overview_opens_a_search_only_task_on_the_search_backend() -> Result<()> {
+    let mut app = make_test_app().await;
+    let (client, _commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let mut displayed = AppServerSession::new(
+        BackendId::new(),
+        AppServerClient::Cloud(client),
+        ThreadParamsMode::Cloud,
+    );
+    let source = BackendId::new();
+    let [hit, collision] = std::array::from_fn(|_| ThreadId::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.app_server_backend_id = Some(displayed.backend_id());
+    assert!(
+        app.backend_registry
+            .observe(displayed.backend_id(), collision)
+    );
+
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    view.handle_key_event(KeyCode::Char('/').into());
+    view.handle_paste("Older task".into());
+    let AppEvent::SearchAgentsOverview(search_id, _) = rx.try_recv()? else {
+        panic!("expected an older-history search");
+    };
+    app.agents_overview.search_id = search_id;
+    let row = |id| {
+        overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Older task",
+            ThreadStatus::NotLoaded,
+        )
+    };
+    let found = row(hit);
+    app.apply_agents_overview_search_page(
+        search_id,
+        source,
+        vec![(found.clone(), false), (row(collision), false)],
+        Default::default(),
+        /*ok*/ true,
+    );
+    assert_eq!(
+        app.backend_registry.owner(collision),
+        Some(displayed.backend_id())
+    );
+    assert!(!app.agents_overview.search_matches.contains_key(&collision));
+    assert!(!app.agents_overview.threads.contains_key(&hit));
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.select_agents_overview_thread(&mut tui, &mut displayed, hit)
+        .await?;
+    let AppEvent::ResumeBackendSession(target) = rx.try_recv()? else {
+        panic!("expected the search-only task to resume");
+    };
+    assert_eq!(
+        (
+            target.backend_id,
+            target.thread_id,
+            target.path,
+            target.cwd,
+            target.history_mode
+        ),
+        (
+            source,
+            hit,
+            found.path,
+            Some(found.cwd.to_path_buf()),
+            Some(found.history_mode)
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
     let mut app = make_test_app().await;
     let stub = |owner, mode| {
@@ -227,7 +301,7 @@ async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
         let session = AppServerSession::new(owner, AppServerClient::Cloud(client), mode);
         (session, (commands, events))
     };
-    let (mut displayed, _displayed_transport) = stub(BackendId::new(), ThreadParamsMode::Cloud);
+    let (mut displayed, (mut commands, _events)) = stub(BackendId::new(), ThreadParamsMode::Cloud);
     let remote_owner = BackendId::new();
     let [local_id, remote_id, colliding_id] = std::array::from_fn(|_| ThreadId::new());
     let [local, remote, colliding] = [
@@ -313,17 +387,24 @@ async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
         Some(&remote)
     );
 
+    app.active_thread_id = Some(ThreadId::new());
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    assert!(matches!(
-        app.select_agents_overview_thread(&mut tui, &mut displayed, remote_id)
-            .await?,
-        AppRunControl::Continue
-    ));
-    assert!(matches!(
-        rx.try_recv()?,
-        AppEvent::ResumeBackendSession(target)
-            if target.backend_id == remote_owner && target.thread_id == remote_id
-    ));
+    for (owner, thread_id) in [
+        (remote_owner, remote_id),
+        (displayed.backend_id(), local_id),
+    ] {
+        let result = tokio::select! {
+            result = app.select_agents_overview_thread(&mut tui, &mut displayed, thread_id) => result?,
+            _ = commands.recv() => panic!("selecting a listed task must resume before reading it"),
+        };
+        assert!(matches!(result, AppRunControl::Continue));
+        assert!(matches!(
+            rx.try_recv()?,
+            AppEvent::ResumeBackendSession(target)
+                if target.backend_id == owner && target.thread_id == thread_id
+        ));
+    }
+    assert!(commands.try_recv().is_err());
     assert!(app.agents_overview.threads.contains_key(&local_id));
     let mut view = app.agents_overview_view(vec![remote], Some(remote_id));
     assert!(!view.pin_action_supported);

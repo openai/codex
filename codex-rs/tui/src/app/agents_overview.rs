@@ -524,10 +524,23 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<AppRunControl> {
+        // Selecting an already visible chat can just dismiss the overview.
+        let viewing_task = self.current_displayed_thread_id() == Some(thread_id)
+            && (!self.thread_unavailable(thread_id) || self.chat_widget.is_external_writer_view());
         if let Some(owner) = self.backend_registry.owner(thread_id)
-            && owner != app_server.backend_id()
+            && (owner != app_server.backend_id()
+                || (app_server.thread_params_mode()
+                    == crate::app_server_session::ThreadParamsMode::Cloud
+                    && !self.chat_widget.fork_in_progress
+                    && !viewing_task))
         {
-            let Some(Some(thread)) = self.agents_overview.threads.get(&thread_id) else {
+            let Some(thread) = self
+                .agents_overview
+                .threads
+                .get(&thread_id)
+                .and_then(Option::as_ref)
+                .or_else(|| self.agents_overview.search_matches.get(&thread_id))
+            else {
                 self.add_agents_overview_error(format!(
                     "Agent session {thread_id} is unavailable. Refresh Command Center and try again."
                 ));

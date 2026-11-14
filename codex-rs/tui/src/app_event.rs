@@ -376,6 +376,7 @@ pub(crate) enum AppEvent {
     SearchAgentsOverview(Uuid, usize),
     AgentsOverviewSearchPage {
         id: Uuid,
+        backend_id: crate::backend_id::BackendId,
         rows: Vec<(Thread, bool)>,
         cursor: crate::app::agents_overview_discovery::AgentsOverviewDiscovery,
         ok: bool,

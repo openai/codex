@@ -914,13 +914,26 @@ async fn live_center_show_more_navigation_search_and_loading() {
     view.handle_paste("Older task".into());
     let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
     insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Searching history…");
-    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ false);
+    let backend_id = crate::backend_id::BackendId::new();
+    app.apply_agents_overview_search_page(
+        id,
+        backend_id,
+        Vec::new(),
+        Default::default(),
+        /*ok*/ false,
+    );
     insta::assert_snapshot!(
         "live_center_show_more_search_retry",
         screen(&view, /*width*/ 80, /*height*/ 12)
     );
     view.handle_key_event(KeyCode::Enter.into());
     let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
-    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ true);
+    app.apply_agents_overview_search_page(
+        id,
+        backend_id,
+        Vec::new(),
+        Default::default(),
+        /*ok*/ true,
+    );
     insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Show more matches");
 }

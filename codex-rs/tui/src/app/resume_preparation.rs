@@ -151,7 +151,7 @@ impl App {
             Some(thread) => Ok(thread),
             None => {
                 app_server
-                    .resume_thread_with_permission_overrides(
+                    .resume_thread_for_navigation(
                         &local_settings,
                         resume_config.clone(),
                         thread_id,
