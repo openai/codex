@@ -122,6 +122,10 @@ pub struct ModelRequestHookInput {
     #[serde(skip)]
     pub lifecycle_id: uuid::Uuid,
     pub kind: SamplingKind,
+    /// Identifies a generation across harness retries and model fallback.
+    pub request_id: String,
+    /// One-based attempt number within this generation.
+    pub attempt_number: u32,
     pub session_id: String,
     /// Identifies the issuing thread within its shared session.
     pub thread_id: String,

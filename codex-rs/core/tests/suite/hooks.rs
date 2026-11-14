@@ -6135,10 +6135,18 @@ async fn model_request_hooks_report_failures_and_retries_but_cannot_veto() -> Re
         wait_for_hook_inputs(test.codex_home_path(), "PostModelRequest", /*count*/ 2).await?;
     assert_eq!(pre.len(), 2);
     assert_eq!(post.len(), 2);
+    let request_id = pre[0]["request_id"]
+        .as_str()
+        .context("sampling request id")?;
     let thread_id = test.session_configured.thread_id.to_string();
-    for hook in pre.iter().chain(&post) {
-        assert_eq!(hook["thread_id"], thread_id);
-        assert_eq!(hook["kind"], "sampling");
+    assert!(!request_id.is_empty());
+    for (index, pair) in pre.iter().zip(&post).enumerate() {
+        for hook in [pair.0, pair.1] {
+            assert_eq!(hook["request_id"], request_id);
+            assert_eq!(hook["attempt_number"], index + 1);
+            assert_eq!(hook["thread_id"], thread_id);
+            assert_eq!(hook["kind"], "sampling");
+        }
     }
     assert_eq!(post[0]["status"], "failed");
     assert!(post[0]["error"].is_string());

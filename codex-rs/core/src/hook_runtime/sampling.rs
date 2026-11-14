@@ -1,5 +1,6 @@
-//! Each provider attempt pairs its own hooks. Transport recovery within an
-//! attempt does not start another hook pair.
+//! A sampling loop keeps one request ID across retries. Each call to open a
+//! response stream pairs its own hooks; transport recovery within that call
+//! does not start another hook pair.
 
 use super::emit_hook_completed_events;
 use super::emit_hook_started_events;
@@ -24,14 +25,21 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 pub(crate) struct SamplingRequest {
+    id: Uuid,
+    attempts: u32,
     kind: SamplingKind,
 }
 
 impl SamplingRequest {
     pub(crate) fn new(kind: SamplingKind) -> Self {
-        Self { kind }
+        Self {
+            id: Uuid::new_v4(),
+            attempts: 0,
+            kind,
+        }
     }
 
     pub(crate) fn open(
@@ -54,6 +62,7 @@ impl SamplingRequest {
         owner_cancellation: &CancellationToken,
         send: impl Future<Output = Result<OpenedModelResponse>>,
     ) -> Result<SamplingStream> {
+        self.attempts += 1;
         let sampling_turn = match self.kind {
             SamplingKind::Sampling => Some(Arc::clone(&step.turn)),
             SamplingKind::ForegroundCompaction | SamplingKind::BackgroundCompaction => None,
@@ -69,6 +78,8 @@ impl SamplingRequest {
         let input = ModelRequestHookInput {
             lifecycle_id: uuid::Uuid::new_v4(),
             kind: self.kind,
+            request_id: self.id.to_string(),
+            attempt_number: self.attempts,
             session_id: session.session_id().to_string(),
             thread_id: session.thread_id().to_string(),
             turn_id: step.turn.sub_id.clone(),

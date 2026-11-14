@@ -130,6 +130,12 @@
     "agent_type": {
       "type": "string"
     },
+    "attempt_number": {
+      "description": "One-based attempt number within this generation.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "cwd": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
@@ -137,6 +143,10 @@
       "$ref": "#/definitions/SamplingKind"
     },
     "model": {
+      "type": "string"
+    },
+    "request_id": {
+      "description": "Identifies a generation across harness retries and model fallback.",
       "type": "string"
     },
     "session_id": {
@@ -154,9 +164,11 @@
     }
   },
   "required": [
+    "attempt_number",
     "cwd",
     "kind",
     "model",
+    "request_id",
     "session_id",
     "thread_id",
     "transcript_path",
