@@ -198,6 +198,7 @@ async fn write_named_rollout(home: &Path, id: Uuid, attached_to: Option<Uuid>) -
 
 fn inclusive_title_search() -> ListThreadsParams {
     ListThreadsParams {
+        included_thread_ids: None,
         page_size: 10,
         cursor: None,
         sort_key: ThreadSortKey::CreatedAt,

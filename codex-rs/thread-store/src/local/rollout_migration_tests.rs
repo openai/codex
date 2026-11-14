@@ -2675,6 +2675,7 @@ async fn migration_preserves_legacy_displayed_thread_names() {
         }
         let page = store
             .list_threads(ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,

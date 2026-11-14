@@ -210,6 +210,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -239,6 +240,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -268,6 +270,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -297,6 +300,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -1054,6 +1058,9 @@ impl ThreadStore for InMemoryThreadStore {
                 page.items.retain(|thread| {
                     thread.section.as_ref().map(|section| section.id.as_str()) == section.as_deref()
                 });
+            }
+            if let Some(ids) = &params.included_thread_ids {
+                page.items.retain(|thread| ids.contains(&thread.thread_id));
             }
             if params.sort_key == ThreadSortKey::SectionPosition {
                 page.items.sort_by_key(|thread| {

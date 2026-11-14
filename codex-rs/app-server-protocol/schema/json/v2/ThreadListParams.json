@@ -86,6 +86,16 @@
         "null"
       ]
     },
+    "includedThreadIds": {
+      "description": "Restrict results to up to 100 thread IDs before pagination. Omit or send null for unrestricted results. An empty list matches nothing. Exclusions still apply. Repeat the same IDs on each page. The local store uses indexed metadata for this filter.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "limit": {
       "description": "Optional page size; defaults to a reasonable server-side value.",
       "format": "uint32",
@@ -162,7 +172,7 @@
       ]
     },
     "useStateDbOnly": {
-      "description": "If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
+      "description": "If true, the local store returns indexed metadata without scanning JSONL rollouts for repairs. Requests with `includedThreadIds` always use indexed metadata.",
       "type": "boolean"
     }
   },

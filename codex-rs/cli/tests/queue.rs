@@ -476,6 +476,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
                     params: ThreadListParams {
                         include_attached_threads: false,
                         current_account_only: false,
+                        included_thread_ids: None,
                         excluded_thread_ids: None,
                         attached_to_thread_id: None,
                         cursor: None,

@@ -50,6 +50,7 @@ async fn delegated_thread_is_listed_before_user_followup() {
 
         let listed = store
             .list_threads(ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,

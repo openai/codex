@@ -1461,6 +1461,11 @@ pub struct ThreadListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Restrict results to up to 100 thread IDs before pagination. Omit or send null
+    /// for unrestricted results. An empty list matches nothing. Exclusions still apply.
+    /// Repeat the same IDs on each page. The local store uses indexed metadata for this filter.
+    #[ts(optional = nullable)]
+    pub included_thread_ids: Option<Vec<String>>,
     /// Thread IDs to exclude before applying the result limit. Up to 100
     /// entries; invalid IDs or a larger list are rejected, never truncated.
     /// Send the same exclusions on each page. Omitted, null, or empty means no exclusions.
@@ -1514,9 +1519,8 @@ pub struct ThreadListParams {
     /// exactly matches one of these paths are returned.
     #[ts(optional = nullable, type = "string | Array<string> | null")]
     pub cwd: Option<ThreadListCwdFilter>,
-    /// If true, return from the state DB without scanning JSONL rollouts to
-    /// repair thread metadata. Omitted or false preserves scan-and-repair
-    /// behavior.
+    /// If true, the local store returns indexed metadata without scanning JSONL rollouts
+    /// for repairs. Requests with `includedThreadIds` always use indexed metadata.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_state_db_only: bool,
     /// Optional substring filter for the extracted thread title.

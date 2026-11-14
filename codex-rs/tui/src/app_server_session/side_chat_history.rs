@@ -142,6 +142,7 @@ impl AppServerSession {
             ancestor_thread_id: None,
             search_term: None,
             originators: None,
+            included_thread_ids: None,
             excluded_thread_ids: None,
         };
         if matches!(self.request_handle, AppServerRequestHandle::InProcess(_)) {

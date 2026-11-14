@@ -33,19 +33,23 @@ across account switches. Resume and revert preserve that distinction; forks are 
 Scoped requests skip candidates whose rollout header cannot be read. API-key
 logins see all local history. Direct access by thread ID remains available.
 
-# Thread list exclusions
+# Thread list ID filters
 
-`thread/list` accepts `excludedThreadIds`, an optional array of up to 100
-thread ID strings. Omitted, null, or empty lists do not exclude anything.
-Invalid IDs or more than 100 entries return JSON-RPC error `-32602`;
-duplicates count toward that bound and no entries are silently truncated.
+`thread/list` accepts `includedThreadIds` to list specific saved threads and
+`excludedThreadIds` to omit them. Each accepts up to 100 thread ID strings.
+Omitting an array or sending null leaves that filter unrestricted. An empty
+inclusion matches nothing. An empty exclusion removes nothing. Invalid IDs
+or more than 100 entries in either array return JSON-RPC error `-32602`.
+Duplicates count toward each bound.
 
-Exclusions apply before the returned result limit, along with the existing
-source, provider, archive, project, section and cwd filters. Pages refill to
-the requested limit (at most 100) unless history is exhausted. Send the same
-exclusions and filters with each returned cursor. Clients that display a saved
-manual order can load those summaries separately, then exclude the entire saved
-ID set when listing the remainder. This field does not save or sort that order.
+Both ID filters apply alongside the other list filters, including `currentAccountOnly`,
+before pagination. Pages fill to the requested limit (up to 100) or exhaust the matches.
+Exclusions win when an ID appears in both arrays. Send the same filters with
+each cursor. The regular list sort determines the order of matches.
+The local store uses indexed metadata when an inclusion array is present, even
+when `useStateDbOnly` is false. IDs absent from its index produce no match.
+Older App Servers ignore `includedThreadIds`. Clients that reconcile saved IDs
+must establish server support before treating missing matches as removals.
 
 DB-only requests (`useStateDbOnly: true`) return JSON-RPC error `-32603`
 when the local state DB cannot serve the query, even for an empty cwd filter.

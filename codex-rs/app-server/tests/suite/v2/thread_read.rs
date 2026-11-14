@@ -417,6 +417,7 @@ async fn paginated_stored_thread_routes_projected_turns() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1188,6 +1189,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
             params: ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -1672,6 +1674,7 @@ async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,

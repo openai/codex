@@ -173,6 +173,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
 
     let threads = store
         .list_threads(ListThreadsParams {
+            included_thread_ids: None,
             page_size: 10,
             cursor: None,
             sort_key: ThreadSortKey::CreatedAt,

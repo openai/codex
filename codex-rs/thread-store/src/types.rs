@@ -360,6 +360,8 @@ impl ThreadRelationFilter {
 /// Parameters for listing threads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListThreadsParams {
+    /// Restrict the list to these IDs. An empty list matches nothing.
+    pub included_thread_ids: Option<Vec<ThreadId>>,
     /// Maximum number of threads to return.
     pub page_size: usize,
     /// Opaque cursor returned by a previous list call.

@@ -612,6 +612,7 @@ source = {:?}
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2132,6 +2133,7 @@ env_key = "TEST_CATALOG_KEY""#
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2340,6 +2342,7 @@ required = true
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2430,6 +2433,7 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2517,6 +2521,7 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2650,6 +2655,7 @@ async fn external_agent_config_import_returns_before_background_session_import_f
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -2771,6 +2777,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         .send_thread_list_request(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,

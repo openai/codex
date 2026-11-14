@@ -15,6 +15,11 @@ cursor?: string | null, /**
  * Optional page size; defaults to a reasonable server-side value.
  */
 limit?: number | null, /**
+ * Restrict results to up to 100 thread IDs before pagination. Omit or send null
+ * for unrestricted results. An empty list matches nothing. Exclusions still apply.
+ * Repeat the same IDs on each page. The local store uses indexed metadata for this filter.
+ */
+includedThreadIds?: Array<string> | null, /**
  * Thread IDs to exclude before applying the result limit. Up to 100
  * entries; invalid IDs or a larger list are rejected, never truncated.
  * Send the same exclusions on each page. Omitted, null, or empty means no exclusions.
@@ -51,9 +56,8 @@ sectionId?: string | null, /**
  * exactly matches one of these paths are returned.
  */
 cwd?: string | Array<string> | null, /**
- * If true, return from the state DB without scanning JSONL rollouts to
- * repair thread metadata. Omitted or false preserves scan-and-repair
- * behavior.
+ * If true, the local store returns indexed metadata without scanning JSONL rollouts
+ * for repairs. Requests with `includedThreadIds` always use indexed metadata.
  */
 useStateDbOnly?: boolean, /**
  * Optional substring filter for the extracted thread title.

@@ -283,6 +283,7 @@ mod tests {
 
         let archived = store
             .list_threads(ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,

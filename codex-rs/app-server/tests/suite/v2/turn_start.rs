@@ -4724,6 +4724,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
             params: codex_app_server_protocol::ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,

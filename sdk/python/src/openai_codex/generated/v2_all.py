@@ -11157,6 +11157,13 @@ class ThreadListParams(BaseModel):
             description="Thread IDs to exclude before applying the result limit. Up to 100 entries; invalid IDs or a larger list are rejected, never truncated. Send the same exclusions on each page. Omitted, null, or empty means no exclusions.",
         ),
     ] = None
+    included_thread_ids: Annotated[
+        list[str] | None,
+        Field(
+            alias="includedThreadIds",
+            description="Restrict results to up to 100 thread IDs before pagination. Omit or send null for unrestricted results. An empty list matches nothing. Exclusions still apply. Repeat the same IDs on each page. The local store uses indexed metadata for this filter.",
+        ),
+    ] = None
     limit: Annotated[
         int | None,
         Field(description="Optional page size; defaults to a reasonable server-side value.", ge=0),
@@ -11210,7 +11217,7 @@ class ThreadListParams(BaseModel):
         bool | None,
         Field(
             alias="useStateDbOnly",
-            description="If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
+            description="If true, the local store returns indexed metadata without scanning JSONL rollouts for repairs. Requests with `includedThreadIds` always use indexed metadata.",
         ),
     ] = None
 

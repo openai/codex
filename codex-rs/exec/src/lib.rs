@@ -2009,6 +2009,7 @@ async fn resolve_resume_thread_id(
                     params: ThreadListParams {
                         include_attached_threads: false,
                         current_account_only: true,
+                        included_thread_ids: None,
                         excluded_thread_ids: None,
                         attached_to_thread_id: None,
                         originators: None,
@@ -2099,6 +2100,7 @@ async fn resolve_resume_thread_id(
                 params: ThreadListParams {
                     include_attached_threads: false,
                     current_account_only: false,
+                    included_thread_ids: None,
                     excluded_thread_ids: None,
                     attached_to_thread_id: None,
                     originators: None,

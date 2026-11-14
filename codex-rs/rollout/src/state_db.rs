@@ -359,6 +359,7 @@ pub async fn list_threads_db(
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     cwd_filters: Option<&[PathBuf]>,
+    included_thread_ids: Option<&[ThreadId]>,
     relation_filter: Option<codex_state::ThreadRelationFilter>,
     archived: bool,
     section: Option<Option<&str>>,
@@ -406,6 +407,7 @@ pub async fn list_threads_db(
     let mut num_scanned_rows = 0usize;
     while items.len() < page_size {
         let filters = codex_state::ThreadFilterOptions {
+            included_thread_ids,
             archived_only: archived,
             section,
             allowed_sources: allowed_sources.as_slice(),

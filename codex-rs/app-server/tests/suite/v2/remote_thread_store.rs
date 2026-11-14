@@ -257,6 +257,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
             params: ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -318,6 +319,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
             params: ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -503,6 +505,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             params: ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
