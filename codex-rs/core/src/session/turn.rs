@@ -10,7 +10,7 @@ use crate::client::ModelClientSession;
 use crate::client::SamplingOptions;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
+use crate::client_common::SamplingStream;
 use crate::compact::AutoCompactionDisabled;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact_remote_v2::BackgroundCompactionCandidate;
@@ -654,6 +654,11 @@ pub(crate) async fn run_turn(
             .await
         }
         .await;
+        // Consume the whole response before deciding whether the turn may continue.
+        let sampling_request_result = sampling_request_result.and_then(|output| {
+            sess.check_rollout_budget()?;
+            Ok(output)
+        });
         match sampling_request_result {
             Ok((sampling_request_output, notify_messages)) => {
                 guardian_budget_compacted = false;
@@ -2827,7 +2832,7 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<InFlightFuture<'static>>,
     sess: Arc<Session>,
     step_context: &StepContext,
-) -> CodexResult<()> {
+) {
     let turn_context = &step_context.turn;
     while let Some(res) = in_flight.next().await {
         match res {
@@ -2850,7 +2855,6 @@ async fn drain_in_flight(
             }
         }
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2977,7 +2981,10 @@ async fn try_run_sampling_request(
     if cancellation_token.is_cancelled() && !can_interrupt {
         return Err(CodexErr::TurnAborted);
     }
-    let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
+    let streaming = turn_context.config.response_process_mode
+        == codex_config::config_toml::ResponseProcessMode::Streaming;
+    let mut wait_for_bill_only = false;
+    let mut in_flight = FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -3053,31 +3060,36 @@ async fn try_run_sampling_request(
                     preempt = CancellationToken::new();
                     continue;
                 }
-                if let Some(interrupt) = stream.interrupt.take() {
+                if stream.settlement_started.load(Ordering::Acquire) {
+                    wait_for_bill_only = streaming && stream.interrupt.is_none();
+                } else {
+                    let Some(interrupt) = stream.interrupt.take() else {
+                        // TODO: Reconcile any response item already being presented to the client.
+                        break Ok(SamplingRequestResult {
+                            needs_follow_up: true,
+                            mailbox_preempted: false,
+                            last_agent_message,
+                        });
+                    };
                     if step_context.settings.model_info.use_responses_lite {
                         let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
                     }
-                    // Drain the response normally before reusing its connection and history.
-                    preempt = CancellationToken::new();
-                    needs_follow_up = true;
-                    continue;
                 }
-                // TODO: Reconcile any response item already being presented to the client.
-                break Ok(SamplingRequestResult {
-                    needs_follow_up: true,
-                    mailbox_preempted: false,
-                    last_agent_message,
-                });
+                // A steer cannot start another request before the accounting owner returns its decision.
+                preempt = CancellationToken::new();
+                needs_follow_up = true;
+                continue;
             }
             Err(_) => break Err(CodexErr::TurnAborted),
         };
 
-        let event = ResponseStream::accept_for_turn(event, &cancellation_token);
-        let event = match event.unwrap_or_else(|| {
-            Err(CodexErr::Stream(
+        let event = SamplingStream::accept_for_turn(event, &cancellation_token);
+        let Some(crate::client_common::SamplingEvent { event, hook_output }) = event else {
+            break Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
-            ))
-        }) {
+            ));
+        };
+        let event = match event {
             Ok(event) => event,
             Err(err) => {
                 if let CodexErrorDetails::ResponseIncomplete(incomplete) = err.details() {
@@ -3085,6 +3097,7 @@ async fn try_run_sampling_request(
                         &turn_context,
                         &step_context.settings,
                         incomplete,
+                        hook_output,
                     )
                     .await;
                     should_emit_token_count |= incomplete.token_usage.is_some();
@@ -3104,6 +3117,19 @@ async fn try_run_sampling_request(
                 break Err(err);
             }
         };
+
+        // A steer can cut off unread items on an HTTP stream while the owner posts its bill.
+        // Consume the terminal accounting decision before opening the follow-up request.
+        if wait_for_bill_only {
+            if matches!(event, ResponseEvent::Completed { .. }) {
+                break Ok(SamplingRequestResult {
+                    needs_follow_up: true,
+                    mailbox_preempted: *draining_for_mailbox,
+                    last_agent_message,
+                });
+            }
+            continue;
+        }
 
         let Some(event) = resampling.filter(event, &step_context.tool_router) else {
             continue;
@@ -3215,7 +3241,6 @@ async fn try_run_sampling_request(
                     step_context: Arc::clone(&step_context),
                     turn_store: Arc::clone(&turn_store),
                     tool_runtime,
-                    defer_tool_dispatch: *draining_for_mailbox,
                     cancellation_token: cancellation_token.child_token(),
                 };
                 if *draining_for_mailbox {
@@ -3263,8 +3288,8 @@ async fn try_run_sampling_request(
                     Ok(output_result) => output_result,
                     Err(err) => break Err(err),
                 };
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                if let Some(tool) = output_result.tool_future {
+                    in_flight.push_back(tool);
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -3291,23 +3316,26 @@ async fn try_run_sampling_request(
                         conversation.id = %sess.thread_id,
                         turn.id = %turn_context.sub_id,
                     );
-                    if step_context.settings.model_info.use_responses_lite
+                    if stream.settlement_started.load(Ordering::Acquire) {
+                        wait_for_bill_only = streaming
+                            && !(step_context.settings.model_info.use_responses_lite
+                                && stream.interrupt.is_some());
+                    } else if step_context.settings.model_info.use_responses_lite
                         && let Some(interrupt) = stream.interrupt.take()
                     {
-                        // A closed receiver can mean completion is already buffered. Drain it
-                        // too; a transport failure below still takes the mailbox follow-up.
+                        // Completion can already be buffered when the interrupt receiver closes.
                         let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
-                        // Retain completed items and the response ID for incremental continuation.
-                        // Further item boundaries must not drop the stream while it drains.
-                        *draining_for_mailbox = true;
-                        needs_follow_up = true;
-                        continue;
+                    } else {
+                        break Ok(SamplingRequestResult {
+                            needs_follow_up: true,
+                            mailbox_preempted: true,
+                            last_agent_message,
+                        });
                     }
-                    break Ok(SamplingRequestResult {
-                        needs_follow_up: true,
-                        mailbox_preempted: true,
-                        last_agent_message,
-                    });
+                    // Keep the response ID and terminal decision. Later tools receive a denial.
+                    *draining_for_mailbox = true;
+                    needs_follow_up = true;
+                    continue;
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
@@ -3502,7 +3530,10 @@ async fn try_run_sampling_request(
                     .record_token_usage_info(
                         &turn_context,
                         &step_context.settings,
-                        token_usage.as_ref(),
+                        crate::client_common::SamplingUsage {
+                            provider: token_usage,
+                            charge: hook_output,
+                        },
                         if resampling.retry_pending {
                             super::TokenUsageContext::SpendingOnly
                         } else {
@@ -3715,7 +3746,7 @@ async fn try_run_sampling_request(
             conversation.id = %sess.thread_id,
             turn.id = %turn_context.sub_id,
         );
-        drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+        drain_in_flight(&mut in_flight, Arc::clone(&sess), &step_context).await;
     }
 
     if should_emit_token_count {

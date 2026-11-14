@@ -203,6 +203,10 @@ async fn adds_weighted_initial_and_threshold_reminders(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()> {
+    use codex_history::RolloutItem;
+    use codex_protocol::models::ResponseItem;
+    use core_test_support::responses::ev_apply_patch_custom_tool_call;
+
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -210,13 +214,25 @@ async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()
     completed["response"]["usage"]["codex_rollout_budget_units"] = json!(-1.0);
     let responses = mount_sse_sequence(
         &server,
-        vec![sse(vec![ev_response_created("invalid-units"), completed])],
+        vec![sse(vec![
+            ev_response_created("invalid-units"),
+            ev_apply_patch_custom_tool_call(
+                "unbilled-patch",
+                "*** Begin Patch\n*** Add File: unbilled-tool-ran\n+unexpected\n*** End Patch",
+            ),
+            completed,
+        ])],
     )
     .await;
     let test = test_codex()
-        .with_config(|config| {
-            config.rollout_budget = Some(rollout_budget());
+        .with_pre_build_hook(|home| {
+            std::fs::write(
+                home.join("config.toml"),
+                "[responses]\nprocess_mode = \"after_complete_response\"\n",
+            )
+            .expect("configure buffered response processing");
         })
+        .with_config(|config| config.rollout_budget = Some(rollout_budget()))
         .build(&server)
         .await?;
 
@@ -232,11 +248,8 @@ async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()
     else {
         unreachable!();
     };
-    assert_eq!(
-        error.message,
-        "Fatal error: response.completed usage.codex_rollout_budget_units must be finite and non-negative"
-    );
     assert_eq!(error.codex_error_info, Some(CodexErrorInfo::Other));
+    assert!(error.message.contains("codex_rollout_budget_units"));
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -246,6 +259,16 @@ async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()
         1,
         "invalid units should not retry"
     );
+    // Invalid accounting rejects the buffered response before any of its items are published.
+    assert!(!test.workspace_path("unbilled-tool-ran").exists());
+    test.codex.ensure_rollout_materialized().await;
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    assert!(!history.items.iter().any(|item| matches!(item,
+        RolloutItem::ResponseItem(envelope) if matches!(&envelope.item,
+            ResponseItem::CustomToolCall { call_id, .. }
+            | ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "unbilled-patch"
+        )
+    )));
 
     Ok(())
 }
@@ -403,20 +426,17 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("exhaust-budget"),
-                ev_completed_with_tokens("exhaust-budget", /*total_tokens*/ 30),
-            ]),
-            sse(vec![
-                ev_response_created("already-exhausted"),
-                ev_completed_with_tokens("already-exhausted", /*total_tokens*/ 1),
-            ]),
-        ],
-    )
-    .await;
+    let mut sequence = vec![sse(vec![
+        ev_response_created("exhaust-budget"),
+        ev_completed_with_tokens("exhaust-budget", /*total_tokens*/ 30),
+    ])];
+    if owner == AgentRuntimeOwnership::Host || !enforce_limit {
+        sequence.push(sse(vec![
+            ev_response_created("already-exhausted"),
+            ev_completed_with_tokens("already-exhausted", /*total_tokens*/ 1),
+        ]));
+    }
+    let responses = mount_sse_sequence(&server, sequence).await;
     let mut extensions = ExtensionRegistryBuilder::new();
     if owner == AgentRuntimeOwnership::Host {
         extensions.thread_lifecycle_contributor(Arc::new(HostRuntime));

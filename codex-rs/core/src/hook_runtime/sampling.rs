@@ -8,7 +8,7 @@ use super::run_model_request_hooks;
 use super::thread_spawn_subagent_hook_context;
 use super::tool_hook_cwd;
 use crate::client::OpenedModelResponse;
-use crate::client_common::ResponseStream;
+use crate::client_common::SamplingStream;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_hooks::ModelRequestHookEvent;
@@ -40,7 +40,7 @@ impl SamplingRequest {
         model: &str,
         owner_cancellation: &CancellationToken,
         send: impl Future<Output = Result<OpenedModelResponse>> + Send,
-    ) -> impl Future<Output = Result<ResponseStream>> + Send {
+    ) -> impl Future<Output = Result<SamplingStream>> + Send {
         // Keep the transport and hook state out of the turn's cancellation and retry futures.
         Box::pin(self.open_attempt(session, step, model, owner_cancellation, send))
     }
@@ -52,16 +52,21 @@ impl SamplingRequest {
         model: &str,
         owner_cancellation: &CancellationToken,
         send: impl Future<Output = Result<OpenedModelResponse>>,
-    ) -> Result<ResponseStream> {
+    ) -> Result<SamplingStream> {
+        let send = async {
+            session.check_rollout_budget()?;
+            send.await
+        };
         let sampling_turn = match self.kind {
             SamplingKind::Sampling => Some(Arc::clone(&step.turn)),
             SamplingKind::ForegroundCompaction | SamplingKind::BackgroundCompaction => None,
         };
+        let settlement = Some((Arc::clone(session), Arc::clone(&step.turn)));
         let hooks = hooks_for_model_request(session, step);
         let pre_mode = hooks.execution_mode_for_event(HookEventName::PreModelRequest);
         let post_mode = hooks.execution_mode_for_event(HookEventName::PostModelRequest);
         if pre_mode.is_none() && post_mode.is_none() {
-            return send.await?.deliver(&mut None, sampling_turn);
+            return send.await?.deliver(&mut None, sampling_turn, settlement);
         }
         let subagent = thread_spawn_subagent_hook_context(session, &step.turn);
         let input = ModelRequestHookInput {
@@ -92,7 +97,7 @@ impl SamplingRequest {
         }
         let stream = send
             .await
-            .and_then(|opened| opened.deliver(&mut attempt, sampling_turn));
+            .and_then(|opened| opened.deliver(&mut attempt, sampling_turn, settlement));
         if let Err(error) = &stream
             && let Some(mut attempt) = attempt
             && let Some(hooks) = attempt.start_post_hooks(ModelRequestHookEvent::failed(error))

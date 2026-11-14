@@ -1710,6 +1710,8 @@ async fn foreground_compaction_only_installs_and_bills_after_its_post_hook() -> 
             fs::write(home.join("config.toml"), toml::to_string(&config).unwrap()).unwrap();
         })
         .with_config(move |config| {
+            config.response_process_mode =
+                codex_config::config_toml::ResponseProcessMode::AfterCompleteResponse;
             config.model_provider = provider;
             set_test_compact_prompt(config);
             trust_discovered_hooks(config);

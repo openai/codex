@@ -1,6 +1,6 @@
 //! Interceptors can transform incremental events and retain upstream cancellation.
 use super::*;
-use crate::client_common::ResponseStream;
+use crate::client_common::SamplingStream;
 use codex_extension_api::ResponseEvent;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -29,14 +29,15 @@ async fn interceptors_forward_before_completion_in_order_and_cancel_upstream() {
     let upstream_cancelled = consumer_dropped.clone();
     let mut stream = intercept_stream(
         Box::pin(
-            ResponseStream {
+            SamplingStream {
                 routing_affinity: None,
                 rx_event,
                 interrupt: None,
                 consumer_dropped,
+                settlement_started: Default::default(),
             }
             .map(|event| {
-                event.map_err(|error| {
+                event.event.map_err(|error| {
                     codex_extension_api::ModelResponseError::Stream(error.to_string())
                 })
             }),
@@ -44,7 +45,7 @@ async fn interceptors_forward_before_completion_in_order_and_cancel_upstream() {
         vec![Box::new(Append("a")), Box::new(Append("b"))],
     );
     tx_event
-        .send(Ok(ResponseEvent::OutputTextDelta("text".into())))
+        .send(Ok(ResponseEvent::OutputTextDelta("text".into())).into())
         .await
         .unwrap();
     // Upstream remains open and has not sent Completed.

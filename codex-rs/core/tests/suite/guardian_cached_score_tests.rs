@@ -383,8 +383,8 @@ enum ProbeCase {
 #[test_case::test_case(Some(false), false, "probe-item", ProbeCase::Escalated, 1; "explicit_escalation_still_reviews")]
 #[test_case::test_case(Some(false), false, "probe-item", ProbeCase::Rewrite, 1; "direct_hook_rewrite")]
 #[test_case::test_case(Some(false), true, "probe-item", ProbeCase::Rewrite, 2; "nested_hook_rewrite")]
-#[test_case::test_case(Some(true), false, "probe-item", ProbeCase::Interrupted, 1; "interrupted_direct_review")]
-#[test_case::test_case(Some(true), true, "probe-item", ProbeCase::Interrupted, 2; "interrupted_cell_review")]
+#[test_case::test_case(Some(true), false, "probe-item", ProbeCase::Interrupted, 0; "interrupted_direct_review")]
+#[test_case::test_case(Some(true), true, "probe-item", ProbeCase::Interrupted, 0; "interrupted_cell_review")]
 #[test_case::test_case(Some(false), false, "probe-item", ProbeCase::CatalogPolicy, 0; "catalog_low_without_legacy_flag")]
 #[test_case::test_case(Some(true), false, "probe-item", ProbeCase::CatalogPolicy, 1; "catalog_review_without_legacy_flag")]
 #[test_case::test_case(Some(false), false, "probe-item", ProbeCase::IncompleteAuthorization, 1; "incomplete_authorization_still_reviews")]
@@ -525,6 +525,9 @@ async fn serving_assessment_replaces_async_scoring(
             model.auto_review_model_override = Some("gpt-5.5".into());
         })
         .with_config(move |config| {
+            if scenario == ProbeCase::Interrupted {
+                config.response_process_mode = codex_config::config_toml::ResponseProcessMode::AfterCompleteResponse;
+            }
             if matches!(scenario, ProbeCase::Rewrite | ProbeCase::Interrupted) {
                 trust_discovered_hooks(config);
             }
@@ -621,6 +624,19 @@ async fn serving_assessment_replaces_async_scoring(
     test.codex.shutdown_and_wait().await?;
     let requests = parent.requests();
     assert_eq!(requests.len(), 2);
+    if scenario == ProbeCase::Interrupted {
+        // Buffered processing holds partial output. A failed stream must
+        // not expose the tool call to Guardian or carry a made-up reply into the retry.
+        let retry = requests[1].body_json();
+        assert!(
+            retry["input"]
+                .as_array()
+                .expect("request input")
+                .iter()
+                .all(|item| item["call_id"] != "call")
+        );
+        return Ok(());
+    }
     let output = requests[1].call_output(
         "call",
         if code_mode {

@@ -106,11 +106,12 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         ]));
     sess.update_token_usage_info(
         &turn,
-        Some(&TokenUsage {
+        TokenUsage {
             input_tokens: 60_000,
             total_tokens: 60_000,
             ..Default::default()
-        }),
+        }
+        .into(),
         /*includes_reasoning*/ false,
     )
     .await

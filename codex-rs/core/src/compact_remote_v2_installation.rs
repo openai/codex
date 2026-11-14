@@ -198,11 +198,9 @@ async fn build_and_install_compaction(
         owned_client_session: _owned_client_session,
     } = attempt;
     if prefix.is_none()
-        && let Some(token_usage) = token_usage.as_ref()
+        && let Some(usage) = &token_usage
     {
-        sess.record_rollout_budget_usage(&compaction_turn_context.sub_id, token_usage)
-            .await?;
-        analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
+        analytics_details.active_context_tokens_before = Some(usage.input_tokens);
     }
     let (compacted_history, retained_images) = build_v2_compacted_history(
         prompt_input,

@@ -709,6 +709,28 @@ disable_in_process_fallback = true
 }
 
 #[tokio::test]
+async fn load_config_resolves_response_process_mode() -> std::io::Result<()> {
+    let streaming = r#"[responses]
+process_mode = "streaming"
+"#;
+    let buffered = r#"[responses]
+process_mode = "after_complete_response"
+"#;
+    for (toml, expected) in [
+        ("", ResponseProcessMode::Streaming),
+        (streaming, ResponseProcessMode::Streaming),
+        (buffered, ResponseProcessMode::AfterCompleteResponse),
+    ] {
+        assert_eq!(
+            load_config_from_toml(toml).await?.response_process_mode,
+            expected
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
     let codex_home = tempdir()?;
 
@@ -1009,14 +1031,14 @@ sleep_tool = true
             },
         ),
     ] {
-        let config = load_current_time_reminder_config(config_toml).await?;
+        let config = load_config_from_toml(config_toml).await?;
         assert!(config.features.enabled(Feature::CurrentTimeReminder));
         assert_eq!(config.current_time_reminder, Some(expected));
     }
     Ok(())
 }
 
-async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
+async fn load_config_from_toml(config_toml: &str) -> std::io::Result<Config> {
     let codex_home = tempdir()?;
     let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
     Config::load_from_base_config_with_overrides(

@@ -421,6 +421,9 @@ pub struct ConfigToml {
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
 
+    /// Controls how Codex processes model responses.
+    pub responses: Option<ResponsesToml>,
+
     /// Bounded, product-owned metadata attached to every Responses API request.
     pub responses_api_metadata: Option<BTreeMap<String, String>>,
 
@@ -720,6 +723,24 @@ pub struct ToolsToml {
 pub struct CodeModeToml {
     /// Idle seconds between gRPC stream heartbeats. Zero (the default) disables them.
     pub heartbeat_interval_s: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ResponsesToml {
+    /// When to process response items, including text and tool calls. Defaults to `streaming`.
+    pub process_mode: Option<ResponseProcessMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseProcessMode {
+    /// Process items as they arrive. A tool can start before its response is complete.
+    #[default]
+    Streaming,
+    /// Process buffered items in order after the response completes, synchronous post-hooks
+    /// finish, and any budget charges are posted.
+    AfterCompleteResponse,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

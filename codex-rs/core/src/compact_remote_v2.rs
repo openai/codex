@@ -7,11 +7,13 @@ use crate::compact_retained_tool_outputs::is_retained_tool_output;
 use crate::session::FileAudioDurations;
 
 use crate::Prompt;
-use crate::ResponseStream;
 use crate::client::ModelClientSession;
 use crate::client::ResponsesHttpExecutor;
 use crate::client::SamplingOptions;
 use crate::client_common::ResponseEvent;
+use crate::client_common::SamplingEvent;
+use crate::client_common::SamplingStream;
+use crate::client_common::SamplingUsage;
 use crate::compact::CompactedHistoryMetadata;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
@@ -262,6 +264,7 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
+    let result = result.and_then(|installed| sess.check_rollout_budget().map(|()| installed));
     match result {
         Ok(installed) => Ok(installed),
         Err(err)
@@ -411,7 +414,7 @@ async fn run_remote_compaction_request_v2(
 async fn collect_compaction_output(
     sess: &Session,
     turn_context: &TurnContext,
-    mut stream: ResponseStream,
+    mut stream: SamplingStream,
     request_kind: CompactionRequestKind<'_>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let mut output_item_count = 0usize;
@@ -431,31 +434,40 @@ async fn collect_compaction_output(
                 _ = cancellation.cancelled() => return Err(CodexErr::TurnAborted),
             },
         };
-        let Some(event) = event else { break };
-        if let Err(err) = &event
-            && let CodexErrorDetails::ResponseIncomplete(incomplete) = err.details()
-        {
-            match request_kind {
-                CompactionRequestKind::Background(_) => {
-                    if let Some(usage) = incomplete.token_usage.as_ref() {
-                        // Match completed background requests without replacing the terminal error.
-                        let _ = sess
-                            .record_rollout_budget_usage(&turn_context.sub_id, usage)
+        let Some(SamplingEvent { event, hook_output }) = event else {
+            break;
+        };
+        let event = match event {
+            Ok(event) => event,
+            Err(err) => {
+                if let CodexErrorDetails::ResponseIncomplete(incomplete) = err.details() {
+                    match request_kind {
+                        CompactionRequestKind::Background(_) => {
+                            // Match completed background requests without replacing the terminal error.
+                            let usage = SamplingUsage {
+                                provider: incomplete.token_usage.clone(),
+                                charge: hook_output,
+                            };
+                            let _ = sess
+                                .record_rollout_budget_usage(&turn_context.sub_id, &usage)
+                                .await;
+                        }
+                        CompactionRequestKind::Foreground(_) => {
+                            sess.record_incomplete_response_usage(
+                                turn_context,
+                                &turn_context.initial_settings,
+                                incomplete,
+                                hook_output,
+                            )
                             .await;
+                            sess.send_token_count_event(turn_context).await;
+                        }
                     }
                 }
-                CompactionRequestKind::Foreground(_) => {
-                    sess.record_incomplete_response_usage(
-                        turn_context,
-                        &turn_context.initial_settings,
-                        incomplete,
-                    )
-                    .await;
-                    sess.send_token_count_event(turn_context).await;
-                }
+                return Err(err);
             }
-        }
-        match event? {
+        };
+        match event {
             ResponseEvent::OutputItemDone(item) => {
                 output_item_count += 1;
                 if let ResponseItem::Compaction { .. } = item {
@@ -471,25 +483,25 @@ async fn collect_compaction_output(
                 usage_metadata,
                 ..
             } => {
-                match request_kind {
-                    CompactionRequestKind::Background(_) => {
-                        if let Some(usage) = token_usage.as_ref() {
-                            sess.record_rollout_budget_usage(&turn_context.sub_id, usage)
-                                .await?;
-                        }
-                    }
-                    CompactionRequestKind::Foreground(_) => {
-                        sess.record_observed_response_completed(
-                            turn_context,
-                            &response_id,
-                            token_usage.as_ref(),
-                            usage_metadata.as_ref(),
-                        )
-                        .await;
-                    }
+                let usage = SamplingUsage {
+                    provider: token_usage,
+                    charge: hook_output,
+                };
+                if matches!(request_kind, CompactionRequestKind::Foreground(_)) {
+                    sess.record_observed_response_completed(
+                        turn_context,
+                        &response_id,
+                        usage.provider.as_ref(),
+                        usage_metadata.as_ref(),
+                    )
+                    .await;
                 }
+                // Both callers consumed this response. Whether it contains an
+                // installable summary is a separate decision below.
+                sess.record_rollout_budget_usage(&turn_context.sub_id, &usage)
+                    .await?;
                 completed_response_id = Some(response_id);
-                completed_token_usage = token_usage;
+                completed_token_usage = usage.provider;
                 break;
             }
             _ => {}
@@ -983,19 +995,20 @@ mod tests {
         ))
     }
 
-    fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
+    fn response_stream(events: Vec<impl Into<SamplingEvent>>) -> SamplingStream {
         let (tx_event, rx_event) = mpsc::channel(events.len().max(1));
         for event in events {
             tx_event
-                .try_send(event)
+                .try_send(event.into())
                 .expect("response stream test channel should have capacity");
         }
         drop(tx_event);
-        ResponseStream {
+        SamplingStream {
             routing_affinity: None,
             rx_event,
             interrupt: None,
             consumer_dropped: CancellationToken::new(),
+            settlement_started: Default::default(),
         }
     }
 

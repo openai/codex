@@ -4728,6 +4728,38 @@
       ],
       "type": "object"
     },
+    "ResponseProcessMode": {
+      "oneOf": [
+        {
+          "description": "Process items as they arrive. A tool can start before its response is complete.",
+          "enum": [
+            "streaming"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Process buffered items in order after the response completes, synchronous post-hooks finish, and any budget charges are posted.",
+          "enum": [
+            "after_complete_response"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ResponsesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "process_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResponseProcessMode"
+            }
+          ],
+          "description": "When to process response items, including text and tool calls. Defaults to `streaming`."
+        }
+      },
+      "type": "object"
+    },
     "ResumeCwdMode": {
       "description": "Working directory to use when resuming or forking a session.",
       "oneOf": [
@@ -9060,6 +9092,14 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "responses": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResponsesToml"
+        }
+      ],
+      "description": "Controls how Codex processes model responses."
     },
     "responses_api_metadata": {
       "additionalProperties": {

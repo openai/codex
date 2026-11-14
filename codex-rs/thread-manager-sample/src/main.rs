@@ -394,6 +394,7 @@ async fn new_config(
         experimental_request_user_input_enabled: true,
         update_plan_enabled: true,
         tool_registry: Default::default(),
+        response_process_mode: Default::default(),
         code_mode: Default::default(),
         background_terminal_max_timeout: 300_000,
         thread_unload_delay: std::time::Duration::from_secs(/*secs*/ 60),

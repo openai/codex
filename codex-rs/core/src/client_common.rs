@@ -121,23 +121,66 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
     }
 }
 
-pub struct ResponseStream {
+/// Records whether the response producer has posted the bill.
+#[derive(Debug, Default)]
+pub(crate) struct SamplingCharge {
+    pub(crate) posted: bool,
+}
+
+/// Core consumes a terminal event together with its billing status. Other readers
+/// of the public response stream still see the provider's unmodified event.
+#[derive(Debug)]
+pub(crate) struct SamplingEvent {
+    pub(crate) event: Result<ResponseEvent>,
+    pub(crate) hook_output: SamplingCharge,
+}
+
+/// Provider usage and billing status for one response.
+#[derive(Debug)]
+pub(crate) struct SamplingUsage {
+    pub(crate) provider: Option<codex_protocol::protocol::TokenUsage>,
+    pub(crate) charge: SamplingCharge,
+}
+
+#[cfg(test)]
+impl From<codex_protocol::protocol::TokenUsage> for SamplingUsage {
+    fn from(provider: codex_protocol::protocol::TokenUsage) -> Self {
+        Self {
+            provider: Some(provider),
+            charge: Default::default(),
+        }
+    }
+}
+
+impl From<Result<ResponseEvent>> for SamplingEvent {
+    fn from(event: Result<ResponseEvent>) -> Self {
+        Self {
+            event,
+            hook_output: Default::default(),
+        }
+    }
+}
+
+/// A sampling consumer receives the billing status with the provider event.
+pub(crate) struct SamplingStream {
     pub(crate) routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
-    pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+    pub(crate) rx_event: mpsc::Receiver<SamplingEvent>,
     pub(crate) interrupt: Option<oneshot::Sender<codex_api::ResponseInterrupt>>,
     /// Signals the mapper task that the consumer stopped polling before the
     /// provider stream reached its own terminal event.
     pub(crate) consumer_dropped: CancellationToken,
+    /// Once settlement begins, a steer waits for its terminal accounting decision.
+    pub(crate) settlement_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl ResponseStream {
+impl SamplingStream {
     /// A cancelled turn discards any queued event, including an incomplete response's usage.
     pub(crate) fn accept_for_turn(
-        event: Option<Result<ResponseEvent>>,
+        event: Option<SamplingEvent>,
         cancellation: &CancellationToken,
-    ) -> Option<Result<ResponseEvent>> {
+    ) -> Option<SamplingEvent> {
         if cancellation.is_cancelled() {
-            Some(Err(CodexErr::TurnAborted))
+            Some(Err(CodexErr::TurnAborted).into())
         } else {
             event
         }
@@ -146,27 +189,40 @@ impl ResponseStream {
     pub(crate) async fn next_for_turn(
         &mut self,
         cancellation: &CancellationToken,
-    ) -> Option<Result<ResponseEvent>> {
+    ) -> Option<SamplingEvent> {
         let event = tokio::select! {
             biased;
             event = self.rx_event.recv() => event,
-            () = cancellation.cancelled() => return Some(Err(CodexErr::TurnAborted)),
+            () = cancellation.cancelled() => return Some(Err(CodexErr::TurnAborted).into()),
         };
         Self::accept_for_turn(event, cancellation)
     }
 }
 
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
+impl Stream for SamplingStream {
+    type Item = SamplingEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
     }
 }
 
-impl Drop for ResponseStream {
+impl Drop for SamplingStream {
     fn drop(&mut self) {
         self.consumer_dropped.cancel();
+    }
+}
+
+/// Response events for low-level client requests that do not run sampling hooks.
+pub struct ResponseStream(pub(crate) SamplingStream);
+
+impl Stream for ResponseStream {
+    type Item = Result<ResponseEvent>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0)
+            .poll_next(cx)
+            .map(|event| event.map(|event| event.event))
     }
 }
 

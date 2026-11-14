@@ -3398,7 +3398,7 @@ async fn record_token_usage_info_notifies_extension_contributors(
         .record_token_usage_info(
             &turn_context,
             &turn_context.initial_settings,
-            Some(&first_usage),
+            first_usage.clone().into(),
             crate::session::TokenUsageContext::Sampling {
                 includes_reasoning: true,
                 input_item_count: 0,
@@ -3410,7 +3410,7 @@ async fn record_token_usage_info_notifies_extension_contributors(
         .record_token_usage_info(
             &turn_context,
             &turn_context.initial_settings,
-            Some(&second_usage),
+            second_usage.clone().into(),
             context,
         )
         .await
@@ -13173,7 +13173,6 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         step_context: StepContext::for_test(Arc::clone(&tc)),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)).await,
-        defer_tool_dispatch: false,
         cancellation_token: CancellationToken::new(),
     };
 

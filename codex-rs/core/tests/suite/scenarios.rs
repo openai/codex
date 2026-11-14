@@ -4651,6 +4651,8 @@ async fn async_compaction_reuses_pending_work(
         env,
         move |config| {
             if observe_attempts {
+                config.response_process_mode =
+                    codex_config::config_toml::ResponseProcessMode::AfterCompleteResponse;
                 core_test_support::hooks::trust_discovered_hooks(config);
             }
             if over_budget {

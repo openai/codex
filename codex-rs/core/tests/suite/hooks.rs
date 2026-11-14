@@ -6186,32 +6186,40 @@ async fn model_request_observer_reports_cancellation() -> Result<()> {
 enum ToolDispatchCase {
     Eager,
     AsyncHook,
+    AfterComplete,
     SyncHook,
     InterruptedHook,
+    ExhaustedHook,
 }
 
 #[test_case::test_case(ToolDispatchCase::Eager; "default runs the tool before the response ends")]
 #[test_case::test_case(ToolDispatchCase::AsyncHook; "an observer does not hold the tool")]
+#[test_case::test_case(ToolDispatchCase::AfterComplete; "buffered output waits for completion without hooks")]
 #[test_case::test_case(ToolDispatchCase::SyncHook; "streaming output and tools precede a synchronous hook")]
-#[test_case::test_case(ToolDispatchCase::InterruptedHook; "interrupt cancels the synchronous hook before billing")]
+#[test_case::test_case(ToolDispatchCase::InterruptedHook; "interrupt discards the held response and its charge")]
+#[test_case::test_case(ToolDispatchCase::ExhaustedHook; "the response bill blocks its own tool")]
 #[tokio::test]
 async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    use ToolDispatchCase::AfterComplete;
     use ToolDispatchCase::AsyncHook;
     use ToolDispatchCase::Eager;
+    use ToolDispatchCase::ExhaustedHook;
     use ToolDispatchCase::InterruptedHook;
     use ToolDispatchCase::SyncHook;
     const MARKER: &str = "tool-dispatched";
     const STREAMED: &str = "Still streaming.";
 
+    let buffered = matches!(case, AfterComplete | InterruptedHook | ExhaustedHook);
     let hook_async = match case {
-        Eager => None,
+        Eager | AfterComplete => None,
         AsyncHook => Some(true),
-        SyncHook | InterruptedHook => Some(false),
+        SyncHook | InterruptedHook | ExhaustedHook => Some(false),
     };
     let (finish_stream, gate) = oneshot::channel();
     let mut completed = ev_completed_with_tokens("first", /*total_tokens*/ 42);
-    completed["response"]["usage"]["codex_rollout_budget_units"] = json!(1);
+    completed["response"]["usage"]["codex_rollout_budget_units"] =
+        json!(if case == ExhaustedHook { 101 } else { 1 });
     let first = vec![
         StreamingSseChunk {
             gate: None,
@@ -6246,6 +6254,10 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
     let port = hook_gate.local_addr()?.port();
     let mut builder = test_codex()
         .with_pre_build_hook(move |home| {
+            if buffered {
+                fs::write(home.join("config.toml"), "[responses]\nprocess_mode = \"after_complete_response\"\n")
+                    .expect("configure response processing after completion");
+            }
             if let Some(hook_async) = hook_async {
                 let post = format!(
                     r#"python3 -c 'import json, socket, sys; json.load(sys.stdin).get("response_id") == "first" and socket.create_connection(("127.0.0.1", {port})).recv(1)'"#
@@ -6261,7 +6273,7 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             if hook_async.is_some() {
                 trust_discovered_hooks(config);
             }
-            if matches!(case, Eager | SyncHook) {
+            if matches!(case, Eager | SyncHook | ExhaustedHook) {
                 config.rollout_budget = Some(super::rollout_budget::rollout_budget());
             }
             // The builder changes cwd after loading config, so bind the write grant to that cwd.
@@ -6271,7 +6283,7 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             config.permissions.set_permission_profile(restrictive_workspace_write_profile())
                 .expect("allow the fixture's patch inside its temporary workspace");
         });
-    if matches!(case, SyncHook | InterruptedHook) {
+    if case == InterruptedHook {
         let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
         extensions.thread_lifecycle_contributor(accounting.clone());
         builder = builder.with_extensions(Arc::new(extensions.build()));
@@ -6290,8 +6302,12 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
         saw_delta |= matches!(event, EventMsg::AgentMessageContentDelta(message) if message.delta == STREAMED);
         matches!(event, EventMsg::SafetyBuffering(_))
     }).await;
-    assert!(saw_delta);
-    fs_wait::wait_for_path_exists(&marker, Duration::from_secs(10)).await?;
+    assert_eq!(saw_delta, !buffered);
+    if buffered {
+        assert!(!marker.exists());
+    } else {
+        fs_wait::wait_for_path_exists(&marker, Duration::from_secs(10)).await?;
+    }
     finish_stream.send(()).expect("release response stream");
     let held_hook = if hook_async.is_some() {
         Some(
@@ -6302,8 +6318,21 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
     } else {
         None
     };
-    if hook_async == Some(false) {
-        assert!(accounting.reports.lock().expect("usage reports").is_empty());
+    if buffered && hook_async == Some(false) {
+        assert!(!marker.exists());
+        test.codex.ensure_rollout_materialized().await;
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        assert!(
+            !history.items.iter().any(|item| matches!(item,
+                RolloutItem::ResponseItem(envelope) if match &envelope.item {
+                    ResponseItem::CustomToolCall { call_id, .. } => call_id == "call",
+                    ResponseItem::Message { role, content, .. } => role == "assistant" && content.iter().any(
+                        |part| matches!(part, ContentItem::OutputText { text, .. } if text == STREAMED)),
+                    _ => false,
+                }
+            )),
+            "the completed response is still waiting for its synchronous hook"
+        );
     }
     if case == InterruptedHook {
         let started = wait_for_event_match(&test.codex, |event| match event {
@@ -6340,15 +6369,67 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
             Some("Hook cancelled because the turn was interrupted"),
         );
         drop(held_hook);
+        assert!(!marker.exists());
+        let server = start_mock_server().await;
+        let requests = mount_sse_once(&server, responses::sse_completed("resumed")).await;
+        let resumed = test_codex().restart(&server, &test).await?;
+        resumed.submit_turn("continue after interrupt").await?;
+        assert!(
+            !requests
+                .single_request()
+                .input()
+                .iter()
+                .any(|item| item["call_id"] == "call")
+        );
         assert!(accounting.reports.lock().expect("usage reports").is_empty());
         return Ok(());
     }
     drop(held_hook);
+    if case == ExhaustedHook {
+        let error = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::Error(error) => Some(error.clone()),
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            error.codex_error_info,
+            Some(codex_protocol::protocol::CodexErrorInfo::SessionBudgetExceeded)
+        );
+    }
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(fs::read_to_string(marker)?, "ran\n");
+    if case == ExhaustedHook {
+        assert!(!marker.exists());
+        test.codex.ensure_rollout_materialized().await;
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        let recorded = history
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(envelope) => match &envelope.item {
+                    ResponseItem::Message { role, content, .. } if role == "assistant" && content.iter().any(
+                        |part| matches!(part, ContentItem::OutputText { text, .. } if text == STREAMED)
+                    ) => Some("assistant message"),
+                    ResponseItem::CustomToolCall { call_id, .. } if call_id == "call" => {
+                        Some("tool call")
+                    }
+                    ResponseItem::CustomToolCallOutput {
+                        call_id, output, ..
+                    } if call_id == "call" => output.text_content(),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded,
+            ["tool call", "assistant message", "aborted before dispatch"]
+        );
+    } else {
+        assert_eq!(fs::read_to_string(marker)?, "ran\n");
+    }
     Ok(())
 }
 

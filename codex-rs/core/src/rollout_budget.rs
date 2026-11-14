@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 /// Budget reminder returned by a controller and acknowledged after history insertion.
 pub struct RolloutBudgetReminder {
@@ -19,6 +21,8 @@ pub struct RolloutBudgetReminder {
 #[derive(Default)]
 pub(crate) struct RolloutBudget {
     state: OnceLock<Mutex<RolloutBudgetState>>,
+    /// An explicit stop gates new tools across the tree, even with per-thread host accountants.
+    stop_tools: AtomicBool,
 }
 
 struct RolloutBudgetState {
@@ -63,8 +67,20 @@ impl RolloutBudget {
                 + usage.non_cached_input() as f64 * state.config.prefill_token_weight
         };
         state.weighted_tokens_used += units;
-        Ok(state.config.enforce_limit
-            && state.weighted_tokens_used >= state.config.limit_tokens as f64)
+        let exhausted = state.config.enforce_limit
+            && state.weighted_tokens_used >= state.config.limit_tokens as f64;
+        if exhausted {
+            self.stop_new_tools();
+        }
+        Ok(exhausted)
+    }
+
+    pub(crate) fn stop_new_tools(&self) {
+        self.stop_tools.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn tools_stopped(&self) -> bool {
+        self.stop_tools.load(Ordering::Acquire)
     }
 
     pub(crate) fn pending_reminder(

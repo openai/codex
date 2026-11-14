@@ -2,6 +2,7 @@ use core_test_support::test_codex::local_requests;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_config::config_toml::ResponseProcessMode;
 use codex_core::CodexThread;
 use codex_core::InputWaitOutcome;
 use codex_core::StartIfIdleSubmission;
@@ -1597,7 +1598,15 @@ async fn steer_interrupts_and_drains_websocket(
 ) -> anyhow::Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
 
+    const CALL_ID: &str = "stale-write";
+    const FILE_NAME: &str = "stale-write.txt";
+    let mut write = responses::ev_apply_patch_custom_tool_call(
+        CALL_ID,
+        &format!("*** Begin Patch\n*** Add File: {FILE_NAME}\n+stale\n*** End Patch"),
+    );
+    write["item"]["id"] = json!("stale-write-item");
     let mut interrupted = ev_completed_with_tokens("resp-interrupted", /*total_tokens*/ 42);
+    interrupted["response"]["usage"]["codex_rollout_budget_units"] = json!(17);
     if acknowledgement == Some("response.interrupt.accepted") {
         interrupted["type"] = json!("response.incomplete");
         interrupted["response"]["status"] = json!("incomplete");
@@ -1607,7 +1616,10 @@ async fn steer_interrupts_and_drains_websocket(
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-interrupted"),
+            write,
             ev_reasoning_item_added("reason-1", &["thinking"]),
+            json!({"type":"response.metadata", "response_id":"resp-interrupted",
+                "metadata":{"type":"safety_buffering","use_cases":["cyber"],"reasons":["policy-check"]}}),
         ],
         // Finish the active response only after receiving response.interrupt.
         [
@@ -1623,7 +1635,7 @@ async fn steer_interrupts_and_drains_websocket(
                     "type": "response.output_item.interrupted",
                     "response_id": "resp-interrupted",
                     "item_id": "reason-1",
-                    "output_index": 0,
+                    "output_index": 1,
                     "sequence_number": 4,
                 })
             } else {
@@ -1640,12 +1652,27 @@ async fn steer_interrupts_and_drains_websocket(
         ],
     ]])
     .await;
+    let accounting = Arc::new(super::rollout_budget::HostAccounting::default());
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(accounting.clone());
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_model("gpt-5.4")
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })
         .with_config(|config| {
+            config.response_process_mode = ResponseProcessMode::AfterCompleteResponse;
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.permissions.approval_policy =
+                codex_core::config::Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write())
+                .expect("allow the fixture's patch inside its temporary workspace");
             config
                 .features
                 .enable(Feature::InstantInterrupt)
@@ -1656,7 +1683,11 @@ async fn steer_interrupts_and_drains_websocket(
     let codex = &test.codex;
 
     submit_user_input(codex, "first prompt").await;
-    wait_for_reasoning_item_started(codex).await;
+    // The safety notification follows the buffered call and reasoning item. The
+    // websocket is still open, and the provider awaits the client's interrupt.
+    wait_for_event(codex, |event| matches!(event, EventMsg::SafetyBuffering(_))).await;
+    let marker = test.workspace_path(FILE_NAME);
+    assert!(!marker.try_exists()?);
     let initial_request = server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
         .await
@@ -1682,6 +1713,10 @@ async fn steer_interrupts_and_drains_websocket(
         .filter(|text| text == "first prompt" || text == "second prompt")
         .collect::<Vec<_>>();
     assert_eq!(prompts, vec!["second prompt"]);
+    assert_eq!(
+        call_output_text(&follow_up, "custom_tool_call_output", CALL_ID).as_deref(),
+        Some("aborted before dispatch")
+    );
     wait_for_event(codex, |event| {
         matches!(
             event,
@@ -1691,6 +1726,16 @@ async fn steer_interrupts_and_drains_websocket(
     })
     .await;
     wait_for_successful_turn(codex).await;
+    assert!(!marker.try_exists()?);
+    let billed_units = accounting
+        .reports
+        .lock()
+        .expect("usage reports")
+        .iter()
+        .filter_map(|report| report.usage.codex_rollout_budget_units.as_ref())
+        .map(serde_json::Number::as_i64)
+        .collect::<Vec<_>>();
+    assert_eq!(billed_units, [Some(17)]);
 
     assert_eq!(server.connections().len(), 1);
     codex.shutdown_and_wait().await?;

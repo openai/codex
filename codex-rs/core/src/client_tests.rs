@@ -1695,7 +1695,7 @@ async fn untraced_http_stream_releases_completed_output_before_response_ends() {
     );
 
     assert!(matches!(
-        stream.next().await,
+        stream.next().await.map(|item| item.event),
         Some(Ok(ResponseEvent::OutputItemDone(_)))
     ));
     assert_eq!(payload.strong_count(), 0);
@@ -1736,7 +1736,7 @@ async fn incomplete_response_traces_attempted_call_without_streaming_it() -> any
             /*last_response_tx*/ None,
             super::ResponseDelivery::default(),
         );
-        assert!(matches!(stream.next().await, Some(Err(_))));
+        assert!(stream.next().await.is_some_and(|item| item.event.is_err()));
         assert!(stream.next().await.is_none());
 
         let rollout = replay_bundle(temp.path())?;
@@ -1786,7 +1786,8 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let observed = stream
         .next()
         .await
-        .expect("mapped stream should yield output item")?;
+        .expect("mapped stream should yield output item")
+        .event?;
     assert!(matches!(observed, ResponseEvent::OutputItemDone(_)));
 
     // Dropping the consumer is how turn interruption/preemption stops polling
@@ -2894,7 +2895,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         interceptors: vec![Box::new(ReplaceOutput)],
         continuation: Some(last_response_tx),
     }
-    .into_stream()?;
+    .into_raw_stream()?;
     let mut delivered = Vec::new();
     while let Some(event) = stream.next().await {
         if let ResponseEvent::OutputItemDone(item) = event? {

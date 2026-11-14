@@ -540,7 +540,7 @@ impl InputQueue {
 }
 
 impl TurnInputQueue {
-    fn has_user_input(&self) -> bool {
+    pub(crate) fn has_user_input(&self) -> bool {
         self.items
             .iter()
             .any(|input| matches!(input, TurnInput::UserInput { .. }))

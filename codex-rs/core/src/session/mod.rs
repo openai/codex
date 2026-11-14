@@ -5654,6 +5654,7 @@ impl Session {
         turn_context: &TurnContext,
         settings: &ResolvedStepSettings,
         incomplete: &ResponseIncompleteError,
+        charge: crate::client_common::SamplingCharge,
     ) {
         if let Some(response_id) = &incomplete.response_id {
             self.record_response_token_usage(
@@ -5668,7 +5669,10 @@ impl Session {
             .record_token_usage_info(
                 turn_context,
                 settings,
-                incomplete.token_usage.as_ref(),
+                crate::client_common::SamplingUsage {
+                    provider: incomplete.token_usage.clone(),
+                    charge,
+                },
                 TokenUsageContext::SpendingOnly,
             )
             .await;
@@ -5677,14 +5681,14 @@ impl Session {
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
-        token_usage: Option<&TokenUsage>,
+        usage: crate::client_common::SamplingUsage,
         includes_reasoning: bool,
     ) -> CodexResult<()> {
         let result = self
             .record_token_usage_info(
                 turn_context,
                 &turn_context.initial_settings,
-                token_usage,
+                usage,
                 TokenUsageContext::Sampling {
                     includes_reasoning,
                     input_item_count: 0,
@@ -5743,10 +5747,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         settings: &ResolvedStepSettings,
-        token_usage: Option<&TokenUsage>,
+        usage: crate::client_common::SamplingUsage,
         context: TokenUsageContext,
     ) -> CodexResult<()> {
-        if let Some(token_usage) = token_usage {
+        let token_info = if let Some(token_usage) = usage.provider.as_ref() {
             let token_info = {
                 let mut state = self.state.lock().await;
                 match context {
@@ -5799,24 +5803,26 @@ impl Session {
                     token_usage,
                 );
             }
-            let budget_result = self
-                .record_rollout_budget_usage(&turn_context.sub_id, token_usage)
-                .await;
-            if let Some(token_info) = token_info.as_ref() {
-                for contributor in self.services.extensions.token_usage_contributors() {
-                    contributor
-                        .on_token_usage(
-                            &self.services.session_extension_data,
-                            &self.services.thread_extension_data,
-                            turn_context.extension_data.as_ref(),
-                            token_info,
-                        )
-                        .await;
-                }
+            token_info
+        } else {
+            None
+        };
+        let budget_result = self
+            .record_rollout_budget_usage(&turn_context.sub_id, &usage)
+            .await;
+        if let Some(token_info) = token_info.as_ref() {
+            for contributor in self.services.extensions.token_usage_contributors() {
+                contributor
+                    .on_token_usage(
+                        &self.services.session_extension_data,
+                        &self.services.thread_extension_data,
+                        turn_context.extension_data.as_ref(),
+                        token_info,
+                    )
+                    .await;
             }
-            budget_result?;
         }
-        Ok(())
+        budget_result
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
