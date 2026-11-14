@@ -47,7 +47,7 @@ use diagnostics::Code;
 use diagnostics::Diagnostics;
 use diagnostics::Phase;
 
-use control::TunnelCredential;
+use control::read_bearer;
 use control::read_connect_headers;
 
 const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -222,7 +222,7 @@ pub async fn run(args: Args) -> Result<()> {
         let (metadata, mut tokens) = control_input(
             std::io::BufReader::new(std::io::stdin()),
             args.connect_headers_stdin,
-            &args.proxy_url.origin().ascii_serialization(),
+            ssh::GATEWAY_ORIGINS.contains(&args.proxy_url.origin().ascii_serialization().as_str()),
         )?;
         let connect = metadata.await.context("CONNECT metadata input closed")??;
         let initial_auth = tokens
@@ -289,9 +289,8 @@ async fn update_auth_tokens(
 fn control_input(
     mut reader: impl BufRead + Send + 'static,
     connect_headers_stdin: bool,
-    proxy_origin: &str,
+    require_portals_oauth: bool,
 ) -> Result<(oneshot::Receiver<Result<HeaderMap>>, TokenStream)> {
-    let portals = ssh::GATEWAY_ORIGINS.contains(&proxy_origin);
     let (metadata, initial_metadata) = oneshot::channel();
     let (send, tokens) = mpsc::channel(1);
     // Tokio's blocking stdin can prevent runtime shutdown after a proxy startup failure.
@@ -310,18 +309,17 @@ fn control_input(
                     return;
                 }
             };
-            let credential = if portals
+            if require_portals_oauth
                 && headers
                     .get("x-portals-auth-mode")
                     .is_none_or(|mode| mode != "oauth")
             {
-                TunnelCredential::ErsTunnelJwt
-            } else {
-                TunnelCredential::Bearer
-            };
+                let _ = metadata.send(Err(anyhow!("Portals requires OAuth CONNECT metadata")));
+                return;
+            }
             let _ = metadata.send(Ok(headers));
             loop {
-                let token = credential.read(&mut reader);
+                let token = read_bearer(&mut reader);
                 let finished = !matches!(&token, Ok(Some(_)));
                 if send.blocking_send(token).is_err() || finished {
                     break;

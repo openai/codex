@@ -9,7 +9,6 @@ doctest = false
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 h3 = { git = "https://github.com/hyperium/h3", rev = "e07e69412876f7e26f026bd75a48b2704d8c8283" }
