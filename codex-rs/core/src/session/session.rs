@@ -1283,7 +1283,8 @@ impl Session {
                 error!("failed to initialize thread persistence: {e:#}");
                 e
             })?;
-        let session_result: anyhow::Result<Arc<Self>> = async {
+        // Keep the large initialization future out of callers' stack frames.
+        let session_result: anyhow::Result<Arc<Self>> = Box::pin(async {
             if let InitialHistory::Resumed(resumed) = &mut initial_history
                 && let Some(history) = resume_context
             {
@@ -1994,7 +1995,7 @@ impl Session {
                 realtime_history: (session_configuration.history_mode
                     == ThreadHistoryMode::Paginated
                     && services.live_thread.is_some())
-                .then(|| Mutex::new(Default::default())),
+                .then(|| Mutex::new(crate::realtime_history::RealtimeHistoryState::default())),
                 active_turn: Mutex::new(None),
                 async_hook_results,
                 input_queue: InputQueue::with_controller(
@@ -2143,7 +2144,7 @@ impl Session {
                 state.queue_pending_session_start_source(session_start_source);
             }
             Ok(sess)
-        }
+        })
         .await;
         match session_result {
             Ok(sess) => {

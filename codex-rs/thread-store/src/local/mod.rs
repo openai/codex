@@ -798,6 +798,10 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { projects::delete_project(self, project_id).await })
     }
 
+    fn realtime_frames_enabled(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async { Ok(self.state_db.is_some()) })
+    }
+
     fn supports_paginated_history_lists(&self) -> bool {
         self.state_db.is_some()
     }

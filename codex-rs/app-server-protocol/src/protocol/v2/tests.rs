@@ -5660,3 +5660,13 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
         );
     }
 }
+
+#[test]
+fn an_undated_live_voice_item_preserves_its_wire_shape() {
+    let wire = serde_json::json!({
+        "id": "speech", "realtimeSessionId": "voice", "type": "transcriptSegment",
+        "role": "assistant", "text": "hello",
+    });
+    let item: ThreadRealtimeItem = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), wire);
+}

@@ -466,6 +466,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::RealtimeConversationRealtime(event) => match event.payload {
+            RealtimeEvent::HistoryItemStarted(item) | RealtimeEvent::HistoryItemCompleted(item)
+                if matches!(
+                    &item.content,
+                    codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted { .. }
+                        | codex_protocol::realtime::RealtimeItemContent::SessionEndInputSaved { .. }
+                ) => {}
             RealtimeEvent::HistoryItemStarted(item) => {
                 outgoing
                     .send_server_notification(ServerNotification::ThreadRealtimeItemStarted(

@@ -8,6 +8,25 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::realtime::RealtimeItemContent;
 
 impl Session {
+    /// Start and attach operations run sequentially in the submission loop.
+    /// Cache enrollment after a successful lookup so a failed start can retry.
+    pub(crate) async fn initialize_realtime_history(&self) -> std::io::Result<bool> {
+        let Some(history) = &self.realtime_history else {
+            return Ok(false);
+        };
+        if let Some(enabled) = history.lock().await.frame_enrollment {
+            return Ok(enabled);
+        }
+        let enabled = self
+            .services
+            .thread_store
+            .realtime_frames_enabled(self.thread_id())
+            .await
+            .map_err(std::io::Error::other)?;
+        history.lock().await.frame_enrollment = Some(enabled);
+        Ok(enabled)
+    }
+
     pub(super) async fn send_realtime_history_effects(
         &self,
         submission_id: &str,
@@ -33,18 +52,24 @@ impl Session {
         if effects.items.is_empty() {
             return Ok(());
         }
-        self.live_thread_for_persistence("append realtime history")?
-            .append_items(
-                &effects
-                    .items
-                    .iter()
-                    .cloned()
-                    .map(RolloutItem::RealtimeItem)
-                    .collect::<Vec<_>>(),
-            )
-            .await?;
-        for item in effects.items {
-            if !matches!(&item.content, RealtimeItemContent::TranscriptSegment { .. }) {
+        let live_thread = self.live_thread_for_persistence("append realtime history")?;
+        let items = effects.items;
+        let records = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::RealtimeItem)
+            .collect::<Vec<_>>();
+        live_thread.append_items(&records).await?;
+        // A completed notification acknowledges durable history, including on hosts
+        // whose append operation only admits work to an asynchronous writer.
+        if effects.seal_frames {
+            live_thread.flush().await?;
+        }
+        for item in items {
+            if !matches!(
+                &item.content,
+                RealtimeItemContent::Frame { .. } | RealtimeItemContent::TranscriptSegment { .. }
+            ) {
                 self.deliver_event_raw(event(RealtimeEvent::HistoryItemStarted(item.clone())))
                     .await;
             }

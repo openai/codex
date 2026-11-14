@@ -755,8 +755,11 @@ async fn realtime_conversation_streams_timeline_items() -> Result<()> {
     .await?;
     assert_eq!(session_started.item, session_completed.item);
     assert_eq!(
-        Uuid::parse_str(&session_started.item.id)?.get_version_num(),
-        7
+        session_started.item.id,
+        format!(
+            "realtime-session-start:{}",
+            session_started.item.realtime_session_id
+        )
     );
     assert!(matches!(
         session_completed.item.content,
@@ -1427,7 +1430,17 @@ async fn realtime_timeline_splits_accepted_steering_and_persists_promoted_artifa
     );
     for entry in &page.data {
         if let ThreadTimelineEntry::Realtime { item, .. } = entry {
-            assert_eq!(Uuid::parse_str(&item.id)?.get_version_num(), 7);
+            if matches!(
+                item.content,
+                ThreadRealtimeItemContent::RealtimeSessionStarted
+            ) {
+                assert_eq!(
+                    item.id,
+                    format!("realtime-session-start:{}", item.realtime_session_id)
+                );
+            } else {
+                assert_eq!(Uuid::parse_str(&item.id)?.get_version_num(), 7);
+            }
         }
     }
 
@@ -2400,12 +2413,19 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
     // Phase 2: start through app-server and assert the app receives both the started notification
     // and the answer SDP.
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    let call_request = harness.call_capture.single_request();
+    let session_id = call_request
+        .headers
+        .get("x-session-id")
+        .context("call session ID")?
+        .to_str()?;
+    assert_ne!(session_id, harness.thread_id);
     assert_eq!(
         started,
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
-                realtime_session_id: Some(harness.thread_id.clone()),
+                realtime_session_id: Some(session_id.to_string()),
                 version: RealtimeConversationVersion::V1,
             },
             sdp: ThreadRealtimeSdpNotification {
@@ -2531,7 +2551,7 @@ async fn existing_call_attaches_without_reinitializing_the_client_session(
         started,
         ThreadRealtimeStartedNotification {
             thread_id: harness.thread_id.clone(),
-            realtime_session_id: realtime_session_id.map(str::to_string),
+            realtime_session_id: Some(realtime_session_id.unwrap_or("rtc_existing").to_string()),
             version: expected_version,
         }
     );
@@ -2663,12 +2683,19 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
             RealtimeConversationVersion::V3,
         )
         .await?;
+    let call_request = harness.call_capture.single_request();
+    let session_id = call_request
+        .headers
+        .get("x-session-id")
+        .context("call session ID")?
+        .to_str()?;
+    assert_ne!(session_id, harness.thread_id);
     assert_eq!(
         started,
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
-                realtime_session_id: Some(harness.thread_id.clone()),
+                realtime_session_id: Some(session_id.to_string()),
                 version: RealtimeConversationVersion::V3,
             },
             sdp: ThreadRealtimeSdpNotification {
@@ -4322,12 +4349,19 @@ async fn realtime_starts_on_forked_and_resumed_threads(
     }
 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    let call_request = harness.call_capture.single_request();
+    let session_id = call_request
+        .headers
+        .get("x-session-id")
+        .context("call session ID")?
+        .to_str()?;
+    assert_ne!(session_id, harness.thread_id);
     assert_eq!(
         started,
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
-                realtime_session_id: Some(harness.thread_id.clone()),
+                realtime_session_id: Some(session_id.to_string()),
                 version: RealtimeConversationVersion::V1,
             },
             sdp: ThreadRealtimeSdpNotification {

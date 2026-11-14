@@ -607,6 +607,7 @@ impl Session {
                 thread_id: self.thread_id(),
                 tools: state.persisted_dynamic_tools.to_vec(),
             })),
+            observation_clock_floor_ms: None,
             multi_agent_version: self.multi_agent_version(),
             last_started_turn_id: state.last_started_turn_id.clone(),
             turn_attribution: state.turn_attribution.clone(),
@@ -1970,6 +1971,13 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
+        if let Some(history) = &self.realtime_history {
+            history
+                .lock()
+                .await
+                .observation_clock
+                .restore(rollout_items);
+        }
         let rollout_reconstruction::RolloutReconstruction {
             mut history,
             rejected_audio_file_ids,
@@ -2953,8 +2961,8 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        self.send_event_raw_with_persistence(event, /*persist*/ true)
-            .await;
+        // Keep event persistence out of callers' stack frames.
+        Box::pin(self.send_event_raw_with_persistence(event, /*persist*/ true)).await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -4879,6 +4887,10 @@ impl Session {
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
+        let observation_clock_floor_ms = match &self.realtime_history {
+            Some(history) => history.lock().await.observation_clock.floor_ms(),
+            None => None,
+        };
         let (compacted_item, world_state_baseline, started_item) = {
             let mut state = self.state.lock().await;
             let complete_replacement =
@@ -4958,7 +4970,10 @@ impl Session {
             state
                 .history
                 .set_world_state_baseline(world_state_baseline.clone());
-            let resume_metadata = self.compaction_resume_metadata(&state);
+            let resume_metadata = CompactionResumeMetadata {
+                observation_clock_floor_ms,
+                ..self.compaction_resume_metadata(&state)
+            };
             let compacted_item = CompactedItem {
                 message: metadata.message,
                 replacement_history: Some(replacement_history),

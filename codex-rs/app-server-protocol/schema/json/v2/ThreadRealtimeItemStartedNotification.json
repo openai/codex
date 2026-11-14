@@ -60,6 +60,25 @@
         }
       ]
     },
+    "ThreadRealtimeFrameChannels": {
+      "description": "A frame holds one or more payloads, at most one per channel. They share one ID, observation time, and seal. V1 requires its only channel, `voice_transcript`.",
+      "properties": {
+        "voice_transcript": {
+          "$ref": "#/definitions/ThreadRealtimeVoiceTranscript"
+        }
+      },
+      "required": [
+        "voice_transcript"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeHandoffMode": {
+      "enum": [
+        "start",
+        "steer"
+      ],
+      "type": "string"
+    },
     "ThreadRealtimeItem": {
       "description": "EXPERIMENTAL - a thread-scoped realtime item in the canonical timeline.",
       "oneOf": [
@@ -77,6 +96,26 @@
             "type"
           ],
           "title": "RealtimeSessionStartedThreadRealtimeItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "channels": {
+              "$ref": "#/definitions/ThreadRealtimeFrameChannels"
+            },
+            "type": {
+              "enum": [
+                "frame"
+              ],
+              "title": "FrameThreadRealtimeItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channels",
+            "type"
+          ],
+          "title": "FrameThreadRealtimeItem",
           "type": "object"
         },
         {
@@ -150,11 +189,93 @@
           ],
           "title": "RealtimeSessionClosedThreadRealtimeItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "input_item_id": {
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/definitions/ThreadRealtimeHandoffMode"
+            },
+            "source_event_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnInputAccepted"
+              ],
+              "title": "TurnInputAcceptedThreadRealtimeItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_id",
+            "input",
+            "input_item_id",
+            "mode",
+            "source_event_ids",
+            "turn_id",
+            "type"
+          ],
+          "title": "TurnInputAcceptedThreadRealtimeItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "input_item_id": {
+              "type": "string"
+            },
+            "source_event_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "sessionEndInputSaved"
+              ],
+              "title": "SessionEndInputSavedThreadRealtimeItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "input_item_id",
+            "source_event_ids",
+            "type"
+          ],
+          "title": "SessionEndInputSavedThreadRealtimeItem",
+          "type": "object"
         }
       ],
       "properties": {
         "id": {
           "type": "string"
+        },
+        "observedAtMs": {
+          "description": "Canonical observation time in Unix milliseconds for eligible voice calls.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "realtimeSessionId": {
           "type": "string"
@@ -179,6 +300,21 @@
         "assistant"
       ],
       "type": "string"
+    },
+    "ThreadRealtimeVoiceTranscript": {
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/ThreadRealtimeTranscriptRole"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
     }
   },
   "description": "EXPERIMENTAL - a realtime timeline item started before its content streams.",

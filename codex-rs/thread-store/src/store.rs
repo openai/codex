@@ -547,6 +547,11 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Whether this live thread writes canonical realtime frames and handoff receipts.
+    fn realtime_frames_enabled(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Whether paginated threads can hydrate durable history through turn and item lists.
     fn supports_paginated_history_lists(&self) -> bool {
         false

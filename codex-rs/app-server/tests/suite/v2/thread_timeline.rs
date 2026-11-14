@@ -95,6 +95,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
                 RolloutItem::RealtimeItem(RealtimeItem {
                     id: "voice-1:started".to_string(),
                     realtime_session_id: "voice-1".to_string(),
+                    observed_at_ms: Some(1_000),
                     content: RealtimeItemContent::RealtimeSessionStarted,
                 }),
                 RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
@@ -124,6 +125,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
                 RolloutItem::RealtimeItem(RealtimeItem {
                     id: "voice-1:transcript-1".to_string(),
                     realtime_session_id: "voice-1".to_string(),
+                    observed_at_ms: None,
                     content: RealtimeItemContent::TranscriptSegment {
                         role: RealtimeTranscriptRole::Assistant,
                         text: "Checking staging".to_string(),

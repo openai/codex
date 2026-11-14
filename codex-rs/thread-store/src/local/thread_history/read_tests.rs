@@ -430,6 +430,7 @@ async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
             RealtimeItem {
                 id: "voice-1:started".to_string(),
                 realtime_session_id: "voice-1".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionStarted,
             },
         ),
@@ -438,6 +439,7 @@ async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
             RealtimeItem {
                 id: "voice-1:source:0".to_string(),
                 realtime_session_id: "voice-1".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::TranscriptSegment {
                     role: RealtimeTranscriptRole::Assistant,
                     text: "Before the artifact".to_string(),
@@ -449,6 +451,7 @@ async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
             RealtimeItem {
                 id: "artifact".to_string(),
                 realtime_session_id: "voice-1".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::BemItemPromoted {
                     turn_id: "turn-1".to_string(),
                     item_id: "middle".to_string(),
@@ -461,6 +464,7 @@ async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
             RealtimeItem {
                 id: "voice-1:closed".to_string(),
                 realtime_session_id: "voice-1".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionClosed {
                     outcome: RealtimeSessionOutcome::Ended,
                 },
@@ -727,6 +731,7 @@ async fn timeline_page_state_excludes_realtime_events_after_fork_cutoff() {
             RealtimeItem {
                 id: "voice:started".to_string(),
                 realtime_session_id: "voice".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionStarted,
             },
         ),
@@ -735,6 +740,7 @@ async fn timeline_page_state_excludes_realtime_events_after_fork_cutoff() {
             RealtimeItem {
                 id: "voice:closed".to_string(),
                 realtime_session_id: "voice".to_string(),
+                observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionClosed {
                     outcome: RealtimeSessionOutcome::Ended,
                 },

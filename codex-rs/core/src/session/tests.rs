@@ -6177,6 +6177,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
             thread_id: session.thread_id(),
             tools: Vec::new(),
         })),
+        observation_clock_floor_ms: None,
         multi_agent_version: Some(MultiAgentVersion::V2),
         last_started_turn_id: Some(turn_context.sub_id.clone()),
         turn_attribution: Some(codex_history::TurnAttribution {
