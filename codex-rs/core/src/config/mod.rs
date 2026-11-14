@@ -47,6 +47,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -143,6 +144,7 @@ use codex_sandboxing::SandboxType;
 pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::Platform;
@@ -344,6 +346,14 @@ pub(crate) async fn test_config() -> Config {
     )
     .await
     .expect("load default test config")
+}
+
+/// Process-local launch directories for stdio servers supplied by the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpLaunchCwds {
+    pub plugins: HashMap<String, HashMap<String, AbsolutePathBuf>>,
+    /// Server name, expected executable, and launch directory.
+    pub configured: HashMap<String, (String, AbsolutePathBuf)>,
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -1046,6 +1056,9 @@ pub struct Config {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
+
+    /// Process-local launch directories for stdio servers supplied by the host.
+    pub mcp_launch_cwds: Arc<McpLaunchCwds>,
 
     /// Path to the current Codex executable. This cannot be set in the config
     /// file: it must be set in code via [`ConfigOverrides`].
@@ -1947,6 +1960,8 @@ impl Config {
         {
             catalog.enable_ema(auth.idp.clone());
         }
+        let use_launch_cwds = self.features.enabled(Feature::McpSharedReplCwd)
+            && self.features.enabled(Feature::McpConnectionSharing);
         for (plugin_order, plugin) in loaded_plugins
             .plugins()
             .iter()
@@ -1967,7 +1982,17 @@ impl Config {
                 )
             }
             .with_host_root(PathUri::from_abs_path(&plugin.root));
-            for (name, plugin_server) in plugin_mcp_servers {
+            let launch_cwds = self.mcp_launch_cwds.plugins.get(&plugin.config_name);
+            for (name, mut plugin_server) in plugin_mcp_servers {
+                if use_launch_cwds
+                    && let Some(path) = launch_cwds.and_then(|cwds| cwds.get(&name))
+                    && plugin_server.is_local_environment()
+                    && !plugin.is_agent_plugin()
+                    && let McpServerTransportConfig::Stdio { cwd, .. } =
+                        &mut plugin_server.transport
+                {
+                    *cwd = Some(LegacyAppPathString::from_abs_path(path));
+                }
                 let registration = McpServerRegistration::from_plugin(
                     name,
                     attribution.clone(),
@@ -1981,10 +2006,17 @@ impl Config {
             catalog.register(registration);
         }
         for (name, server) in self.mcp_servers.get() {
-            catalog.register(McpServerRegistration::from_config(
-                name.clone(),
-                server.clone(),
-            ));
+            let mut server = server.clone();
+            if use_launch_cwds
+                && let Some((executable, path)) = self.mcp_launch_cwds.configured.get(name)
+                && server.is_local_environment()
+                && let McpServerTransportConfig::Stdio { command, cwd, .. } = &mut server.transport
+                && command == executable
+                && cwd.is_none()
+            {
+                *cwd = Some(LegacyAppPathString::from_abs_path(path));
+            }
+            catalog.register(McpServerRegistration::from_config(name.clone(), server));
         }
 
         McpConfig {
@@ -4696,6 +4728,7 @@ impl Config {
             extra_config: None,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
+            mcp_launch_cwds: Arc::default(),
             codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe: None,

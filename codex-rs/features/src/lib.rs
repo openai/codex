@@ -290,6 +290,8 @@ pub enum Feature {
     McpToolListChanged,
     /// Discover and share eligible local stdio connections across chats.
     McpConnectionSharing,
+    /// Use the app server's fixed launch directories for shared REPL servers.
+    McpSharedReplCwd,
     /// Defer optional stdio server startup in regular chats with a warm tool catalog.
     McpLazyStdioStartup,
     /// Keep same-named HTTP servers discovered on different executors separate.
@@ -1765,6 +1767,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::McpConnectionSharing,
         key: "mcp_connection_sharing",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::McpSharedReplCwd,
+        key: "mcp_shared_repl_cwd",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

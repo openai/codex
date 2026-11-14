@@ -6101,6 +6101,90 @@ async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> an
 }
 
 #[tokio::test]
+async fn mcp_launch_cwds_follow_the_runtime_feature() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{"mcpServers":{"sample":{"command":"sample","enabled":false},"other":{"command":"other"}}}"#,
+    )?;
+    let user_config = toml::toml! {
+        [features]
+        plugins = true
+        mcp_connection_sharing = true
+
+        [plugins."sample@test"]
+        enabled = true
+
+        [mcp_servers.node_repl]
+        command = "test-repl"
+
+        [mcp_servers.artifact_session]
+        command = "test-repl"
+
+        [mcp_servers.other_repl]
+        command = "custom-repl"
+    };
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        toml::to_string(&user_config)?,
+    )?;
+
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    config.mcp_launch_cwds = Arc::new(McpLaunchCwds {
+        plugins: HashMap::from([(
+            "sample@test".to_string(),
+            HashMap::from([("sample".to_string(), config.codex_home.clone())]),
+        )]),
+        configured: ["node_repl", "artifact_session", "other_repl"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    ("test-repl".to_string(), config.codex_home.clone()),
+                )
+            })
+            .collect(),
+    });
+    let plugins_manager =
+        plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
+    assert!(!config.features.enabled(Feature::McpSharedReplCwd));
+    for enabled in [false, true, false] {
+        let mut incoming = config.clone();
+        incoming
+            .features
+            .set_enabled(Feature::McpSharedReplCwd, enabled)?;
+        config = config.resolve_runtime_refresh(&incoming, RuntimeConfigRefresh::User)?;
+        let mcp_config = config.to_mcp_config(&plugins_manager).await;
+        let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
+        for (name, command) in [
+            ("sample", "sample"),
+            ("node_repl", "test-repl"),
+            ("artifact_session", "test-repl"),
+        ] {
+            let mut expected = stdio_mcp(command);
+            expected.enabled = name != "sample";
+            let McpServerTransportConfig::Stdio { cwd, .. } = &mut expected.transport else {
+                unreachable!();
+            };
+            *cwd = enabled.then(|| LegacyAppPathString::from_abs_path(&config.codex_home));
+            assert_eq!(configured_servers[name], expected);
+        }
+        assert_eq!(configured_servers["other"], stdio_mcp("other"));
+        assert_eq!(configured_servers["other_repl"], stdio_mcp("custom-repl"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_mcp_config_omits_plugin_id_when_user_server_shadows_plugin_mcp() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home

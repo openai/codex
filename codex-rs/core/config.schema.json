@@ -1193,6 +1193,9 @@
             "mcp_oauth_refresh_coordination": {
               "type": "boolean"
             },
+            "mcp_shared_repl_cwd": {
+              "type": "boolean"
+            },
             "mcp_tool_list_changed": {
               "type": "boolean"
             },
@@ -8360,6 +8363,9 @@
           "type": "boolean"
         },
         "mcp_oauth_refresh_coordination": {
+          "type": "boolean"
+        },
+        "mcp_shared_repl_cwd": {
           "type": "boolean"
         },
         "mcp_tool_list_changed": {

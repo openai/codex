@@ -331,31 +331,12 @@ impl PreparedMcpCall {
     /// loopback) or remote executor does not establish a shared filesystem.
     /// Capability probes are cached process-wide by absolute executable path.
     pub async fn sandbox_codex_executable(&self) -> Option<AbsolutePathBuf> {
-        let server = self
-            .config
-            .mcp_server_catalog
-            .server(self.server_key())?
-            .config();
-        if self.server_environment_id() != codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
-            || !server.is_local_environment()
-            || !matches!(
-                server.transport,
-                codex_config::McpServerTransportConfig::Stdio { .. }
-            )
-        {
-            return None;
-        }
-
-        // Require a literal absolute path before the constructor can expand `~`.
-        let executable = self
-            .config
-            .codex_self_exe
-            .as_deref()
-            .filter(|path| path.is_absolute() && path.to_str().is_some())?;
-        let executable = AbsolutePathBuf::from_absolute_path_checked(executable).ok()?;
-        crate::sandbox_executable::supports_sandbox_state(&executable)
-            .await
-            .then_some(executable)
+        crate::sandbox_metadata::sandbox_codex_executable(
+            &self.config,
+            self.server_key(),
+            self.server_environment_id(),
+        )
+        .await
     }
 
     pub fn server_name(&self) -> &str {

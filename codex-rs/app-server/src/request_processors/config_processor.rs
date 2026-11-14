@@ -76,6 +76,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mcp_2026_07_28",
     "mcp_connection_sharing",
     "mcp_lazy_stdio_startup",
+    "mcp_shared_repl_cwd",
     "memories",
     "mentions_v2",
     "remote_control",

@@ -619,6 +619,9 @@ struct AppServerCommand {
     #[arg(long, hide = true)]
     managed_daemon: bool,
 
+    #[command(flatten)]
+    plugin_mcp_launch: codex_app_server::PluginMcpLaunchArgs,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -1288,6 +1291,7 @@ async fn dispatch_cli(
                 stdio,
                 remote_control,
                 managed_daemon,
+                plugin_mcp_launch,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -1333,6 +1337,7 @@ async fn dispatch_cli(
                         cloud_skills_snapshot,
                         code_mode_host_transport: code_mode_host.into(),
                         managed_daemon,
+                        plugin_mcp_launch,
                         remote_control_startup_mode: match (remote_control, remote_control_disabled)
                         {
                             (true, _) => {

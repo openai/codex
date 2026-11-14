@@ -11,6 +11,9 @@ use serde_json::Map;
 use serde_json::Value;
 use std::path::PathBuf;
 
+use crate::McpConfig;
+use crate::McpServerKey;
+
 /// Servers advertise this experimental capability to receive opaque sandbox state
 /// in tool-call `_meta`, along with a local launcher when one is available.
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
@@ -48,6 +51,33 @@ struct SandboxLauncher {
     /// A full CLI on the MCP server's host, supporting `sandbox --sandbox-state-json`.
     /// Remote/HTTP servers and hosts without a verified, UTF-8 CLI path omit the envelope.
     codex_executable: AbsolutePathBuf,
+}
+
+/// Return a verified CLI on the same host and filesystem as a local stdio server.
+pub(crate) async fn sandbox_codex_executable(
+    config: &McpConfig,
+    server_key: &McpServerKey,
+    environment_id: &str,
+) -> Option<AbsolutePathBuf> {
+    let server = config.mcp_server_catalog.server(server_key)?.config();
+    if environment_id != codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+        || !server.is_local_environment()
+        || !matches!(
+            server.transport,
+            codex_config::McpServerTransportConfig::Stdio { .. }
+        )
+    {
+        return None;
+    }
+
+    let executable = config
+        .codex_self_exe
+        .as_deref()
+        .filter(|path| path.is_absolute() && path.to_str().is_some())?;
+    let executable = AbsolutePathBuf::from_absolute_path_checked(executable).ok()?;
+    crate::sandbox_executable::supports_sandbox_state(&executable)
+        .await
+        .then_some(executable)
 }
 
 pub(crate) fn augment_metadata(
