@@ -1844,7 +1844,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::IncrementalToolsLegacy,
         key: "incremental_tools_legacy",
         stage: Stage::Stable,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::IncrementalToolsLegacyGcp,

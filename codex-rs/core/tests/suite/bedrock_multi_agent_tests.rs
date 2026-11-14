@@ -52,9 +52,12 @@ async fn bedrock_catalog_selects_v2_by_default(
         Some(MultiAgentVersion::V2)
     );
     let request = mock.single_request();
+    let declarations = request.inputs_of_type("additional_tools");
     for tool in ["spawn_agent", "followup_task"] {
         assert!(
-            request.tool_by_name("collaboration", tool).is_some(),
+            declarations
+                .iter()
+                .any(|item| responses::namespace_child_tool(item, "collaboration", tool).is_some()),
             "default Bedrock catalog should expose collaboration.{tool}",
         );
     }
