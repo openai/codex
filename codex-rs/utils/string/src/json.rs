@@ -1,8 +1,29 @@
-//! JSON serialization helpers for ASCII-only transports and bounded output.
+//! JSON serialization helpers for counting bytes, bounding output, and ASCII-only transports.
 
 use std::io;
 
 use serde::Serialize;
+
+#[derive(Default)]
+struct JsonByteCounter(usize);
+
+impl io::Write for JsonByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Counts serialized JSON bytes without retaining the serialized output.
+pub fn serialized_json_bytes<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<usize> {
+    let mut counter = JsonByteCounter::default();
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.0)
+}
 
 struct AsciiJsonFormatter;
 

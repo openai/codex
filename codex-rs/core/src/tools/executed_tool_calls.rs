@@ -39,7 +39,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::metadata_metrics;
 use crate::tools::router::ToolCall;
-use crate::utils::json::serialized_json_bytes;
+use codex_utils_string::serialized_json_bytes;
 
 mod seen_ids;
 
