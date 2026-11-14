@@ -4,7 +4,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tokio::sync::Mutex as AsyncMutex;
 
 use codex_exec_server::EnvironmentAccessKey;
 use codex_extension_api::CatalogRefreshBackoff;
@@ -49,8 +48,6 @@ pub(crate) struct SkillsSessionState {
 
 /// Thread-owned skill configuration and caches; consumers can only read catalog snapshots.
 pub struct SkillsThreadState {
-    /// Serializes discovery before checking freshness and publishing the next catalog.
-    cloud_refresh_lock: AsyncMutex<()>,
     config: Mutex<SkillsExtensionConfig>,
     cloud_skills_available: bool,
     catalog_state: Mutex<SkillCatalogState>,
@@ -62,6 +59,13 @@ pub struct SkillsThreadState {
     pub(crate) shadow_task_context: Arc<ShadowTaskContext>,
 }
 
+struct CloudSkillRefreshError {
+    error: SkillProviderError,
+    /// Cooldown for the step caller to store after a current-generation failure.
+    /// Superseded attempts return `None`, allowing the next step to retry immediately.
+    retry_backoff: Option<CatalogRefreshBackoff>,
+}
+
 impl SkillsThreadState {
     pub(crate) fn new(
         config: SkillsExtensionConfig,
@@ -69,7 +73,6 @@ impl SkillsThreadState {
         extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> Self {
         Self {
-            cloud_refresh_lock: AsyncMutex::new(()),
             config: Mutex::new(config),
             cloud_skills_available,
             catalog_state: Mutex::new(SkillCatalogState::default()),
@@ -284,19 +287,82 @@ impl SkillsThreadState {
             .and_then(|cache| cache.catalog.clone())
     }
 
-    /// Reuses complete, warning-free catalogs; backs off partials, warnings, and failures.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "cloud discovery must remain serialized through fetching and catalog publication"
-    )]
-    #[tracing::instrument(name = "skills.cloud.refresh_cloud_catalog", level = "info", skip_all)]
+    /// Checks freshness and backoff before using the shared cloud refresh path.
+    pub(crate) async fn refresh_cloud_catalog_for_step(
+        &self,
+        providers: &SkillProviders,
+        query: SkillListQuery<'_>,
+    ) -> SkillProviderResult<()> {
+        {
+            let config = self
+                .config
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !config.cloud_skill_enabled || !self.cloud_skills_available {
+                return Ok(());
+            }
+            let mut catalogs = self
+                .catalog_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cache = catalogs.prepare_cloud_generation(
+                providers.cloud_mcp_resources(query.mcp_resources.as_deref()),
+            );
+            let resource_cache_key = cache.current_resource_cache_key();
+            if cache.is_auth_current()
+                && cache
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| !catalog.is_partial && catalog.warnings.is_empty())
+                && cache.resource_cache_key == resource_cache_key
+            {
+                catalogs.cloud_retry = None;
+                return Ok(());
+            }
+            if catalogs.cloud_retry.as_ref().is_some_and(|retry| {
+                retry.is_pending(cache.auth_cache_key.as_ref(), resource_cache_key.as_ref())
+            }) {
+                return Ok(());
+            }
+        }
+        match self.discover_cloud_catalog(providers, query).await {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let Some(retry_backoff) = failure.retry_backoff else {
+                    // A superseded attempt can be retried on the next step.
+                    return Ok(());
+                };
+                self.catalog_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .cloud_retry = Some(retry_backoff);
+                Err(failure.error)
+            }
+        }
+    }
+
+    /// Explicit requests bypass cache reuse and leave failures retryable on the next step.
     pub(crate) async fn refresh_cloud_catalog(
         &self,
         providers: &SkillProviders,
         query: SkillListQuery<'_>,
     ) -> SkillProviderResult<()> {
-        // Wait without holding config/catalog state or the MCP runtime permit.
-        let _refresh = self.cloud_refresh_lock.lock().await;
+        self.catalog_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cloud_retry = None;
+        self.discover_cloud_catalog(providers, query)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// Fetches and publishes one catalog; Core serializes discovery and step snapshots.
+    #[tracing::instrument(name = "skills.cloud.refresh_cloud_catalog", level = "info", skip_all)]
+    async fn discover_cloud_catalog(
+        &self,
+        providers: &SkillProviders,
+        query: SkillListQuery<'_>,
+    ) -> Result<(), CloudSkillRefreshError> {
         let (cache, resource_cache_key) = {
             let config = self
                 .config
@@ -313,21 +379,6 @@ impl SkillsThreadState {
                 providers.cloud_mcp_resources(query.mcp_resources.as_deref()),
             );
             let resource_cache_key = cache.current_resource_cache_key();
-            if catalogs.cloud_retry.as_ref().is_some_and(|retry| {
-                retry.is_pending(cache.auth_cache_key.as_ref(), resource_cache_key.as_ref())
-            }) {
-                return Ok(());
-            }
-            if cache.is_auth_current()
-                && cache
-                    .catalog
-                    .as_ref()
-                    .is_some_and(|catalog| !catalog.is_partial && catalog.warnings.is_empty())
-                && cache.resource_cache_key == resource_cache_key
-            {
-                catalogs.cloud_retry = None;
-                return Ok(());
-            }
             (cache, resource_cache_key)
         };
         let mut result = providers.list_cloud_for_turn(query).await;
@@ -345,18 +396,22 @@ impl SkillsThreadState {
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, &cache))
         {
-            // Ignore superseded results, including errors.
-            return Ok(());
+            return Err(CloudSkillRefreshError {
+                error: SkillProviderError::new("cloud skill discovery was superseded"),
+                retry_backoff: None,
+            });
         }
         let catalog = match result {
             Ok(catalog) => catalog,
             Err(error) => {
-                catalogs.cloud_retry = Some(CatalogRefreshBackoff::after_failure(
-                    cache.auth_cache_key.clone(),
-                    resource_cache_key,
-                    catalogs.cloud_retry.as_ref(),
-                ));
-                return Err(error);
+                return Err(CloudSkillRefreshError {
+                    error,
+                    retry_backoff: Some(CatalogRefreshBackoff::after_failure(
+                        cache.auth_cache_key.clone(),
+                        resource_cache_key,
+                        catalogs.cloud_retry.as_ref(),
+                    )),
+                });
             }
         };
         catalogs.cloud_retry = if catalog.is_partial || !catalog.warnings.is_empty() {

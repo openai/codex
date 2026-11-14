@@ -114,7 +114,7 @@ fn client() -> Arc<McpResourceClient> {
 
 fn query(client: Option<Arc<McpResourceClient>>) -> SkillListQuery<'static> {
     SkillListQuery {
-        turn_id: "turn".into(),
+        turn_id: Some("turn".into()),
         executor_roots: Vec::new(),
         host_snapshot: None,
         include_host_skills: false,
@@ -152,7 +152,7 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
     .expect("frozen cloud skill fixture should be valid");
     let providers = SkillProviders::new().with_cloud_provider(Arc::new(provider));
     state
-        .refresh_cloud_catalog(&providers, query(Some(client())))
+        .refresh_cloud_catalog_for_step(&providers, query(Some(client())))
         .await
         .expect("cloud catalog refresh should succeed");
     let catalog = state
@@ -182,7 +182,7 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
             }
         );
         state
-            .refresh_cloud_catalog(&providers, query(mcp_resources))
+            .refresh_cloud_catalog_for_step(&providers, query(mcp_resources))
             .await
             .expect("cloud catalog refresh should succeed");
         assert_eq!(state.available_cloud_catalog(), Some(catalog.clone()));
@@ -366,7 +366,7 @@ async fn late_read_cannot_return_or_populate_a_replaced_cache() {
         let (late, ()) = tokio::join!(state.read_skill(&providers, request(original)), async {
             provider.entered.notified().await;
             state
-                .refresh_cloud_catalog(&providers, query(replacement.clone()))
+                .refresh_cloud_catalog_for_step(&providers, query(replacement.clone()))
                 .await
                 .expect("cloud catalog refresh should succeed");
             provider.resume.notify_one();
@@ -390,7 +390,7 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
     let providers = SkillProviders::new().with_cloud_provider(provider.clone());
     provider.pause_list.store(true, Ordering::SeqCst);
     let (late, ()) = tokio::join!(
-        state.refresh_cloud_catalog(&providers, query(Some(client()))),
+        state.refresh_cloud_catalog_for_step(&providers, query(Some(client()))),
         async {
             provider.entered.notified().await;
             state
@@ -435,9 +435,9 @@ async fn cloud_catalogs_are_reused_while_fresh_or_backing_off_until_auth_changes
                 .expect("every successful provider response should be accepted");
             for turn_id in ["turn", "next turn"] {
                 let mut request = query(Some(original_client.clone()));
-                request.turn_id = turn_id.to_string();
+                request.turn_id = Some(turn_id.to_string());
                 state
-                    .refresh_cloud_catalog(&providers, request)
+                    .refresh_cloud_catalog_for_step(&providers, request)
                     .await
                     .expect("accepted cloud catalog should be reused");
                 assert_eq!(state.available_cloud_catalog(), Some(accepted.clone()));
@@ -445,7 +445,7 @@ async fn cloud_catalogs_are_reused_while_fresh_or_backing_off_until_auth_changes
             }
             *provider.next_catalog.lock().unwrap() = Some(SkillCatalog::default());
             state
-                .refresh_cloud_catalog(&providers, query(Some(client())))
+                .refresh_cloud_catalog_for_step(&providers, query(Some(client())))
                 .await
                 .expect("auth changes should refresh the accepted catalog");
             assert_eq!(
@@ -482,14 +482,14 @@ async fn partial_or_warning_cloud_catalogs_retry_with_backoff_and_recover() {
             for (index, delay) in [5, 10, 20, 40, 80, 160, 300, 300].into_iter().enumerate() {
                 *provider.next_catalog.lock().unwrap() = Some(retryable.clone());
                 state
-                    .refresh_cloud_catalog(&providers, query(original_client.clone()))
+                    .refresh_cloud_catalog_for_step(&providers, query(original_client.clone()))
                     .await
                     .expect("partial or warning catalogs should remain usable");
                 assert_eq!(state.available_cloud_catalog(), Some(retryable.clone()));
                 assert_eq!(provider.lists.load(Ordering::SeqCst), index + 1);
                 tokio::time::advance(Duration::from_secs(delay - 1)).await;
                 state
-                    .refresh_cloud_catalog(&providers, query(original_client.clone()))
+                    .refresh_cloud_catalog_for_step(&providers, query(original_client.clone()))
                     .await
                     .expect("retry cooldown should suppress discovery");
                 assert_eq!(provider.lists.load(Ordering::SeqCst), index + 1);
@@ -502,14 +502,14 @@ async fn partial_or_warning_cloud_catalogs_retry_with_backoff_and_recover() {
             };
             *provider.next_catalog.lock().unwrap() = Some(complete.clone());
             state
-                .refresh_cloud_catalog(&providers, query(original_client.clone()))
+                .refresh_cloud_catalog_for_step(&providers, query(original_client.clone()))
                 .await
                 .expect("retry should recover a complete catalog");
             assert_eq!(state.available_cloud_catalog(), Some(complete.clone()));
             assert!(state.catalog_state.lock().unwrap().cloud_retry.is_none());
             tokio::time::advance(Duration::from_secs(600)).await;
             state
-                .refresh_cloud_catalog(&providers, query(original_client))
+                .refresh_cloud_catalog_for_step(&providers, query(original_client))
                 .await
                 .expect("clean catalogs should remain cached");
             assert_eq!(state.available_cloud_catalog(), Some(complete));
@@ -544,7 +544,7 @@ async fn cloud_refresh_replaces_catalogs_and_read_cache_for_every_accepted_resul
                 .expect("test provider catalog mutex should not be poisoned") =
                 Some(previous.clone());
             state
-                .refresh_cloud_catalog(&providers, query(Some(original_client.clone())))
+                .refresh_cloud_catalog_for_step(&providers, query(Some(original_client.clone())))
                 .await
                 .expect("cloud catalog refresh should succeed");
             let generation = state
@@ -569,7 +569,7 @@ async fn cloud_refresh_replaces_catalogs_and_read_cache_for_every_accepted_resul
                 .lock()
                 .expect("test provider catalog mutex should not be poisoned") =
                 Some(incoming.clone());
-            let current_client = client();
+            let current_client = original_client;
             state
                 .refresh_cloud_catalog(&providers, query(Some(current_client.clone())))
                 .await

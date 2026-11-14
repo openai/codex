@@ -2713,9 +2713,18 @@ async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
         refresh_registered_catalogs_for_step(&registry, &session_store, &thread_store, "turn-3")
             .await;
         assert_eq!(list_calls.load(Ordering::Relaxed), 2);
+        for contributor in registry.turn_lifecycle_contributors() {
+            contributor
+                .refresh_cloud_catalog(codex_extension_api::CloudCatalogRefreshInput {
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                })
+                .await
+                .map_err(|error| format!("partial catalogs should be accepted: {error}"))?;
+        }
         refresh_registered_catalogs_for_step(&registry, &session_store, &thread_store, "turn-4")
             .await;
-        assert_eq!(list_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(list_calls.load(Ordering::Relaxed), 3);
     }
     Ok(())
 }

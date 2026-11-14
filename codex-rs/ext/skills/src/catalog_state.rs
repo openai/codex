@@ -123,7 +123,7 @@ impl CachedExecutorV2Catalog {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExecutorCatalogCacheKey {
-    pub(crate) turn_id: String,
+    pub(crate) turn_id: Option<String>,
     pub(crate) roots: Vec<(SelectedCapabilityRoot, EnvironmentAccessKey)>,
     pub(crate) include_bundled_skills: bool,
 }

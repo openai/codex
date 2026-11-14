@@ -523,7 +523,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
     });
     let catalog = provider
         .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             executor_roots: selected_roots
                 .iter()
                 .map(|root| AccessedSelectedCapabilityRoot { root, fs: &access })
@@ -614,7 +614,7 @@ async fn executor_discovery_preserves_posix_and_windows_locator_alias_roots() {
         );
         let catalog = provider
             .list(SkillListQuery {
-                turn_id: "turn-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
                 executor_roots: Vec::new(),
                 host_snapshot: None,
                 include_host_skills: false,
@@ -736,7 +736,7 @@ async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
         ),
     );
     let query = |executor_capability_discovery| SkillListQuery {
-        turn_id: "turn-1".to_string(),
+        turn_id: Some("turn-1".to_string()),
         executor_roots: executor_roots
             .iter()
             .map(|root| AccessedSelectedCapabilityRoot { root, fs: &access })
@@ -927,7 +927,7 @@ async fn pre_discovered_executor_catalog_snapshot() {
         .await;
     let catalog = provider
         .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             executor_roots: Vec::new(),
             host_snapshot: None,
             include_host_skills: false,
@@ -1046,7 +1046,7 @@ async fn direct_executor_discovery_preserves_hidden_nested_and_probed_metadata()
     );
     let direct = provider
         .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             executor_roots: vec![AccessedSelectedCapabilityRoot {
                 root: &selected_root,
                 fs: &access,
@@ -1113,7 +1113,7 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         .await;
     let catalog = provider
         .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             executor_roots: Vec::new(),
             host_snapshot: None,
             include_host_skills: false,

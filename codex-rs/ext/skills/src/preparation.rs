@@ -64,7 +64,7 @@ async fn discover_executor_catalog(
     cloud_enabled: bool,
 ) -> SkillCatalog {
     let query = SkillListQuery {
-        turn_id: input.turn_id.to_string(),
+        turn_id: Some(input.turn_id.to_string()),
         executor_roots: input.ready_selected_capability_roots.to_vec(),
         host_snapshot: None,
         include_host_skills: false,
@@ -95,7 +95,7 @@ async fn discover_host_catalog(
     Some(
         providers
             .list_host_for_turn(SkillListQuery {
-                turn_id: input.turn_id.to_string(),
+                turn_id: Some(input.turn_id.to_string()),
                 executor_roots: Vec::new(),
                 host_snapshot: Some(host_snapshot),
                 include_host_skills: true,

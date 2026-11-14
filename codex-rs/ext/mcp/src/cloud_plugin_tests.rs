@@ -21,6 +21,7 @@ use codex_extension_api::McpServerContributor;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
+use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Op;
@@ -44,6 +45,50 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::Notify;
+
+/// The host can suppress the first cloud refresh even when plugins are enabled.
+#[tokio::test]
+async fn cloud_source_policy_skips_startup_discovery() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let mut config = codex_core::config::ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await?;
+    config.features.enable(Feature::Plugins)?;
+    config.features.disable(Feature::Apps)?;
+    let provider = Arc::new(CloudProvider::default());
+    let contributor = PluginContributor {
+        providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+            EnvironmentManager::default_for_tests(),
+        ))))
+        .with_cloud_provider(provider.clone())
+        .with_cloud_enabled(|config| config.features.enabled(Feature::Apps)),
+    };
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    contributor
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &codex_protocol::protocol::SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    contributor
+        .refresh_cloud_catalog(CloudCatalogRefreshInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await
+        .expect("disabled discovery succeeds");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
 
 #[tokio::test]
 async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow::Result<()> {
@@ -95,7 +140,7 @@ async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow:
         }
         for contributor in registry.turn_lifecycle_contributors() {
             contributor
-                .refresh_catalog_for_step(CatalogRefreshInput {
+                .refresh_catalog_for_step(StepCatalogRefreshInput {
                     turn_id,
                     session_store: &session,
                     thread_store: &thread,
@@ -219,14 +264,14 @@ async fn partial_or_warning_cloud_catalogs_retry_with_backoff_and_recover() {
             }
             let thread = ExtensionData::new("thread");
             let turn = ExtensionData::new("turn");
-            let input = CatalogRefreshInput {
+            let input = StepCatalogRefreshInput {
                 turn_id: "turn",
                 session_store: &session,
                 thread_store: &thread,
                 turn_store: &turn,
             };
             let next_turn = ExtensionData::new("next turn");
-            let next_input = CatalogRefreshInput {
+            let next_input = StepCatalogRefreshInput {
                 turn_id: "next turn",
                 turn_store: &next_turn,
                 ..input
@@ -298,7 +343,7 @@ async fn cloud_refresh_reuses_catalogs_and_retries() {
         let thread = ExtensionData::new("thread");
         let turn = ExtensionData::new("turn");
         let next_turn = ExtensionData::new("next turn");
-        let input = CatalogRefreshInput {
+        let input = StepCatalogRefreshInput {
             turn_id: "turn",
             session_store: &session,
             thread_store: &thread,
@@ -307,28 +352,29 @@ async fn cloud_refresh_reuses_catalogs_and_retries() {
         let state = thread.get_or_init(PluginsThreadState::default);
         state.contributor_state().plugins_enabled = true;
 
-        // Concurrent preparation waits for discovery before checking freshness.
+        // Core serializes callers; exercise the next preparation after completion or cancellation.
         provider.pause_discovery.store(true, Ordering::SeqCst);
-        let mut discovery = contributor.refresh_catalog_for_step(input);
-        assert!(futures::poll!(&mut discovery).is_pending());
-        let next_input = CatalogRefreshInput {
+        let mut turn_start = contributor.refresh_catalog_for_step(input);
+        assert!(futures::poll!(&mut turn_start).is_pending());
+        let next_input = StepCatalogRefreshInput {
             turn_id: "next turn",
             turn_store: &next_turn,
             ..input
         };
-        let mut waiting = contributor.refresh_catalog_for_step(next_input);
-        assert!(futures::poll!(&mut waiting).is_pending());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
         provider.set_reply(Ok(new_catalog.clone()));
         if cancelled {
-            drop(discovery);
+            drop(turn_start);
         } else {
             provider.resume_discovery.notify_one();
-            assert_eq!(discovery.await, succeeded);
+            assert_eq!(turn_start.await, succeeded);
         }
         // Later turns share failure cooldowns; cancellation still allows immediate retry.
-        assert_eq!(waiting.await, cancelled);
+        assert_eq!(
+            contributor.refresh_catalog_for_step(next_input).await,
+            cancelled
+        );
         if !succeeded && !cancelled {
             assert_eq!(state.cloud_catalog(), None);
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -355,6 +401,43 @@ async fn cloud_refresh_reuses_catalogs_and_retries() {
         tokio::time::advance(Duration::from_secs(5)).await;
         assert!(contributor.refresh_catalog_for_step(next_input).await);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn explicit_cloud_refresh_replaces_cached_catalog() {
+    let provider = Arc::new(CloudProvider::default());
+    provider.set_reply(Ok(cloud_catalog()));
+    let contributor = PluginContributor {
+        providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+            EnvironmentManager::default_for_tests(),
+        ))))
+        .with_cloud_provider(provider.clone()),
+    };
+    let session = ExtensionData::new("session");
+    let thread = ExtensionData::new("thread");
+    let turn = ExtensionData::new("turn");
+    let state = thread.get_or_init(PluginsThreadState::default);
+    state.contributor_state().plugins_enabled = true;
+    let input = StepCatalogRefreshInput {
+        turn_id: "turn",
+        session_store: &session,
+        thread_store: &thread,
+        turn_store: &turn,
+    };
+    assert!(contributor.refresh_catalog_for_step(input).await);
+    let refreshed_catalog = PluginCatalog {
+        is_partial: true,
+        ..Default::default()
+    };
+    provider.set_reply(Ok(refreshed_catalog.clone()));
+    assert!(!contributor.refresh_catalog_for_step(input).await);
+    contributor
+        .refresh_cloud_catalog(input.into())
+        .await
+        .unwrap();
+    assert_eq!(state.cloud_catalog(), Some(refreshed_catalog));
+    assert!(!contributor.refresh_catalog_for_step(input).await);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
 }
 
 struct CloudProvider {
@@ -972,7 +1055,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         ))))
         .with_cloud_provider(provider.clone()),
     };
-    let input = CatalogRefreshInput {
+    let input = StepCatalogRefreshInput {
         turn_id: "same-turn",
         session_store: &session,
         thread_store: &thread,

@@ -42,6 +42,22 @@ pub struct CatalogRefreshInput<'a> {
     pub turn_store: &'a ExtensionData,
 }
 
+/// Inputs for explicit cloud discovery, including before a thread has any turns.
+#[derive(Clone, Copy)]
+pub struct CloudCatalogRefreshInput<'a> {
+    pub session_store: &'a ExtensionData,
+    pub thread_store: &'a ExtensionData,
+}
+
+impl<'a> From<CatalogRefreshInput<'a>> for CloudCatalogRefreshInput<'a> {
+    fn from(input: CatalogRefreshInput<'a>) -> Self {
+        Self {
+            session_store: input.session_store,
+            thread_store: input.thread_store,
+        }
+    }
+}
+
 /// Input supplied when the host completes a turn.
 pub struct TurnStopInput<'a> {
     /// Store scoped to the host session runtime.

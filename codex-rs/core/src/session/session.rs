@@ -99,6 +99,8 @@ pub(crate) struct Session {
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     /// Owns invalidation and serializes refreshes without blocking captured calls.
     pub(super) mcp_refresh: McpRefresh,
+    /// Serializes cloud publication with capture of a step's plugin and skill snapshots.
+    pub(super) cloud_catalog_preparation: super::cloud_plugins::CloudCatalogPreparation,
     /// Non-owning lookup for approval data retained by running MCP invocations.
     pub(crate) mcp_tool_approval_metadata: std::sync::Mutex<McpToolApprovalMetadataMap>,
     pub(super) mcp_elicitation_reviewer_handle: OnceLock<codex_mcp::ElicitationReviewerHandle>,
@@ -1981,6 +1983,7 @@ impl Session {
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
                 mcp_refresh: McpRefresh::new(),
+                cloud_catalog_preparation: Default::default(),
                 mcp_tool_approval_metadata: Default::default(),
                 mcp_elicitation_reviewer_handle: OnceLock::new(),
                 mcp_elicitation_lifecycle_handle: OnceLock::new(),

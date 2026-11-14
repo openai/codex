@@ -19,13 +19,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
-use tokio::sync::Mutex as AsyncMutex;
 
 /// Plugin configuration and caches owned by one thread; mutable state stays extension-private.
 #[derive(Default)]
 pub struct PluginsThreadState {
-    /// Serializes discovery before checking freshness and publishing the next catalog.
-    pub(crate) cloud_refresh_lock: AsyncMutex<()>,
     state: Mutex<PluginContributorState>,
 }
 

@@ -1,4 +1,4 @@
-//! Step discovery observes ready MCP connections; prewarm skips discovery and cancellation releases preparation.
+//! Concurrent catalog discovery retains publication and releases preparation on cancellation.
 
 use super::*;
 use crate::McpRefreshReason;
@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 
 struct Recorder {
     client: McpResourceClient,
+    ready: Arc<tokio::sync::Barrier>,
     pause: std::sync::atomic::AtomicBool,
     keys: std::sync::Mutex<Vec<McpResourceClientCacheKey>>,
     discovered: tokio::sync::Notify,
@@ -23,6 +24,7 @@ impl codex_extension_api::TurnLifecycleContributor for Recorder {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(self.client.cache_key());
+            self.ready.wait().await;
             self.discovered.notify_one();
             if self.pause.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 std::future::pending::<()>().await;
@@ -32,17 +34,27 @@ impl codex_extension_api::TurnLifecycleContributor for Recorder {
     }
 }
 
+/// Step discovery overlaps providers on ready connections; cancellation releases the catalog lock.
 #[tokio::test]
-async fn step_discovery_reconciles_mcp_skips_prewarm_and_cancels_preparation() {
+async fn step_discovery_reconciles_mcp_skips_prewarm_and_releases_lock_on_cancellation() {
     let (mut session, turn_context) = make_session_and_context().await;
+    let ready = Arc::new(tokio::sync::Barrier::new(2));
     let recorder = Arc::new(Recorder {
         client: McpResourceClient::new(Arc::clone(&session.services.mcp_runtime)),
+        ready: Arc::clone(&ready),
         pause: std::sync::atomic::AtomicBool::new(true),
         keys: Default::default(),
         discovered: Default::default(),
     });
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_lifecycle_contributor(recorder.clone());
+    builder.turn_lifecycle_contributor(Arc::new(Recorder {
+        client: recorder.client.clone(),
+        ready,
+        pause: std::sync::atomic::AtomicBool::new(false),
+        keys: Default::default(),
+        discovered: Default::default(),
+    }));
     session.services.extensions = Arc::new(builder.build());
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -95,7 +107,7 @@ async fn step_discovery_reconciles_mcp_skips_prewarm_and_cancels_preparation() {
         session.capture_step_context(Arc::clone(&turn_context), &CancellationToken::new()),
     )
     .await
-    .expect("cancelled discovery must allow the next step")
+    .expect("cancelled discovery must release the catalog lock")
     .expect("next step should prepare");
     assert!(recorder.client.cache_key() == prepared_key);
 
@@ -111,4 +123,76 @@ async fn step_discovery_reconciles_mcp_skips_prewarm_and_cancels_preparation() {
     assert!(keys[2] != prepared_key);
     assert!(keys[2] == recorder.client.cache_key());
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+/// Explicit refresh overlaps providers under one lock and retains publication while a sibling waits.
+#[tokio::test]
+async fn explicit_cloud_refresh_runs_concurrently_and_awaits_all_results() {
+    struct CatalogGate {
+        entered: Arc<tokio::sync::Barrier>,
+        finish: tokio::sync::Notify,
+        result: Result<(), &'static str>,
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for CatalogGate {
+        fn refresh_cloud_catalog<'a>(
+            &'a self,
+            _input: codex_extension_api::CloudCatalogRefreshInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+            Box::pin(async move {
+                self.entered.wait().await;
+                self.finish.notified().await;
+                self.result.map_err(str::to_string)
+            })
+        }
+    }
+
+    let (mut session, _) = make_session_and_context().await;
+    let entered = Arc::new(tokio::sync::Barrier::new(3));
+    let failing = Arc::new(CatalogGate {
+        entered: Arc::clone(&entered),
+        finish: Default::default(),
+        result: Err("plugin discovery failed"),
+    });
+    let succeeding = Arc::new(CatalogGate {
+        entered: Arc::clone(&entered),
+        finish: Default::default(),
+        result: Ok(()),
+    });
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.turn_lifecycle_contributor(failing.clone());
+    builder.turn_lifecycle_contributor(succeeding.clone());
+    session.services.extensions = Arc::new(builder.build());
+    let session = Arc::new(session);
+    let mut refresh = Box::pin(session.refresh_cloud_plugins());
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut refresh => panic!("refresh completed before both providers started: {result:?}"),
+            _ = entered.wait() => {}
+        }
+    })
+    .await
+    .expect("both providers must start before either finishes");
+    assert!(!session.mcp_refresh.is_pending());
+
+    let mut lock = Box::pin(session.lock_cloud_catalogs());
+    assert!(futures::poll!(&mut lock).is_pending());
+    drop(lock);
+
+    failing.finish.notify_one();
+    assert!(futures::poll!(&mut refresh).is_pending());
+    assert!(session.mcp_refresh.is_pending());
+    succeeding.finish.notify_one();
+    assert_eq!(
+        refresh.await.expect_err("one provider failed").to_string(),
+        "plugin discovery failed"
+    );
+    drop(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            session.lock_cloud_catalogs(),
+        )
+        .await
+        .expect("completed refresh must release the catalog lock"),
+    );
 }

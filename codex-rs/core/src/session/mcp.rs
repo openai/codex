@@ -482,20 +482,27 @@ impl Session {
         };
         if is_active_regular_turn {
             // Refresh cloud catalogs without holding the MCP permit or active-turn lock.
-            for contributor in self.services.extensions.turn_lifecycle_contributors() {
-                if contributor
-                    .refresh_catalog_for_step(codex_extension_api::CatalogRefreshInput {
-                        turn_id: &turn_context.sub_id,
-                        session_store: &self.services.session_extension_data,
-                        thread_store: &self.services.thread_extension_data,
-                        turn_store: turn_context.extension_data.as_ref(),
-                    })
-                    .await
-                {
-                    // Preserve MCP updates if a later refresh is cancelled.
-                    self.mark_mcp_runtime_dirty(McpRefreshReason::ExtensionCatalogChanged);
-                }
-            }
+            futures::future::join_all(
+                self.services
+                    .extensions
+                    .turn_lifecycle_contributors()
+                    .iter()
+                    .map(|contributor| async move {
+                        if contributor
+                            .refresh_catalog_for_step(codex_extension_api::CatalogRefreshInput {
+                                turn_id: &turn_context.sub_id,
+                                session_store: &self.services.session_extension_data,
+                                thread_store: &self.services.thread_extension_data,
+                                turn_store: turn_context.extension_data.as_ref(),
+                            })
+                            .await
+                        {
+                            // Preserve each publication if the refresh batch is cancelled.
+                            self.mark_mcp_runtime_dirty(McpRefreshReason::ExtensionCatalogChanged);
+                        }
+                    }),
+            )
+            .await;
             self.refresh_mcp_if_dirty().await;
         }
         self.wait_for_apps_tool_refresh().await;

@@ -60,6 +60,13 @@ fn cleanup_preserves_live_process_and_reclaims_its_abandoned_checkout() -> Resul
     child.stdin.take().unwrap().write_all(b"x")?;
     assert!(child.wait()?.success());
     assert!(payload.exists(), "process exit must bypass TempDir cleanup");
+    // Other tests can fork while the earlier cleanup or checkout creation holds
+    // a lock. Wait for inherited locks and release them before cleanup's try-locks.
+    for name in [CLEANUP_LOCK, COORDINATION_LOCK] {
+        let lock = open_lock(&tmp_root.join(name))?;
+        lock.lock()?;
+        lock.unlock()?;
+    }
     drop(
         crate::configure_trusted_git_repository(
             &mut std::process::Command::new("git"),

@@ -58,6 +58,7 @@ pub use contributors::ApprovalDecision;
 pub use contributors::ApprovalDecisionInput;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::CatalogRefreshInput;
+pub use contributors::CloudCatalogRefreshInput;
 pub use contributors::CodeModeCellTiming;
 pub use contributors::CommandStartInput;
 pub use contributors::ConfigContributor;

@@ -31,7 +31,8 @@ pub(crate) const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
 /// Catalog inputs with executor roots bound to filesystem access for this callback.
 #[derive(Clone)]
 pub struct SkillListQuery<'a> {
-    pub turn_id: String,
+    /// Absent for explicit cloud discovery before turn admission.
+    pub turn_id: Option<String>,
     pub executor_roots: Vec<AccessedSelectedCapabilityRoot<'a>>,
     pub host_snapshot: Option<Arc<HostSkillsSnapshot>>,
     pub include_host_skills: bool,
