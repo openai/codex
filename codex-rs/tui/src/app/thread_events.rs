@@ -656,6 +656,7 @@ pub(super) struct ThreadEventChannel {
     /// Live Attach restored delivery without reading the history from the gap.
     pub(super) history_may_be_incomplete: bool,
     attachment: ThreadEventAttachment,
+    pub(super) archived: bool,
 }
 
 impl ThreadEventChannel {
@@ -668,6 +669,7 @@ impl ThreadEventChannel {
             backend_id: None,
             history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
+            archived: false,
         }
     }
 
@@ -703,6 +705,7 @@ impl ThreadEventChannel {
             backend_id: None,
             history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
+            archived: false,
         }
     }
 }

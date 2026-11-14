@@ -442,6 +442,11 @@ impl ChatWidget {
         let send_pending_steers_immediately =
             self.input_queue.submit_pending_steers_after_interrupt;
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        if send_pending_steers_immediately && self.is_archived_view() {
+            // Keep the original steer records for recovery instead of retrying in read-only mode.
+            self.request_redraw();
+            return;
+        }
         if self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(

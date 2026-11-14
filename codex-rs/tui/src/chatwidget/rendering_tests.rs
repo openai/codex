@@ -268,7 +268,7 @@ async fn external_writer_view_shows_notice_instead_of_composer() {
 async fn external_writer_fork_progress_restores_the_previous_view() {
     let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
     for locked in [false, true] {
-        widget.external_writer_view = locked;
+        widget.read_only_thread = locked.then_some(ReadOnlyThread::ExternalWriter);
         let previous = render_frame(&widget, /*width*/ 60);
         widget.fork_in_progress = true;
         let frame = render_frame(&widget, /*width*/ 60);

@@ -3270,6 +3270,46 @@ fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
 }
 
 #[tokio::test]
+async fn archived_view_preserves_pending_steer_when_interrupt_arrives() {
+    let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    let mut steer = pending_steer("pending steer");
+    steer.admitted_turn_id = Some("turn-1".into());
+    chat.input_queue.pending_steers.push_back(steer.clone());
+    chat.input_queue.submit_pending_steers_after_interrupt = true;
+    chat.restore_user_message_to_composer("retained draft".into());
+
+    chat.show_read_only_thread(ReadOnlyThread::Archived);
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    let saved = chat.capture_thread_input_state().unwrap();
+    assert_eq!(saved.pending_steers, VecDeque::from([steer]));
+    assert_eq!(chat.bottom_pane.composer_text(), "retained draft");
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
+async fn archived_view_preserves_initial_prompt_and_dismisses_search() {
+    for vim in [false, true] {
+        let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.initial_user_message = Some("CLI prompt".into());
+        chat.restore_user_message_to_composer("typed draft".into());
+        chat.bottom_pane.set_vim_enabled(vim);
+        chat.handle_key_event(if vim {
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)
+        } else {
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+        });
+        assert!(!chat.no_modal_or_popup_active());
+        chat.show_read_only_thread(ReadOnlyThread::Archived);
+        chat.submit_initial_user_message_if_pending();
+        assert!(chat.no_modal_or_popup_active());
+        assert_eq!(chat.composer_text_with_pending(), "CLI prompt\ntyped draft");
+        assert_no_submit_op(&mut ops);
+    }
+}
+
+#[tokio::test]
 async fn provider_error_recovers_only_the_rejected_steer() {
     let (mut chat, _events, mut operations) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut accepted = pending_steer("Focus on the backend");

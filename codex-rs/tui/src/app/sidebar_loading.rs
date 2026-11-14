@@ -144,9 +144,9 @@ impl App {
                 ..side::SideThreadState::new(target.parent)
             };
             self.abandoned_side_threads.remove(&child);
-            if !self.should_attach_live_thread_for_selection(child)
-                && let Some(channel) = self.thread_event_channels.get(&child)
+            if let Some(channel) = self.thread_event_channels.get(&child)
                 && channel.backend_id.is_none_or(|id| id == target.backend_id)
+                && (channel.archived || !self.should_attach_live_thread_for_selection(child))
                 && channel.store.lock().await.session.is_some()
             {
                 self.side_threads.insert(child, side);

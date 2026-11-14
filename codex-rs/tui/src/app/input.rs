@@ -496,7 +496,8 @@ impl App {
                 self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
                 return;
             }
-            if matches!(key_event.code, KeyCode::Char('f' | 'F'))
+            if self.chat_widget.is_external_writer_view()
+                && matches!(key_event.code, KeyCode::Char('f' | 'F'))
                 && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
             {
                 self.chat_widget.fork_in_progress = true;
@@ -504,25 +505,35 @@ impl App {
                     .send(AppEvent::ForkCurrentSession { name: None });
                 return;
             }
-            if matches!(key_event.code, KeyCode::Char('r' | 'R'))
+            let recovery_key = if self.chat_widget.is_archived_view() {
+                matches!(key_event.code, KeyCode::Char('u' | 'U'))
+            } else {
+                matches!(key_event.code, KeyCode::Char('r' | 'R'))
+            };
+            if recovery_key
                 && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
                 && let Some(thread_id) = self.current_displayed_thread_id()
             {
-                let target = SessionTarget {
-                    backend_id: app_server.backend_id(),
-                    path: self
-                        .primary_session_configured
-                        .as_ref()
-                        .and_then(|session| session.rollout_path.clone()),
-                    thread_id,
-                    cwd: None,
-                    history_mode: None,
-                };
-                if let Ok(AppRunControl::Exit(_)) =
-                    self.resume_target_session(tui, app_server, target).await
+                if self.chat_widget.is_archived_view()
+                    && let Err(error) = app_server.thread_unarchive(thread_id).await
+                    && !crate::app_server_session::is_active_writer_error(&error)
                 {
-                    self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+                    // Another client may have restored it before its notification arrived.
+                    let already_unarchived = error.chain().any(|cause| {
+                        cause.to_string().contains(&format!(
+                            "no archived rollout found for thread id {thread_id}"
+                        ))
+                    }) && app_server
+                        .thread_read(thread_id, /*include_turns*/ false)
+                        .await
+                        .is_ok();
+                    if !already_unarchived {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to unarchive thread: {error}"));
+                        return;
+                    }
                 }
+                archived_thread::resume_displayed_thread(self, tui, app_server, thread_id).await;
                 return;
             }
         }

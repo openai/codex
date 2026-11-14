@@ -1,0 +1,11 @@
+---
+source: tui/src/app/tests/archived_thread_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, width)"
+---
+  This thread was archived
+  u to unarchive
+  Press U to unarchive this thread and
+  continue here.
+
+   u unarchive   ←/esc command center
+  ⌃c/q exit   ⌃t transcript

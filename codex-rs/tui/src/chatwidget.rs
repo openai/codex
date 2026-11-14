@@ -380,7 +380,9 @@ pub(crate) use realtime::tests::commit_realtime_history_events;
 pub(crate) use realtime::tests::start_voice_attempt_for_test;
 mod reasoning_shortcuts;
 use self::realtime::RealtimeConversationUiState;
+mod read_only;
 mod rendering;
+pub(crate) use read_only::ReadOnlyThread;
 mod replay;
 mod review;
 mod review_popups;
@@ -689,7 +691,7 @@ pub(crate) struct ChatWidget {
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
     blocks_direct_input: bool,
-    external_writer_view: bool,
+    read_only_thread: Option<ReadOnlyThread>,
     read_only_history: bool,
     thread_settings_confirmed: bool,
     provider_error: Option<codex_app_server_protocol::ModelProviderError>,
@@ -1868,30 +1870,6 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
 
-    pub(crate) fn show_external_writer_thread(&mut self) {
-        self.cancel_image_submission();
-        self.blocks_direct_input = true;
-        self.external_writer_view = true;
-        self.pause_unavailable_thread();
-        if let Some(cell) = self.transcript.active_cell.as_mut() {
-            if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
-                exec.freeze_snapshot();
-            } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
-                tool.freeze_snapshot();
-            }
-        }
-        self.bottom_pane
-            .set_composer_input_enabled(/*enabled*/ false, /*placeholder*/ None);
-    }
-
-    pub(crate) fn is_external_writer_view(&self) -> bool {
-        self.external_writer_view
-    }
-
-    pub(crate) fn is_read_only_view(&self) -> bool {
-        self.is_external_writer_view()
-    }
-
     fn refresh_skills_for_current_cwd(&mut self, force_reload: bool) {
         self.submit_op(AppCommand::list_skills(
             vec![self.config.cwd.to_path_buf()],
@@ -1914,9 +1892,8 @@ impl ChatWidget {
                 AppCommand::UserTurn { .. } | AppCommand::Review { .. } | AppCommand::Compact
             )
         {
-            self.add_error_message(if self.external_writer_view {
-                "This thread is open elsewhere. Close it there and retry resume to continue."
-                    .to_string()
+            self.add_error_message(if let Some(reason) = self.read_only_thread {
+                reason.message().to_string()
             } else {
                 PARENT_OWNED_INPUT_MESSAGE.to_string()
             });

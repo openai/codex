@@ -245,7 +245,7 @@ impl ChatWidget {
             thread_rename_block_message: None,
             active_side_conversation: false,
             blocks_direct_input: false,
-            external_writer_view: false,
+            read_only_thread: None,
             read_only_history: false,
             thread_settings_confirmed: false,
             provider_error: None,
