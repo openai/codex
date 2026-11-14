@@ -19,6 +19,8 @@ use codex_agent_graph_store::AgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_attachment_store::AttachmentStore;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
 use codex_core::CodexThread;
 pub use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -1070,6 +1072,24 @@ impl TestCodexBuilder {
 
         Ok((config, cwd))
     }
+}
+
+pub fn configure_scenario_catalog(config: &mut Config) {
+    // Keep the fixture independent of the checkout's project configuration.
+    let stack = &config.config_layer_stack;
+    config.config_layer_stack = ConfigLayerStack::new(
+        stack
+            .all_layers_low_to_high()
+            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect(),
+        stack.requirements().clone(),
+        stack.requirements_toml().clone(),
+    )
+    .expect("fixture config layers")
+    .with_cloud_config_binding(stack.cloud_config_binding().cloned());
+    config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
+    config.cloud_skill_enabled = false;
 }
 
 fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {

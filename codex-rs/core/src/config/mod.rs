@@ -1288,6 +1288,7 @@ const AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES: usize = 2000;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub use_history_notes_extension: bool,
+    pub context_window_as_tool_output: bool,
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
     pub guidance_message: Option<String>,
@@ -1381,6 +1382,7 @@ impl Default for TokenBudgetConfig {
     fn default() -> Self {
         Self {
             use_history_notes_extension: false,
+            context_window_as_tool_output: false,
             reminder_threshold_tokens: None,
             reminder_message_template: ResolvedModelMessages::bundled()
                 .token_budget_reminder_template()
@@ -3030,6 +3032,9 @@ pub(crate) fn resolve_token_budget_config(
 
     let token_budget = TokenBudgetConfig {
         use_history_notes_extension,
+        context_window_as_tool_output: token_budget_config
+            .and_then(|config| config.context_window_as_tool_output)
+            .unwrap_or_default(),
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,

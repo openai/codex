@@ -772,6 +772,7 @@ auto_compact_fallback_buffer_tokens = 8000
 "#,
             Some(TokenBudgetConfig {
                 use_history_notes_extension: true,
+                context_window_as_tool_output: false,
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
                 guidance_message: Some("Preserve important state before compaction.".to_string()),

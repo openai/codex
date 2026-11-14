@@ -71,14 +71,9 @@ Settings:
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
-03:message/developer[3]:
-    [01] <context_window>
-    [02]
-        Agent name: /root
-        First context window id: <UUID 1>
-        Current context window id: <UUID 1>
-
-    [03] </context_window>
+03:function_call_output/agent.thread_hint:Agent name: /root
+    First context window id: <UUID 1>
+    Current context window id: <UUID 1>
 04:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 

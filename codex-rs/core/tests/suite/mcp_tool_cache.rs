@@ -615,7 +615,7 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
     let fixture = test_codex()
         .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_config(move |config| {
-            super::scenarios::configure_scenario_catalog(config);
+            core_test_support::test_codex::configure_scenario_catalog(config);
             config.update_plan_enabled = true;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config

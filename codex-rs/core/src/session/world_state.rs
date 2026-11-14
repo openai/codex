@@ -233,9 +233,8 @@ impl Session {
                     .session_source
                     .get_agent_path()
                     .unwrap_or_else(codex_protocol::AgentPath::root),
-                window_ids.first_window_id,
-                window_ids.previous_window_id,
-                window_ids.window_id,
+                window_ids,
+                step_context.token_budget.as_ref(),
             ));
         }
         let guidance = step_context

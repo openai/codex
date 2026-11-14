@@ -415,6 +415,9 @@ pub struct TokenBudgetConfigToml {
     /// Whether to expose the built-in history and notes extension.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_history_notes_extension: Option<bool>,
+    /// Render the context window and its hints as an agent.thread_hint tool output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_as_tool_output: Option<bool>,
     /// Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]

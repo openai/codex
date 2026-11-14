@@ -104,6 +104,7 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestEnv;
+use core_test_support::test_codex::configure_scenario_catalog;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
@@ -368,24 +369,6 @@ fn plugin(name: &str) -> UserInput {
         name: name.to_string(),
         path: format!("plugin://{name}@test"),
     }
-}
-
-pub(super) fn configure_scenario_catalog(config: &mut Config) {
-    // Keep the fixture independent of the checkout's project configuration.
-    let stack = &config.config_layer_stack;
-    config.config_layer_stack = ConfigLayerStack::new(
-        stack
-            .all_layers_low_to_high()
-            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
-            .cloned()
-            .collect(),
-        stack.requirements().clone(),
-        stack.requirements_toml().clone(),
-    )
-    .expect("fixture config layers")
-    .with_cloud_config_binding(stack.cloud_config_binding().cloned());
-    config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
-    config.cloud_skill_enabled = false;
 }
 
 fn configure_catalog_plugin_scenario(config: &mut Config) {
@@ -3380,6 +3363,7 @@ async fn prediction_fork_preserves_context_above_compaction_threshold() -> Resul
                 .enable(Feature::TokenBudget)
                 .expect("enable token budget");
             config.token_budget = Some(TokenBudgetConfig {
+                context_window_as_tool_output: true,
                 reminder_threshold_tokens: Some(2_000),
                 ..TokenBudgetConfig::default()
             });

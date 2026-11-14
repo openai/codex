@@ -192,6 +192,14 @@ async fn partial_answers_survive_forked_child_requests(
             }
             if preserve_fork_prefix {
                 config.update_plan_enabled = true;
+                config
+                    .features
+                    .enable(Feature::TokenBudget)
+                    .expect("enable token budget");
+                config.token_budget = Some(TokenBudgetConfig {
+                    context_window_as_tool_output: true,
+                    ..Default::default()
+                });
                 config.multi_agent_v2.root_agent_usage_hint_text =
                     Some("You are /root. Coordinate the investigation.".into());
                 config.multi_agent_v2.subagent_usage_hint_text =
@@ -325,7 +333,7 @@ async fn partial_answers_survive_forked_child_requests(
             insta::assert_snapshot!(
                 "preserved_answer_fork",
                 context_snapshot::format_request_history_snapshot(
-                    "A worker inherits the parent prefix unchanged and receives its own instructions. Requests are grouped by parent, then child.",
+                    "A worker inherits the parent prefix, then receives its own window hint and instructions. Requests are grouped by parent, then child.",
                     &requests,
                     &ContextSnapshotOptions::default().rewrite_known_segments()
                 )
