@@ -933,26 +933,32 @@ impl ToolRegistry {
         }
 
         // Environment resolution, pre-tool hooks and Guardian may all have waited.
-        let invocation_guard = if invocation.session.rollout_budget().tools_stopped() {
-            None
-        } else {
-            let guard = reservation.activate(&invocation);
+        let mut start_denial = invocation.session.tool_start_denial();
+        let mut invocation_guard = None;
+        if matches!(start_denial, Ok(None)) {
+            invocation_guard = reservation.activate(&invocation);
             if tool.mcp_server_name().is_none() {
                 notify_tool_start(&invocation, /*mcp_tool*/ None)
                     .or_cancel_tool(&cancellation_token)
                     .await?;
             }
-            guard
+            // The rollout can stop while the start observer waits.
+            start_denial = invocation.session.tool_start_denial();
+        }
+        let reason = match start_denial {
+            Ok(reason) => reason,
+            Err(error) => {
+                let err = FunctionCallError::Fatal(error.to_string());
+                return Err(fail_before_execution(dispatch_trace, &invocation, err).await);
+            }
         };
-        // A start observer can also wait. This is the last check before polling the
-        // handler; a stop after admission does not cancel an already-running tool.
-        if invocation.session.rollout_budget().tools_stopped() {
+        if let Some(reason) = reason {
             drop(invocation_guard);
             let result = AnyToolResult {
                 call_id: invocation.call_id.clone(),
                 payload: invocation.payload.clone(),
                 result: Box::new(AbortedToolOutput {
-                    message: "aborted before handler start: rollout budget exhausted".into(),
+                    message: format!("aborted before handler start: {reason}"),
                 }),
                 post_tool_use_payload: None,
             };

@@ -14,8 +14,11 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
+use codex_history::RolloutItem;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -512,6 +515,32 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
             matches!(event, EventMsg::TurnComplete(_))
         })
         .await;
+    }
+
+    if owner == AgentRuntimeOwnership::Controller && enforce_limit {
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        let warning_roles = history
+            .items
+            .iter()
+            .filter_map(|item| {
+                let RolloutItem::ResponseItem(item) = item else {
+                    return None;
+                };
+                let ResponseItem::Message { role, content, .. } = &item.item else {
+                    return None;
+                };
+                content
+                    .iter()
+                    .any(|part| {
+                        matches!(part,
+                            ContentItem::InputText { text }
+                                if text.contains("<turn_aborted>")
+                        )
+                    })
+                    .then_some(role.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(warning_roles, ["developer", "developer"]);
     }
 
     if owner == AgentRuntimeOwnership::Host {

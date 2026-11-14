@@ -46,6 +46,14 @@ impl Session {
         &self.services.local_agent_runtime.rollout_budget
     }
 
+    /// Return the diagnostic for a refused tool or propagate an accounting error.
+    pub(crate) fn tool_start_denial(&self) -> CodexResult<Option<String>> {
+        Ok(self
+            .rollout_budget()
+            .tools_stopped()
+            .then(|| "rollout budget exhausted".into()))
+    }
+
     pub(crate) fn check_rollout_budget(&self) -> CodexResult<()> {
         if self.rollout_budget().tools_stopped() {
             Err(CodexErr::SessionBudgetExceeded)

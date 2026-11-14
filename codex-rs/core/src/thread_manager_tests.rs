@@ -1141,12 +1141,15 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn contextual_user_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
-        .expect("contextual-user interrupted marker should be enabled")
+    interrupted_turn_history_marker(
+        InterruptedTurnHistoryMarker::ContextualUser,
+        /*cause*/ None,
+    )
+    .expect("contextual-user interrupted marker should be enabled")
 }
 
 fn developer_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
+    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer, /*cause*/ None)
         .expect("developer interrupted marker should be enabled")
 }
 
@@ -3846,7 +3849,7 @@ fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
             content: vec![ContentItem::InputText {
                 text: format!(
                     "<turn_aborted>\n{}\n</turn_aborted>",
-                    crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+                    crate::context::TurnAborted::INTERRUPTED_NEUTRAL_GUIDANCE
                 ),
             }],
             phase: None,

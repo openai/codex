@@ -338,7 +338,11 @@ impl ToolCallRuntime {
                 .or_cancel_tool(&invocation_cancellation_token)
                 .await?;
                 // A peer may have exhausted the account while this call waited for its slot.
-                if session.rollout_budget().tools_stopped() {
+                if session
+                    .tool_start_denial()
+                    .map_err(|error| FunctionCallError::Fatal(error.to_string()))?
+                    .is_some()
+                {
                     tracing::Span::current().record("aborted", true);
                     record_result_ready(&turn.sub_id, &dispatch_tool_name, &dispatch_call_id);
                     return Err(ToolDispatchError::Aborted(ToolAbort::BeforeDispatch));

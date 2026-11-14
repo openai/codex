@@ -255,10 +255,8 @@ async fn run_compact_task_inner(
     let result = result.and_then(|_| sess.check_rollout_budget());
     if let Err(err) = &result
         && !matches!(phase, CompactionPhase::PostTurn)
-        && !matches!(
-            err.details(),
-            CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-        )
+        && !matches!(err.details(), CodexErrorDetails::Interrupted)
+        && !crate::tasks::ends_turn_as_interrupted(err)
     {
         sess.track_turn_codex_error(turn_context.as_ref(), err);
         // Pre-turn failures are reported after preserving the incoming prompt.
@@ -573,10 +571,8 @@ pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> Compa
     match result {
         Ok(_) => CompactionStatus::Completed,
         Err(err)
-            if matches!(
-                err.details(),
-                CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-            ) =>
+            if matches!(err.details(), CodexErrorDetails::Interrupted)
+                || crate::tasks::ends_turn_as_interrupted(err) =>
         {
             CompactionStatus::Interrupted
         }

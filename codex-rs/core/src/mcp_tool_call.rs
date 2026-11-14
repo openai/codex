@@ -537,9 +537,8 @@ async fn handle_approved_mcp_tool_call(
     let mut admission_error = None;
     let admit = || {
         let reason = sess
-            .rollout_budget()
-            .tools_stopped()
-            .then(|| "rollout budget exhausted".to_owned());
+            .tool_start_denial()
+            .map_err(|error| McpAdmissionError(FunctionCallError::Fatal(error.to_string())))?;
         if let Some(reason) = reason {
             return Err(McpAdmissionError(FunctionCallError::RespondToModel(format!(
                 "aborted before MCP handoff: {reason}"

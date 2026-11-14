@@ -277,7 +277,7 @@ pub(crate) async fn run_turn(
             PersistContext::Standard,
         )
         .await;
-        if matches!(err.details(), CodexErrorDetails::TurnAborted) {
+        if crate::tasks::ends_turn_as_interrupted(&err) {
             return Err(err);
         }
         if matches!(err.details(), CodexErrorDetails::ToolCollision(_)) {
@@ -345,7 +345,7 @@ pub(crate) async fn run_turn(
         .await
     {
         Ok(step_context) => step_context,
-        Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
+        Err(err) if crate::tasks::ends_turn_as_interrupted(&err) => {
             let _ = run_hooks_and_record_inputs(
                 &sess,
                 &turn_context,
@@ -793,7 +793,7 @@ pub(crate) async fn run_turn(
                         }
                         Ok(false) => {}
                         Err(err) => {
-                            if matches!(err.details(), CodexErrorDetails::TurnAborted) {
+                            if crate::tasks::ends_turn_as_interrupted(&err) {
                                 return Err(err);
                             }
                             let error = err.to_codex_protocol_error();
@@ -897,10 +897,9 @@ pub(crate) async fn run_turn(
                             )
                             .await
                         {
-                            if matches!(
-                                err.details(),
-                                CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-                            ) {
+                            if matches!(err.details(), CodexErrorDetails::Interrupted)
+                                || crate::tasks::ends_turn_as_interrupted(&err)
+                            {
                                 return Err(err);
                             }
                             let error = err.to_codex_protocol_error();
@@ -951,7 +950,7 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = false;
                 continue;
             }
-            Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
+            Err(err) if crate::tasks::ends_turn_as_interrupted(&err) => {
                 return Err(err);
             }
             Err(codex_error)

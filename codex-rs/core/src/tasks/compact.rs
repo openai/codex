@@ -9,7 +9,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
 use codex_model_provider::RemoteCompactionSupport;
-use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -95,7 +94,7 @@ impl SessionTask for CompactTask {
             }
         };
         if let Err(err) = result {
-            if matches!(err.details(), CodexErrorDetails::TurnAborted) {
+            if super::ends_turn_as_interrupted(&err) {
                 return Err(err);
             }
             let error = err.to_codex_protocol_error();

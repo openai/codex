@@ -268,7 +268,7 @@ async fn run_remote_compact_task_inner(
     match result {
         Ok(installed) => Ok(installed),
         Err(err)
-            if matches!(err.details(), CodexErrorDetails::TurnAborted)
+            if crate::tasks::ends_turn_as_interrupted(&err)
                 || matches!(phase, CompactionPhase::PostTurn) =>
         {
             Err(err)
