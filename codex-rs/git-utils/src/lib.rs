@@ -48,6 +48,7 @@ pub use info::get_git_repo_root;
 pub use info::get_head_commit_hash;
 pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
+pub use info::observe_git_remote_urls;
 pub use info::recent_commits;
 pub use operations::git_config_override_env;
 pub use platform::create_symlink;

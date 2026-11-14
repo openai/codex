@@ -26,7 +26,7 @@ serde = { workspace = true, features = ["derive"] }
 similar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }
+tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",
