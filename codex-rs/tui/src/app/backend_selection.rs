@@ -217,12 +217,17 @@ impl App {
         let bootstrap = destination
             .bootstrap_for_new_thread(&settings.config)
             .map_err(|error| format!("Failed to prepare the new conversation: {error}"));
-        let bootstrap = if responsive_cloud_switch {
+        let Some(bootstrap) = if responsive_cloud_switch {
             let events = tui.event_stream();
             wait_for_cloud_switch(self, tui, bootstrap, events, clipboard_after_bootstrap).await
         } else {
-            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, bootstrap).await
-        }?;
+            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, bootstrap)
+                .await
+                .map(Some)
+        }?
+        else {
+            return Ok(());
+        };
         let destination_cwd = settings.config.cwd.to_path_buf();
         if let Err(control) = self
             .confirm_directory_trust_for_target(
@@ -243,7 +248,12 @@ impl App {
         {
             if responsive_cloud_switch {
                 let events = tui.event_stream();
-                finish_failed_cloud_switch(self, tui, events).await;
+                if finish_failed_cloud_switch(self, tui, events)
+                    .await
+                    .is_break()
+                {
+                    return Ok(());
+                }
             }
             if matches!(control, AppRunControl::Exit(_)) {
                 self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
@@ -271,8 +281,11 @@ impl App {
             )
             .await
         };
-        let (config, local_settings) =
-            loaded.map_err(|error| format!("Failed to read new session defaults: {error}"))?;
+        let Some((config, local_settings)) =
+            loaded.map_err(|error| format!("Failed to read new session defaults: {error}"))?
+        else {
+            return Ok(());
+        };
         if let Some(draft) = fresh_draft.as_mut() {
             draft.apply_settings(&local_settings, config.cwd.as_path());
         }
@@ -287,7 +300,7 @@ impl App {
                 host_project_cwd.as_deref(),
             )
             .map_err(|error| format!("Failed to start the new conversation: {error}"));
-        let started = if responsive_cloud_switch {
+        let Some(started) = if responsive_cloud_switch {
             let events = tui.event_stream();
             wait_for_cloud_switch(
                 self,
@@ -298,8 +311,13 @@ impl App {
             )
             .await
         } else {
-            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, start).await
-        }?;
+            StartupDraftPump::run_during_navigation(fresh_draft.as_mut(), tui, start)
+                .await
+                .map(Some)
+        }?
+        else {
+            return Ok(());
+        };
         if responsive_cloud_switch {
             draft = Some(self.chat_widget.composer_draft_snapshot());
         }
@@ -307,7 +325,12 @@ impl App {
         if let Err(error) = tui.clear_for_thread_switch() {
             if responsive_cloud_switch {
                 let events = tui.event_stream();
-                finish_failed_cloud_switch(self, tui, events).await;
+                if finish_failed_cloud_switch(self, tui, events)
+                    .await
+                    .is_break()
+                {
+                    return Ok(());
+                }
             }
             return Err(format!("Failed to open the new conversation: {error}"));
         }

@@ -1708,6 +1708,84 @@ async fn cloud_switch_wait_keeps_draft_editable_without_submitting_to_local() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn cloud_switch_wait_quits_on_ctrl_c_before_adopting_the_thread() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+    use crate::app_event::ExitMode;
+
+    for completed in [false, true] {
+        let (mut app, mut app_events, _operations) = make_test_app_with_channels().await;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let operation = async {
+            if !completed {
+                std::future::pending::<()>().await;
+            }
+            Ok::<_, std::convert::Infallible>(())
+        };
+        let ctrl_c = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        let wait = wait_for_cloud_switch(
+            &mut app,
+            &mut tui,
+            operation,
+            tokio_stream::iter([ctrl_c]).chain(tokio_stream::pending()),
+            ClipboardHandoff::SettleBeforeNextView,
+        );
+        tokio::pin!(wait);
+        assert_eq!(futures::poll!(&mut wait), std::task::Poll::Ready(Ok(None)));
+        let exits: Vec<_> = std::iter::from_fn(|| app_events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::Exit(mode) => Some(mode),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(exits, [ExitMode::ShutdownFirst]);
+    }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn cloud_switch_wait_ctrl_c_clears_buffered_draft_before_quitting() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+    use crate::app_event::ExitMode;
+
+    let (mut app, mut app_events, _operations) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, app.config.cwd.to_path_buf());
+    app.chat_widget.handle_thread_session(session);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let (send, events) = tokio::sync::mpsc::unbounded_channel();
+    let ctrl_c = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    send.send(TuiEvent::Key(KeyCode::Char('a').into()))?;
+    send.send(ctrl_c.clone())?;
+    let wait = wait_for_cloud_switch(
+        &mut app,
+        &mut tui,
+        std::future::pending::<Result<(), std::convert::Infallible>>(),
+        tokio_stream::wrappers::UnboundedReceiverStream::new(events),
+        ClipboardHandoff::SettleBeforeNextView,
+    );
+    tokio::pin!(wait);
+    assert!(futures::poll!(&mut wait).is_pending());
+    let history: Vec<_> = std::iter::from_fn(|| app_events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::AppendMessageHistoryEntry { thread_id, text } => Some((thread_id, text)),
+            AppEvent::Exit(_) => panic!("the first Ctrl+C should clear the draft"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(history, [(thread_id, "a".into())]);
+
+    send.send(ctrl_c)?;
+    assert_eq!(futures::poll!(&mut wait), std::task::Poll::Ready(Ok(None)));
+    assert!(
+        std::iter::from_fn(|| app_events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::Exit(ExitMode::ShutdownFirst)))
+    );
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn cloud_switch_wait_routes_ctrl_d_to_the_draft_or_queues_shutdown() -> Result<()> {
     use crate::app::cloud_switch_wait::ClipboardHandoff;

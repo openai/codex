@@ -227,6 +227,42 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
 
 #[tokio::test]
 async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
+    assert_abandoned_request_unblocks_worker(
+        "ListThreads",
+        CloudOperation::Request(Box::new(protocol::ClientRequest::ThreadList {
+            request_id: protocol::RequestId::Integer(1),
+            params: serde_json::from_value(serde_json::json!({"limit": 10}))?,
+        })),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn dropping_an_in_flight_start_unblocks_the_native_worker() -> Result<()> {
+    for operation in [
+        CloudOperation::Request(Box::new(protocol::ClientRequest::ThreadStart {
+            request_id: protocol::RequestId::Integer(1),
+            params: Default::default(),
+        })),
+        CloudOperation::StartProjectThread {
+            request_id: protocol::RequestId::Integer(1),
+            params: Box::default(),
+            project: cloud::ProjectEnvironment {
+                name: "project".into(),
+                origin_urls: vec!["https://github.com/example/project.git".into()],
+                cwd: None,
+            },
+        },
+    ] {
+        assert_abandoned_request_unblocks_worker("Prewarm", operation).await?;
+    }
+    Ok(())
+}
+
+async fn assert_abandoned_request_unblocks_worker(
+    rpc: &str,
+    operation: CloudOperation,
+) -> Result<()> {
     let server = MockServer::start().await;
     let home = tempfile::tempdir()?;
     let config = crate::legacy_core::config::ConfigBuilder::default()
@@ -247,6 +283,7 @@ async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
         workspace_routing: None,
     };
     let (client, commands, output) = CloudClient::channel(/*capacity*/ 32);
+    let handle = client.request_handle();
     let client = AppServerClient::Cloud(client);
     let mut requests = requests::Requests {
         client: Arc::new(native),
@@ -257,16 +294,16 @@ async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
     tokio::spawn(async move {
         run_worker(commands, &mut requests, &mut Replies::default(), &output).await;
     });
-    let (list_arrived, mut arrival) = mpsc::unbounded_channel();
-    let (release_list, held) = std::sync::mpsc::channel::<()>();
+    let (request_arrived, mut arrival) = mpsc::unbounded_channel();
+    let (release_request, held) = std::sync::mpsc::channel::<()>();
     let held = Mutex::new(held);
     Mock::given(method("POST"))
-        .and(path(
-            "/oaiproto.codex_app_server_backend.ThreadService/ListThreads",
-        ))
+        .and(path(format!(
+            "/oaiproto.codex_app_server_backend.ThreadService/{rpc}"
+        )))
         .and(header("authorization", "Bearer synthetic-bearer"))
         .respond_with(move |_: &wiremock::Request| {
-            let _ = list_arrived.send(());
+            let _ = request_arrived.send(());
             // Wiremock serves on a dedicated thread. Hold the RPC until the sender drops.
             let _ = held.lock().unwrap().recv();
             ResponseTemplate::new(503)
@@ -275,17 +312,28 @@ async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut list = Box::pin(client.request(protocol::ClientRequest::ThreadList {
-        request_id: protocol::RequestId::Integer(1),
-        params: serde_json::from_value(serde_json::json!({"limit": 10}))?,
-    }));
+    let mut pending = Box::pin(async {
+        match operation {
+            CloudOperation::Request(request) => client.request(*request).await,
+            CloudOperation::StartProjectThread {
+                request_id,
+                params,
+                project,
+            } => {
+                handle
+                    .start_project_thread(request_id, *params, project)
+                    .await
+            }
+            _ => unreachable!("fixture supports Cloud lists and starts"),
+        }
+    });
     tokio::select! {
         seen = tokio::time::timeout(crate::SHUTDOWN_TIMEOUT, arrival.recv()) => {
             assert_eq!(seen?, Some(()));
         }
-        _ = &mut list => panic!("list finished before the fixture held it"),
+        _ = &mut pending => panic!("request finished before the fixture held it"),
     }
-    drop(list);
+    drop(pending);
     let account_response = tokio::time::timeout(
         crate::SHUTDOWN_TIMEOUT,
         client.request_typed::<protocol::GetAccountResponse>(protocol::ClientRequest::GetAccount {
@@ -296,7 +344,7 @@ async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
         }),
     )
     .await;
-    drop(release_list);
+    drop(release_request);
     assert_eq!(account_response??, account);
     client.shutdown().await?;
     Ok(())

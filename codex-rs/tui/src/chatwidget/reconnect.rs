@@ -198,6 +198,16 @@ impl ChatWidget {
         self.bottom_pane.composer_paste_deadline()
     }
 
+    pub(crate) fn cancel_cloud_handoff_input(&mut self) -> CancellationEvent {
+        // Count buffered terminal input as part of the draft before deciding to quit.
+        self.bottom_pane.flush_composer_paste_burst();
+        let cancellation = self.bottom_pane.on_ctrl_c();
+        if cancellation == CancellationEvent::Handled {
+            self.refresh_startup_recovery();
+        }
+        cancellation
+    }
+
     pub(crate) fn handle_restricted_key(
         &mut self,
         key: KeyEvent,

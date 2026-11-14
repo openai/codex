@@ -4,14 +4,19 @@
 //! session preparation and adoption, so no competing navigation can install a Cloud stream.
 
 use super::App;
+use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
+use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::RestrictedInputMode;
 use crate::chatwidget::ClipboardPasteContext;
 use crate::tui;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::layout::Size;
 use std::future::Future;
+use std::ops::ControlFlow;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 
@@ -33,12 +38,12 @@ fn handle_cloud_switch_event(
     tui: &mut tui::Tui,
     event: tui::TuiEvent,
     progress: CloudSwitchProgress,
-) {
+) -> ControlFlow<()> {
     let screen_size = match tui.screen_size_for_event(&event) {
         Ok(size) => size,
         Err(error) => {
             tracing::warn!(%error, "failed to inspect terminal size during cloud switch");
-            return;
+            return ControlFlow::Continue(());
         }
     };
     // Clipboard text is delivered on Draw after ordinary input invalidation and target checks.
@@ -57,6 +62,21 @@ fn handle_cloud_switch_event(
     }
     match event {
         tui::TuiEvent::Key(mut key) => {
+            if key.kind == KeyEventKind::Press
+                && crate::key_hint::ctrl(KeyCode::Char('c')).is_press(key)
+            {
+                app.cancel_pending_key_chord();
+                if app.chat_widget.cancel_cloud_handoff_input() == CancellationEvent::NotHandled
+                    && app.chat_widget.no_modal_or_popup_active()
+                {
+                    app.app_event_tx
+                        .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                    clear_cloud_switch_hint(app);
+                    return ControlFlow::Break(());
+                }
+                show_cloud_switch_hint(app, progress);
+                return ControlFlow::Continue(());
+            }
             let escape = if app.should_recover_vim_insert_escape(tui, key)
                 && !(tui.is_owned_screen()
                     && crate::transcript_view::JumpTarget::from_key(key).is_some())
@@ -91,7 +111,7 @@ fn handle_cloud_switch_event(
                 .handle_handoff_paste_tick(tui.frame_requester())
             {
                 tui.defer_screen_size(screen_size);
-                return;
+                return ControlFlow::Continue(());
             }
             app.chat_widget.pre_draw_tick();
             draw_cloud_switch(app, tui, screen_size);
@@ -104,6 +124,7 @@ fn handle_cloud_switch_event(
             app.start_right_click_paste(tui, mouse, ClipboardPasteContext::DraftHandoff);
         }
     }
+    ControlFlow::Continue(())
 }
 
 fn show_cloud_switch_hint(app: &mut App, progress: CloudSwitchProgress) {
@@ -113,6 +134,11 @@ fn show_cloud_switch_hint(app: &mut App, progress: CloudSwitchProgress) {
     };
     app.chat_widget
         .set_footer_hint_override(Some(vec![(label.into(), action.into())]));
+}
+
+fn clear_cloud_switch_hint(app: &mut App) {
+    app.cancel_pending_key_chord();
+    app.chat_widget.set_footer_hint_override(/*items*/ None);
 }
 
 fn draw_cloud_switch(app: &mut App, tui: &mut tui::Tui, screen_size: Size) {
@@ -126,11 +152,11 @@ pub(super) async fn finish_failed_cloud_switch(
     app: &mut App,
     tui: &mut tui::Tui,
     mut events: impl Stream<Item = tui::TuiEvent> + Unpin,
-) {
+) -> ControlFlow<()> {
     let progress = CloudSwitchProgress::Failed;
     show_cloud_switch_hint(app, progress);
     draw_cloud_switch(app, tui, tui.terminal.last_known_screen_size);
-    drain_cloud_switch_events(app, tui, &mut events, progress).await;
+    drain_cloud_switch_events(app, tui, &mut events, progress).await
 }
 
 async fn drain_cloud_switch_events(
@@ -138,7 +164,7 @@ async fn drain_cloud_switch_events(
     tui: &mut tui::Tui,
     events: &mut (impl Stream<Item = tui::TuiEvent> + Unpin),
     progress: CloudSwitchProgress,
-) {
+) -> ControlFlow<()> {
     // The current draft owns paste keys and any clipboard text until adoption.
     let settle_clipboard = matches!(
         progress,
@@ -164,26 +190,27 @@ async fn drain_cloud_switch_events(
         let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.next()).await else {
             if clipboard_deadline.is_some() {
                 // The terminal stream can end or the deadline can beat its scheduled Draw.
-                handle_cloud_switch_event(app, tui, tui::TuiEvent::Draw, progress);
+                handle_cloud_switch_event(app, tui, tui::TuiEvent::Draw, progress)?;
                 app.pending_right_click_paste = None;
             }
             break;
         };
-        handle_cloud_switch_event(app, tui, event, progress);
+        handle_cloud_switch_event(app, tui, event, progress)?;
     }
-    app.cancel_pending_key_chord();
-    app.chat_widget.set_footer_hint_override(/*items*/ None);
+    clear_cloud_switch_hint(app);
+    ControlFlow::Continue(())
 }
 
 /// Keep the draft editable while Cloud prepares its destination. Other app actions wait
 /// until the handoff completes, so a second navigation cannot replace the pending stream.
+/// Returns `Ok(None)` when the user requests exit, dropping the pending operation.
 pub(crate) async fn wait_for_cloud_switch<T, E>(
     app: &mut App,
     tui: &mut tui::Tui,
     operation: impl Future<Output = Result<T, E>>,
     events: impl Stream<Item = tui::TuiEvent> + Unpin,
     clipboard_handoff: ClipboardHandoff,
-) -> Result<T, E> {
+) -> Result<Option<T>, E> {
     let progress = CloudSwitchProgress::Connecting(clipboard_handoff);
     app.cancel_pending_key_chord();
     show_cloud_switch_hint(app, progress);
@@ -198,13 +225,20 @@ pub(crate) async fn wait_for_cloud_switch<T, E>(
         tokio::select! {
             biased;
             result = &mut operation => break result,
-            Some(event) = events.next() => handle_cloud_switch_event(app, tui, event, progress),
+            Some(event) = events.next() => {
+                if handle_cloud_switch_event(app, tui, event, progress).is_break() {
+                    return Ok(None);
+                }
+            }
         }
     };
-    if result.is_err() {
-        finish_failed_cloud_switch(app, tui, events).await;
+    let input = if result.is_err() {
+        finish_failed_cloud_switch(app, tui, events).await
     } else {
-        drain_cloud_switch_events(app, tui, &mut events, progress).await;
+        drain_cloud_switch_events(app, tui, &mut events, progress).await
+    };
+    if input.is_break() {
+        return Ok(None);
     }
-    result
+    result.map(Some)
 }
