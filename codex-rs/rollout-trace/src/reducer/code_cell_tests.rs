@@ -410,6 +410,7 @@ fn cancelled_turn_terminates_unfinished_code_cell() -> anyhow::Result<()> {
 fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = Arc::new(create_started_writer(&temp)?);
+    let mut pending_dispatches = Vec::new();
     writer.append(RawTraceEventPayload::ThreadStarted {
         thread_id: "thread-child".to_string(),
         agent_path: "/root/child".to_string(),
@@ -482,8 +483,11 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
             );
             if wait_id == "rejected" {
                 dispatch.record_failed("invalid wait arguments");
-            } else if wait_id == "confirmed" {
-                // The source item is still pending. No registry return is required for this edge.
+                continue;
+            }
+            // Replay these dispatches while they are still pending.
+            pending_dispatches.push(dispatch);
+            if wait_id == "confirmed" {
                 crate::CodeCellTraceContext::enabled(Arc::clone(&writer), thread_id, turn_id, "1")
                     .record_wait_target(wait_id);
             }

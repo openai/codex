@@ -369,6 +369,46 @@ fn protocol_wrapper_records_selected_events_as_raw_payloads() -> anyhow::Result<
 }
 
 #[test]
+fn dropping_tool_dispatch_closes_the_execution_window() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let trace =
+        ThreadTraceContext::start_root_in_root_for_test(temp.path(), minimal_metadata(thread_id))?;
+    trace.record_codex_turn_started("turn-1");
+    let dispatch = trace.start_tool_dispatch_trace(|| {
+        Some(ToolDispatchInvocation {
+            thread_id: thread_id.to_string(),
+            codex_turn_id: "turn-1".into(),
+            tool_call_id: "call".into(),
+            tool_name: "test_tool".into(),
+            tool_namespace: None,
+            requester: ToolDispatchRequester::Model {
+                model_visible_call_id: "call".into(),
+            },
+            payload: ToolDispatchPayload::Function {
+                arguments: "{}".into(),
+            },
+        })
+    });
+    trace.flush()?;
+    let bundle = single_bundle_dir(temp.path())?;
+    let before = replay_bundle(&bundle)?.tool_calls["call"].execution.clone();
+    assert_eq!(before.status, ExecutionStatus::Running);
+    assert_eq!(before.ended_at_unix_ms, None);
+
+    drop(dispatch);
+    trace.flush()?;
+    let rollout = replay_bundle(&bundle)?;
+    let call = &rollout.tool_calls["call"];
+    assert_eq!(call.execution.status, ExecutionStatus::Aborted);
+    assert_eq!(call.execution.started_at_unix_ms, before.started_at_unix_ms);
+    assert!(call.execution.ended_at_unix_ms >= Some(before.started_at_unix_ms));
+    assert!(call.execution.ended_seq > Some(before.started_seq));
+    assert_eq!(call.raw_result_payload_id, None);
+    Ok(())
+}
+
+#[test]
 fn intercepted_exec_records_patch_without_a_terminal() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let thread_id = ThreadId::new();

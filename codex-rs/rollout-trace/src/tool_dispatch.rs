@@ -29,19 +29,13 @@ use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::writer::TraceWriter;
 
-/// No-op capable trace handle for one resolved tool dispatch.
-#[derive(Clone, Debug)]
+/// Records one tool dispatch, closing it as aborted if dropped before a result.
+#[derive(Debug)]
 pub struct ToolDispatchTraceContext {
-    state: ToolDispatchTraceContextState,
+    active: Option<EnabledToolDispatchTraceContext>,
 }
 
-#[derive(Clone, Debug)]
-enum ToolDispatchTraceContextState {
-    Disabled,
-    Enabled(EnabledToolDispatchTraceContext),
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct EnabledToolDispatchTraceContext {
     writer: Arc<TraceWriter>,
     thread_id: AgentThreadId,
@@ -127,9 +121,7 @@ enum DispatchedToolTraceResponse<'a> {
 impl ToolDispatchTraceContext {
     /// Builds a context that accepts trace calls and records nothing.
     pub(crate) fn disabled() -> Self {
-        Self {
-            state: ToolDispatchTraceContextState::Disabled,
-        }
+        Self { active: None }
     }
 
     /// Returns whether caller-side result conversion would be recorded.
@@ -137,7 +129,7 @@ impl ToolDispatchTraceContext {
     /// Core uses this to avoid formatting or cloning tool outputs when the
     /// dispatch lifecycle is disabled.
     pub fn is_enabled(&self) -> bool {
-        matches!(self.state, ToolDispatchTraceContextState::Enabled(_))
+        self.active.is_some()
     }
 
     /// Starts one dispatch-level lifecycle and returns the handle for its result.
@@ -152,13 +144,13 @@ impl ToolDispatchTraceContext {
         };
         record_started(&context, invocation);
         Self {
-            state: ToolDispatchTraceContextState::Enabled(context),
+            active: Some(context),
         }
     }
 
     /// Records the caller-facing successful or failed tool result.
-    pub fn record_completed(&self, status: ExecutionStatus, result: ToolDispatchResult) {
-        let ToolDispatchTraceContextState::Enabled(context) = &self.state else {
+    pub fn record_completed(mut self, status: ExecutionStatus, result: ToolDispatchResult) {
+        let Some(context) = self.active.take() else {
             return;
         };
         let response = match &result {
@@ -169,21 +161,36 @@ impl ToolDispatchTraceContext {
                 DispatchedToolTraceResponse::CodeModeResponse { value }
             }
         };
-        append_tool_call_ended(context, status, &response);
+        append_tool_call_ended(&context, status, &response);
     }
 
     /// Records a dispatch failure before the tool produced a normal result payload.
-    pub fn record_failed(&self, error: impl Display) {
-        let ToolDispatchTraceContextState::Enabled(context) = &self.state else {
+    pub fn record_failed(mut self, error: impl Display) {
+        let Some(context) = self.active.take() else {
             return;
         };
         append_tool_call_ended(
-            context,
+            &context,
             ExecutionStatus::Failed,
             &DispatchedToolTraceResponse::Error {
                 error: error.to_string(),
             },
         );
+    }
+}
+
+impl Drop for ToolDispatchTraceContext {
+    fn drop(&mut self) {
+        if let Some(context) = self.active.take() {
+            let _ = context.writer.enqueue_event(
+                RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
+                RawTraceEventPayload::ToolCallEnded {
+                    tool_call_id: context.tool_call_id,
+                    status: ExecutionStatus::Aborted,
+                    result_payload: None,
+                },
+            );
+        }
     }
 }
 

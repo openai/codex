@@ -16,7 +16,7 @@ use codex_rollout_trace::ToolDispatchRequester;
 use codex_rollout_trace::ToolDispatchResult;
 use codex_rollout_trace::ToolDispatchTraceContext;
 
-/// Keeps registry early-return paths paired with trace end events.
+/// Keeps registry results and abandoned dispatches paired with trace end events.
 pub(crate) struct ToolDispatchTrace {
     context: ToolDispatchTraceContext,
 }
@@ -32,7 +32,7 @@ impl ToolDispatchTrace {
     }
 
     pub(crate) fn record_completed(
-        &self,
+        self,
         invocation: &ToolInvocation,
         call_id: &str,
         payload: &ToolPayload,
@@ -54,7 +54,7 @@ impl ToolDispatchTrace {
         self.context.record_completed(status, result_payload);
     }
 
-    pub(crate) fn record_failed(&self, error: &FunctionCallError) {
+    pub(crate) fn record_failed(self, error: &FunctionCallError) {
         self.context.record_failed(error);
     }
 }
