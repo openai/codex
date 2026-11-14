@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
 use crate::function_tool::OrCancelToolExt;
@@ -13,6 +13,7 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::memory_usage::shell_script_for_invocation;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolEnvironments;
@@ -39,6 +40,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
+use codex_rollout_trace::ExecutionStatus;
 use codex_shell_command::parse_command::parse_shell_script;
 use codex_tools::FunctionsNamespaceFunctionPrefixes;
 use codex_tools::ToolName;
@@ -930,12 +932,40 @@ impl ToolRegistry {
             return Err(fail_before_execution(dispatch_trace, &invocation, err).await);
         }
 
-        let invocation_guard = reservation.activate(&invocation);
-        if tool.mcp_server_name().is_none() {
-            notify_tool_start(&invocation, /*mcp_tool*/ None)
-                .or_cancel_tool(&cancellation_token)
-                .await?;
+        // Environment resolution, pre-tool hooks and Guardian may all have waited.
+        let invocation_guard = if invocation.session.rollout_budget().tools_stopped() {
+            None
+        } else {
+            let guard = reservation.activate(&invocation);
+            if tool.mcp_server_name().is_none() {
+                notify_tool_start(&invocation, /*mcp_tool*/ None)
+                    .or_cancel_tool(&cancellation_token)
+                    .await?;
+            }
+            guard
+        };
+        // A start observer can also wait. This is the last check before polling the
+        // handler; a stop after admission does not cancel an already-running tool.
+        if invocation.session.rollout_budget().tools_stopped() {
+            drop(invocation_guard);
+            let result = AnyToolResult {
+                call_id: invocation.call_id.clone(),
+                payload: invocation.payload.clone(),
+                result: Box::new(AbortedToolOutput {
+                    message: "aborted before handler start: rollout budget exhausted".into(),
+                }),
+                post_tool_use_payload: None,
+            };
+            dispatch_trace.record_result(&invocation, &result, ExecutionStatus::Aborted);
+            notify_tool_finish_if_unclaimed(
+                &invocation,
+                call_state.as_deref(),
+                ToolCallOutcome::Aborted,
+            )
+            .await;
+            return Ok(result);
         }
+
         let mut control_tool_analytics = tool
             .is_builtin_control_tool()
             .then(|| ControlToolCallGuard::new(&invocation));
@@ -1025,6 +1055,7 @@ impl ToolRegistry {
             {
                 ToolCallOutcome::Aborted
             }
+            Ok(result) if result.result.was_aborted() => ToolCallOutcome::Aborted,
             Ok(_) => ToolCallOutcome::Completed { success },
             Err(_) => ToolCallOutcome::Failed {
                 handler_executed: true,
@@ -1035,6 +1066,10 @@ impl ToolRegistry {
             .await;
 
         match result {
+            Ok(result) if result.result.was_aborted() => {
+                dispatch_trace.record_result(&invocation, &result, ExecutionStatus::Aborted);
+                Ok(result)
+            }
             Ok(mut result) => {
                 if let Some(outcome) = post_tool_use_outcome {
                     if outcome.should_block {
@@ -1056,12 +1091,12 @@ impl ToolRegistry {
                     }
                 }
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());
-                dispatch_trace.record_completed(
-                    &invocation,
-                    &result.call_id,
-                    &result.payload,
-                    result.result.as_ref(),
-                );
+                let status = if success {
+                    ExecutionStatus::Completed
+                } else {
+                    ExecutionStatus::Failed
+                };
+                dispatch_trace.record_result(&invocation, &result, status);
                 Ok(result)
             }
             Err(err) => {
@@ -1077,7 +1112,7 @@ async fn notify_tool_finish_if_unclaimed(
     call_state: Option<&ToolCallState>,
     outcome: ToolCallOutcome,
 ) -> bool {
-    if call_state.is_some_and(|state| state.terminal_outcome_reached.swap(true, Ordering::AcqRel)) {
+    if call_state.is_some_and(|state| state.terminal_outcome.set(outcome).is_err()) {
         return false;
     }
 
@@ -1092,6 +1127,9 @@ async fn handle_any_tool(
 ) -> Result<AnyToolResult, FunctionCallError> {
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
+    if let Some(state) = call_state {
+        let _ = state.handler_started_at.set(Instant::now());
+    }
     let output = tool.handle(invocation.clone()).await?;
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());

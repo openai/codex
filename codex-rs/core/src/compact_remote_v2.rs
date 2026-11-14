@@ -1472,11 +1472,13 @@ mod tests {
             assert!(
                 matches!(result, Err(ref err) if matches!(err.details(), CodexErrorDetails::TurnAborted))
             );
+            assert!(!sess.rollout_budget().tools_stopped());
             assert!(accounting.reports.lock().unwrap().is_empty());
             return;
         }
         assert!(matches!(result, Err(ref err)
             if matches!(err.details(), CodexErrorDetails::ResponseIncomplete(_))));
+        assert!(sess.rollout_budget().tools_stopped());
         assert_eq!(
             *accounting.reports.lock().unwrap(),
             vec![AgentUsageReport {

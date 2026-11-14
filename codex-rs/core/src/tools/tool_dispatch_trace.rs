@@ -9,6 +9,7 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
@@ -31,25 +32,23 @@ impl ToolDispatchTrace {
         Self { context }
     }
 
-    pub(crate) fn record_completed(
+    pub(crate) fn record_result(
         self,
         invocation: &ToolInvocation,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &AnyToolResult,
+        status: ExecutionStatus,
     ) {
         if !self.context.is_enabled() {
             return;
         }
 
-        let Some(result_payload) = tool_dispatch_result(invocation, call_id, payload, result)
-        else {
+        let Some(result_payload) = tool_dispatch_result(
+            invocation,
+            &result.call_id,
+            &result.payload,
+            result.result.as_ref(),
+        ) else {
             return;
-        };
-        let status = if result.success_for_logging() {
-            ExecutionStatus::Completed
-        } else {
-            ExecutionStatus::Failed
         };
         self.context.record_completed(status, result_payload);
     }

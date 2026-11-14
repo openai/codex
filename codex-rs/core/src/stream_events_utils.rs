@@ -382,14 +382,10 @@ pub(crate) async fn handle_output_item_done(
             let cancellation_token = ctx.cancellation_token.child_token();
             let runtime = ctx.tool_runtime.clone();
             let dispatch = |allowed: bool| -> InFlightFuture<'static> {
-                if allowed
-                    && !ctx.sess.rollout_budget().tools_stopped()
-                    && !cancellation_token.is_cancelled()
-                {
+                if allowed && !cancellation_token.is_cancelled() {
                     Box::pin(runtime.handle_tool_call(call, cancellation_token))
                 } else {
-                    let output =
-                        ToolCallRuntime::aborted_response(&call, /*elapsed_secs*/ None);
+                    let output = ToolCallRuntime::aborted_before_dispatch(&call);
                     Box::pin(std::future::ready(Ok(
                         output.into_response(/*file_backed_tool_audio*/ false)
                     )))

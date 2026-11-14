@@ -196,3 +196,171 @@ async fn explicit_cloud_refresh_runs_concurrently_and_awaits_all_results() {
         .expect("completed refresh must release the catalog lock"),
     );
 }
+
+#[derive(Clone, Copy)]
+enum McpPause {
+    Start,
+    Result,
+}
+
+struct PauseMcpCall {
+    phase: McpPause,
+    entered: Notify,
+    release: Notify,
+    outcome: std::sync::OnceLock<codex_extension_api::ToolCallOutcome>,
+}
+
+impl codex_extension_api::ToolLifecycleContributor for PauseMcpCall {
+    fn on_tool_start<'a>(
+        &'a self,
+        input: codex_extension_api::ToolStartInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            assert_eq!(input.mcp_tool.unwrap().tool_info().tool.name, "probe");
+            if matches!(self.phase, McpPause::Start) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        })
+    }
+
+    fn on_mcp_tool_result<'a>(
+        &'a self,
+        _input: codex_extension_api::McpToolResultInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if matches!(self.phase, McpPause::Result) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        })
+    }
+
+    fn on_tool_finish<'a>(
+        &'a self,
+        input: codex_extension_api::ToolFinishInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        Box::pin(async move { self.outcome.set(input.outcome).expect("one finish") })
+    }
+}
+
+#[test_case::test_case(McpPause::Start; "stop_before_send")]
+#[test_case::test_case(McpPause::Result; "stop_after_send")]
+#[tokio::test]
+async fn mcp_budget_stop_at_handoff(phase: McpPause) -> anyhow::Result<()> {
+    use crate::tools::parallel::ToolCallRuntime;
+    use crate::tools::router::ToolCall;
+    use codex_extension_api::ToolCallOutcome;
+    use core_test_support::hooks::mount_hook_mcp;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let endpoint = wiremock::MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let received = Arc::clone(&calls);
+    mount_hook_mcp(&endpoint, "handoff", &["probe"], move |_| {
+        received.fetch_add(1, Ordering::Relaxed);
+        json!({"content": [{"type":"text", "text":"peer result"}]})
+    })
+    .await;
+    let observer = Arc::new(PauseMcpCall {
+        phase,
+        entered: Notify::new(),
+        release: Notify::new(),
+        outcome: Default::default(),
+    });
+    let (mut session, _) = make_session_and_context().await;
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.tool_lifecycle_contributor(observer.clone());
+    session.services.extensions = Arc::new(extensions.build());
+    session
+        .rollout_budget()
+        .configure(crate::config::RolloutBudgetConfig {
+            enforce_limit: true,
+            limit_tokens: 1,
+            reminder_at_remaining_tokens: Vec::new(),
+            sampling_token_weight: 1.0,
+            prefill_token_weight: 1.0,
+        });
+    {
+        let mut state = session.state.lock().await;
+        let config = Arc::make_mut(&mut state.session_configuration.original_config_do_not_use);
+        config
+            .mcp_servers
+            .set(serde_json::from_value(json!({"handoff": {
+                "url": format!("{}/repl", endpoint.uri()),
+                "default_tools_approval_mode": "approve"
+            }}))?)?;
+    }
+    let session = Arc::new(session);
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
+    session
+        .wait_for_mcp_server(&codex_mcp::McpServerKey::unscoped("handoff"))
+        .await;
+    let turn = session.new_default_turn().await;
+    let cancel = CancellationToken::new();
+    let step = session
+        .capture_step_context_with_required_mcp_servers(
+            turn,
+            &cancel,
+            &["handoff".to_owned()],
+            &HashSet::new(),
+        )
+        .await?;
+    let tool = step
+        .mcp
+        .tools()
+        .iter()
+        .find(|tool| tool.server_name() == "handoff" && tool.tool.name == "probe")
+        .expect("MCP server advertised probe");
+    let call = ToolCall {
+        tool_name: tool.canonical_tool_name(),
+        call_id: "handoff-probe".into(),
+        payload: ToolPayload::Function {
+            arguments: "{}".into(),
+        },
+        encrypted_function_args: None,
+        native_call: None,
+    };
+    let runtime = ToolCallRuntime::new(
+        session.clone(),
+        step,
+        Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+    );
+    let response = runtime.handle_tool_call(call, cancel);
+    tokio::pin!(response);
+    tokio::select! {
+        () = observer.entered.notified() => {}
+        reply = &mut response => anyhow::bail!("MCP call finished before the observer paused: {reply:?}"),
+    }
+    let usage = codex_protocol::protocol::TokenUsage {
+        output_tokens: 2,
+        ..Default::default()
+    };
+    session
+        .record_rollout_budget_usage("peer-turn", &usage.into())
+        .await?;
+    observer.release.notify_one();
+    let reply = response.await?;
+    let (count, outcome) = match phase {
+        McpPause::Start => {
+            assert_eq!(
+                reply.item,
+                ResponseInputItem::FunctionCallOutput {
+                    call_id: "handoff-probe".into(),
+                    output: FunctionCallOutputPayload::from_text(
+                        "aborted before MCP handoff: rollout budget exhausted".into()
+                    ),
+                }
+                .into()
+            );
+            (0, ToolCallOutcome::Aborted)
+        }
+        McpPause::Result => (1, ToolCallOutcome::Completed { success: true }),
+    };
+    assert_eq!(calls.load(Ordering::Relaxed), count);
+    assert_eq!(observer.outcome.get(), Some(&outcome));
+    session.services.mcp_runtime.shutdown().await;
+    Ok(())
+}

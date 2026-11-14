@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
+use crate::function_tool::FunctionCallError;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::GuardianReviewContext;
@@ -167,7 +168,7 @@ pub(crate) async fn handle_mcp_tool_call(
     invocation_tool_name: ToolName,
     source: &crate::tools::context::ToolCallSource,
     arguments: String,
-) -> HandledMcpToolCall {
+) -> Result<CompletedMcpToolCall, FunctionCallError> {
     let turn_context = &step_context.turn;
     let server = advertised_tool.server_name().to_owned();
     let tool_name = advertised_tool.tool.name.to_string();
@@ -175,10 +176,10 @@ pub(crate) async fn handle_mcp_tool_call(
         Ok(value) => value,
         Err(e) => {
             error!("failed to parse tool call arguments: {e}");
-            return HandledMcpToolCall {
+            return Ok(CompletedMcpToolCall {
                 result: CallToolResult::from_error_text(format!("err: {e}")),
                 tool_input: JsonValue::Object(serde_json::Map::new()),
-            };
+            });
         }
     };
 
@@ -230,11 +231,11 @@ pub(crate) async fn handle_mcp_tool_call(
                 /*already_started*/ false,
             )
             .await;
-            return HandledMcpToolCall {
+            return Ok(CompletedMcpToolCall {
                 result: CallToolResult::from_result(result),
                 tool_input: arguments_value
                     .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
-            };
+            });
         }
     };
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, Some(&metadata));
@@ -263,11 +264,11 @@ pub(crate) async fn handle_mcp_tool_call(
             connector_name.as_deref(),
             /*duration*/ None,
         );
-        return HandledMcpToolCall {
+        return Ok(CompletedMcpToolCall {
             result: CallToolResult::from_result(result),
             tool_input: arguments_value
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
-        };
+        });
     };
     let _approval_metadata = sess.register_mcp_tool_approval_metadata(
         &call_id,
@@ -396,11 +397,11 @@ pub(crate) async fn handle_mcp_tool_call(
             /*duration*/ None,
         );
 
-        return HandledMcpToolCall {
+        return Ok(CompletedMcpToolCall {
             result: CallToolResult::from_result(result),
             tool_input: arguments_value
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
-        };
+        });
     }
 
     handle_approved_mcp_tool_call(
@@ -418,10 +419,15 @@ pub(crate) async fn handle_mcp_tool_call(
     .await
 }
 
-pub(crate) struct HandledMcpToolCall {
+pub(crate) struct CompletedMcpToolCall {
     pub(crate) result: CallToolResult,
     pub(crate) tool_input: JsonValue,
 }
+
+/// Preserves the local admission failure through RMCP's transport error context.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct McpAdmissionError(FunctionCallError);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct McpToolCallItemMetadata {
@@ -480,7 +486,7 @@ async fn handle_approved_mcp_tool_call(
     item_metadata: McpToolCallItemMetadata,
     source: &crate::tools::context::ToolCallSource,
     approval_application: McpToolApprovalApplication,
-) -> HandledMcpToolCall {
+) -> Result<CompletedMcpToolCall, FunctionCallError> {
     let turn_context = step_context.turn.as_ref();
     let server = invocation.server.clone();
     let tool_name = invocation.tool.clone();
@@ -521,17 +527,31 @@ async fn handle_approved_mcp_tool_call(
             /*already_started*/ true,
         )
         .await;
-        return HandledMcpToolCall {
+        return Ok(CompletedMcpToolCall {
             result: CallToolResult::from_result(result),
             tool_input,
-        };
+        });
     }
     let mut elicitation_type = None;
     let mut request_error_code = None;
+    let mut admission_error = None;
+    let admit = || {
+        let reason = sess
+            .rollout_budget()
+            .tools_stopped()
+            .then(|| "rollout budget exhausted".to_owned());
+        if let Some(reason) = reason {
+            return Err(McpAdmissionError(FunctionCallError::RespondToModel(format!(
+                "aborted before MCP handoff: {reason}"
+            )))
+            .into());
+        }
+        Ok(())
+    };
     let result = async {
         let result = async {
             let result = prepared_call
-                .call_with_preparation(/*requested_timeout*/ None, || async {
+                .call_with_admission(/*requested_timeout*/ None, admit, || async {
                     if let McpToolApprovalApplication::Apply { decision, policy } =
                         &approval_application
                     {
@@ -680,9 +700,16 @@ async fn handle_approved_mcp_tool_call(
                     Ok((rewritten_arguments, request_meta))
                 })
                 .await
-                .map_err(|error| {
-                    request_error_code = codex_rmcp_client::request_error_code(&error);
-                    format!("tool call error: {error:?}")
+                .map_err(|error| match error.downcast::<McpAdmissionError>() {
+                    Ok(McpAdmissionError(error)) => {
+                        let message = error.to_string();
+                        admission_error = Some(error);
+                        message
+                    }
+                    Err(error) => {
+                        request_error_code = codex_rmcp_client::request_error_code(&error);
+                        format!("tool call error: {error:?}")
+                    }
                 });
             // Keep the backend response intact, before callbacks or model/UI limits can change it.
             sess.services.rollout_thread_trace.record_mcp_tool_result(
@@ -747,6 +774,19 @@ async fn handle_approved_mcp_tool_call(
         },
     ))
     .await;
+    if let Some(error) = admission_error {
+        notify_mcp_tool_call_completed(
+            sess,
+            turn_context,
+            call_id,
+            invocation,
+            item_metadata,
+            Duration::ZERO,
+            truncate_mcp_tool_result_for_event(&result),
+        )
+        .await;
+        return Err(error);
+    }
     if let Err(error) = &result {
         tracing::warn!("MCP tool call error: {error:?}");
     }
@@ -792,10 +832,10 @@ async fn handle_approved_mcp_tool_call(
         Some(duration),
     );
 
-    HandledMcpToolCall {
+    Ok(CompletedMcpToolCall {
         result: CallToolResult::from_result(result),
         tool_input,
-    }
+    })
 }
 
 fn mcp_tool_call_span(

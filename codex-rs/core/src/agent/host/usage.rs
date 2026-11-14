@@ -19,6 +19,7 @@ pub struct AgentUsageReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsageAccountingDecision {
     Continue,
+    /// Do not start more tool handlers in this local rollout tree. Already-running work continues.
     Exhausted,
 }
 

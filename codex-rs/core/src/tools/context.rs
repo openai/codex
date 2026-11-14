@@ -6,6 +6,7 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::output::CapturedStream;
 use crate::unified_exec::resolve_max_tokens;
+use codex_extension_api::ToolCallOutcome;
 use codex_protocol::ResponseItemId;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -25,8 +26,8 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -46,7 +47,8 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 /// Delivery does not finish the call: post-tool hooks can still be cancelled.
 #[derive(Default)]
 pub(crate) struct ToolCallState {
-    pub(crate) terminal_outcome_reached: AtomicBool,
+    pub(crate) terminal_outcome: OnceLock<ToolCallOutcome>,
+    pub(crate) handler_started_at: OnceLock<Instant>,
     pub(crate) delivered_assistant_message: OnceLock<String>,
     pub(crate) invocation: crate::agent::host::InvocationReservation,
 }
@@ -396,6 +398,10 @@ pub struct AbortedToolOutput {
 }
 
 impl ToolOutput for AbortedToolOutput {
+    fn was_aborted(&self) -> bool {
+        true
+    }
+
     fn log_output(&self) -> String {
         self.message.clone()
     }

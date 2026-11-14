@@ -19,6 +19,11 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Whether the call was refused before its underlying operation started.
+    fn was_aborted(&self) -> bool {
+        false
+    }
+
     /// Finalizes output using the same completed handler duration reported in tool-call logs.
     /// Called before recording model-visible history; implementations must not measure time here.
     fn set_handler_duration_ms(&mut self, _handler_duration_ms: u64) {}
@@ -90,6 +95,10 @@ where
 
     fn success_for_logging(&self) -> bool {
         (**self).success_for_logging()
+    }
+
+    fn was_aborted(&self) -> bool {
+        (**self).was_aborted()
     }
 
     fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {

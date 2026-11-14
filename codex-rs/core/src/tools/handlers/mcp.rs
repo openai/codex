@@ -7,9 +7,11 @@ use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
 use crate::function_tool::FunctionCallError;
 use crate::image_preparation::prompt_image_decoder;
+use crate::mcp_tool_call::CompletedMcpToolCall;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::session::session::Session;
+use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolEnvironments;
@@ -314,9 +316,16 @@ impl McpHandler {
         ))
         .await;
 
+        let (result, tool_input) = match result {
+            Ok(CompletedMcpToolCall { result, tool_input }) => (result, tool_input),
+            Err(FunctionCallError::RespondToModel(message)) => {
+                return Ok(boxed_tool_output(AbortedToolOutput { message }));
+            }
+            Err(error) => return Err(error),
+        };
         Ok(boxed_tool_output(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
+            result,
+            tool_input,
             result_metadata_capture_allowed,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(

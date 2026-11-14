@@ -421,6 +421,22 @@ impl PreparedMcpCall {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(Option<JsonValue>, Option<JsonValue>)>>,
     {
+        self.call_with_admission(requested_timeout, || Ok(()), prepare)
+            .await
+    }
+
+    /// Checks admission on the negotiated session immediately before handing a tool request
+    /// to the peer. An in-flight request can complete even if new work is stopped.
+    pub async fn call_with_admission<F, Fut>(
+        &self,
+        requested_timeout: Option<Duration>,
+        admit: impl Fn() -> Result<()> + Send + Sync,
+        prepare: F,
+    ) -> Result<CallToolResult>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(Option<JsonValue>, Option<JsonValue>)>>,
+    {
         let effective_timeout = match (self.client.tool_timeout, requested_timeout) {
             (Some(server_timeout), Some(requested_timeout)) => {
                 Some(server_timeout.min(requested_timeout))
@@ -466,16 +482,21 @@ impl PreparedMcpCall {
                         }
                         None => None,
                     };
+                    let policy_meta = self.connections.network_policy_meta_for_call(
+                        &self.client,
+                        Some(self.permission_profile()),
+                        self.server_environment_id(),
+                        meta,
+                    );
                     self.client
                         .call_tool(
                             tool_name.clone(),
                             arguments,
-                            self.connections.network_policy_meta_for_call(
-                                &self.client,
-                                Some(self.permission_profile()),
-                                self.server_environment_id(),
-                                meta,
-                            ),
+                            |capabilities| {
+                                let meta = policy_meta(capabilities)?;
+                                admit()?;
+                                Ok(meta)
+                            },
                             remaining_timeout,
                         )
                         .await
