@@ -3,11 +3,10 @@
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::ModelProviderConfigWriteParams;
 use codex_app_server_protocol::ModelProviderConfigWriteResponse;
+use codex_app_server_protocol::ModelProviderDefaultSetParams;
 use codex_app_server_protocol::ModelProviderListParams;
 use codex_app_server_protocol::ModelProviderListResponse;
 use codex_app_server_protocol::ModelProviderSummary;
@@ -72,14 +71,10 @@ pub(crate) async fn set_default_provider(
     id: &str,
 ) -> Result<ConfigWriteResponse, TypedRequestError> {
     handle
-        .request_typed(ClientRequest::ConfigValueWrite {
+        .request_typed(ClientRequest::ModelProviderDefaultSet {
             request_id: RequestId::String(Uuid::new_v4().to_string()),
-            params: ConfigValueWriteParams {
-                key_path: "model_provider".into(),
-                value: id.into(),
-                merge_strategy: MergeStrategy::Replace,
-                file_path: None,
-                expected_version: None,
+            params: ModelProviderDefaultSetParams {
+                provider_id: id.into(),
             },
         })
         .await
@@ -93,14 +88,17 @@ pub(crate) fn override_reason(response: ConfigWriteResponse) -> String {
 }
 
 pub(super) fn request_error(err: TypedRequestError) -> String {
-    if let TypedRequestError::Server { method, source } = &err
-        && (source.code == -32601
+    if unsupported_method(&err) {
+        return "Update the connected app server to browse model providers.".into();
+    }
+    format!("Could not load model providers: {err}")
+}
+
+pub(super) fn unsupported_method(err: &TypedRequestError) -> bool {
+    matches!(err, TypedRequestError::Server { method, source }
+        if source.code == -32601
             || (source.code == -32600
                 && source
                     .message
                     .starts_with(&format!("Invalid request: unknown variant `{method}`"))))
-    {
-        return "Update the connected app server to browse model providers.".into();
-    }
-    format!("Could not load model providers: {err}")
 }

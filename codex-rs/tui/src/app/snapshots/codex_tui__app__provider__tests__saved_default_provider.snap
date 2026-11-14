@@ -10,5 +10,5 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
   2. ○ OpenAI                             openai
   3. Create a custom provider or gateway
 
-  /new now uses gateway. Restart the app server and TUI to refresh /model.
+  New chats now use Example Gateway.
   enter details · esc back

@@ -287,6 +287,7 @@ fn list(
             let secondary_action = (can_select && !is_default).then(|| {
                 let backend = catalog.backend;
                 let id = provider.id.clone();
+                let name = provider.name.clone();
                 let dismissed = dismissed.clone();
                 SelectionSecondaryAction {
                     key: key_hint::plain(KeyCode::Char(' ')),
@@ -295,7 +296,10 @@ fn list(
                         tx.send(AppEvent::Provider(Event::Write {
                             backend,
                             dismissed: dismissed.clone(),
-                            write: write::Write::Default(id.clone()),
+                            write: write::Write::Default {
+                                id: id.clone(),
+                                name: name.clone(),
+                            },
                         }))
                     }),
                 }
