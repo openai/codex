@@ -30,11 +30,6 @@ impl Session {
             if contributor.turn_start_phase(&self.services.thread_extension_data) != phase {
                 continue;
             }
-            if phase == TurnStartPhase::RegularTaskStart
-                && contributor.requires_mcp_runtime(&self.services.thread_extension_data)
-            {
-                self.refresh_mcp_if_dirty().await;
-            }
             contributor
                 .on_turn_start(codex_extension_api::TurnStartInput {
                     turn_id: turn_context.sub_id.as_str(),

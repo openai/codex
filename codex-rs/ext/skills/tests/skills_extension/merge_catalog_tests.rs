@@ -137,7 +137,7 @@ impl MergeHarness {
                 thread_store: &harness.thread_store,
             })
             .await;
-        start_registered_turn(
+        refresh_registered_catalogs_for_step(
             &harness.registry,
             &harness.session_store,
             &harness.thread_store,
@@ -471,7 +471,7 @@ async fn executor_aliases_survive_cloud_promotion_without_reassigning_remaining_
             );
             harness.turn_store = ExtensionData::new("turn-2");
             harness.step_store = ExtensionData::new("step-2");
-            start_registered_turn(
+            refresh_registered_catalogs_for_step(
                 &harness.registry,
                 &harness.session_store,
                 &harness.thread_store,
@@ -1374,7 +1374,7 @@ async fn v2_shadow_observation_tracks_merged_skills_independently_of_read_route(
         for turn_id in ["turn-1", "turn-2"] {
             harness.turn_store = ExtensionData::new(turn_id);
             harness.step_store = ExtensionData::new(format!("{turn_id}-step"));
-            start_registered_turn(
+            refresh_registered_catalogs_for_step(
                 &harness.registry,
                 &harness.session_store,
                 &harness.thread_store,

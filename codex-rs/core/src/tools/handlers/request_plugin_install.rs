@@ -275,6 +275,12 @@ impl RequestPluginInstallHandler {
             false
         };
 
+        if completed {
+            // Skills-only installs have no connector tools to refresh. Dirty discovery too,
+            // so the next step can see the newly installed plugin and its skills.
+            session.request_mcp_runtime_refresh(crate::McpRefreshReason::PluginInstalled);
+        }
+
         if completed && let DiscoverableTool::Connector(connector) = &tool {
             session
                 .merge_connector_selection(HashSet::from([connector.id.clone()]))

@@ -1897,7 +1897,13 @@ mod tests {
 
         assert_eq!(
             state
-                .host_blocked("api.openai.com", /*port*/ 80)
+                .host_blocked_with_lookup(
+                    "api.openai.com",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
@@ -1914,14 +1920,26 @@ mod tests {
 
         assert_eq!(
             state
-                .host_blocked("example.com", /*port*/ 80)
+                .host_blocked_with_lookup(
+                    "example.com",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
             state
-                .host_blocked("api.openai.com", /*port*/ 443)
+                .host_blocked_with_lookup(
+                    "api.openai.com",
+                    /*port*/ 443,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed

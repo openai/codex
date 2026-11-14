@@ -249,7 +249,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
                 .expect("thread MCP resource client");
             let auth = client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME);
             let connection = client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME);
-            // Turn-start preparation must consume the pending reconnect before discovery.
+            // Step preparation must consume the pending reconnect before discovery.
             test.codex.submit(Op::RefreshMcpServers).await?;
             Some((client, auth, connection))
         } else {
@@ -325,7 +325,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         assert!(
             client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME)
                 == *provider.resource_key.lock().expect("resource key lock"),
-            "turn-start reprojection must not invalidate resource caches: {turn}"
+            "step reprojection must not invalidate resource caches: {turn}"
         );
         if let Some((client, scope, connection)) = previous_connection_scope {
             assert!(client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME) != connection);

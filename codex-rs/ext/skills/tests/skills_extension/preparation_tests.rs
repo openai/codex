@@ -85,7 +85,7 @@ async fn config_reload_during_preparation_applies_to_next_step_but_reads_still_c
             thread_store: &thread,
         })
         .await;
-    start_registered_turn(&registry, &session, &thread, "turn").await;
+    refresh_registered_catalogs_for_step(&registry, &session, &thread, "turn").await;
     let roots = vec![SelectedCapabilityRoot {
         id: "skills".into(),
         location: CapabilityRootLocation::Environment {

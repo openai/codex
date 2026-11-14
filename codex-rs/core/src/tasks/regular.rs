@@ -1,4 +1,3 @@
-use crate::McpRefreshReason;
 use crate::agent::helper_daybreak::turn::SavedProgramResolution;
 use std::sync::Arc;
 
@@ -75,36 +74,14 @@ impl SessionTask for RegularTask {
             sess.emit_turn_started(&ctx, TaskKind::Regular).await;
             sess.start_deferred_mcp_reprojection();
             // Regular-start contributors run once, after the task is visible and interruptible.
-            let prepares_mcp = sess
-                .services
-                .extensions
-                .turn_lifecycle_contributors()
-                .iter()
-                .any(|contributor| {
-                    contributor.turn_start_phase(&sess.services.thread_extension_data)
-                        == TurnStartPhase::RegularTaskStart
-                        && contributor.requires_mcp_runtime(&sess.services.thread_extension_data)
-                });
-            let preparation = async {
-                sess.emit_turn_start_lifecycle(
+            let preparation = sess
+                .emit_turn_start_lifecycle(
                     &ctx,
                     /*token_usage_at_turn_start*/ None,
                     TurnStartPhase::RegularTaskStart,
                 )
+                .or_cancel(&cancellation_token)
                 .await;
-                if prepares_mcp {
-                    // Resource discovery can overlap the fetch. Wait before reprojection.
-                    sess.wait_for_apps_tool_refresh().await;
-                }
-            }
-            .or_cancel(&cancellation_token)
-            .await;
-            // Even cancelled discovery may have cleared the previous account's catalog.
-            if prepares_mcp {
-                sess.request_mcp_runtime_reprojection(
-                    McpRefreshReason::TurnStartContributorPreparedMcp,
-                );
-            }
             if preparation.is_err() {
                 return SessionStartupPrewarmResolution::Cancelled;
             }

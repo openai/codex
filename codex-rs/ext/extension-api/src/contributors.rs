@@ -222,12 +222,6 @@ pub trait TurnLifecycleContributor: Send + Sync {
         TurnStartPhase::BeforeTaskRegistration
     }
 
-    /// Whether regular-task startup must reconcile MCP before this callback runs.
-    /// Ignored before task registration; contributors unrelated to MCP keep the default.
-    fn requires_mcp_runtime(&self, _thread_store: &ExtensionData) -> bool {
-        false
-    }
-
     /// Called once in the selected phase, before task-specific work begins.
     /// Regular-task preparation may be cancelled before this callback completes;
     /// stop and abort callbacks must tolerate missing or partial initialization.

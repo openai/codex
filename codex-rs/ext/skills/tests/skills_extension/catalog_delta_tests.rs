@@ -296,7 +296,7 @@ async fn render_catalogs_for_step(
             thread_store: &thread_store,
         })
         .await;
-    start_registered_turn(&registry, &session_store, &thread_store, turn_id).await;
+    refresh_registered_catalogs_for_step(&registry, &session_store, &thread_store, turn_id).await;
     let roots = [SelectedCapabilityRoot {
         id: "skills".to_string(),
         location: CapabilityRootLocation::Environment {

@@ -1,4 +1,4 @@
-//! Reuses complete, warning-free cloud plugins until their auth or Apps resources change.
+//! Refreshes cloud plugins before a step when their auth or Apps resources change.
 //! Partial catalogs and catalogs with warnings remain usable and retry with thread-owned exponential backoff.
 //! Accepted complete and partial catalogs replace prior entries; failures retain same-auth fallback.
 
@@ -17,8 +17,6 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
-use codex_extension_api::TurnStartPhase;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
@@ -179,34 +177,6 @@ impl ConfigContributor<Config> for PluginContributor {
 }
 
 impl TurnLifecycleContributor for PluginContributor {
-    fn turn_start_phase(&self, thread_store: &ExtensionData) -> TurnStartPhase {
-        if self.providers.cloud.is_some()
-            && thread_store
-                .get::<PluginsThreadState>()
-                .is_some_and(|state| state.contributor_state().plugins_enabled)
-        {
-            TurnStartPhase::RegularTaskStart
-        } else {
-            TurnStartPhase::BeforeTaskRegistration
-        }
-    }
-
-    fn requires_mcp_runtime(&self, thread_store: &ExtensionData) -> bool {
-        self.turn_start_phase(thread_store) == TurnStartPhase::RegularTaskStart
-    }
-
-    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            self.refresh_cloud_catalog(CatalogRefreshInput {
-                turn_id: input.turn_id,
-                session_store: input.session_store,
-                thread_store: input.thread_store,
-                turn_store: input.turn_store,
-            })
-            .await;
-        })
-    }
-
     fn refresh_catalog_for_step<'a>(
         &'a self,
         input: CatalogRefreshInput<'a>,

@@ -23,9 +23,6 @@ use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::Op;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -49,54 +46,6 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 #[tokio::test]
-async fn cloud_discovery_selects_regular_task_phase() {
-    struct ExistingContributor;
-    impl TurnLifecycleContributor for ExistingContributor {}
-
-    let mut builder = ExtensionRegistryBuilder::new();
-    builder.turn_lifecycle_contributor(Arc::new(ExistingContributor));
-    let executor = Arc::new(ExecutorPluginProvider::new(Arc::new(
-        EnvironmentManager::default_for_tests(),
-    )));
-    install_plugin_providers(&mut builder, PluginProviders::new(executor.clone()));
-    install_plugin_providers(
-        &mut builder,
-        PluginProviders::new(executor).with_cloud_provider(Arc::new(CloudProvider::default())),
-    );
-    let registry = builder.build();
-    let thread = ExtensionData::new("thread");
-    for plugins_enabled in [false, true] {
-        thread
-            .get_or_init(PluginsThreadState::default)
-            .contributor_state()
-            .plugins_enabled = plugins_enabled;
-        let dependencies = registry
-            .turn_lifecycle_contributors()
-            .iter()
-            .map(|contributor| contributor.requires_mcp_runtime(&thread))
-            .collect::<Vec<_>>();
-        assert_eq!(dependencies, vec![false, false, plugins_enabled]);
-        let phases = registry
-            .turn_lifecycle_contributors()
-            .iter()
-            .map(|contributor| contributor.turn_start_phase(&thread))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            phases,
-            vec![
-                TurnStartPhase::BeforeTaskRegistration,
-                TurnStartPhase::BeforeTaskRegistration,
-                if plugins_enabled {
-                    TurnStartPhase::RegularTaskStart
-                } else {
-                    TurnStartPhase::BeforeTaskRegistration
-                },
-            ],
-        );
-    }
-}
-
-#[tokio::test]
 async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow::Result<()> {
     let config_home = tempfile::tempdir()?;
     let mut config = codex_core::config::ConfigBuilder::default()
@@ -104,14 +53,6 @@ async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow:
         .fallback_cwd(Some(config_home.path().to_path_buf()))
         .build()
         .await?;
-    let mode = CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model: "test".to_string(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        },
-    };
     let provider = Arc::new(CloudProvider::default());
     let mut builder = ExtensionRegistryBuilder::new();
     let providers = PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
@@ -154,10 +95,8 @@ async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow:
         }
         for contributor in registry.turn_lifecycle_contributors() {
             contributor
-                .on_turn_start(TurnStartInput {
+                .refresh_catalog_for_step(CatalogRefreshInput {
                     turn_id,
-                    collaboration_mode: &mode,
-                    token_usage_at_turn_start: None,
                     session_store: &session,
                     thread_store: &thread,
                     turn_store: &ExtensionData::new(turn_id),
@@ -921,6 +860,19 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
                 )
             })
             .await??;
+            // Superseded discovery retries on the next step, not before this request.
+            assert_eq!(
+                provider.calls.load(Ordering::SeqCst),
+                previous_discoveries + 1
+            );
+            let retry = responses::mount_sse_once(
+                &server,
+                sse(vec![ev_response_created("retry"), ev_completed("retry")]),
+            )
+            .await;
+            test.submit_turn("Retry the catalog after the connection change.")
+                .await?;
+            assert_eq!(retry.requests().len(), 1);
             // Failed retries retain a fallback only for the same auth.
             let state = test
                 .codex

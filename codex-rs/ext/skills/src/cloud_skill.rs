@@ -1,11 +1,8 @@
-//! Refreshes cloud skills at turn start and through step freshness checks.
+//! Refreshes cloud skills before steps when their auth or Apps resources change.
 
 use codex_extension_api::CatalogRefreshInput;
-use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
-use codex_extension_api::TurnStartPhase;
 
 use super::SkillsExtension;
 use crate::provider::SkillListQuery;
@@ -55,33 +52,6 @@ impl<C: Send + Sync + 'static> SkillsExtension<C> {
 }
 
 impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
-    fn turn_start_phase(&self, thread_store: &ExtensionData) -> TurnStartPhase {
-        if thread_store
-            .get::<SkillsThreadState>()
-            .is_some_and(|state| state.cloud_skill_enabled())
-        {
-            TurnStartPhase::RegularTaskStart
-        } else {
-            TurnStartPhase::BeforeTaskRegistration
-        }
-    }
-
-    fn requires_mcp_runtime(&self, thread_store: &ExtensionData) -> bool {
-        self.turn_start_phase(thread_store) == TurnStartPhase::RegularTaskStart
-    }
-
-    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            self.refresh_cloud_catalog(CatalogRefreshInput {
-                turn_id: input.turn_id,
-                session_store: input.session_store,
-                thread_store: input.thread_store,
-                turn_store: input.turn_store,
-            })
-            .await;
-        })
-    }
-
     fn refresh_catalog_for_step<'a>(
         &'a self,
         input: CatalogRefreshInput<'a>,

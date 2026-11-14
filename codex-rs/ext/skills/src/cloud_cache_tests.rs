@@ -228,8 +228,7 @@ async fn step_cloud_refresh_reuses_accepted_results_and_retries_failures() {
     let registry = builder.build();
     let contributor = registry
         .turn_lifecycle_contributors()
-        .iter()
-        .find(|contributor| contributor.requires_mcp_runtime(&thread_store))
+        .last()
         .expect("cloud skills contributor should be registered");
     let refresh_input = CatalogRefreshInput {
         turn_id: "turn",

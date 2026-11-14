@@ -1077,6 +1077,7 @@ mod tests {
             mode: NetworkMode::Full,
             mitm: true,
             credential_broker: true,
+            // This test exercises protocol detection, independently of live DNS resolution.
             allow_local_binding: Some(true),
             ..NetworkProxyConfig::default()
         };
