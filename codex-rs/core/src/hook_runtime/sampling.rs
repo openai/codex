@@ -54,10 +54,6 @@ impl SamplingRequest {
         owner_cancellation: &CancellationToken,
         send: impl Future<Output = Result<OpenedModelResponse>>,
     ) -> Result<SamplingStream> {
-        let send = async {
-            session.check_rollout_budget()?;
-            send.await
-        };
         let sampling_turn = match self.kind {
             SamplingKind::Sampling => Some(Arc::clone(&step.turn)),
             SamplingKind::ForegroundCompaction | SamplingKind::BackgroundCompaction => None,
@@ -83,6 +79,9 @@ impl SamplingRequest {
             agent_id: subagent.as_ref().map(|context| context.agent_id.clone()),
             agent_type: subagent.map(|context| context.agent_type),
         };
+        // Hook input preparation may wait. Do not start a new hook pair after a stop;
+        // the HTTP/WS send independently rechecks after a pre-hook has finished.
+        session.check_rollout_budget()?;
         let mut attempt = post_mode.map(|mode| SamplingAttempt {
             owner_cancellation: owner_cancellation.clone(),
             post: Some(PostHooks {

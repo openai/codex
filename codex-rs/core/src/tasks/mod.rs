@@ -682,7 +682,8 @@ impl Session {
         reason: TurnAbortReason,
         error: Option<ErrorEvent>,
     ) -> bool {
-        let Some(active_turn) = self.take_named_active_turn(turn_id, &reason).await else {
+        let active_turn = self.take_named_active_turn(turn_id, &reason).await;
+        let Some(active_turn) = active_turn else {
             return false;
         };
 
@@ -696,7 +697,8 @@ impl Session {
         reason: &TurnAbortReason,
     ) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
-        if active.as_ref()?.task.as_ref()?.turn_context.sub_id != turn_id {
+        let turn = &active.as_ref()?.task.as_ref()?.turn_context;
+        if turn.sub_id != turn_id {
             return None;
         }
         if matches!(
@@ -749,8 +751,10 @@ impl Session {
                 (None, None, Some(err))
             }
         };
-        let can_continue =
-            regular_output.is_some() && turn_context.terminal_error.lock().await.is_none();
+        // A late steer cannot reopen the stopped rollout after the turn loop has finished.
+        let can_continue = regular_output.is_some()
+            && turn_context.terminal_error.lock().await.is_none()
+            && !self.work_budget().is_exhausted();
         let finishing = CancellationToken::new();
         let finish_recording = finishing.clone().drop_guard();
         let (turn_state, unadmitted_task, mut pending_input, outcome_handoff) = {

@@ -541,7 +541,7 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = if can_drain_pending_input {
+        let pending_input = if can_drain_pending_input && !sess.work_budget().is_exhausted() {
             sess.input_queue
                 .get_pending_input(&sess.active_turn)
                 .await
@@ -654,7 +654,8 @@ pub(crate) async fn run_turn(
             .await
         }
         .await;
-        // Consume the whole response before deciding whether the turn may continue.
+        // Completed can precede Guardian's accepted-text replay. Preserve the
+        // entire consumed response before deciding whether the turn may continue.
         let sampling_request_result = sampling_request_result.and_then(|output| {
             sess.check_rollout_budget()?;
             Ok(output)
@@ -1694,6 +1695,7 @@ async fn run_auto_compact(
     candidate: Option<Box<BackgroundCompactionCandidate>>,
 ) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
+    sess.check_rollout_budget()?;
     if matches!(phase, CompactionPhase::PreTurn)
         && crate::guardian::is_basic_session_source(&turn_context.session_source)
         && !crate::guardian::should_compact_guardian_input(sess)?
@@ -1712,6 +1714,9 @@ async fn run_auto_compact(
         turn.id = %turn_context.sub_id,
     );
     if turn_context.config.features.enabled(Feature::TokenBudget) {
+        // Unlike sampling compaction, this reset has no transport admission check.
+        // World-state preparation above may have waited while a peer posted a bill.
+        sess.check_rollout_budget()?;
         // Compaction is the reset request, so force a new context window
         // instead of consuming a pending `new_context` tool request.
         crate::compact_token_budget::run_inline_auto_compact_task(

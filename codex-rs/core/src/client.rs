@@ -312,6 +312,7 @@ pub struct ModelClient {
     http_client_factory: HttpClientFactory,
     restored_history: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
+    budget_policy: Option<crate::rollout_budget::ThreadBudgetPolicy>,
     executed_tool_calls: Option<ExecutedToolCalls>,
     // Resolved once when the session is created, like other session feature flags.
     api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
@@ -660,6 +661,7 @@ impl ModelClient {
             http_client_factory,
             restored_history: false,
             request_contributors,
+            budget_policy: None,
             executed_tool_calls: None,
             api_key_cyber_access_programs:
                 cyber_access_program::ApiKeyCyberAccessPrograms::UnsupportedProvider,
@@ -669,6 +671,14 @@ impl ModelClient {
 
     pub(crate) fn with_executed_tool_calls(mut self, recorder: ExecutedToolCalls) -> Self {
         self.executed_tool_calls = Some(recorder);
+        self
+    }
+
+    pub(crate) fn with_budget_policy(
+        mut self,
+        policy: crate::rollout_budget::ThreadBudgetPolicy,
+    ) -> Self {
+        self.budget_policy = Some(policy);
         self
     }
 
@@ -2120,6 +2130,9 @@ impl ResponsesHttpExecutor<'_> {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            if let Some(policy) = &self.client.budget_policy {
+                policy.check_start()?;
+            }
             let stream_result = client
                 .stream_request_with_observer(request, options, |wire| {
                     inference_trace_attempt.record_started(
@@ -2474,6 +2487,9 @@ impl ModelClientSession {
                     ),
                 ],
             );
+            if !warmup && let Some(policy) = &self.client.budget_policy {
+                policy.check_start()?;
+            }
             let stream_result = websocket_connection
                 .stream_request_with_observer(
                     ws_request,

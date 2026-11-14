@@ -163,6 +163,7 @@ impl RegularTask {
                 // Terminal errors are already reported. Let task completion preserve pending
                 // input instead of restarting the failed turn for that same input.
                 if ctx.terminal_error.lock().await.is_some()
+                    || sess.work_budget().is_exhausted()
                     || !sess.input_queue.has_pending_input(&sess.active_turn).await
                 {
                     return Ok(Some(RegularTaskOutput {

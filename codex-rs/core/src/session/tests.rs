@@ -6898,6 +6898,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         client_mcp_extensions: ClientMcpExtensions::default(),
         local_agent_runtime: agent_control.runtime.clone(),
+        budget_policy: crate::rollout_budget::ThreadBudgetPolicy::new(
+            crate::rollout_budget::ThreadBudgetAccount::Native(Arc::clone(
+                &agent_control.runtime.rollout_budget,
+            )),
+        )
+        .expect("test budget policy"),
         agent_control: Arc::new(agent_control),
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
@@ -9249,6 +9255,12 @@ where
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         client_mcp_extensions: ClientMcpExtensions::default(),
         local_agent_runtime: agent_control.runtime.clone(),
+        budget_policy: crate::rollout_budget::ThreadBudgetPolicy::new(
+            crate::rollout_budget::ThreadBudgetAccount::Native(Arc::clone(
+                &agent_control.runtime.rollout_budget,
+            )),
+        )
+        .expect("test budget policy"),
         agent_control: Arc::new(agent_control),
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),

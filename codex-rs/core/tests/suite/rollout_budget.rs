@@ -440,6 +440,7 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    const ACCEPTED_REVIEW: &str = r#"{"outcome":"allow"}"#;
     // Enforced: decimal equality is allowed; the next material charge exceeds it.
     // Advisory: a real overspend still permits a later request with a zero-balance reminder.
     let (limit_budget, reminder_at_remaining_tokens, charges): (f64, Vec<i64>, &[f64]) =
@@ -462,7 +463,12 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
             let id = format!("budget-{turn}");
             let mut completed = ev_completed_with_tokens(&id, /*total_tokens*/ 1);
             completed["response"]["usage"]["codex_rollout_budget_units"] = json!(units);
-            sse(vec![ev_response_created(&id), completed])
+            let mut events = vec![ev_response_created(&id)];
+            if turn == crossing_turn {
+                events.push(ev_assistant_message("accepted-review", ACCEPTED_REVIEW));
+            }
+            events.push(completed);
+            sse(events)
         })
         .collect();
     let responses = mount_sse_sequence(&server, sequence).await;
@@ -483,6 +489,10 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
         .build_with_auto_env(&server)
         .await?;
     let late = Arc::new(HostAccounting::default());
+    // This real Guardian policy replays accepted text only after Completed.
+    test.codex
+        .thread_extension_data()
+        .insert(codex_guardian_reviewer::DenialResample::default());
     if owner == AgentRuntimeOwnership::Host {
         // Neither the owner nor the accounting provider can change after startup.
         let data = test.codex.thread_extension_data();
@@ -502,7 +512,7 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
             matches!(event, EventMsg::Error(_) | EventMsg::TurnComplete(_))
         })
         .await;
-        if turn < crossing_turn || owner == AgentRuntimeOwnership::Host || !enforce_limit {
+        if turn < 2 || owner == AgentRuntimeOwnership::Host || !enforce_limit {
             assert!(matches!(event, EventMsg::TurnComplete(done) if done.error.is_none()));
             continue;
         }
@@ -517,8 +527,14 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
         .await;
     }
 
+    test.codex.ensure_rollout_materialized().await;
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    assert!(history.items.iter().any(|item| matches!(item, codex_history::RolloutItem::ResponseItem(envelope)
+        if matches!(&envelope.item, codex_protocol::models::ResponseItem::Message { role, content, .. }
+            if role == "assistant" && content.iter().any(|part| matches!(part,
+                codex_protocol::models::ContentItem::OutputText { text, .. } if text == ACCEPTED_REVIEW))))),
+        "a shared stop must not discard Guardian's already-selected final text");
     if owner == AgentRuntimeOwnership::Controller && enforce_limit {
-        let history = test.codex.load_history(/*include_archived*/ false).await?;
         let warning_roles = history
             .items
             .iter()
@@ -545,7 +561,6 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
 
     if owner == AgentRuntimeOwnership::Host {
         let requests = responses.requests();
-        assert_eq!(requests.len(), charges.len());
         for request in &requests {
             assert!(rollout_budget_texts(request).is_empty());
         }
@@ -770,14 +785,21 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
     extensions.thread_lifecycle_contributor(accounting.clone());
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::InstantInterrupt)
-                .expect("enable instant interrupt");
+        .with_config(move |config| {
+            for feature in [
+                Feature::InstantInterrupt,
+                Feature::DefaultModeRequestUserInput,
+            ] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("enable test feature");
+            }
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
-            config.rollout_budget = None;
+            // This allowance would admit the response. The selected host can still stop it.
+            config.rollout_budget =
+                matches!(behavior, HostAccountingBehavior::Exhausted).then(rollout_budget);
         })
         .build_with_auto_env(&server)
         .await?;

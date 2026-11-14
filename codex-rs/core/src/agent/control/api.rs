@@ -33,6 +33,10 @@ use futures::future::BoxFuture;
 use std::collections::HashSet;
 
 impl AgentControl for LocalAgentControl {
+    fn native_rollout_budget(&self) -> Option<std::sync::Arc<crate::RolloutBudget>> {
+        Some(std::sync::Arc::clone(&self.runtime.rollout_budget))
+    }
+
     fn identity(&self) -> SessionId {
         self.session_id()
     }

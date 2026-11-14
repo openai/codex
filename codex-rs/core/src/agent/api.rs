@@ -39,6 +39,12 @@ const _: Option<&dyn AgentControl> = None;
 /// remote ownership, retries and recovery are separate backend work.
 /// Boxed Send futures allow callers to use `Arc<dyn AgentControl>`.
 pub trait AgentControl: Send + Sync {
+    /// Expose the account only when this controller actually owns native billing.
+    /// External controllers keep their own ledger and need not provide a numeric read.
+    fn native_rollout_budget(&self) -> Option<std::sync::Arc<crate::RolloutBudget>> {
+        None
+    }
+
     fn identity(&self) -> SessionId;
 
     /// Resolve an ID or a name relative to the caller's captured source, without loading.

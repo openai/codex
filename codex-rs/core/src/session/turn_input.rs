@@ -609,6 +609,11 @@ async fn start_if_idle(
                 reason: NotSubmittedReason::NotIdle,
             });
         }
+        // Idle observers can retry a failed turn. Check before reserving so a permanent
+        // stop cannot create a loop of new turns that never reach the provider.
+        if kind != TurnStartKind::User {
+            session.check_rollout_budget()?;
+        }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
         Arc::clone(&active_turn.turn_state)
     };
@@ -841,6 +846,12 @@ impl Session {
             && !self.has_outstanding_durable_sleep()
             && !self.should_wake_on_agent_messages().await
         {
+            return None;
+        }
+        // Triggered mail and durable sleep bypass start_if_idle. Leave their mail
+        // pending rather than consuming it to start a turn that the work gate will refuse.
+        if let Err(error) = self.check_rollout_budget() {
+            tracing::debug!(%error, "rollout budget stopped a pending-work wake");
             return None;
         }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);

@@ -5,7 +5,6 @@ use crate::agent::host::AgentUsageReport;
 use crate::agent::host::UsageAccountingDecision;
 use crate::client_common::SamplingUsage;
 use crate::context::ContextualUserFragment;
-use crate::rollout_budget::RolloutBudget;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -27,9 +26,7 @@ pub(super) async fn maybe_record_reminder(
     else {
         return;
     };
-    let response_item = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
-        remaining_units: reminder.remaining_units,
-    });
+    let response_item = sess.budget_reminder_item(&reminder);
     sess.record_conversation_items(
         turn_context,
         turn_context.model_info(),
@@ -42,23 +39,41 @@ pub(super) async fn maybe_record_reminder(
 }
 
 impl Session {
-    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
+    pub(crate) fn budget_reminder_item(
+        &self,
+        reminder: &crate::RolloutBudgetReminder,
+    ) -> codex_protocol::models::ResponseItem {
+        ContextualUserFragment::into(crate::context::RolloutBudgetContext {
+            remaining_units: reminder.remaining_units,
+        })
+    }
+
+    pub(crate) fn native_rollout_budget(&self) -> Option<std::sync::Arc<crate::RolloutBudget>> {
+        match &self.agent_runtime {
+            AgentRuntimeServices::Controller => self.services.agent_control.native_rollout_budget(),
+            AgentRuntimeServices::Host(_) => None,
+        }
+    }
+
+    /// All threads consult the same work gate, even when a host owns one thread's bill.
+    pub(crate) fn work_budget(&self) -> &crate::RolloutBudget {
         &self.services.local_agent_runtime.rollout_budget
+    }
+
+    pub(crate) fn check_rollout_budget(&self) -> CodexResult<()> {
+        self.services.budget_policy.check_start()
     }
 
     /// Return the diagnostic for a refused tool or propagate an accounting error.
     pub(crate) fn tool_start_denial(&self) -> CodexResult<Option<String>> {
-        Ok(self
-            .rollout_budget()
-            .tools_stopped()
-            .then(|| "rollout budget exhausted".into()))
-    }
-
-    pub(crate) fn check_rollout_budget(&self) -> CodexResult<()> {
-        if self.rollout_budget().tools_stopped() {
-            Err(CodexErr::SessionBudgetExceeded)
-        } else {
-            Ok(())
+        match self.check_rollout_budget() {
+            Ok(()) => Ok(None),
+            Err(error) => match error.details() {
+                CodexErrorDetails::SessionBudgetExceeded => {
+                    Ok(Some("rollout budget exhausted".into()))
+                }
+                _ => Err(error),
+            },
         }
     }
 
@@ -98,10 +113,11 @@ impl Session {
             {
                 Ok(()) => false,
                 // A legacy controller can report a posted bill and a stop through this error.
+                // A native account has already chosen its own deadline action.
                 Err(error)
                     if matches!(error.details(), CodexErrorDetails::SessionBudgetExceeded) =>
                 {
-                    true
+                    self.native_rollout_budget().is_none()
                 }
                 Err(error) => return Err(CodexErr::UsageAccountingFailed(error.to_string())),
             },
@@ -127,7 +143,7 @@ impl Session {
             }
         };
         if stop_new_work {
-            self.rollout_budget().stop_new_tools();
+            self.work_budget().stop_new_work();
         }
         Ok(())
     }

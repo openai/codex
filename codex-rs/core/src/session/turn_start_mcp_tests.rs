@@ -275,11 +275,11 @@ async fn mcp_budget_stop_at_handoff(phase: McpPause) -> anyhow::Result<()> {
     extensions.tool_lifecycle_contributor(observer.clone());
     session.services.extensions = Arc::new(extensions.build());
     session
-        .rollout_budget()
+        .work_budget()
         .configure(crate::config::RolloutBudgetConfig {
             enforce_limit: true,
             limit_budget: 1.0,
-            reminder_at_context_start: true,
+            reminder_at_context_start: false,
             reminder_at_remaining_tokens: Vec::new(),
             sampling_token_weight: 1.0,
             prefill_token_weight: 1.0,

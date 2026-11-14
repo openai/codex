@@ -309,6 +309,13 @@ impl ToolCallRuntime {
         let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
             async move {
                 let _message_admission = message_admission?;
+                // A response replayed after settlement can already have exhausted the budget.
+                // Record its denial without waiting for a handler that will never start.
+                if session.work_budget().is_exhausted() {
+                    tracing::Span::current().record("aborted", true);
+                    record_result_ready(&turn.sub_id, &dispatch_tool_name, &dispatch_call_id);
+                    return Err(ToolDispatchError::Aborted(ToolAbort::BeforeDispatch));
+                }
                 // Readiness and admission remain cancellable even when the handler must finish.
                 let (guard, admission_started) = async {
                     if let Some(tool_runtime) = tool_runtime
@@ -1034,17 +1041,20 @@ mod tests {
         }
     }
 
+    #[test_case::test_case(false; "posted cost checked after the slot opens")]
     #[tokio::test]
-    async fn completed_and_budget_stopped_tools_report_their_own_lifecycle() -> anyhow::Result<()> {
+    async fn completed_and_budget_stopped_tools_report_their_own_lifecycle(
+        weighted: bool,
+    ) -> anyhow::Result<()> {
         let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
         session
-            .rollout_budget()
+            .work_budget()
             .configure(crate::config::RolloutBudgetConfig {
                 enforce_limit: true,
                 limit_budget: 1.0,
-                reminder_at_context_start: true,
+                reminder_at_context_start: weighted,
                 reminder_at_remaining_tokens: Vec::new(),
-                sampling_token_weight: 1.0,
+                sampling_token_weight: if weighted { f64::MAX } else { 1.0 },
                 prefill_token_weight: 1.0,
             });
         let lifecycle = Arc::new(PausedToolLifecycle::default());
@@ -1136,25 +1146,33 @@ mod tests {
             output_tokens: 2,
             ..Default::default()
         };
-        session
+        let bill = session
             .record_rollout_budget_usage("peer-turn", &usage.into())
-            .await?;
+            .await;
+        bill?;
+        assert!(session.work_budget().is_exhausted());
         cancellation_token.cancel();
         // Let the caller observe cancellation while the already-finished handler is held.
         assert!(futures::poll!(response.as_mut()).is_pending());
+        // Both waiting handlers must see the posted stop themselves.
         lifecycle.release_start.notify_one();
         let held_reply = tokio::time::timeout(Duration::from_secs(1), held).await??;
+        let expected_denial = "rollout budget exhausted";
         assert_eq!(
             held_reply.item,
             ResponseInputItem::FunctionCallOutput {
                 call_id: "held-at-start".into(),
-                output: FunctionCallOutputPayload::from_text(
-                    "aborted before handler start: rollout budget exhausted".into(),
-                ),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    "aborted before handler start: {expected_denial}"
+                ),),
             }
             .into()
         );
         lifecycle.release_finish.notify_one();
+        assert_eq!(
+            ResponseItemEnvelope::new(expected_abort.into()),
+            tokio::time::timeout(Duration::from_secs(1), queued).await??
+        );
 
         let response = tokio::time::timeout(Duration::from_secs(1), response).await??;
         let expected_response = ResponseInputItem::FunctionCallOutput {
@@ -1167,10 +1185,6 @@ mod tests {
         assert_eq!(
             ResponseItemEnvelope::new(expected_response.into()),
             response
-        );
-        assert_eq!(
-            ResponseItemEnvelope::new(expected_abort.into()),
-            tokio::time::timeout(Duration::from_secs(1), queued).await??
         );
         assert_eq!(parallel_handler.calls.load(Ordering::Relaxed), 1);
         assert_eq!(queued_handler.calls.load(Ordering::Relaxed), 0);

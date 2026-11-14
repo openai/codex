@@ -1,3 +1,5 @@
+mod gate;
+
 use crate::config::RolloutBudgetConfig;
 use crate::config::rollout_budget_threshold_reached;
 use codex_protocol::BudgetUnitsSum;
@@ -5,12 +7,12 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
+pub use gate::RolloutWorkGate;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 /// Budget reminder returned by a controller and acknowledged after history insertion.
 pub struct RolloutBudgetReminder {
@@ -19,14 +21,47 @@ pub struct RolloutBudgetReminder {
     pub reminder_index: i64,
 }
 
-/// Shared accounting and reminder state for one root-thread session tree.
+/// Native spending and reminders, plus the stop published by the tree's selected
+/// accounting owner (native or host). In-flight work can still report its bill.
 #[derive(Default)]
-pub(crate) struct RolloutBudget {
+pub struct RolloutBudget {
     state: OnceLock<Mutex<RolloutBudgetState>>,
-    /// An explicit stop gates new tools across the tree, even with per-thread host accountants.
-    stop_tools: AtomicBool,
+    gate: Arc<RolloutWorkGate>,
 }
 
+/// A native account owns this thread's bills. A host-owned thread only shares its work gate.
+pub(crate) enum ThreadBudgetAccount {
+    Native(Arc<RolloutBudget>),
+    Shared(Arc<RolloutBudget>),
+}
+
+/// Every thread consults the shared work gate before starting new work.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ThreadBudgetPolicy {
+    rollout: Arc<RolloutBudget>,
+}
+
+impl ThreadBudgetPolicy {
+    pub(crate) fn new(account: ThreadBudgetAccount) -> CodexResult<Self> {
+        let (ThreadBudgetAccount::Native(rollout) | ThreadBudgetAccount::Shared(rollout)) = account;
+        Ok(Self { rollout })
+    }
+
+    pub(crate) fn check_start(&self) -> CodexResult<()> {
+        self.rollout.gate.check_start()
+    }
+}
+
+impl std::fmt::Debug for RolloutBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RolloutBudget")
+            .field("state", &self.state)
+            .field("stopped", &self.is_exhausted())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 struct RolloutBudgetState {
     config: RolloutBudgetConfig,
     posted: BudgetUnitsSum,
@@ -34,6 +69,7 @@ struct RolloutBudgetState {
     deliveries: HashMap<ThreadId, ThreadBudgetDelivery>,
 }
 
+#[derive(Debug)]
 struct ThreadBudgetDelivery {
     window_id: String,
     reminder_index: i64,
@@ -50,25 +86,22 @@ impl RolloutBudget {
         });
     }
 
-    /// Records usage and returns whether an enforced budget is exhausted.
+    /// Post the response cost and enforce the allowance under the same lock.
     pub(crate) fn record_usage(
         &self,
         usage: Option<&TokenUsage>,
         hook_charge: codex_hooks::HookCharge,
-    ) -> CodexResult<bool> {
+    ) -> CodexResult<()> {
         let Some(mut state) = self.lock() else {
-            return Ok(false);
+            return Ok(());
         };
         if !hook_charge.units.is_finite() || hook_charge.units < 0.0 {
-            return Err(CodexErr::Fatal("invalid rollout budget charge".into()));
+            return Err(CodexErr::Fatal("invalid additional sampling charge".into()));
         }
-        if hook_charge.overflowed {
-            // All allowances are finite. No future nonnegative receipt can make
-            // this total representable; the remaining allowance is known to be zero.
+        if hook_charge.overflowed && state.posted.total().is_finite() {
+            // Stop new work before validating the rest of an overflowing receipt.
             state.posted.add(f64::INFINITY);
-            if state.config.enforce_limit {
-                self.stop_new_tools();
-            }
+            self.enforce_posted_limit(&state)?;
         }
         let provider_units = if let Some(units) =
             usage.and_then(|usage| usage.codex_rollout_budget_units.as_ref())
@@ -88,31 +121,31 @@ impl RolloutBudget {
             0.0
         };
         if state.posted.total().is_infinite() {
-            return Ok(state.config.enforce_limit);
+            // Later valid receipts cannot restore precision. The original
+            // overflow was reported; it must not veto every advisory turn.
+            return Ok(());
         }
+        // Keep the full bill even if enforcing the new allowance fails.
         state.posted.add(provider_units);
         state.posted.add(hook_charge.units);
+        // Enforce the allowance before reporting an overflowing sum.
+        self.enforce_posted_limit(&state)?;
         if !state.posted.total().is_finite() {
-            if state.config.enforce_limit {
-                self.stop_new_tools();
-            }
-            return Err(CodexErr::Fatal("invalid rollout budget charge".into()));
+            return Err(CodexErr::Fatal(
+                "rollout sampling cost exceeds f64 range".into(),
+            ));
         }
-        // Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
-        let exhausted = state.config.enforce_limit
-            && state.posted.total() > state.config.limit_budget.next_up();
-        if exhausted {
-            self.stop_new_tools();
-        }
-        Ok(exhausted)
+        Ok(())
     }
 
-    pub(crate) fn stop_new_tools(&self) {
-        self.stop_tools.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn tools_stopped(&self) -> bool {
-        self.stop_tools.load(Ordering::Acquire)
+    fn enforce_posted_limit(&self, state: &RolloutBudgetState) -> CodexResult<()> {
+        let posted = state.posted.total();
+        if state.config.enforce_limit
+            && (!posted.is_finite() || posted > state.config.limit_budget.next_up())
+        {
+            self.stop_new_work();
+        }
+        Ok(())
     }
 
     pub(crate) fn pending_reminder(
@@ -121,7 +154,7 @@ impl RolloutBudget {
         window_id: &str,
     ) -> Option<RolloutBudgetReminder> {
         let state = self.lock()?;
-        let remaining_units = (state.config.limit_budget - state.posted.total()).max(0.0);
+        let remaining_units = self.remaining_units(&state).ok()?;
         let reminder_index = state
             .config
             .reminder_at_remaining_tokens
@@ -166,5 +199,21 @@ impl RolloutBudget {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         })
+    }
+
+    pub(crate) fn stop_new_work(&self) {
+        self.gate.stop_budget();
+    }
+
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.gate.is_stopped()
+    }
+
+    fn remaining_units(&self, state: &RolloutBudgetState) -> CodexResult<f64> {
+        if state.posted.total().is_infinite() {
+            return Ok(0.0);
+        }
+        let used = state.posted.total();
+        Ok((state.config.limit_budget - used).max(0.0))
     }
 }

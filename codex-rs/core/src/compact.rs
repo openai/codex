@@ -571,8 +571,10 @@ pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> Compa
     match result {
         Ok(_) => CompactionStatus::Completed,
         Err(err)
-            if matches!(err.details(), CodexErrorDetails::Interrupted)
-                || crate::tasks::ends_turn_as_interrupted(err) =>
+            if matches!(
+                err.details(),
+                CodexErrorDetails::Interrupted | CodexErrorDetails::SessionBudgetExceeded
+            ) || crate::tasks::ends_turn_as_interrupted(err) =>
         {
             CompactionStatus::Interrupted
         }

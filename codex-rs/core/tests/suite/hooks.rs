@@ -6205,8 +6205,8 @@ enum ToolDispatchCase {
 
 #[test_case::test_case(ToolDispatchCase::Eager; "default runs the tool before the response ends")]
 #[test_case::test_case(ToolDispatchCase::AsyncHook; "an observer does not hold the tool")]
-#[test_case::test_case(ToolDispatchCase::AfterComplete; "buffered output waits for completion without hooks")]
-#[test_case::test_case(ToolDispatchCase::SyncHook; "streaming output and tools precede a synchronous hook")]
+#[test_case::test_case(ToolDispatchCase::AfterComplete; "buffered text and tools wait for completion")]
+#[test_case::test_case(ToolDispatchCase::SyncHook; "streaming text and tools do not wait for synchronous pricing")]
 #[test_case::test_case(ToolDispatchCase::InterruptedHook; "interrupt discards the held response and its charge")]
 #[test_case::test_case(ToolDispatchCase::ExhaustedHook; "the response bill blocks its own tool")]
 #[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Host); "the host receives an overflow lower bound and keeps its policy")]
@@ -6324,7 +6324,7 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
         .with_pre_build_hook(move |home| {
             if buffered {
                 fs::write(home.join("config.toml"), "[responses]\nprocess_mode = \"after_complete_response\"\n")
-                    .expect("configure response processing after completion");
+                    .expect("configure buffered response processing");
             }
             if let Some(hook_async) = hook_async {
                 let post = format!(
