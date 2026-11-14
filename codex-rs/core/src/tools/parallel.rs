@@ -1037,7 +1037,8 @@ mod tests {
             .rollout_budget()
             .configure(crate::config::RolloutBudgetConfig {
                 enforce_limit: true,
-                limit_tokens: 1,
+                limit_budget: 1.0,
+                reminder_at_context_start: true,
                 reminder_at_remaining_tokens: Vec::new(),
                 sampling_token_weight: 1.0,
                 prefill_token_weight: 1.0,
@@ -1128,7 +1129,7 @@ mod tests {
         .await
         .expect("the tool should be queued behind the held slot");
         let usage = codex_protocol::protocol::TokenUsage {
-            output_tokens: 1,
+            output_tokens: 2,
             ..Default::default()
         };
         session

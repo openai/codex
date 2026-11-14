@@ -4815,7 +4815,14 @@
           "description": "Stop when the shared budget is exhausted. Defaults to true.",
           "type": "boolean"
         },
+        "limit_budget": {
+          "description": "Positive, finite allowance in budget units. Set either limit_tokens or limit_budget. Spending exactly this amount is allowed.",
+          "exclusiveMinimum": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "limit_tokens": {
+          "description": "Positive whole-token allowance. Set either limit_tokens or limit_budget.",
           "format": "int64",
           "minimum": 1.0,
           "type": "integer"
@@ -4824,6 +4831,10 @@
           "format": "double",
           "minimum": 0.0,
           "type": "number"
+        },
+        "reminder_at_context_start": {
+          "description": "Restate the balance when a thread starts or its context is compacted. Defaults to true. Set false with an empty threshold list for no budget reminders.",
+          "type": "boolean"
         },
         "reminder_at_remaining_tokens": {
           "description": "Remaining weighted-token values that trigger reminders when crossed.",

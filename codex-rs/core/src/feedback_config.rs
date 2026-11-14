@@ -44,7 +44,7 @@ pub(crate) fn usage_tags(
         "token_budget.present": config.token_budget.is_some(),
         "token_budget.reminder_threshold_tokens": config.token_budget.as_ref().and_then(|budget| budget.reminder_threshold_tokens),
         "token_budget.auto_compact_fallback_buffer_tokens": config.token_budget.as_ref().and_then(|budget| budget.auto_compact_fallback_buffer_tokens),
-        "rollout_budget.limit_tokens": config.rollout_budget.as_ref().map(|budget| budget.limit_tokens),
+        "rollout_budget.limit_budget": config.rollout_budget.as_ref().map(|budget| budget.limit_budget),
         "rollout_budget.sampling_token_weight": config.rollout_budget.as_ref().map(|budget| budget.sampling_token_weight),
         "rollout_budget.prefill_token_weight": config.rollout_budget.as_ref().map(|budget| budget.prefill_token_weight),
     });

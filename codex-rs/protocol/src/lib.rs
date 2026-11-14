@@ -1,6 +1,7 @@
 pub mod account;
 mod agent_path;
 pub mod auth;
+mod budget_units;
 mod context_window_id;
 mod item_id_generator;
 mod request_country;
@@ -13,6 +14,7 @@ mod session_id;
 mod thread_id;
 mod tool_name;
 pub use agent_path::AgentPath;
+pub use budget_units::BudgetUnitsSum;
 pub use context_window_id::ContextWindowId;
 pub use item_id_generator::ItemIdGenerator;
 #[cfg(test)]

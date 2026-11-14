@@ -108,7 +108,8 @@ impl ThreadLifecycleContributor<Config> for HostAccounting {
 pub(super) fn rollout_budget() -> RolloutBudgetConfig {
     RolloutBudgetConfig {
         enforce_limit: true,
-        limit_tokens: 100,
+        limit_budget: 100.0,
+        reminder_at_context_start: true,
         reminder_at_remaining_tokens: vec![75, 50, 25],
         sampling_token_weight: 1.0,
         prefill_token_weight: 1.0,
@@ -123,7 +124,7 @@ fn rollout_budget_texts(request: &ResponsesRequest) -> Vec<String> {
         .collect()
 }
 
-fn rollout_budget_message(remaining_tokens: i64) -> String {
+fn rollout_budget_message(remaining_tokens: impl std::fmt::Display) -> String {
     format!(
         "<rollout_budget>\nYou have {remaining_tokens} weighted tokens left in the shared session token budget.\n</rollout_budget>"
     )
@@ -134,10 +135,11 @@ fn wire_request_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(None ; "weighted token usage")]
-#[test_case(Some(40.5) ; "provider budget units")]
+#[test_case(None, true ; "weighted tokens and initial reminder")]
+#[test_case(Some(40.5), false ; "opaque units and threshold reminders only")]
 async fn adds_weighted_initial_and_threshold_reminders(
     rollout_budget_units: Option<f64>,
+    initial_reminder: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -167,11 +169,18 @@ async fn adds_weighted_initial_and_threshold_reminders(
     )
     .await;
     let test = test_codex()
-        .with_config(|config| {
+        .with_config(move |config| {
+            let mut budget = rollout_budget();
+            if !initial_reminder {
+                // Starting at 100.75 has not crossed the threshold at 100.
+                budget.limit_budget = 100.75;
+                budget.reminder_at_remaining_tokens = vec![100];
+            }
             config.rollout_budget = Some(RolloutBudgetConfig {
+                reminder_at_context_start: initial_reminder,
                 sampling_token_weight: 2.0,
                 prefill_token_weight: 0.5,
-                ..rollout_budget()
+                ..budget
             });
         })
         .build(&server)
@@ -181,22 +190,21 @@ async fn adds_weighted_initial_and_threshold_reminders(
     test.submit_turn("second turn").await?;
 
     let requests = responses.requests();
-    assert!(requests[0].has_content_kinds(&["rollout_budget.remaining_tokens"]));
     assert_eq!(
-        rollout_budget_texts(&requests[0]),
-        vec![rollout_budget_message(/*remaining_tokens*/ 100)]
+        requests[0].has_content_kinds(&["rollout_budget.remaining_tokens"]),
+        initial_reminder
     );
-    assert_eq!(
-        rollout_budget_texts(&requests[1]),
-        vec![
-            rollout_budget_message(/*remaining_tokens*/ 100),
-            rollout_budget_message(if rollout_budget_units.is_some() {
-                59
-            } else {
-                60
-            }),
-        ]
-    );
+    let mut expected: Vec<_> = initial_reminder
+        .then(|| rollout_budget_message(/*remaining_tokens*/ 100))
+        .into_iter()
+        .collect();
+    assert_eq!(rollout_budget_texts(&requests[0]), expected);
+    expected.push(rollout_budget_message(if rollout_budget_units.is_some() {
+        60.25
+    } else {
+        60.0
+    }));
+    assert_eq!(rollout_budget_texts(&requests[1]), expected);
 
     Ok(())
 }
@@ -352,7 +360,7 @@ async fn subagent_usage_draws_from_the_shared_budget(host_accounting: bool) -> R
                 .expect("test config should allow multi-agent v2");
             config.rollout_budget = Some(RolloutBudgetConfig {
                 // Host success must not also charge the Local budget.
-                limit_tokens: if host_accounting { 1 } else { 100 },
+                limit_budget: if host_accounting { 1.0 } else { 100.0 },
                 ..rollout_budget()
             });
         })
@@ -426,16 +434,31 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut sequence = vec![sse(vec![
-        ev_response_created("exhaust-budget"),
-        ev_completed_with_tokens("exhaust-budget", /*total_tokens*/ 30),
-    ])];
-    if owner == AgentRuntimeOwnership::Host || !enforce_limit {
-        sequence.push(sse(vec![
-            ev_response_created("already-exhausted"),
-            ev_completed_with_tokens("already-exhausted", /*total_tokens*/ 1),
-        ]));
-    }
+    // Enforced: decimal equality is allowed; the next material charge exceeds it.
+    // Advisory: a real overspend still permits a later request with a zero-balance reminder.
+    let (limit_budget, reminder_at_remaining_tokens, charges): (f64, Vec<i64>, &[f64]) =
+        if enforce_limit {
+            (0.3, vec![], &[0.1, 0.2, 0.000001, 0.0])
+        } else {
+            (30.0, vec![20, 10], &[31.0, 1.0])
+        };
+    let crossing_turn = if enforce_limit { 2 } else { 0 };
+    // The later user turn still runs, but an enforced Core budget refuses its model send.
+    let model_charges = if enforce_limit && owner == AgentRuntimeOwnership::Controller {
+        &charges[..=crossing_turn]
+    } else {
+        charges
+    };
+    let sequence = model_charges
+        .iter()
+        .enumerate()
+        .map(|(turn, units)| {
+            let id = format!("budget-{turn}");
+            let mut completed = ev_completed_with_tokens(&id, /*total_tokens*/ 1);
+            completed["response"]["usage"]["codex_rollout_budget_units"] = json!(units);
+            sse(vec![ev_response_created(&id), completed])
+        })
+        .collect();
     let responses = mount_sse_sequence(&server, sequence).await;
     let mut extensions = ExtensionRegistryBuilder::new();
     if owner == AgentRuntimeOwnership::Host {
@@ -446,8 +469,8 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
         .with_config(move |config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
                 enforce_limit,
-                limit_tokens: 30,
-                reminder_at_remaining_tokens: vec![20, 10],
+                limit_budget,
+                reminder_at_remaining_tokens,
                 ..rollout_budget()
             });
         })
@@ -461,10 +484,10 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
         data.insert(late.clone() as Arc<dyn AgentUsageAccounting>);
     }
 
-    for prompt in ["exhaust the budget", "try another turn"] {
+    for turn in 0..charges.len() {
         test.codex
             .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-                text: prompt.to_string(),
+                text: format!("Budget turn {turn}"),
                 text_elements: Vec::new(),
             }]))
             .await?;
@@ -473,7 +496,7 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
             matches!(event, EventMsg::Error(_) | EventMsg::TurnComplete(_))
         })
         .await;
-        if owner == AgentRuntimeOwnership::Host || !enforce_limit {
+        if turn < crossing_turn || owner == AgentRuntimeOwnership::Host || !enforce_limit {
             assert!(matches!(event, EventMsg::TurnComplete(done) if done.error.is_none()));
             continue;
         }
@@ -490,7 +513,7 @@ async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
 
     if owner == AgentRuntimeOwnership::Host {
         let requests = responses.requests();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), charges.len());
         for request in &requests {
             assert!(rollout_budget_texts(request).is_empty());
         }
@@ -557,7 +580,7 @@ async fn compaction_accounting_errors_fail_without_retry(
         .with_config(move |config| {
             config.model_provider.stream_max_retries = Some(2);
             config.rollout_budget = Some(RolloutBudgetConfig {
-                limit_tokens: 10,
+                limit_budget: 9.0,
                 reminder_at_remaining_tokens: vec![5],
                 ..rollout_budget()
             });

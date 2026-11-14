@@ -1826,7 +1826,8 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     let mut config = test_config().await;
     config.rollout_budget = Some(RolloutBudgetConfig {
         enforce_limit: true,
-        limit_tokens: 100,
+        limit_budget: 100.0,
+        reminder_at_context_start: true,
         reminder_at_remaining_tokens: vec![75, 50, 25],
         sampling_token_weight: 1.0,
         prefill_token_weight: 1.0,
@@ -1989,7 +1990,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .pending_budget_reminder(parent.thread_id, "window")
         .await
         .expect("parent budget reminder");
-    assert_eq!(reminder.remaining_tokens, 75);
+    assert_eq!(reminder.remaining_units, 75.0);
     assert_eq!(reviewer_config.parent_thread_id, Some(parent.thread_id));
     assert_eq!(reviewer_config.forked_from_thread_id, None);
     assert_eq!(reviewer_config.originator, "codex_work_desktop");

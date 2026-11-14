@@ -252,7 +252,7 @@ pub(crate) async fn finalize(
         .await
     {
         let reminder = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
-            remaining_tokens: reminder.remaining_tokens,
+            remaining_units: reminder.remaining_units,
         });
         existing = existing.saturating_add(
             usize::try_from(estimate_item_token_count(&reminder)).unwrap_or(usize::MAX),

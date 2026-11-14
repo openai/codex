@@ -455,9 +455,20 @@ pub struct RolloutBudgetConfigToml {
     pub enforce_limit: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    // TODO: Remove limit_tokens once clients write limit_budget and persisted thread configs have migrated.
+    /// Positive whole-token allowance. Set either limit_tokens or limit_budget.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub limit_tokens: Option<i64>,
+    /// Positive, finite allowance in budget units. Set either limit_tokens or limit_budget.
+    /// Spending exactly this amount is allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "positive_budget_limit_schema")]
+    pub limit_budget: Option<f64>,
+    /// Restate the balance when a thread starts or its context is compacted.
+    /// Defaults to true. Set false with an empty threshold list for no budget reminders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reminder_at_context_start: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Remaining weighted-token values that trigger reminders when crossed.
     pub reminder_at_remaining_tokens: Option<Vec<i64>>,
@@ -467,6 +478,14 @@ pub struct RolloutBudgetConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0))]
     pub prefill_token_weight: Option<f64>,
+}
+
+fn positive_budget_limit_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    let mut schema = f64::json_schema(generator).into_object();
+    schema.number().exclusive_minimum = Some(0.0);
+    schema.into()
 }
 
 impl FeatureConfig for RolloutBudgetConfigToml {

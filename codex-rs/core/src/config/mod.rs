@@ -1401,10 +1401,19 @@ impl Default for TokenBudgetConfig {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RolloutBudgetConfig {
     pub enforce_limit: bool,
-    pub limit_tokens: i64,
+    /// Positive, finite allowance, including fractional opaque units.
+    pub limit_budget: f64,
+    pub reminder_at_context_start: bool,
     pub reminder_at_remaining_tokens: Vec<i64>,
     pub sampling_token_weight: f64,
     pub prefill_token_weight: f64,
+}
+
+/// An integer threshold is reached when the actual fractional balance is at
+/// or below it. Round the balance up, not the threshold to `f64`: an `i64`
+/// threshold above 2^53 is still exact, and every threshold fits in `i128`.
+pub(crate) fn rollout_budget_threshold_reached(remaining_units: f64, threshold: i64) -> bool {
+    remaining_units.ceil() as i128 <= i128::from(threshold)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3053,31 +3062,42 @@ fn resolve_rollout_budget_config(
     config_toml: &ConfigToml,
     features: &ManagedFeatures,
 ) -> std::io::Result<Option<RolloutBudgetConfig>> {
+    let config = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.rollout_budget.as_ref());
+    if let Some(FeatureToml::Config(config)) = config
+        && config.limit_tokens.is_some()
+        && config.limit_budget.is_some()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens and limit_budget cannot both be set",
+        ));
+    }
     if !features.enabled(Feature::RolloutBudget) {
         return Ok(None);
     }
     let missing_limit_error = || {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled",
+            "features.rollout_budget requires limit_tokens or limit_budget when enabled",
         )
     };
-    let Some(FeatureToml::Config(config)) = config_toml
-        .features
-        .as_ref()
-        .and_then(|features| features.rollout_budget.as_ref())
-    else {
+    let Some(FeatureToml::Config(config)) = config else {
         return Err(missing_limit_error());
     };
-    let Some(limit_tokens) = config.limit_tokens else {
-        return Err(missing_limit_error());
-    };
-    if limit_tokens <= 0 {
+    let limit_budget = config
+        .limit_budget
+        .or_else(|| config.limit_tokens.map(|tokens| tokens as f64))
+        .ok_or_else(missing_limit_error)?;
+    if !limit_budget.is_finite() || limit_budget <= 0.0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.limit_tokens must be positive",
+            "features.rollout_budget allowance must be finite and positive",
         ));
     }
+    let reminder_at_context_start = config.reminder_at_context_start.unwrap_or(true);
     let reminder_at_remaining_tokens =
         config
             .reminder_at_remaining_tokens
@@ -3088,13 +3108,17 @@ fn resolve_rollout_budget_config(
                     "features.rollout_budget.reminder_at_remaining_tokens is required when rollout_budget is enabled",
                 )
             })?;
-    if reminder_at_remaining_tokens
-        .iter()
-        .any(|&tokens| tokens <= 0 || tokens >= limit_tokens)
-    {
+    if reminder_at_remaining_tokens.iter().any(|&tokens| {
+        // Persisted token allowances and thresholds are exact integers, including above 2^53.
+        tokens <= 0
+            || match config.limit_tokens {
+                Some(limit) => tokens >= limit,
+                None => rollout_budget_threshold_reached(limit_budget, tokens),
+            }
+    }) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below limit_tokens",
+            "features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below the rollout allowance",
         ));
     }
     let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);
@@ -3112,7 +3136,8 @@ fn resolve_rollout_budget_config(
     }
     Ok(Some(RolloutBudgetConfig {
         enforce_limit: config.enforce_limit.unwrap_or(true),
-        limit_tokens,
+        limit_budget,
+        reminder_at_context_start,
         reminder_at_remaining_tokens,
         sampling_token_weight,
         prefill_token_weight,

@@ -26,7 +26,7 @@ pub(super) async fn maybe_record_reminder(
         return;
     };
     let response_item = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
-        remaining_tokens: reminder.remaining_tokens,
+        remaining_units: reminder.remaining_units,
     });
     sess.record_conversation_items(
         turn_context,

@@ -1,4 +1,6 @@
 use crate::config::RolloutBudgetConfig;
+use crate::config::rollout_budget_threshold_reached;
+use codex_protocol::BudgetUnitsSum;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -12,7 +14,7 @@ use std::sync::atomic::Ordering;
 
 /// Budget reminder returned by a controller and acknowledged after history insertion.
 pub struct RolloutBudgetReminder {
-    pub remaining_tokens: i64,
+    pub remaining_units: f64,
     /// Backend-defined reminder position, returned unchanged on acknowledgement.
     pub reminder_index: i64,
 }
@@ -27,7 +29,7 @@ pub(crate) struct RolloutBudget {
 
 struct RolloutBudgetState {
     config: RolloutBudgetConfig,
-    weighted_tokens_used: f64,
+    posted: BudgetUnitsSum,
     /// Last reminder delivered to each thread, so every thread observes crossed thresholds.
     deliveries: HashMap<ThreadId, ThreadBudgetDelivery>,
 }
@@ -42,7 +44,7 @@ impl RolloutBudget {
         self.state.get_or_init(|| {
             Mutex::new(RolloutBudgetState {
                 config,
-                weighted_tokens_used: 0.0,
+                posted: BudgetUnitsSum::default(),
                 deliveries: HashMap::new(),
             })
         });
@@ -66,9 +68,11 @@ impl RolloutBudget {
             usage.output_tokens.max(0) as f64 * state.config.sampling_token_weight
                 + usage.non_cached_input() as f64 * state.config.prefill_token_weight
         };
-        state.weighted_tokens_used += units;
+        state.posted.add(units);
+        // Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
         let exhausted = state.config.enforce_limit
-            && state.weighted_tokens_used >= state.config.limit_tokens as f64;
+            && (state.posted.total().is_infinite()
+                || state.posted.total() > state.config.limit_budget.next_up());
         if exhausted {
             self.stop_new_tools();
         }
@@ -89,22 +93,22 @@ impl RolloutBudget {
         window_id: &str,
     ) -> Option<RolloutBudgetReminder> {
         let state = self.lock()?;
-        let remaining_tokens = (state.config.limit_tokens as f64 - state.weighted_tokens_used)
-            .max(0.0)
-            .floor() as i64;
+        let remaining_units = (state.config.limit_budget - state.posted.total()).max(0.0);
         let reminder_index = state
             .config
             .reminder_at_remaining_tokens
             .iter()
-            .filter(|&&threshold| remaining_tokens <= threshold)
+            .filter(|&&threshold| rollout_budget_threshold_reached(remaining_units, threshold))
             .count() as i64;
-        if state.deliveries.get(&thread_id).is_some_and(|delivery| {
-            delivery.window_id.as_str() == window_id && delivery.reminder_index >= reminder_index
-        }) {
+        let previous = state.deliveries.get(&thread_id);
+        let crossed_threshold = reminder_index > previous.map_or(0, |d| d.reminder_index);
+        let new_window = state.config.reminder_at_context_start
+            && previous.is_none_or(|d| d.window_id != window_id);
+        if !crossed_threshold && !new_window {
             return None;
         }
         Some(RolloutBudgetReminder {
-            remaining_tokens,
+            remaining_units,
             reminder_index,
         })
     }

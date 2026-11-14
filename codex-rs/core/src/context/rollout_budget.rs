@@ -3,9 +3,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RolloutBudgetContext {
-    pub(crate) remaining_tokens: i64,
+    pub(crate) remaining_units: f64,
 }
 
 impl ContextualUserFragment for RolloutBudgetContext {
@@ -26,9 +26,10 @@ impl ContextualUserFragment for RolloutBudgetContext {
     }
 
     fn body(&self) -> ContentItem {
+        // "Weighted tokens" is the legacy wording. Provider-reported units can be opaque.
         input_text(format!(
             "You have {} weighted tokens left in the shared session token budget.",
-            self.remaining_tokens
+            self.remaining_units
         ))
     }
 }
