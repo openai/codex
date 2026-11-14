@@ -1422,6 +1422,42 @@ fn assistant_message(
 }
 
 #[test]
+fn collapsing_tool_group_refills_viewport() {
+    let mut cells = vec![
+        prompt("Check the field notes"),
+        cell("Opened the field notes\nChecking dates and locations\nChecking names and totals"),
+    ];
+    for id in 1..=6 {
+        cells.push(Arc::new(crate::history_cell::new_web_search_call(
+            format!("lookup-{id}"),
+            format!("field note {id}"),
+            codex_app_server_protocol::WebSearchAction::Other,
+        )));
+    }
+    cells.push(cell("Checking the last source"));
+    let mut view = TranscriptView::default();
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    let screen = |view: &mut TranscriptView| {
+        text(&render(view, &cells, /*width*/ 52, /*height*/ 8))
+    };
+    let initial = screen(&mut view);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    screen(&mut view);
+    // Read down to the expanded group's details, then close it in place.
+    view.scroll(&cells, /*rows*/ 2);
+    let expanded = screen(&mut view);
+    assert!(expanded.contains("▾ 6 tool calls"), "{expanded}");
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    let collapsed = screen(&mut view);
+    assert_eq!(collapsed, initial);
+    assert!(view.is_activity_focused());
+    assert!(!view.is_following());
+    assert_eq!(screen(&mut view), collapsed);
+    insta::assert_snapshot!(collapsed);
+}
+
+#[test]
 fn tool_groups_expand_independently_inside_a_completed_turn() {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::new_active_exec_command;

@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/owned_transcript_follow_tests.rs
-expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
+expression: "crate::chatwidget::tests::helpers::normalize_working_snapshot(snapshots.join(\"\\n\\n\"))"
 ---
 80 columns, 12 rows
 transcript row 37
@@ -59,3 +59,21 @@ row 39
 
   GPT-5.6-Sol default · /tmp/project
   tab to queue message
+
+Collapsed tool group with copy feedback
+transcript row 34
+transcript row 35
+transcript row 36
+transcript row 37
+transcript row 38
+transcript row 39
+    ⌕ 6 tool calls · Searched the web for field note 6
+
+• Working (0s • esc to interrupt)
+
+                                              Copied 24 chars to host clipboard
+
+› draft stays here
+
+  GPT-5.6-Sol default · /tmp/project
+  ↑ previous · ↓ next · enter expand · esc back

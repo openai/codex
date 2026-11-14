@@ -192,6 +192,42 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
                     super::tests::buffer_text(buffer)
                 ));
             }
+
+            app.local_settings.tui.collapse_turn_details = true;
+            for id in 1..=6 {
+                app.transcript_cells
+                    .push(Arc::new(crate::history_cell::new_web_search_call(
+                        format!("lookup-{id}"),
+                        format!("field note {id}"),
+                        codex_app_server_protocol::WebSearchAction::Other,
+                    )));
+            }
+            let size = Size::new(/*width*/ 80, /*height*/ 16);
+            tui.screen_size_for_event(&TuiEvent::Resize(size))?;
+            app.render_owned_transcript(&mut tui, size)?;
+            for key in [KeyCode::F(4), KeyCode::Enter] {
+                app.transcript_view
+                    .handle_key(key.into(), &app.transcript_cells);
+            }
+            app.render_owned_transcript(&mut tui, size)?;
+            app.transcript_view
+                .scroll(&app.transcript_cells, /*rows*/ 2);
+            app.render_owned_transcript(&mut tui, size)?;
+            app.transcript_view
+                .handle_key(KeyCode::Enter.into(), &app.transcript_cells);
+            app.transcript_view.show_copy_feedback(
+                &Ok(crate::clipboard_copy::CopyStatus::Confirmed),
+                /*characters*/ 24,
+            );
+            app.render_owned_transcript(&mut tui, size)?;
+            let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+            let collapsed = super::tests::buffer_text(buffer);
+            assert!(collapsed.contains("6 tool calls"), "{collapsed}");
+            assert!(app.transcript_view.is_activity_focused());
+            snapshots.push(format!(
+                "Collapsed tool group with copy feedback\n{collapsed}"
+            ));
+
             insta::assert_snapshot!(
                 "running_copy_feedback_spacing",
                 crate::chatwidget::tests::helpers::normalize_working_snapshot(

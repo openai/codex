@@ -673,6 +673,7 @@ impl App {
             );
             needs_redraw = false;
         }
+        view.finish_collapse_layout(&self.transcript_cells);
         let blossom_tick = chat_widget
             .empty_state_animation
             .borrow_mut()

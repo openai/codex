@@ -1,0 +1,12 @@
+---
+source: tui/src/transcript_view_tests.rs
+expression: collapsed
+---
+
+
+Opened the field notes
+Checking dates and locations
+Checking names and totals
+    ⌕ 6 tool calls · Searched the web for field note
+
+Checking the last source

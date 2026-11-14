@@ -25,7 +25,7 @@ impl TranscriptView {
                 })
                 .map(EntryKey::cell)
         });
-        self.render(
+        self.paint_rows(
             Rect {
                 height: area.height - u16::from(tip.is_some() && self.turn_tip_key.is_none()),
                 ..area
@@ -39,7 +39,7 @@ impl TranscriptView {
             && self.visible.first().is_none_or(|row| row.key == key)
         {
             self.turn_tip_key = None;
-            self.render(area, buf, cells);
+            self.paint_rows(area, buf, cells);
             return None;
         }
         tip?;
