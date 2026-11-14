@@ -599,6 +599,22 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Reads a bounded immutable snapshot of the independent realtime stream.
+    fn list_realtime(
+        &self,
+        _params: crate::ListRealtimeParams,
+    ) -> ThreadStoreFuture<'_, crate::RealtimePage> {
+        Box::pin(async {
+            Ok(crate::RealtimePage {
+                data: Vec::new(),
+                next_cursor: None,
+                snapshot_end: 0,
+                projected_through_item_index: 0,
+                coverage: codex_app_server_protocol::ThreadRealtimeCoverage::Unsupported,
+            })
+        })
+    }
+
     /// Lists bounded ordinary and realtime thread history in rollout order.
     fn list_timeline(
         &self,

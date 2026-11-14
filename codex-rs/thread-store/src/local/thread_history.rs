@@ -12,6 +12,7 @@ use crate::ThreadStoreResult;
 
 mod read;
 mod realtime;
+mod realtime_stream;
 mod search;
 mod segment_paging;
 mod turn_lookup;
@@ -19,6 +20,7 @@ mod turn_lookup;
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
 pub(super) use realtime::list_timeline;
+pub(super) use realtime_stream::list_realtime;
 pub(super) use search::search_thread_occurrences;
 pub(super) use turn_lookup::find_source_turn;
 pub(super) use turn_lookup::find_visible_turn;

@@ -5476,6 +5476,24 @@
       ],
       "type": "object"
     },
+    "ThreadRealtimeOrder": {
+      "oneOf": [
+        {
+          "description": "Sort by canonical observation time, then committed position.",
+          "enum": [
+            "observedAt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Sort by committed position, including events sealed after older snapshots.",
+          "enum": [
+            "position"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ThreadRealtimeStartTransport": {
       "description": "EXPERIMENTAL - transport used by thread realtime.",
       "oneOf": [

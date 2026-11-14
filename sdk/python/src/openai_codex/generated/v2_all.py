@@ -6415,6 +6415,12 @@ class ThreadRealtimeClosedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ThreadRealtimeCoverage(Enum):
+    unsupported = "unsupported"
+    pending = "pending"
+    ready = "ready"
+
+
 class ThreadRealtimeErrorNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6536,6 +6542,11 @@ class ThreadRealtimeItemTranscriptDeltaNotification(BaseModel):
     delta: str
     item_id: Annotated[str, Field(alias="itemId")]
     thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadRealtimeOrder(Enum):
+    observed_at = "observedAt"
+    position = "position"
 
 
 class ThreadRealtimeOutputAudioDeltaNotification(BaseModel):
@@ -12925,6 +12936,14 @@ class ThreadItemsListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. if None, there are no more items to return.",
         ),
     ] = None
+
+
+class ThreadRealtimeEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    item: ThreadRealtimeItem
+    position: Annotated[int, Field(ge=0)]
 
 
 class ItemThreadTimelineEntry(BaseModel):

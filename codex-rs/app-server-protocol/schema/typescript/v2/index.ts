@@ -584,6 +584,8 @@ export type { ThreadReadStateOperation } from "./ThreadReadStateOperation";
 export type { ThreadRealtimeAudioChunk } from "./ThreadRealtimeAudioChunk";
 export type { ThreadRealtimeBemItemPresentation } from "./ThreadRealtimeBemItemPresentation";
 export type { ThreadRealtimeClosedNotification } from "./ThreadRealtimeClosedNotification";
+export type { ThreadRealtimeCoverage } from "./ThreadRealtimeCoverage";
+export type { ThreadRealtimeEntry } from "./ThreadRealtimeEntry";
 export type { ThreadRealtimeErrorNotification } from "./ThreadRealtimeErrorNotification";
 export type { ThreadRealtimeFrameChannels } from "./ThreadRealtimeFrameChannels";
 export type { ThreadRealtimeHandoffMode } from "./ThreadRealtimeHandoffMode";
@@ -593,6 +595,7 @@ export type { ThreadRealtimeItemAddedNotification } from "./ThreadRealtimeItemAd
 export type { ThreadRealtimeItemCompletedNotification } from "./ThreadRealtimeItemCompletedNotification";
 export type { ThreadRealtimeItemStartedNotification } from "./ThreadRealtimeItemStartedNotification";
 export type { ThreadRealtimeItemTranscriptDeltaNotification } from "./ThreadRealtimeItemTranscriptDeltaNotification";
+export type { ThreadRealtimeOrder } from "./ThreadRealtimeOrder";
 export type { ThreadRealtimeOutputAudioDeltaNotification } from "./ThreadRealtimeOutputAudioDeltaNotification";
 export type { ThreadRealtimeSdpNotification } from "./ThreadRealtimeSdpNotification";
 export type { ThreadRealtimeSessionOutcome } from "./ThreadRealtimeSessionOutcome";

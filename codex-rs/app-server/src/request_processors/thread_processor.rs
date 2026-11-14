@@ -4,6 +4,9 @@ mod daemon_continuation;
 #[path = "daemon_snapshot.rs"]
 mod daemon_snapshot;
 
+#[path = "realtime_history.rs"]
+mod realtime_history;
+
 mod workspace_switching;
 
 #[path = "thread_resume_account.rs"]

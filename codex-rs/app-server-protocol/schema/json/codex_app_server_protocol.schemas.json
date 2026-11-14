@@ -25561,6 +25561,31 @@
         "title": "ThreadRealtimeClosedNotification",
         "type": "object"
       },
+      "ThreadRealtimeCoverage": {
+        "enum": [
+          "unsupported",
+          "pending",
+          "ready"
+        ],
+        "type": "string"
+      },
+      "ThreadRealtimeEntry": {
+        "properties": {
+          "item": {
+            "$ref": "#/definitions/v2/ThreadRealtimeItem"
+          },
+          "position": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "item",
+          "position"
+        ],
+        "type": "object"
+      },
       "ThreadRealtimeErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
@@ -25895,6 +25920,24 @@
         ],
         "title": "ThreadRealtimeItemTranscriptDeltaNotification",
         "type": "object"
+      },
+      "ThreadRealtimeOrder": {
+        "oneOf": [
+          {
+            "description": "Sort by canonical observation time, then committed position.",
+            "enum": [
+              "observedAt"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Sort by committed position, including events sealed after older snapshots.",
+            "enum": [
+              "position"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ThreadRealtimeOutputAudioDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

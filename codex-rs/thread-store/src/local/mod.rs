@@ -498,6 +498,14 @@ impl LocalThreadStore {
         thread_history::list_items(self, params).await
     }
 
+    /// Reads the independent realtime projection without starting a runtime.
+    pub async fn list_realtime(
+        &self,
+        params: crate::ListRealtimeParams,
+    ) -> ThreadStoreResult<crate::RealtimePage> {
+        thread_history::list_realtime(self, params).await
+    }
+
     /// Lists bounded ordinary and realtime items from the rollout projection.
     pub async fn list_timeline(
         &self,
@@ -816,6 +824,13 @@ impl ThreadStore for LocalThreadStore {
 
     fn list_timeline(&self, params: ListTimelineParams) -> ThreadStoreFuture<'_, TimelinePage> {
         Box::pin(LocalThreadStore::list_timeline(self, params))
+    }
+
+    fn list_realtime(
+        &self,
+        params: crate::ListRealtimeParams,
+    ) -> ThreadStoreFuture<'_, crate::RealtimePage> {
+        Box::pin(LocalThreadStore::list_realtime(self, params))
     }
 
     fn search_threads(

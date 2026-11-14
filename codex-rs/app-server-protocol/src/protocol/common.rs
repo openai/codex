@@ -1170,6 +1170,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadTimelineListResponse,
     },
+    #[experimental("thread/realtime/list")]
+    ThreadRealtimeList => "thread/realtime/list" {
+        params: v2::ThreadRealtimeListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeListResponse,
+    },
     #[experimental("thread/realtime/listVoices")]
     ThreadRealtimeListVoices => "thread/realtime/listVoices" {
         params: v2::ThreadRealtimeListVoicesParams,
