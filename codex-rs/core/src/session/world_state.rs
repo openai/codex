@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::session::Session;
@@ -19,6 +20,7 @@ use crate::context::world_state::ModelCatalogState;
 use crate::context::world_state::ModelInstructionsState;
 use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::MultiAgentUsageHintState;
+use crate::context::world_state::PermissionDescription;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PluginsInstructionsState;
@@ -267,36 +269,71 @@ impl Session {
         let approval_context =
             ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages);
         if turn_context.config.include_permissions_instructions {
-            let environment = step_context.environments.primary();
-            let sandbox = environment
-                .filter(|environment| environment.environment().is_remote())
-                .map(|environment| {
-                    environment.sandbox_context(/*additional_permissions*/ None)
-                });
-            let paths = sandbox
-                .as_ref()
-                .map(FileSystemSandboxContext::policy_context);
-            let permission_profile =
-                turn_context.permission_profile_for_environments(&step_context.environments);
-            #[allow(deprecated)]
-            let cwd = environment
-                .and_then(|environment| environment.cwd().to_abs_path().ok())
-                .unwrap_or_else(|| turn_context.cwd.clone());
+            let per_environment = turn_context
+                .config
+                .features
+                .enabled(Feature::PerEnvironmentContext);
+            let mut environments = step_context
+                .environments
+                .turn_environments()
+                .map(Some)
+                .collect::<Vec<_>>();
+            if !per_environment {
+                environments.truncate(1);
+            }
+            // Until a computer is ready, describe the thread defaults without assigning
+            // those permissions to a computer whose configuration is still unknown.
+            if environments.is_empty() {
+                environments.push(None);
+            }
+            let mut descriptions = BTreeMap::new();
+            for environment in environments {
+                let sandbox = environment
+                    .filter(|environment| per_environment || environment.environment().is_remote())
+                    .map(|environment| {
+                        environment.sandbox_context(/*additional_permissions*/ None)
+                    });
+                let paths = sandbox
+                    .as_ref()
+                    .map(FileSystemSandboxContext::policy_context);
+                let permission_profile = environment.map_or_else(
+                    || turn_context.permission_profile_for_environments(&step_context.environments),
+                    super::turn_context::TurnEnvironment::permission_profile_with_workspace_roots,
+                );
+                #[allow(deprecated)]
+                let cwd = environment
+                    .and_then(|environment| environment.cwd().to_abs_path().ok())
+                    .unwrap_or_else(|| turn_context.cwd.clone());
+                let id = if per_environment {
+                    environment.map(|environment| environment.selection.environment_id.clone())
+                } else {
+                    None
+                };
+                descriptions.insert(
+                    id,
+                    PermissionDescription::new(
+                        &permission_profile,
+                        settings.approval_policy(),
+                        approval_context,
+                        exec_policy.as_ref(),
+                        &cwd,
+                        paths.as_ref(),
+                        turn_context
+                            .config
+                            .features
+                            .enabled(Feature::ExecPermissionApprovals),
+                        turn_context
+                            .config
+                            .features
+                            .enabled(Feature::RequestPermissionsTool),
+                    ),
+                );
+            }
             world_state.add_section(PermissionsState::new(
-                &permission_profile,
-                settings.approval_policy(),
-                approval_context,
+                descriptions,
                 exec_policy.as_ref(),
-                &cwd,
-                paths.as_ref(),
-                turn_context
-                    .config
-                    .features
-                    .enabled(Feature::ExecPermissionApprovals),
-                turn_context
-                    .config
-                    .features
-                    .enabled(Feature::RequestPermissionsTool),
+                approval_context,
+                per_environment,
             ));
         } else {
             world_state.add_section(CompactPermissionsState::new(

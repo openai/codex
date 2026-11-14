@@ -26,6 +26,32 @@ fn snapshots() {
     let read_only = permissions_state(PermissionProfile::read_only(), AskForApproval::OnRequest);
     let full_access = permissions_state(PermissionProfile::Disabled, AskForApproval::OnRequest);
     let never_ask = permissions_state(PermissionProfile::read_only(), AskForApproval::Never);
+    let approval_context =
+        ApprovalPromptContext::new(ApprovalsReviewer::User, ResolvedModelMessages::bundled());
+    let scoped = PermissionsState::new(
+        BTreeMap::from([
+            (Some("A".to_string()), read_only.descriptions[&None].clone()),
+            (
+                Some("B".to_string()),
+                full_access.descriptions[&None].clone(),
+            ),
+        ]),
+        &Policy::empty(),
+        approval_context,
+        /*per_environment*/ true,
+    );
+    let only_a = PermissionsState::new(
+        BTreeMap::from([(Some("A".to_string()), read_only.descriptions[&None].clone())]),
+        &Policy::empty(),
+        approval_context,
+        /*per_environment*/ true,
+    );
+    let fallback = PermissionsState::new(
+        read_only.descriptions.clone(),
+        &Policy::empty(),
+        approval_context,
+        /*per_environment*/ true,
+    );
 
     insta::assert_snapshot!(render_section_cases(&[
         (Absent, Absent),
@@ -34,6 +60,11 @@ fn snapshots() {
         (Known(&read_only), Known(&full_access)),
         (Known(&read_only), Known(&never_ask)),
         (Unknown, Known(&read_only)),
+        (Known(&read_only), Known(&only_a)),
+        (Known(&scoped), Known(&only_a)),
+        (Known(&only_a), Known(&only_a)),
+        (Known(&only_a), Known(&fallback)),
+        (Known(&only_a), Known(&read_only)),
     ]));
 }
 
@@ -68,18 +99,24 @@ fn approved_prefix_is_rendered_without_reinjecting_permissions() {
 
     assert_ne!(without_snapshot, with_snapshot);
     assert_ne!(
-        without_approved_prefix.instructions.body().expect_text(),
-        with_approved_prefix.instructions.body().expect_text()
+        without_approved_prefix.descriptions[&None]
+            .instructions
+            .body()
+            .expect_text(),
+        with_approved_prefix.descriptions[&None]
+            .instructions
+            .body()
+            .expect_text()
     );
     assert!(
-        !without_approved_prefix
+        !without_approved_prefix.descriptions[&None]
             .instructions
             .body()
             .expect_text()
             .contains(approved_prefix)
     );
     assert!(
-        with_approved_prefix
+        with_approved_prefix.descriptions[&None]
             .instructions
             .body()
             .expect_text()
@@ -92,7 +129,8 @@ fn approved_prefix_is_rendered_without_reinjecting_permissions() {
     assert!(!rendered_update.contains("<permissions instructions>"));
 
     let before_approval_permissions =
-        permissions_state(PermissionProfile::read_only(), AskForApproval::OnRequest)
+        permissions_state(PermissionProfile::read_only(), AskForApproval::OnRequest).descriptions
+            [&None]
             .instructions
             .render()
             .expect_text();
@@ -109,15 +147,26 @@ fn approved_prefix_is_rendered_without_reinjecting_permissions() {
 fn renders_only_newly_approved_prefixes() {
     use PreviousSectionState::Known;
 
+    let scoped = |policy: &Policy| {
+        let mut legacy = permissions_state_with_default_messages(policy);
+        let description = legacy.descriptions.remove(&None).unwrap();
+        PermissionsState::new(
+            BTreeMap::from([(Some("A".to_string()), description)]),
+            policy,
+            ApprovalPromptContext::new(ApprovalsReviewer::User, ResolvedModelMessages::bundled()),
+            /*per_environment*/ true,
+        )
+    };
+
     let mut exec_policy = Policy::empty();
     exec_policy
         .add_prefix_rule(&["git".to_string(), "pull".to_string()], Decision::Allow)
         .expect("test prefix should be valid");
-    let with_existing_prefix = permissions_state_with_default_messages(&exec_policy);
+    let with_existing_prefix = scoped(&exec_policy);
     exec_policy
         .add_prefix_rule(&["cargo".to_string(), "test".to_string()], Decision::Allow)
         .expect("test prefix should be valid");
-    let with_new_prefix = permissions_state_with_default_messages(&exec_policy);
+    let with_new_prefix = scoped(&exec_policy);
     let existing_snapshot = with_existing_prefix
         .render_fragment_diff(PreviousSectionState::Absent)
         .0
@@ -156,15 +205,22 @@ fn legacy_snapshot_deserializes_and_only_suppresses_matching_full_permissions() 
         .expect("test prefix should be valid");
     let with_approved_prefix = permissions_state_with_default_messages(&exec_policy);
     let matching_legacy: WorldStateSnapshot = serde_json::from_value(json!({
-        "permissions": WorldStateHash::from_fragment(&with_approved_prefix.instructions),
+        "permissions": WorldStateHash::from_fragment(&with_approved_prefix.descriptions[&None].instructions),
     }))
     .expect("legacy world-state snapshot should deserialize");
     let stale_legacy: WorldStateSnapshot = serde_json::from_value(json!({
-        "permissions": WorldStateHash::from_fragment(&without_approved_prefix.instructions),
+        "permissions": WorldStateHash::from_fragment(&without_approved_prefix.descriptions[&None].instructions),
     }))
     .expect("legacy world-state snapshot should deserialize");
-    let expected_permissions = with_approved_prefix.instructions.render().expect_text();
-    let retained = ContextualUserFragment::into(with_approved_prefix.instructions.clone());
+    let expected_permissions = with_approved_prefix.descriptions[&None]
+        .instructions
+        .render()
+        .expect_text();
+    let retained = ContextualUserFragment::into(
+        with_approved_prefix.descriptions[&None]
+            .instructions
+            .clone(),
+    );
     let mut world_state = WorldState::default();
     world_state.add_section(with_approved_prefix);
 
@@ -210,14 +266,17 @@ fn removing_an_approved_prefix_renders_full_permissions() {
 
     assert_eq!(
         rendered,
-        without_approved_prefix.instructions.render().expect_text()
+        without_approved_prefix.descriptions[&None]
+            .instructions
+            .render()
+            .expect_text()
     );
 }
 
 #[test]
 fn persisted_permissions_are_detected_inside_bundled_developer_messages() {
     let state = permissions_state(PermissionProfile::read_only(), AskForApproval::OnRequest);
-    let retained = ContextualUserFragment::into(state.instructions.clone());
+    let retained = ContextualUserFragment::into(state.descriptions[&None].instructions.clone());
     let mut world_state = super::super::WorldState::default();
     world_state.add_section(state);
     let snapshot = world_state.render_full().0;
@@ -280,28 +339,42 @@ fn permissions_state(
         ..Default::default()
     });
     let model_messages = ResolvedModelMessages::from_model(&model);
-    PermissionsState::new(
+    let approval_context = ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages);
+    let description = PermissionDescription::new(
         &permission_profile,
         approval_policy,
-        ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
+        approval_context,
         &Policy::empty(),
         Path::new("/workspace"),
         /*paths*/ None,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
+    );
+    PermissionsState::new(
+        BTreeMap::from([(None, description)]),
+        &Policy::empty(),
+        approval_context,
+        /*per_environment*/ false,
     )
 }
 
 fn permissions_state_with_default_messages(exec_policy: &Policy) -> PermissionsState {
     let model_messages = ResolvedModelMessages::bundled();
-    PermissionsState::new(
+    let approval_context = ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages);
+    let description = PermissionDescription::new(
         &PermissionProfile::read_only(),
         AskForApproval::OnRequest,
-        ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
+        approval_context,
         exec_policy,
         Path::new("/workspace"),
         /*paths*/ None,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
+    );
+    PermissionsState::new(
+        BTreeMap::from([(None, description)]),
+        exec_policy,
+        approval_context,
+        /*per_environment*/ false,
     )
 }

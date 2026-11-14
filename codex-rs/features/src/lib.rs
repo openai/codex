@@ -214,6 +214,8 @@ pub enum Feature {
     ShellSnapshotV2,
     /// Allow turns to start while selected executors are still starting.
     DeferredExecutor,
+    /// Describe each selected environment's filesystem and permissions separately.
+    PerEnvironmentContext,
     /// Use the current working directory for turn diff display paths.
     CwdRelativeTurnDiffs,
     /// Enable runtime metrics snapshots via a manual reader.
@@ -1273,6 +1275,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DeferredExecutor,
         key: "deferred_executor",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PerEnvironmentContext,
+        key: "per_environment_context",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

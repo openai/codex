@@ -61,6 +61,7 @@ pub(crate) use model::ModelInstructionsState;
 pub(crate) use model_catalog::ModelCatalogState;
 pub(crate) use multi_agent_mode::MultiAgentModeState;
 pub(crate) use multi_agent_usage_hint::MultiAgentUsageHintState;
+pub(crate) use permissions::PermissionDescription;
 pub(crate) use permissions::PermissionsState;
 pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;

@@ -39,6 +39,8 @@ fn environment(id: &str, cwd: PathUri, shell: impl Into<String>) -> (String, Env
             error: None,
             shell: Some(shell.into()),
             is_primary: false,
+            filesystem: None,
+            network_access: None,
         },
     )
 }
@@ -60,6 +62,7 @@ fn environment_state(
         .collect();
     EnvironmentsState {
         environments,
+        per_environment: false,
         shell_version: None,
         current_date,
         timezone,
@@ -110,17 +113,28 @@ fn serialize_environment_context_with_foreign_windows_cwd() {
         /*network*/ None,
         /*subagents*/ None,
     );
-    context.filesystem = Some(FileSystemContext::from_permission_profile(
-        &PermissionProfile::Disabled,
-        &[PathUri::parse("file:///D:/workspace").expect("Windows workspace root URI")],
-    ));
+    context.per_environment = true;
+    let environment = context.environments.get_mut("remote").unwrap();
+    environment.network_access = Some(NetworkAccess::Enabled);
+    environment.filesystem = Some(
+        FileSystemContext::from_permission_profile(
+            &PermissionProfile::Disabled,
+            &[PathUri::parse("file:///D:/workspace").expect("Windows workspace root URI")],
+        )
+        .render(),
+    );
 
     assert_eq!(
         context.render().expect_text(),
         r#"<environment_context>
-  <cwd>C:\windows</cwd>
-  <shell>powershell</shell>
-  <filesystem><workspace_roots><root>D:\workspace</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+  <environments>
+    <environment id="remote">
+      <cwd>C:\windows</cwd>
+      <shell>powershell</shell>
+      <network access="enabled" />
+      <filesystem><workspace_roots><root>D:\workspace</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+    </environment>
+  </environments>
 </environment_context>"#
     );
 }
