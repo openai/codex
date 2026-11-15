@@ -1,0 +1,24 @@
+---
+schema: tempest-risk-guidance/v2
+required_inspection_paths:
+- codex-rs/tui/styles.md
+---
+
+# Purpose
+
+Review changes to the Codex terminal UI, including rendering, input handling,
+and its interaction with the app server.
+
+# Risk Posture
+
+## Eligible for automatic approval
+
+- Local rendering or copy fixes with focused snapshots that show the intended
+  change and preserve input behavior.
+
+## Request human approval
+
+- Changes to submission, cancellation, paste, or focus that alter which actions
+  a user can take or what gets sent to the app server.
+- Changes to thread or turn state that depend on notification ordering,
+  reconnect behavior, or compatibility with older app servers.
