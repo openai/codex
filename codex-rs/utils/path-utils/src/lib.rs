@@ -3,6 +3,8 @@
 pub(crate) mod env;
 pub use env::is_wsl;
 mod system_commands;
+#[cfg(target_os = "linux")]
+pub use system_commands::linux_system_executable;
 pub use system_commands::system_executable;
 pub use system_commands::system_path;
 

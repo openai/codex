@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::write_command;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -7,6 +9,16 @@ use std::time::Instant;
 async fn installed_adapter_receives_compatible_command_and_never_copies_expired_work() {
     use std::os::unix::fs::PermissionsExt;
 
+    for (text, input) in [
+        ("Clipboard latency", Some("Clipboard latency")),
+        ("Bush hid the facts", Some("Bush hid the facts\0")),
+        ("é", None),
+        ("line\n", None),
+        ("nul\0", None),
+    ] {
+        assert_eq!(super::clip_input(text).as_deref(), input, "{text:?}");
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let executable = root.join("powershell.exe");
@@ -15,13 +27,36 @@ async fn installed_adapter_receives_compatible_command_and_never_copies_expired_
         r#"#!/bin/sh
 [ "$#" -eq 3 ] && [ "$1" = '-NoProfile' ] && [ "$2" = '-Command' ] || exit 46
 [ "$3" = "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; \$ErrorActionPreference = 'Stop'; \$text = [Console]::In.ReadToEnd(); Set-Clipboard -Value \$text" ] || exit 47
-/bin/cat > "$COPY_OUTPUT"
+/bin/cat > "${0%/*}/clipboard"
 "#,
     ).unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
     let output = root.join("clipboard");
-    let mut command = super::command(&executable, root.as_os_str());
-    command.env("COPY_OUTPUT", &output);
+    let command = super::command(&executable, root.as_os_str());
+    // With both writers present, ASCII must go through the installed adapter.
+    super::copy_with_writers(
+        "one line",
+        Instant::now() + Duration::from_secs(/*secs*/ 5),
+        root.as_os_str(),
+        Some(&executable),
+        Some(std::path::Path::new("/usr/bin/true")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "one line");
+    let error = super::copy_with_writers(
+        "one line",
+        Instant::now(),
+        root.as_os_str(),
+        /*adapter*/ None,
+        Some(std::path::Path::new("/usr/bin/true")),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.contains("clip.exe") && error.contains("clipboard setup timed out"),
+        "{error}"
+    );
     let text = " café 🦀\r\n\t".repeat(/*n*/ 32_768);
     let status = write_command(
         command,
@@ -32,8 +67,7 @@ async fn installed_adapter_receives_compatible_command_and_never_copies_expired_
     .unwrap();
     assert!(status.success(), "{status}");
     assert_eq!(std::fs::read_to_string(&output).unwrap(), text);
-    let mut command = super::command(&executable, root.as_os_str());
-    command.env("COPY_OUTPUT", &output);
+    let command = super::command(&executable, root.as_os_str());
     assert_eq!(
         write_command(command, "late", Instant::now()).await,
         Err("Windows clipboard writer timed out".into())

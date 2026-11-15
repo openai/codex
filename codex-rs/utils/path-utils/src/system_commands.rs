@@ -12,12 +12,18 @@ use std::path::PathBuf;
 
 /// Finds an installed helper without consulting PATH, PATHEXT, or the working directory.
 pub fn system_executable(name: &str) -> Option<PathBuf> {
-    executable_in_directories(name, &system_directories())
+    executable_in_directories(name, &system_directories(ExecutableScope::All))
+}
+
+/// Finds a trusted Linux installation without probing WSL's Windows executable directories.
+#[cfg(target_os = "linux")]
+pub fn linux_system_executable(name: &str) -> Option<PathBuf> {
+    executable_in_directories(name, &system_directories(ExecutableScope::Linux))
 }
 
 /// Child-process PATH for automatic helpers, not for user-requested tools.
 pub fn system_path() -> std::io::Result<OsString> {
-    let directories = system_directories();
+    let directories = system_directories(ExecutableScope::All);
     if directories.is_empty() {
         return Err(std::io::Error::other("no trusted executable directories"));
     }
@@ -72,7 +78,15 @@ fn installation_roots() -> Vec<PathBuf> {
     .collect()
 }
 
-fn system_directories() -> Vec<PathBuf> {
+enum ExecutableScope {
+    All,
+    #[cfg(target_os = "linux")]
+    Linux,
+}
+
+fn system_directories(scope: ExecutableScope) -> Vec<PathBuf> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = scope;
     #[cfg(unix)]
     let directories = [
         "/opt/homebrew/bin",
@@ -91,7 +105,7 @@ fn system_directories() -> Vec<PathBuf> {
     .map(PathBuf::from);
     #[cfg(target_os = "linux")]
     let directories = directories.chain(
-        crate::is_wsl()
+        (matches!(scope, ExecutableScope::All) && crate::is_wsl())
             .then_some([
                 PathBuf::from("/mnt/c/Windows/System32"),
                 PathBuf::from("/mnt/c/Windows/System32/WindowsPowerShell/v1.0"),

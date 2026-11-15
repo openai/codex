@@ -1,57 +1,151 @@
 //! WSL text copies with Windows interop use the Windows clipboard without contacting the display.
+//! Use the lightweight Windows clip writer for single-line ASCII; PowerShell preserves other text.
 //! Bound discovery, input, and exit; give fallback native setup its own short deadline.
 //! Never release the worker while a writer can still run.
 
-#[cfg(target_os = "linux")]
-use std::ffi::OsString;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 use std::sync::Mutex;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 use std::sync::mpsc;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 use std::time::Instant;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 type Pending<T> = Mutex<Option<mpsc::Receiver<Result<T, String>>>>;
 
 #[cfg(target_os = "linux")]
 pub(super) fn copy(text: &str, deadline: Instant) -> Result<(), String> {
-    static DISCOVERY: Pending<(PathBuf, OsString)> = Mutex::new(None);
-    let (executable, path) = read_only_setup(&DISCOVERY, deadline, || {
-        let executable = codex_utils_path::system_executable("powershell.exe")
-            .ok_or("PowerShell is unavailable in the system PATH")?;
+    static SETUP: Pending<(std::ffi::OsString, Option<PathBuf>)> = Mutex::new(None);
+    static CLIP: Pending<Option<PathBuf>> = Mutex::new(None);
+    let (path, adapter) = read_only_setup(&SETUP, deadline, || {
         let path = codex_utils_path::system_path()
             .map_err(|error| format!("failed to resolve system PATH: {error}"))?;
-        Ok((executable, path))
+        // An installed Linux adapter takes precedence over both Windows writers. Avoid
+        // looking up the built-in PowerShell until clip.exe actually needs a fallback.
+        let adapter = codex_utils_path::linux_system_executable("powershell.exe");
+        Ok((path, adapter))
     })?;
-    let status = tokio::runtime::Builder::new_current_thread()
+    let clip = (adapter.is_none() && clip_input(text).is_some())
+        .then(|| {
+            read_only_setup(
+                &CLIP,
+                deadline.min(Instant::now() + std::time::Duration::from_millis(/*millis*/ 200)),
+                || Ok(codex_utils_path::system_executable("clip.exe")),
+            )
+            .ok()
+            .flatten()
+        })
+        .flatten();
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|error| format!("could not start Windows clipboard writer: {error}"))?
-        .block_on(write_command(command(&executable, &path), text, deadline))?;
+        .map_err(|error| format!("could not start Windows clipboard writer: {error}"))?;
+    runtime.block_on(copy_with_writers(
+        text,
+        deadline,
+        &path,
+        adapter.as_deref(),
+        clip.as_deref(),
+    ))
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+async fn copy_with_writers(
+    text: &str,
+    deadline: Instant,
+    path: &std::ffi::OsStr,
+    adapter: Option<&std::path::Path>,
+    clip: Option<&std::path::Path>,
+) -> Result<(), String> {
+    static POWERSHELL: Pending<Option<PathBuf>> = Mutex::new(None);
+    if let Some(adapter) = adapter {
+        return write_writer(command(adapter, path), text, deadline, "powershell.exe").await;
+    }
+    let clip_error = if let Some(clip) = clip
+        && let Some(input) = clip_input(text)
+    {
+        match write_writer(
+            shell_command(clip, path),
+            &input,
+            deadline.min(Instant::now() + std::time::Duration::from_secs(/*secs*/ 1)),
+            "clip.exe",
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+    let fallback = async {
+        let powershell = read_only_setup(&POWERSHELL, deadline, || {
+            Ok(codex_utils_path::system_executable("powershell.exe"))
+        })?
+        .ok_or("PowerShell is unavailable in the system PATH")?;
+        write_writer(command(&powershell, path), text, deadline, "powershell.exe").await
+    }
+    .await;
+    fallback.map_err(|error| match clip_error {
+        Some(clip_error) => format!("{clip_error}; {error}"),
+        None => error,
+    })
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+async fn write_writer(
+    command: tokio::process::Command,
+    text: &str,
+    deadline: Instant,
+    name: &str,
+) -> Result<(), String> {
+    let status = write_command(command, text, deadline)
+        .await
+        .map_err(|error| format!("{name}: {error}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("powershell.exe exited with status {status}"))
+        Err(format!("{name} exited with status {status}"))
     }
 }
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
+fn clip_input(text: &str) -> Option<std::borrow::Cow<'_, str>> {
+    // clip.exe normalizes newlines and guesses UTF-16 for some even-length ASCII.
+    // An odd byte count forces OEM text; a trailing NUL does not enter the clipboard.
+    text.bytes()
+        .all(|byte| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t'))
+        .then(|| {
+            if text.len().is_multiple_of(2) {
+                std::borrow::Cow::Owned(format!("{text}\0"))
+            } else {
+                std::borrow::Cow::Borrowed(text)
+            }
+        })
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn command(executable: &std::path::Path, path: &std::ffi::OsStr) -> tokio::process::Command {
+    let mut command = shell_command(executable, path);
+    // Preserve the released PowerShell signature: trusted adapters may match it exactly.
+    command.args([
+        "-NoProfile",
+        "-Command",
+        "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
+    ]);
+    command
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn shell_command(executable: &std::path::Path, path: &std::ffi::OsStr) -> tokio::process::Command {
     // Spawn only the native shell here: directly spawning a Windows exe can block on WSL.
     let mut command = tokio::process::Command::new("/bin/sh");
     command
         .env("PATH", path)
         .args(["-c", r#"exec "$@""#, "codex-wsl-copy"])
-        .arg(executable)
-        // Preserve the released command signature: trusted adapters may match it exactly.
-        .args([
-            "-NoProfile",
-            "-Command",
-            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
-        ]);
+        .arg(executable);
     command
 }
 
@@ -72,7 +166,7 @@ pub(super) fn native_clipboard() -> Result<arboard::Clipboard, String> {
 
 // Discovery and WSLg setup may block forever. Keep at most one outstanding task of each
 // kind and reuse its result after a timeout. Neither task may capture text or write a clipboard.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn read_only_setup<T: Send + 'static>(
     pending: &Pending<T>,
     deadline: Instant,
@@ -127,7 +221,7 @@ async fn write_command(
         .stderr(Stdio::null())
         .kill_on_drop(/*kill_on_drop*/ true)
         .spawn()
-        .map_err(|error| format!("failed to spawn powershell.exe: {error}"))?;
+        .map_err(|error| format!("failed to spawn Windows clipboard writer: {error}"))?;
     // WSL process spawn itself may stall. Do not write after a late spawn.
     let result = tokio::time::timeout_at(deadline.into(), async {
         if Instant::now() >= deadline {
@@ -136,15 +230,15 @@ async fn write_command(
         child
             .stdin
             .as_mut()
-            .ok_or("failed to open powershell.exe stdin")?
+            .ok_or("failed to open Windows clipboard writer stdin")?
             .write_all(text.as_bytes())
             .await
-            .map_err(|error| format!("failed to write to powershell.exe: {error}"))?;
+            .map_err(|error| format!("failed to write to Windows clipboard writer: {error}"))?;
         drop(child.stdin.take());
         child
             .wait()
             .await
-            .map_err(|error| format!("failed to wait for powershell.exe: {error}"))
+            .map_err(|error| format!("failed to wait for Windows clipboard writer: {error}"))
     })
     .await
     .unwrap_or_else(|_| Err("Windows clipboard writer timed out".into()));
@@ -166,7 +260,7 @@ async fn write_command(
             child
                 .wait()
                 .await
-                .map_err(|error| format!("failed to reap powershell.exe: {error}"))?;
+                .map_err(|error| format!("failed to reap Windows clipboard writer: {error}"))?;
             Err(error)
         }
     }
