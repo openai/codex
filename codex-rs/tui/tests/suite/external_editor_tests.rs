@@ -4,6 +4,7 @@ use super::PtyCodex;
 use super::write_test_config;
 use anyhow::Result;
 use anyhow::ensure;
+use std::os::fd::AsRawFd;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -24,7 +25,13 @@ fn external_editors_keep_the_screen_and_return_the_draft() -> Result<()> {
             &editor,
             &format!(
                 "#!/bin/sh\n{editor_output}\n: > \"$0.ready\"\nIFS= read -r ignored\n\
-                 {exit_screen}\nprintf 'edited draft' > \"$1\"\n",
+                 {reset_mode}{exit_screen}\nprintf 'edited draft' > \"$1\"\n",
+                // Simulate an editor restoring canonical mode after suspend/resume.
+                reset_mode = if fullscreen {
+                    ""
+                } else {
+                    "stty sane || exit 1\n"
+                },
                 exit_screen = if editor_output.contains("1049h") {
                     "printf '\\033[?1049l'"
                 } else {
@@ -94,6 +101,12 @@ fn external_editors_keep_the_screen_and_return_the_draft() -> Result<()> {
 
         terminal.write_input(b"\n")?;
         terminal.wait_for_screen("edited draft")?;
+        let mut mode = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: the PTY master is open and mode points to writable termios storage.
+        ensure!(unsafe { libc::tcgetattr(terminal.master.as_raw_fd(), mode.as_mut_ptr()) } == 0);
+        // SAFETY: tcgetattr succeeded and initialized mode.
+        let mode = unsafe { mode.assume_init() };
+        ensure!(mode.c_lflag & (libc::ICANON | libc::ECHO) == 0);
         ensure!(terminal.parser.screen().alternate_screen() == fullscreen);
         terminal.write_input(b"!")?;
         terminal.wait_for_screen("edited draft!")?;

@@ -1081,6 +1081,12 @@ impl Tui {
         if let Err(err) = terminal_stderr::resume() {
             tracing::warn!("failed to suppress terminal stderr after external program: {err}");
         }
+        // An editor's suspend/resume cycle can change termios behind crossterm's raw-mode cache.
+        // Clear that cache so set_modes actually restores raw mode.
+        #[cfg(unix)]
+        if let Err(err) = disable_raw_mode() {
+            tracing::warn!("failed to reset raw mode after external program: {err}");
+        }
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
