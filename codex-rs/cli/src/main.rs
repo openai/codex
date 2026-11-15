@@ -1198,11 +1198,16 @@ async fn dispatch_cli(
                 .await??;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "exec",
-            )?;
+            if let Some(root_endpoint) = &root_remote
+                && let Some(exec_endpoint) = &exec_cli.remote
+                && root_endpoint != exec_endpoint
+            {
+                anyhow::bail!("`codex exec` received conflicting remote server endpoints");
+            }
+            exec_cli.remote = exec_cli.remote.or(root_remote);
+            exec_cli.remote_auth_token_env = exec_cli
+                .remote_auth_token_env
+                .or(root_remote_auth_token_env);
             exec_cli
                 .shared
                 .inherit_exec_root_options(&interactive.shared);

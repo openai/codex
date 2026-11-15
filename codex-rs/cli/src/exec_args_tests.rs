@@ -11,6 +11,17 @@ fn exec_help_documents_cyber_access_program() {
         .try_get_matches_from(["codex", "exec", "--help"])
         .expect_err("help should short-circuit");
     assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+    let remote_help = help
+        .to_string()
+        .lines()
+        .skip_while(|line| !line.contains("--remote <ADDR>"))
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(remote_help.trim(), @r"
+    --remote <ADDR>
+              Connect to an existing app server
+    ");
     let program_help = help
         .to_string()
         .lines()

@@ -227,6 +227,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         eprintln!("{}\n{}", "user".style(self.cyan), prompt);
     }
 
+    fn print_thread_started(&mut self, thread_id: &str) {
+        eprintln!("thread id: {thread_id}");
+    }
+
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
         match notification {
             ServerNotification::ConfigWarning(notification) => {

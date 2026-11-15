@@ -11,6 +11,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
+mod remote;
 mod worktree;
 
 pub use cli::Cli;
@@ -272,6 +273,12 @@ fn exec_stderr_env_filter() -> EnvFilter {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    if let Some(endpoint) = codex_app_server_client::resolve_remote_endpoint(
+        cli.remote.clone(),
+        cli.remote_auth_token_env.clone(),
+    )? {
+        return remote::run(cli, endpoint).await;
+    }
     if cli.trust && cli.ignore_user_config {
         anyhow::bail!(
             "--trust cannot be combined with --ignore-user-config: saved project trust decisions must be checked"
@@ -283,6 +290,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         mut command,
+        remote: _,
+        remote_auth_token_env: _,
         strict_config,
         shared,
         thread_source,
@@ -1450,6 +1459,9 @@ async fn finish_turn(
         };
 
         let Some(server_event) = server_event else {
+            if matches!(client, AppServerClient::Remote(_)) {
+                anyhow::bail!("app-server disconnected before turn completion");
+            }
             break;
         };
 

@@ -303,7 +303,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
         .respond_with(responses::sse_response(
             create_final_assistant_message_sse_response("queued message consumed")?,
         ))
-        .expect(2)
+        .expect(4)
         .mount_as_scoped(&model)
         .await;
     MockResponsesConfig::new(&model.uri())
@@ -416,6 +416,60 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     );
     let metadata: Value = serde_json::from_str(request.headers["x-codex-turn-metadata"].to_str()?)?;
     assert_eq!(metadata["turn_trigger"], "queue");
+
+    let exec_home = TempDir::new()?;
+    for args in [
+        vec!["exec", "--remote", &endpoint, "--json", "new task"],
+        vec![
+            "exec",
+            "resume",
+            "--remote",
+            &endpoint,
+            &thread_id,
+            "continue task",
+        ],
+    ] {
+        let output = Command::new(&codex)
+            .env("CODEX_HOME", exec_home.path())
+            .env_remove("CODEX_QUEUE_SERVER_API_KEY")
+            .current_dir(exec_home.path())
+            .args(args)
+            .output()
+            .await?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains("queued message consumed"));
+        if stdout.starts_with('{') {
+            let events = stdout
+                .lines()
+                .map(serde_json::from_str::<Value>)
+                .collect::<serde_json::Result<Vec<_>>>()?;
+            assert_ne!(events[0]["thread_id"], thread_id);
+            assert!(events.iter().any(|event| event["type"] == "turn.completed"));
+        } else {
+            let stderr = String::from_utf8(output.stderr)?;
+            let header = stderr
+                .lines()
+                .find(|line| line.starts_with("thread id: "))
+                .context("missing remote exec header")?
+                .replace(&thread_id, "[thread-id]");
+            insta::assert_snapshot!(header, @"thread id: [thread-id]");
+        }
+    }
+    let shared: ThreadReadResponse = app
+        .request_typed(ClientRequest::ThreadRead {
+            request_id: RequestId::Integer(20),
+            params: ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            },
+        })
+        .await?;
+    assert_eq!(shared.thread.turns.len(), 2);
 
     let name = "remote-session-lifecycle";
     let _: ThreadSetNameResponse = app
@@ -541,7 +595,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             .await?;
             let requests = model_requests.received_requests().await;
             assert!(
-                requests[1].body_json::<Value>()?["input"]
+                requests[3].body_json::<Value>()?["input"]
                     .to_string()
                     .contains(cold_message)
             );
@@ -574,6 +628,26 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             .await
             .context("resumed queued turn did not finish before deletion")??;
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn remote_exec_rejects_conflicting_endpoints() -> Result<()> {
+    for command in [vec!["exec"], vec!["exec", "resume"]] {
+        let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+            .env_remove("CODEX_TEST_REMOTE_TOKEN")
+            .args([
+                "--remote",
+                "wss://a.example:443",
+                "--remote-auth-token-env",
+                "CODEX_TEST_REMOTE_TOKEN",
+            ])
+            .args(command)
+            .args(["--remote", "wss://b.example:443"])
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8(output.stderr)?.contains("conflicting remote server endpoints"));
     }
     Ok(())
 }

@@ -21,6 +21,8 @@ pub(crate) trait EventProcessor {
         session_configured: &SessionConfiguredEvent,
     );
 
+    fn print_thread_started(&mut self, thread_id: &str);
+
     /// Handle a single typed app-server notification emitted by the agent.
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus;
 

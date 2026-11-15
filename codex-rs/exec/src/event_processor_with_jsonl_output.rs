@@ -615,6 +615,12 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         self.emit(Self::thread_started_event(session_configured));
     }
 
+    fn print_thread_started(&mut self, thread_id: &str) {
+        self.emit(ThreadEvent::ThreadStarted(ThreadStartedEvent {
+            thread_id: thread_id.to_owned(),
+        }));
+    }
+
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
         let collected = self.collect_thread_events(notification);
         for event in collected.events {
