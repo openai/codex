@@ -44,7 +44,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
-        config: &Config,
+        config: Option<&Config>,
         last_message_path: Option<PathBuf>,
     ) -> Self {
         let style = |styled: Style, plain: Style| if with_ansi { styled } else { plain };
@@ -57,8 +57,8 @@ impl EventProcessorWithHumanOutput {
             magenta: style(Style::new().magenta(), Style::new()),
             red: style(Style::new().red(), Style::new()),
             yellow: style(Style::new().yellow(), Style::new()),
-            show_agent_reasoning: !config.hide_agent_reasoning,
-            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            show_agent_reasoning: config.is_none_or(|config| !config.hide_agent_reasoning),
+            show_raw_agent_reasoning: config.is_some_and(|config| config.show_raw_agent_reasoning),
             last_message_path,
             final_message: None,
             final_message_rendered: false,

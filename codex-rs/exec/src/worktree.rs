@@ -54,6 +54,7 @@ pub(super) async fn fork_source(
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
     .await?;
+    let client = AppServerClient::InProcess(client);
     let result = async {
         let lookup = crate::cli::ResumeArgs {
             session_id: Some(args.session_id.clone()),

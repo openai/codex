@@ -1,7 +1,7 @@
 //! Resolve the cyber treatment for an exec turn from the connected server's catalog.
 
 use crate::RequestIdSequencer;
-use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CyberAccessProgram;
@@ -16,7 +16,7 @@ use codex_protocol::openai_models::ModelAccessPrograms;
 
 pub(crate) async fn program_for_turn(
     features: &Features,
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
     model: &str,
     provider_id: &str,
@@ -94,7 +94,7 @@ pub(crate) async fn program_for_turn(
 }
 
 async fn read_account(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
 ) -> anyhow::Result<Option<Account>> {
     let account = client
