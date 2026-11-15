@@ -1,0 +1,9 @@
+---
+source: tui/src/app/tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 80)"
+---
+  Edit goal
+
+› Use hello
+
+  enter submit · esc back

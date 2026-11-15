@@ -1,4 +1,4 @@
-//! Materializes oversized TUI goal objectives, pastes, and images as app-server-host files.
+//! Expands pasted goal text and materializes oversized objectives and images as app-server-host files.
 
 use std::fs;
 use std::path::Path;
@@ -37,20 +37,13 @@ pub(crate) async fn materialize_goal_draft(
     codex_home: Option<&GoalFilePath>,
     draft: GoalDraft,
 ) -> Result<(String, Option<GoalFilePath>)> {
-    let mut objective = draft.objective;
+    let (mut objective, text_elements) = ChatComposer::expand_pending_pastes(
+        &draft.objective,
+        draft.text_elements,
+        &draft.pending_pastes,
+    );
     if objective.trim().is_empty() {
         bail!("Goal objective must not be empty.");
-    }
-    let text_elements = draft.text_elements;
-    if !draft.pending_pastes.is_empty() {
-        let (expanded_objective, _) = ChatComposer::expand_pending_pastes(
-            &objective,
-            text_elements.clone(),
-            &draft.pending_pastes,
-        );
-        if expanded_objective.trim().is_empty() {
-            bail!("Goal objective must not be empty.");
-        }
     }
 
     let mut active_placeholders = text_elements
@@ -60,25 +53,6 @@ pub(crate) async fn materialize_goal_draft(
         .collect::<Vec<_>>();
     let mut output_dir = None;
     let mut replacements = Vec::new();
-    for (placeholder, text) in draft.pending_pastes.iter() {
-        let Some(active_idx) = active_placeholders
-            .iter()
-            .position(|active| *active == placeholder.as_str())
-        else {
-            continue;
-        };
-        active_placeholders.swap_remove(active_idx);
-        let path = ensure_goal_output_dir(app_server, codex_home, &mut output_dir)
-            .await?
-            .join(format!("pasted-text-{}.txt", replacements.len() + 1));
-        write_attachment(app_server, path.clone(), text.as_bytes().to_vec()).await?;
-
-        replacements.push((
-            placeholder.clone(),
-            format!("pasted text file: {path}. Read this file before continuing."),
-        ));
-    }
-
     let mut image_lines = Vec::new();
     for (idx, image) in draft.local_images.iter().enumerate() {
         if !image.placeholder.is_empty() {
