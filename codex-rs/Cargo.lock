@@ -2221,10 +2221,12 @@ dependencies = [
 name = "codex-app-server-client"
 version = "0.0.0"
 dependencies = [
+ "codex-api",
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-app-server-transport",
  "codex-arg0",
+ "codex-backend-client",
  "codex-cloud-client",
  "codex-config",
  "codex-core",
@@ -2232,6 +2234,7 @@ dependencies = [
  "codex-feedback",
  "codex-http-client",
  "codex-login",
+ "codex-model-provider",
  "codex-protocol",
  "codex-uds",
  "codex-utils-absolute-path",

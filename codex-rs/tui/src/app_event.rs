@@ -449,11 +449,11 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
         result: Result<String, String>,
     },
-    /// Route a hidden title request to its automatic rename or editable prompt.
+    /// Finish title generation and deliver an editable suggestion when requested.
     GeneratedThreadTitle {
         cancellation: CancellationToken,
         thread_id: ThreadId,
-        temporary_thread_id: ThreadId,
+        temporary_thread_id: Option<ThreadId>,
         destination: ThreadTitleDestination,
         result: Result<String, String>,
     },

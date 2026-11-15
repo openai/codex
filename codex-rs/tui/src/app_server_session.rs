@@ -439,21 +439,45 @@ pub(crate) struct AutomaticThreadName {
 
 impl AutomaticThreadName {
     pub(crate) async fn save(mut self, title: String, cancellation: &CancellationToken) {
-        let read = self
-            .session
-            .thread_read(self.thread_id, /*include_turns*/ false);
-        let Some(Ok(thread)) = cancellation.run_until_cancelled(read).await else {
+        let read = async {
+            if let AppServerRequestHandle::Cloud(handle) = &self.session.request_handle
+                && let Some(result) = handle
+                    .read_native_thread_name(&self.thread_id.to_string())
+                    .await
+            {
+                return Ok(result?);
+            }
+            let thread = self
+                .session
+                .thread_read(self.thread_id, /*include_turns*/ false)
+                .await?;
+            Ok::<_, color_eyre::Report>(thread.name)
+        };
+        let Some(Ok(saved_name)) = cancellation.run_until_cancelled(read).await else {
             return;
         };
-        if thread.name != self.expected_name {
+        if saved_name != self.expected_name {
             return;
         }
         let Ok(_permit) = self.gate.acquire().await else {
             return;
         };
-        if !cancellation.is_cancelled()
-            && let Err(error) = self.session.thread_set_name(self.thread_id, title).await
+        if cancellation.is_cancelled() {
+            return;
+        }
+        let result = if let AppServerRequestHandle::Cloud(handle) = &self.session.request_handle
+            && let Some(result) = handle
+                .save_native_thread_name(ThreadSetNameParams {
+                    thread_id: self.thread_id.to_string(),
+                    name: title.clone(),
+                })
+                .await
         {
+            result
+        } else {
+            self.session.thread_set_name(self.thread_id, title).await
+        };
+        if let Err(error) = result {
             tracing::debug!(%error, "failed to apply generated thread title");
         }
     }
@@ -1989,6 +2013,12 @@ impl AppServerSession {
     ) -> Result<()> {
         let gate = self.automatic_name_writes.get(&thread_id).cloned();
         let _permit = match &gate {
+            // The UI awaits manual renames. Never hold it up behind a native Cloud RPC.
+            Some(gate) if matches!(&self.request_handle, AppServerRequestHandle::Cloud(_)) => {
+                Some(gate.try_acquire().wrap_err(
+                    "An automatic title is still being saved. Try renaming the thread again.",
+                )?)
+            }
             Some(gate) => Some(gate.acquire().await?),
             None => None,
         };

@@ -1,5 +1,6 @@
 //! Opens the internal Cloud preview with the selected ChatGPT credentials and local transport policy.
 
+use super::CloudTitleClient;
 use super::start_worker;
 use crate::AppServerClient;
 use crate::legacy_core::config::Config;
@@ -39,6 +40,13 @@ pub async fn connect(config: &Config) -> Result<AppServerClient> {
     let permit = factory.network_policy().acquire(&origin)?;
     let credentials = cloud::Credentials::new(&token, &account_id)?;
     let client = cloud::Client::new(&factory, ORIGIN, credentials)?;
+    let title_client = CloudTitleClient::new(
+        factory,
+        &auth,
+        account_id.clone(),
+        config.chatgpt_backend_url(),
+    )
+    .ok();
     Ok(start_worker(
         client,
         super::idle::Login {
@@ -58,5 +66,6 @@ pub async fn connect(config: &Config) -> Result<AppServerClient> {
             requires_openai_auth: true,
             workspace_routing: None,
         },
+        title_client,
     ))
 }

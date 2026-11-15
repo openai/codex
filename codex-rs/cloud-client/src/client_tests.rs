@@ -160,6 +160,25 @@ async fn rename_sends_the_thread_and_title_and_requires_acknowledgment() {
 }
 
 #[tokio::test]
+async fn reads_a_saved_name_without_attaching_to_the_thread() {
+    let mut fixture = fixture_responses(vec![
+        response(
+            vec![frame(b"\x0a\x09\x72\x01t\x8a\x01\x03New")],
+            tonic::Status::ok(""),
+        ),
+        response(vec![frame(b"\x0a\x03\x72\x01u")], tonic::Status::ok("")),
+    ])
+    .await;
+    assert_eq!(
+        fixture.client.read_thread_name("t").await.unwrap(),
+        Some("New".to_string())
+    );
+    assert_request(&mut fixture, "ReadThread", b"\x0a\x01t").await;
+    assert_eq!(fixture.client.read_thread_name("u").await.unwrap(), None);
+    assert_request(&mut fixture, "ReadThread", b"\x0a\x01u").await;
+}
+
+#[tokio::test]
 async fn activation_preserves_native_settings_and_thread_metadata() {
     // Native Thread fields encoded independently of the client's wire types.
     let thread_base: &[u8] = &[

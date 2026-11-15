@@ -93,27 +93,89 @@ fn bounds_the_entire_title_prompt_for_dense_unicode() {
 }
 
 #[tokio::test]
-async fn cloud_conversations_skip_tui_generated_titles() {
+async fn cloud_conversations_save_the_first_message_if_generation_is_unavailable()
+-> color_eyre::Result<()> {
+    use codex_app_server_client::CloudOperation;
+    use codex_app_server_protocol::ClientRequest;
+
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
     let (client, mut commands, _server_events) =
         codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
-    let app_server = crate::app_server_session::AppServerSession::new(
+    let mut app_server = crate::app_server_session::AppServerSession::new(
         crate::backend_id::BackendId::new(),
         codex_app_server_client::AppServerClient::Cloud(client),
         crate::app_server_session::ThreadParamsMode::Cloud,
     );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let (tx, mut events) = unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget
+        .handle_thread_session(crate::app::tests::test_thread_session(
+            thread_id,
+            app.config.cwd.to_path_buf(),
+        ));
+    app.chat_widget
+        .setup_terminal_title(vec![crate::bottom_pane::TerminalTitleItem::ThreadName]);
 
-    app.generate_thread_title(
-        &app_server,
-        thread_id,
-        ThreadTitleDestination::Automatic,
-        "Fix the login timeout",
-        /*expected_name*/ None,
+    app.handle_active_thread_event(
+        &mut tui,
+        &mut app_server,
+        ThreadBufferedEvent::Notification(Box::new(ServerNotification::ItemCompleted(
+            ItemCompletedNotification::new(
+                thread_id.to_string(),
+                "first-turn".to_string(),
+                title_user_message("first-message", "Fix the **login** timeout"),
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
+        ))),
+    )
+    .await?;
+    insta::assert_snapshot!(
+        app.chat_widget.last_terminal_title.as_deref().unwrap_or_default(),
+        @"Fix the login timeout"
     );
+    let read = commands.recv().await.expect("read the saved Cloud title");
+    assert!(matches!(
+        read.operation,
+        CloudOperation::Request(request)
+            if matches!(request.as_ref(), ClientRequest::ThreadRead { params, .. }
+                if params.thread_id == thread_id.to_string() && !params.include_turns)
+    ));
+    let mut thread = crate::app::agents_overview::tests::overview_thread(
+        thread_id,
+        /*parent_thread_id*/ None,
+        "",
+        codex_app_server_protocol::ThreadStatus::Idle,
+    );
+    thread.name = None;
+    read.response
+        .send(Ok(Ok(serde_json::json!({"thread": thread}))))
+        .unwrap();
+    let rename = commands.recv().await.expect("save the Cloud title");
+    assert!(matches!(
+        rename.operation,
+        CloudOperation::Request(request)
+            if matches!(request.as_ref(), ClientRequest::ThreadSetName { params, .. }
+                if params.thread_id == thread_id.to_string() && params.name == "Fix the login timeout")
+    ));
+    app.cloud_title_shutdown.send(()).unwrap();
+    assert!(app.cloud_title_shutdown.closed().now_or_never().is_none());
+    rename.response.send(Ok(Ok(serde_json::json!({})))).unwrap();
+    app.cloud_title_shutdown.closed().await;
+    loop {
+        let event = events.recv().await.expect("title generation completes");
+        if matches!(&event, AppEvent::GeneratedThreadTitle { .. }) {
+            app.handle_event(&mut tui, &mut app_server, event).await?;
+            break;
+        }
+    }
 
     assert!(app.pending_thread_titles.is_empty());
     assert!(commands.try_recv().is_err());
+    Ok(())
 }
 
 #[tokio::test]
@@ -178,7 +240,7 @@ async fn automatic_thread_title_respects_origin_metadata_after_switching() -> co
             AppEvent::GeneratedThreadTitle {
                 cancellation: CancellationToken::new(),
                 thread_id,
-                temporary_thread_id: codex_protocol::ThreadId::new(),
+                temporary_thread_id: Some(ThreadId::new()),
                 destination: ThreadTitleDestination::Automatic,
                 result: Ok(r#"{"title":"Generated title"}"#.to_string()),
             },
@@ -581,7 +643,7 @@ async fn canceled_thread_title_ignores_late_start_and_completion() -> color_eyre
         AppEvent::GeneratedThreadTitle {
             cancellation,
             thread_id,
-            temporary_thread_id,
+            temporary_thread_id: Some(temporary_thread_id),
             destination,
             result: Ok(r#"{"title":"Late automatic title"}"#.to_string()),
         },
@@ -604,7 +666,8 @@ async fn canceled_thread_title_ignores_late_start_and_completion() -> color_eyre
 }
 
 #[tokio::test]
-async fn manual_rename_waits_for_an_in_flight_automatic_write() -> color_eyre::Result<()> {
+async fn cloud_manual_rename_can_retry_after_an_in_flight_automatic_write() -> color_eyre::Result<()>
+{
     let thread_id = ThreadId::new();
     let (client, mut requests, _events) =
         codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
@@ -632,8 +695,15 @@ async fn manual_rename_waits_for_an_in_flight_automatic_write() -> color_eyre::R
     assert!(automatic.as_mut().now_or_never().is_none());
     let write = requests.try_recv()?;
 
-    let mut manual = std::pin::pin!(session.thread_set_name(thread_id, "Manual".into()));
-    assert!(manual.as_mut().now_or_never().is_none());
+    let error = session
+        .thread_set_name(thread_id, "Manual".into())
+        .now_or_never()
+        .expect("a pending automatic Cloud write must not block the UI")
+        .expect_err("manual rename must report that the write is still in flight");
+    assert_eq!(
+        error.to_string(),
+        "An automatic title is still being saved. Try renaming the thread again."
+    );
     assert!(
         requests.try_recv().is_err(),
         "manual rename raced the automatic write"
@@ -648,6 +718,8 @@ async fn manual_rename_waits_for_an_in_flight_automatic_write() -> color_eyre::R
     automatic
         .now_or_never()
         .expect("automatic write acknowledged");
+
+    let mut manual = std::pin::pin!(session.thread_set_name(thread_id, "Manual".into()));
     assert!(manual.as_mut().now_or_never().is_none());
     acknowledge(requests.try_recv()?);
     manual.await?;
@@ -955,7 +1027,7 @@ async fn failed_thread_title_requests_are_removed() -> color_eyre::Result<()> {
         AppEvent::GeneratedThreadTitle {
             cancellation: CancellationToken::new(),
             thread_id,
-            temporary_thread_id: codex_protocol::ThreadId::new(),
+            temporary_thread_id: Some(ThreadId::new()),
             destination: ThreadTitleDestination::Automatic,
             result: Err("generation failed".to_string()),
         },

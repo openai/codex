@@ -877,7 +877,11 @@ impl App {
             }
             AppCommand::SetThreadName { name } => {
                 let name = name.to_string();
-                app_server.thread_set_name(thread_id, name.clone()).await?;
+                if let Err(error) = app_server.thread_set_name(thread_id, name.clone()).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to rename thread: {error}"));
+                    return Ok(true);
+                }
                 self.chat_widget.display_thread_name(thread_id, name);
                 self.cancel_thread_title_generation(thread_id);
                 Ok(true)

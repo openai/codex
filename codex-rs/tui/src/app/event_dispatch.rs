@@ -3431,8 +3431,9 @@ impl App {
                 destination,
                 result,
             } => {
-                self.temporary_structured_requests
-                    .remove(&temporary_thread_id);
+                if let Some(temporary_thread_id) = temporary_thread_id {
+                    self.temporary_structured_requests.remove(&temporary_thread_id);
+                }
 
                 if cancellation.is_cancelled() {
                     return Ok(AppRunControl::Continue);

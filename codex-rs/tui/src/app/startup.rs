@@ -1067,6 +1067,7 @@ See the Codex keymap documentation for supported actions and examples."
             background_voice: None,
             background_voice_error: None,
             temporary_structured_requests: HashMap::new(),
+            cloud_title_shutdown: Default::default(),
             pending_thread_titles: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -1805,6 +1806,18 @@ See the Codex keymap documentation for supported actions and examples."
         };
         // Let the pending terminal poll unwind while the app server shuts down.
         tui.pause_events();
+        // Skip pending inference on exit. Give the fallback writes a bounded chance
+        // to finish before closing the connections they use.
+        if app.cloud_title_shutdown.send(()).is_ok()
+            && tokio::time::timeout(Duration::from_secs(3), app.cloud_title_shutdown.closed())
+                .await
+                .is_err()
+        {
+            tracing::debug!("timed out saving pending Cloud titles during shutdown");
+        }
+        for cancellation in app.pending_thread_titles.values() {
+            cancellation.cancel();
+        }
         app.chat_widget.mention_usage_mut().flush().await;
         if let Err(err) = backends.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");

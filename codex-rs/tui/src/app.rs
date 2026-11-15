@@ -669,6 +669,8 @@ pub(crate) struct App {
         ),
     >,
     /// Track title generation across thread switches and deduplicate automatic requests.
+    /// Each pending Cloud title holds a receiver until its name has been saved.
+    cloud_title_shutdown: tokio::sync::watch::Sender<()>,
     pending_thread_titles: HashMap<(ThreadId, ThreadTitleDestination), CancellationToken>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,

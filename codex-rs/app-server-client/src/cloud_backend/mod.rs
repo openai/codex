@@ -6,6 +6,7 @@ mod auth;
 mod events;
 mod idle;
 mod requests;
+mod thread_title;
 
 use crate::AppServerClient;
 use crate::AppServerEvent;
@@ -27,6 +28,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 pub use auth::connect;
+pub(super) use thread_title::CloudTitleClient;
 
 type ReplyStream = BoxStream<'static, Result<cloud::Event, cloud::Error>>;
 type OpenReplyStream = (ReplyStream, Option<cloud::Event>);
@@ -291,9 +293,10 @@ fn start_worker(
     client: cloud::Client,
     login: idle::Login,
     account: protocol::GetAccountResponse,
+    title_client: Option<CloudTitleClient>,
 ) -> AppServerClient {
     let (app_client, commands, output) =
-        CloudClient::channel_with_catalog(/*capacity*/ 32, Some(client.clone()));
+        CloudClient::channel_with_native(/*capacity*/ 32, Some(client.clone()), title_client);
     let client = Arc::new(client);
     let mut requests = requests::Requests {
         client: Arc::clone(&client),
@@ -385,6 +388,11 @@ async fn run_worker_with_prepared(
             CloudOperation::Shutdown => {
                 let _ = command.response.send(Ok(Ok(Value::Null)));
                 return;
+            }
+            CloudOperation::ThreadNameSaved(params) => {
+                requests.thread_name_saved(params, output);
+                let _ = command.response.send(Ok(Ok(Value::Null)));
+                continue;
             }
             CloudOperation::Request(request) => {
                 Ok((*request, cloud::SubmissionMode::StartIfIdle, None))

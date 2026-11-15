@@ -298,6 +298,24 @@ impl Client {
         Ok(())
     }
 
+    /// Reads the saved name without opening or replacing an attachment.
+    pub async fn read_thread_name(&self, thread_id: &str) -> Result<Option<String>, Error> {
+        let payload = self
+            .raw_unary(
+                wire::ThreadIdRequest {
+                    thread_id: thread_id.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/ReadThread",
+            )
+            .await?;
+        let thread = wire::ReadThreadResponse::decode(payload)
+            .map_err(|_| Error::InvalidResponse)?
+            .thread
+            .filter(|thread| thread.id.as_deref() == Some(thread_id))
+            .ok_or(Error::InvalidResponse)?;
+        Ok(thread.name)
+    }
+
     /// Saves a conversation name without opening an attachment.
     pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<(), MutationError> {
         if thread_id.trim().is_empty() || name.trim().is_empty() {
