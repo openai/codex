@@ -162,7 +162,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         turns: &[Turn],
-        hidden_item_ids: &HashSet<&str>,
+        hidden_item_ids: &HashSet<(&str, &str)>,
         thread_id: ThreadId,
         cwd: &AbsolutePathBuf,
         visibility: RawReasoningVisibility,
@@ -172,38 +172,35 @@ impl App {
         }
         let user_items = turns
             .iter()
-            .flat_map(Turn::item_payloads)
-            .filter(|item| matches!(item, ThreadItemPayload::UserMessage { .. }))
-            .map(|item| (item.id().to_string(), item.clone()))
+            .flat_map(|turn| {
+                turn.item_payloads()
+                    .map(move |item| (turn.id.as_str(), item))
+            })
+            .filter(|(_, item)| matches!(item, ThreadItemPayload::UserMessage { .. }))
+            .map(|(turn_id, item)| (hidden_item_ids.contains(&(turn_id, item.id())), item))
             .collect::<Vec<_>>();
         let projected_user_cells = thread_items_to_transcript_cells(
             Some(thread_id),
             cwd,
-            user_items.iter().map(|(_, item)| item.clone()),
+            user_items.iter().map(|(_, item)| (*item).clone()),
             visibility,
             Some(&self.config),
         );
         let persisted_user_cells = user_items
             .into_iter()
             .zip(projected_user_cells)
-            .map(|((item_id, _), cell)| (item_id, cell))
+            .map(|((hidden, _), cell)| (hidden, cell))
             .collect();
         if self.chat_widget.thread_id() != Some(thread_id)
             && let Some(pane) = self.side_companions.get_mut(&thread_id)
         {
-            for index in
-                hidden_transcript_indices(&pane.cells, persisted_user_cells, hidden_item_ids)
-            {
+            for index in hidden_transcript_indices(&pane.cells, persisted_user_cells) {
                 pane.splice_older_cells(index..index + 1, Vec::new());
                 pane.view.restart_search();
             }
             return;
         }
-        let indices = hidden_transcript_indices(
-            &self.transcript_cells,
-            persisted_user_cells,
-            hidden_item_ids,
-        );
+        let indices = hidden_transcript_indices(&self.transcript_cells, persisted_user_cells);
         if indices.is_empty() {
             return;
         }
@@ -245,9 +242,9 @@ impl App {
     /// Project each terminal row on the page containing the end of its turn.
     fn project_older_history_cells(
         &mut self,
-        items: Vec<ThreadItemPayload>,
+        items: Vec<(String, ThreadItemPayload)>,
         turns: &[Turn],
-        hidden_item_ids: &HashSet<&str>,
+        hidden_item_ids: &HashSet<(&str, &str)>,
         thread_id: ThreadId,
         cwd: &AbsolutePathBuf,
         visibility: RawReasoningVisibility,
@@ -255,11 +252,13 @@ impl App {
         let mut cells = Vec::new();
         for (range, turn_end) in completion::group_turn_items(&items, turns) {
             // Internal prompts stay invisible, but still separate adjacent tool groups.
-            for visible in items[range].split(|item| hidden_item_ids.contains(item.id())) {
+            for visible in items[range]
+                .split(|(turn_id, item)| hidden_item_ids.contains(&(turn_id.as_str(), item.id())))
+            {
                 cells.extend(thread_items_to_transcript_cells(
                     Some(thread_id),
                     cwd,
-                    visible.iter().cloned(),
+                    visible.iter().map(|(_, item)| item.clone()),
                     visibility,
                     Some(&self.config),
                 ));
@@ -401,7 +400,7 @@ impl App {
 }
 
 /// Classify internal review prompts across page boundaries before rendering any older items.
-fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<&str> {
+fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<(&str, &str)> {
     let mut hidden = HashSet::new();
     let mut review_mode = false;
     for (index, turn) in turns.iter().enumerate() {
@@ -418,7 +417,7 @@ fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<&str> {
                 ThreadItemPayload::UserMessage { .. }
                     if review_mode || hidden_nested_review_turn =>
                 {
-                    hidden.insert(item.id());
+                    hidden.insert((turn.id.as_str(), item.id()));
                 }
                 _ => {}
             }
@@ -437,8 +436,7 @@ fn history_prefix_len(cells: &[Arc<dyn HistoryCell>]) -> usize {
 /// Match repeated user messages from newest to oldest so identical visible prompts stay distinct.
 fn hidden_transcript_indices(
     cells: &[Arc<dyn HistoryCell>],
-    mut persisted_user_cells: Vec<(String, Arc<dyn HistoryCell>)>,
-    hidden_item_ids: &HashSet<&str>,
+    mut persisted_user_cells: Vec<(bool, Arc<dyn HistoryCell>)>,
 ) -> Vec<usize> {
     let mut indices = Vec::new();
     for (index, cell) in cells.iter().enumerate().rev() {
@@ -458,7 +456,7 @@ fn hidden_transcript_indices(
         }) else {
             continue;
         };
-        if hidden_item_ids.contains(persisted_user_cells[position].0.as_str()) {
+        if persisted_user_cells[position].0 {
             indices.push(index);
         }
         persisted_user_cells.truncate(position);

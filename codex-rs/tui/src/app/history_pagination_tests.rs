@@ -106,15 +106,12 @@ async fn fork_lineage_stays_before_repeated_older_history_pages() {
 fn repeated_prompt_matching_removes_only_the_hidden_occurrence() {
     let cells = vec![user_cell("repeat"), user_cell("other"), user_cell("repeat")];
     let persisted = vec![
-        ("unloaded".to_string(), user_cell("repeat")),
-        ("hidden".to_string(), user_cell("repeat")),
-        ("middle".to_string(), user_cell("other")),
-        ("visible".to_string(), user_cell("repeat")),
+        (true, user_cell("repeat")),
+        (true, user_cell("repeat")),
+        (false, user_cell("other")),
+        (false, user_cell("repeat")),
     ];
-    assert_eq!(
-        hidden_transcript_indices(&cells, persisted, &HashSet::from(["hidden", "unloaded"])),
-        vec![0],
-    );
+    assert_eq!(hidden_transcript_indices(&cells, persisted), vec![0],);
 }
 
 #[tokio::test]
@@ -144,8 +141,8 @@ async fn resume_places_interruption_before_searches_split_across_pages() {
     canceled.items.push(search("canceled"));
     audit.items.insert(/*index*/ 0, search("older"));
     let page = vec![
-        canceled.items[0].payload.clone(),
-        audit.items[0].payload.clone(),
+        (canceled.id.clone(), canceled.items[0].payload.clone()),
+        (audit.id.clone(), audit.items[0].payload.clone()),
     ];
     let cwd = app.config.cwd.clone();
     let older = app.project_older_history_cells(
@@ -213,14 +210,16 @@ async fn hidden_last_item_keeps_turn_groups_and_completion_boundaries() {
         first.completed_at = Some(1_700_000_000);
         first.duration_ms = Some(125_000);
         let mut second = turn("second", TurnStatus::InProgress, &[]);
-        second.items = vec![computer("newer-call")];
+        second.items = vec![computer("hidden")];
         let turns = vec![first, second];
         let hidden = hidden_review_item_ids(&turns);
-        assert_eq!(hidden, HashSet::from(["hidden"]));
+        assert_eq!(hidden, HashSet::from([("first", "hidden")]));
         let items = turns
             .iter()
-            .flat_map(Turn::item_payloads)
-            .cloned()
+            .flat_map(|turn| {
+                turn.item_payloads()
+                    .map(|item| (turn.id.clone(), item.clone()))
+            })
             .collect::<Vec<_>>();
 
         let cells = app.project_older_history_cells(
@@ -247,10 +246,7 @@ async fn hidden_last_item_keeps_turn_groups_and_completion_boundaries() {
         assert_eq!(
             (groups, completions, visible_users),
             (
-                vec![
-                    vec!["older-call".to_string()],
-                    vec!["newer-call".to_string()]
-                ],
+                vec![vec!["older-call".to_string()], vec!["hidden".to_string()]],
                 expected_completions,
                 0,
             ),

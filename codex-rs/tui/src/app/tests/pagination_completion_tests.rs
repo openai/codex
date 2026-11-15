@@ -201,8 +201,18 @@ async fn older_page_updates_the_parked_parent_without_moving_focus() -> Result<(
 #[tokio::test]
 async fn older_pagination_completion_footers_follow_answers_without_overlap_duplicates()
 -> Result<()> {
-    let (mut app, _codex_home, thread_id) =
+    let (mut app, codex_home, thread_id) =
         completed_history_app(&["Oldest", "Middle", "Newest"]).await?;
+    // Reuse an item ID across turns without changing the expected transcript.
+    let path = rollout_path(
+        codex_home.path(),
+        "2000-09-06T14-32-00",
+        &thread_id.to_string(),
+    );
+    std::fs::write(
+        &path,
+        std::fs::read_to_string(&path)?.replace("answer-0", "prompt-1"),
+    )?;
     let (mut app_server, _requests, proxy) = start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,
