@@ -16,6 +16,7 @@ use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::bail;
+
 use color_eyre::eyre::eyre;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -29,6 +30,18 @@ pub use auth::connect;
 
 type ReplyStream = BoxStream<'static, Result<cloud::Event, cloud::Error>>;
 type OpenReplyStream = (ReplyStream, Option<cloud::Event>);
+
+/// Separate an immediate EOF from a quiet, successfully attached stream.
+fn check_reply_stream(
+    stream: &mut ReplyStream,
+) -> Result<Option<cloud::Event>, Option<cloud::Error>> {
+    match tokio::task::unconstrained(stream.next()).now_or_never() {
+        Some(None) => Err(None),
+        Some(Some(Err(error))) => Err(Some(error)),
+        Some(Some(Ok(event))) => Ok(Some(event)),
+        None => Ok(None),
+    }
+}
 
 /// Rejected locally before an admission request can be sent.
 #[derive(Debug, thiserror::Error)]
@@ -63,22 +76,27 @@ impl Replies {
             let opened = open.await;
             let root = Arc::clone(root);
             recovery.pending = None;
-            if let Some((stream, first)) = opened.filter(|_| recovery.login.permit.check().is_ok())
-            {
-                recovery.installed = Some(tokio::time::Instant::now());
-                // A same-thread Attach can stay quiet. Keep the last observation until an
-                // event or a dispatched mutation changes recovery eligibility.
-                self.install(&root, stream, first, output);
-                if let Some(recovery) = &self.idle
-                    && recovery.observed_idle != Some(false)
-                {
-                    recovery.notify_connected(&root, output);
+            match opened.and_then(|attachment| {
+                recovery.login.permit.check().map_err(|_| None)?;
+                Ok(attachment)
+            }) {
+                Ok((stream, first)) => {
+                    recovery.installed = Some(tokio::time::Instant::now());
+                    // A same-thread Attach can stay quiet. Keep the last observation until an
+                    // event or a dispatched mutation changes recovery eligibility.
+                    self.install(&root, stream, first, output);
+                    if let Some(recovery) = &self.idle
+                        && recovery.observed_idle != Some(false)
+                    {
+                        recovery.notify_connected(&root, output);
+                    }
                 }
-            } else {
-                recovery
-                    .state
-                    .send_replace(crate::cloud::IdleReconnect::Inactive);
-                self.report_loss(&root, output);
+                Err(reason) => {
+                    recovery
+                        .state
+                        .send_replace(crate::cloud::IdleReconnect::Inactive);
+                    self.report_loss(&root, reason, output);
+                }
             }
             return;
         }
@@ -95,6 +113,7 @@ impl Replies {
             ),
             ended => {
                 let id = active.thread_id.clone();
+                let error = ended.and_then(Result::err);
                 self.active = None;
                 if let Some(recovery) = &mut self.idle {
                     recovery
@@ -105,22 +124,27 @@ impl Replies {
                         .is_none_or(|start| start.elapsed() >= std::time::Duration::from_secs(15));
                     if recovery.observed_idle == Some(true)
                         && stable
-                        && idle::transient(ended.and_then(Result::err).as_ref())
+                        && idle::transient(error.as_ref())
                     {
                         recovery.offer(&id);
                     }
                 }
-                self.report_loss(&id, output);
+                self.report_loss(&id, error.as_ref().and_then(idle::blocked_recovery), output);
             }
         }
     }
 
-    fn report_loss(&self, id: &str, output: &mpsc::UnboundedSender<AppServerEvent>) {
+    fn report_loss(
+        &self,
+        id: &str,
+        reason: Option<&str>,
+        output: &mpsc::UnboundedSender<AppServerEvent>,
+    ) {
         self.stream_losses.record(id);
         let _ = output.send(AppServerEvent::ThreadStreamDisconnected(Box::new(
             cloud_error(
                 id,
-                "Cloud stream ended. Reopen the conversation to reconnect.",
+                reason.unwrap_or("Cloud stream ended. Reopen the conversation to reconnect."),
             ),
         )));
     }
@@ -255,16 +279,11 @@ impl Replies {
 }
 
 fn probe_reply_stream(stream: &mut ReplyStream) -> Result<Option<cloud::Event>> {
-    // Attach can close after successful headers. A healthy idle stream need not emit an event.
-    match tokio::task::unconstrained(stream.next()).now_or_never() {
-        Some(None | Some(Err(_))) => {
-            bail!(
-                "Cloud conversation activated but its stream did not connect. Reopen it before sending."
-            );
-        }
-        Some(Some(Ok(event))) => Ok(Some(event)),
-        None => Ok(None),
-    }
+    check_reply_stream(stream).map_err(|_| {
+        eyre!(
+            "Cloud conversation activated but its stream did not connect. Reopen it before sending."
+        )
+    })
 }
 
 /// Opens an app-server client backed by the authenticated native Cloud client.
@@ -385,7 +404,7 @@ async fn run_worker_with_prepared(
                 if let Some(candidate) = &mut prepared {
                     candidate.canceled_recovery = canceled;
                 } else if let Some(root) = canceled {
-                    replies.report_loss(&root, output);
+                    replies.report_loss(&root, /*reason*/ None, output);
                 }
                 continue;
             }
@@ -434,15 +453,21 @@ async fn run_worker_with_prepared(
                     candidate.settings.thread.id == *id
                         || loaded.is_some_and(|loaded| loaded.thread.id == *id)
                 });
-                let is_thread_list = matches!(&request, protocol::ClientRequest::ThreadList { .. });
+                // Inventory and history reads have no conversation state to commit.
+                let is_read = matches!(
+                    &request,
+                    protocol::ClientRequest::ThreadList { .. }
+                        | protocol::ClientRequest::ThreadTurnsList { .. }
+                        | protocol::ClientRequest::ThreadItemsList { .. }
+                );
                 // When closure and the handshake are both ready, cancel before
                 // the handshake can replace the active attachment.
                 let result = tokio::select! {
                     biased;
                     _ = output.closed() => return,
-                    _ = command.response.closed(), if is_thread_list || is_thread_start => {
+                    _ = command.response.closed(), if is_read || is_thread_start => {
                         if let Some(root) = canceled {
-                            replies.report_loss(&root, output);
+                            replies.report_loss(&root, /*reason*/ None, output);
                         }
                         continue;
                     }
@@ -455,7 +480,7 @@ async fn run_worker_with_prepared(
                         .and_then(|candidate| candidate.canceled_recovery)
                     && requests.loaded.is_some()
                 {
-                    replies.report_loss(&root, output);
+                    replies.report_loss(&root, /*reason*/ None, output);
                 }
                 result
             }
@@ -464,7 +489,7 @@ async fn run_worker_with_prepared(
         if result.is_err()
             && let Some(root) = canceled
         {
-            replies.report_loss(&root, output);
+            replies.report_loss(&root, /*reason*/ None, output);
         }
         let _ = command.response.send(Ok(request_result(result)));
     }
@@ -647,7 +672,7 @@ async fn advance_prepared_resume(
         }
     }
     if let Some(root) = candidate.canceled_recovery {
-        replies.report_loss(&root, output);
+        replies.report_loss(&root, /*reason*/ None, output);
     }
     None
 }

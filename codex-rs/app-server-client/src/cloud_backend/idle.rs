@@ -1,6 +1,7 @@
 //! Reopens only the lost reply stream of a displayed, idle Cloud conversation.
 
 use super::ReplyStream;
+use super::check_reply_stream;
 use crate::cloud::IdleReconnect;
 use codex_cloud_client as cloud;
 use codex_http_client::NetworkPermit;
@@ -8,13 +9,29 @@ use codex_login::AuthConfig;
 use codex_login::token_data::parse_jwt_expiration;
 use codex_protocol::auth::AuthMode;
 use futures::FutureExt;
-use futures::StreamExt;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::watch;
 use tokio::time::Instant;
+
+const SIGN_IN_AGAIN: &str =
+    "Your cloud sign-in changed or expired. Sign in again to access this conversation.";
+
+pub(super) fn blocked_recovery(error: &cloud::Error) -> Option<&'static str> {
+    let cloud::Error::Rpc(status) = error else {
+        return None;
+    };
+    match status.code {
+        5 => Some("Cloud could not find this conversation."),
+        7 => Some("Your account no longer has access to this cloud conversation."),
+        16 => Some(SIGN_IN_AGAIN),
+        _ => None,
+    }
+}
+
+const RECOVERY_FAILED: &str = "Cloud could not restore the reply stream for this conversation.";
 
 pub(super) struct Login {
     pub(super) storage: AuthConfig,
@@ -26,6 +43,9 @@ pub(super) struct Login {
 
 impl Login {
     async fn current(&self) -> bool {
+        if !matches!(self.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens) {
+            return false;
+        }
         let Ok(Some(auth)) = self
             .storage
             .load_auth_with_modes(/*enable_codex_api_key_env*/ false, Some(&[self.mode]))
@@ -44,9 +64,48 @@ impl Login {
                 expiry.is_none_or(|expiry| SystemTime::from(expiry) > SystemTime::now())
             })
     }
+
+    async fn attach(
+        &self,
+        client: &cloud::Client,
+        thread_id: &str,
+    ) -> Result<(ReplyStream, Option<cloud::Event>), &'static str> {
+        for delay in [
+            Duration::ZERO,
+            Duration::from_millis(500),
+            Duration::from_secs(1),
+        ] {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            if !self.current().await {
+                return Err(SIGN_IN_AGAIN);
+            }
+            match client
+                .attach(thread_id)
+                .await
+                .map_err(Some)
+                .and_then(|mut stream| {
+                    let first = check_reply_stream(&mut stream)?;
+                    Ok((stream, first))
+                }) {
+                Ok(attachment) => {
+                    if !self.current().await {
+                        return Err(SIGN_IN_AGAIN);
+                    }
+                    return Ok(attachment);
+                }
+                Err(Some(error)) if !transient(Some(&error)) => {
+                    return Err(blocked_recovery(&error).unwrap_or(RECOVERY_FAILED));
+                }
+                Err(_) => {}
+            }
+        }
+        Err("Cloud did not restore the reply stream after several attempts.")
+    }
 }
 
-type Open = BoxFuture<'static, Option<(ReplyStream, Option<cloud::Event>)>>;
+type Open = BoxFuture<'static, Result<(ReplyStream, Option<cloud::Event>), Option<&'static str>>>;
 
 pub(super) struct Recovery {
     pub(super) state: watch::Sender<IdleReconnect>,
@@ -138,49 +197,14 @@ impl Recovery {
                     |state| matches!(state, IdleReconnect::Opening(id) if Arc::ptr_eq(id, &selected)),
                 )
                 .await
-                .ok()?;
+                .map_err(|_| None)?;
             // Use the policy bound to the frozen serving credential when this client opened.
-            let attempts = login
-                .permit
-                // A revoke-then-allow cannot restart this episode or release a buffered first event.
-                .run(async {
-                    for delay in [
-                        Duration::ZERO,
-                        Duration::from_millis(500),
-                        Duration::from_secs(1),
-                    ] {
-                        if !delay.is_zero() {
-                            tokio::time::sleep(delay).await;
-                        }
-                        if !login.current().await {
-                            return None;
-                        }
-                        match client.attach(&selected).await {
-                            Ok(mut stream) => {
-                                let first =
-                                    tokio::task::unconstrained(stream.next()).now_or_never();
-                                let event = match first {
-                                    None => None,
-                                    Some(Some(Ok(event))) => Some(event),
-                                    Some(Some(Err(error))) if !transient(Some(&error)) => {
-                                        return None;
-                                    }
-                                    Some(_) => continue,
-                                };
-                                return login.current().await.then_some((stream, event));
-                            }
-                            Err(error) if transient(Some(&error)) => {}
-                            Err(_) => return None,
-                        }
-                    }
-                    None
-                });
-            // Bound this accepted recovery episode, including credential checks and retry backoff.
-            tokio::time::timeout(Duration::from_secs(/*secs*/ 8), attempts)
+            let attempt = login.permit.run(login.attach(&client, &selected));
+            tokio::time::timeout(Duration::from_secs(/*secs*/ 8), attempt)
                 .await
-                .ok()?
-                .ok()
-                .flatten()
+                .map_err(|_| None)?
+                .map_err(|_| None)?
+                .map_err(Some)
         };
         self.pending = Some((root, open.boxed()));
     }

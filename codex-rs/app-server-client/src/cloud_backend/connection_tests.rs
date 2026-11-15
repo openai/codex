@@ -226,15 +226,37 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
 }
 
 #[tokio::test]
-async fn dropping_an_in_flight_list_unblocks_the_native_worker() -> Result<()> {
-    assert_abandoned_request_unblocks_worker(
-        "ListThreads",
-        CloudOperation::Request(Box::new(protocol::ClientRequest::ThreadList {
-            request_id: protocol::RequestId::Integer(1),
-            params: serde_json::from_value(serde_json::json!({"limit": 10}))?,
-        })),
-    )
-    .await
+async fn dropping_an_in_flight_read_unblocks_the_native_worker() -> Result<()> {
+    for (rpc, request) in [
+        (
+            "ListThreads",
+            protocol::ClientRequest::ThreadList {
+                request_id: protocol::RequestId::Integer(1),
+                params: serde_json::from_value(serde_json::json!({"limit": 10}))?,
+            },
+        ),
+        (
+            "ListTurns",
+            protocol::ClientRequest::ThreadTurnsList {
+                request_id: protocol::RequestId::Integer(1),
+                params: serde_json::from_value(serde_json::json!({
+                    "threadId": "t",
+                    "itemsView": "notLoaded",
+                }))?,
+            },
+        ),
+        (
+            "ListItems",
+            protocol::ClientRequest::ThreadItemsList {
+                request_id: protocol::RequestId::Integer(1),
+                params: serde_json::from_value(serde_json::json!({"threadId": "t"}))?,
+            },
+        ),
+    ] {
+        assert_abandoned_request_unblocks_worker(rpc, CloudOperation::Request(Box::new(request)))
+            .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -609,16 +631,84 @@ async fn successful_reopen_supersedes_only_earlier_losses_for_that_thread() -> R
 }
 
 #[tokio::test]
+async fn accepted_idle_reconnect_reports_changed_login() -> Result<()> {
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(home.path().to_owned())
+        .fallback_cwd(Some(home.path().to_owned()))
+        .without_project_context()
+        .build()
+        .await?;
+    let factory = config.http_client_factory();
+    let (mut client, _commands, output) = CloudClient::channel(/*capacity*/ 1);
+    let handle = client.request_handle();
+    let mut replies = Replies {
+        idle: Some(idle::Recovery {
+            state: handle.reconnect.clone(),
+            pending: None,
+            installed: None,
+            observed_idle: Some(true),
+            client: Arc::new(cloud::Client::new(
+                &factory,
+                &server.uri(),
+                cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
+            )?),
+            login: Arc::new(idle::Login {
+                storage: config.auth_config(),
+                mode: codex_protocol::auth::AuthMode::Chatgpt,
+                token: "synthetic-bearer".into(),
+                account: "synthetic-account".into(),
+                permit: factory.network_policy().acquire(&server.uri().parse()?)?,
+            }),
+        }),
+        active: Some(Attachment {
+            thread_id: "t".into(),
+            stream: stream::empty().boxed(),
+        }),
+        stream_losses: client.stream_losses.clone(),
+        ..Default::default()
+    };
+    replies.forward_next(&output).await;
+    assert!(matches!(
+        client.next_event().await,
+        Some(AppServerEvent::ThreadStreamDisconnected(_))
+    ));
+    assert!(handle.reconnect_idle_thread("t"));
+
+    replies.forward_next(&output).await;
+    let Some(AppServerEvent::ThreadStreamDisconnected(error)) = client.next_event().await else {
+        panic!("expected a disconnect notification after the accepted reconnect failed");
+    };
+    assert_eq!(
+        *error,
+        cloud_error(
+            "t",
+            "Your cloud sign-in changed or expired. Sign in again to access this conversation."
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn attachment_status_follows_its_server_notifications() -> Result<()> {
-    let (output, _notifications) = mpsc::unbounded_channel();
+    let (output, mut events) = mpsc::unbounded_channel();
     let mut replies = Replies::default();
     let notifications: [&[u8]; 3] = [
         b"\x1a\x0d\x12\x0b\x0a\x06\x22\x04\x0a\x02\x08\x01\x12\x01t", // t is waiting
         b"\x1a\x09\x12\x07\x0a\x02\x12\x00\x12\x01x",                 // x is idle
         b"\x1a\x09\x12\x07\x0a\x02\x12\x00\x12\x01t",                 // t is idle
     ];
-    let stream =
-        stream::iter(notifications.map(|bytes| Ok(cloud::Event::Notification(bytes.into()))));
+    let stream = stream::iter(
+        notifications
+            .map(|bytes| Ok(cloud::Event::Notification(bytes.into())))
+            .into_iter()
+            .chain([Err(cloud::Error::Rpc(cloud::RpcStatus {
+                code: 7,
+                message: "private backend details".into(),
+                details: Default::default(),
+            }))]),
+    );
     replies
         .replace("t", async { Ok(stream.boxed()) }, &output)
         .await?;
@@ -634,6 +724,16 @@ async fn attachment_status_follows_its_server_notifications() -> Result<()> {
     assert_eq!(replies.thread_status("t"), Some(&cloud::ThreadStatus::Idle));
     replies.forward_next(&output).await;
     assert_eq!(replies.thread_status("t"), Some(&cloud::ThreadStatus::Idle));
+    let AppServerEvent::ThreadStreamDisconnected(error) = events.try_recv()? else {
+        panic!("expected a Cloud stream loss");
+    };
+    assert_eq!(
+        *error,
+        cloud_error(
+            "t",
+            "Your account no longer has access to this cloud conversation."
+        )
+    );
 
     replies
         .replace("t", async { Ok(stream::pending().boxed()) }, &output)
