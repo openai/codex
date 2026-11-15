@@ -12,4 +12,4 @@ expression: buffer_text(&buffer)
   No experimental features available for now
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel

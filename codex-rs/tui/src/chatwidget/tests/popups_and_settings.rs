@@ -3150,7 +3150,7 @@ async fn experimental_features_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn experimental_features_toggle_saves_on_exit() {
+async fn experimental_features_cancel_discards_toggle() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
@@ -3179,25 +3179,8 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
-    assert!(
-        !chat.has_active_view(),
-        "remapped cancel must save and close"
-    );
-
-    let mut updates = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::SaveExperimentalFeatures {
-            updates: event_updates,
-            ..
-        } = event
-        {
-            updates = Some(event_updates);
-            break;
-        }
-    }
-
-    let updates = updates.expect("expected SaveExperimentalFeatures event");
-    assert_eq!(updates, vec![(expected_feature.key().to_string(), true)]);
+    assert!(!chat.has_active_view(), "remapped cancel must close");
+    assert!(rx.try_recv().is_err(), "cancel must discard the toggle");
 }
 
 #[tokio::test]

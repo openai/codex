@@ -13,4 +13,4 @@ expression: buffer_text(&buffer)
                                      PATH.
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel

@@ -11,4 +11,4 @@ expression: buffer_text(&buffer)
 › [x] Server network_proxy  Description supplied by the server.
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel

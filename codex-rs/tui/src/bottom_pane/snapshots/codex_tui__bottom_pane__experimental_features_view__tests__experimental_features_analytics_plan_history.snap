@@ -12,4 +12,4 @@ expression: buffer_text(&buffer)
                               consumer accounts in /analytics.
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel
