@@ -2087,7 +2087,10 @@ impl ChatComposer {
         }
 
         let result = match &mut self.popups.active {
-            ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(
+                key_event,
+                slash_input::SlashPopupInputMode::Normal,
+            ),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),

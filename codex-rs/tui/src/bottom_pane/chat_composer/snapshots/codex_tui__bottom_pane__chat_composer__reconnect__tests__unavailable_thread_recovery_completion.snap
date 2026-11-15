@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/chat_composer/reconnect_tests.rs
+assertion_line: 217
+expression: terminal.backend()
+---
+"› /subagents  switch between this session's subagents                           "
+"                                                                                "
+"› /sub                                                                          "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                             100% context left  "

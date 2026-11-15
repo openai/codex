@@ -32,6 +32,12 @@ pub(super) enum SlashValidation {
     Deferred,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SlashPopupInputMode {
+    Normal,
+    UnavailableThread,
+}
+
 pub(super) enum SubmissionValidation {
     Valid,
     UnknownCommand(String),
@@ -238,6 +244,7 @@ impl ChatComposer {
     pub(super) fn handle_key_event_with_slash_popup(
         &mut self,
         key_event: KeyEvent,
+        mode: SlashPopupInputMode,
     ) -> (InputResult, bool) {
         if self.handle_empty_prompt_shortcut(&key_event) {
             return (InputResult::None, true);
@@ -378,7 +385,7 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    if self.blocks_direct_input {
+                    if self.blocks_direct_input && mode == SlashPopupInputMode::Normal {
                         let command_is_allowed = match &sel {
                             CommandItem::Builtin(cmd) => {
                                 parse_slash_name(self.draft.textarea.text()).is_some_and(
