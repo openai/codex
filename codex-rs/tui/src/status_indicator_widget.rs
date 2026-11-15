@@ -24,6 +24,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::ShortcutHint;
 use crate::line_truncation::line_width;
+use crate::line_truncation::truncate_line_with_ellipsis;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
@@ -203,13 +204,8 @@ impl StatusIndicatorWidget {
 
         if out.len() > self.details_max_lines {
             out.truncate(self.details_max_lines);
-            let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
-            let max_base_len = content_width.saturating_sub(1);
-            if let Some(last) = out.last_mut()
-                && let Some(span) = last.spans.last_mut()
-            {
-                let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
-                *span = format!("{trimmed}…").dim();
+            if let Some(last) = out.last_mut() {
+                *last = truncate_line_with_ellipsis(std::mem::take(last), usize::from(width)).dim();
             }
         }
 
@@ -546,8 +542,24 @@ mod tests {
         assert_eq!(lines.len(), STATUS_DETAILS_DEFAULT_MAX_LINES);
         let last = lines.last().expect("expected last details line");
         assert!(
-            last.spans[1].content.as_ref().ends_with("…"),
+            last.to_string().ends_with('…'),
             "expected ellipsis in last line: {last:?}"
+        );
+
+        w.update_details(
+            Some("界".repeat(20)),
+            StatusDetailsCapitalization::Preserve,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+        let lines = w.wrapped_details_lines(/*width*/ 10);
+        assert!(lines.iter().all(|line| line_width(line) <= 10));
+        insta::assert_snapshot!(
+            lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"),
+            @r###"
+          └ 界界界
+            界界界
+            界界…
+        "###
         );
     }
 
