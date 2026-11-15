@@ -52,6 +52,7 @@ use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
 use crate::marketplace::MarketplaceListOutcome;
+use crate::marketplace::MarketplacePlugin;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginManifestFallback;
 use crate::marketplace::MarketplacePluginPolicy;
@@ -60,6 +61,7 @@ use crate::marketplace::ResolvedMarketplacePlugin;
 use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::home_dir;
+use crate::marketplace::list_marketplace_manifests;
 use crate::marketplace::list_marketplaces_with_cache;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_policy::MarketplacePolicy;
@@ -603,6 +605,13 @@ pub struct ConfiguredMarketplacePlugin {
 pub struct ConfiguredMarketplaceListOutcome {
     pub marketplaces: Vec<ConfiguredMarketplace>,
     pub errors: Vec<MarketplaceListError>,
+}
+
+/// Catalog paths and plugin IDs already claimed by earlier project scopes in this request.
+#[derive(Default)]
+struct MarketplaceSelection {
+    paths: HashSet<AbsolutePathBuf>,
+    plugin_ids: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -2583,6 +2592,7 @@ impl PluginsManager {
             additional_roots,
             include_openai_curated,
             &plugin_states,
+            /*selection*/ None,
         )
     }
 
@@ -2592,43 +2602,68 @@ impl PluginsManager {
         additional_roots: &[AbsolutePathBuf],
         include_openai_curated: bool,
         plugin_states: &ConfiguredPluginStates,
+        mut selection: Option<&mut MarketplaceSelection>,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         let marketplace_roots =
             self.marketplace_roots(config, additional_roots, include_openai_curated);
-        let marketplace_outcome = self.list_marketplaces_with_policy(config, &marketplace_roots)?;
+        let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
         let mut seen_plugin_keys = HashSet::new();
-        let marketplaces = marketplace_outcome
-            .marketplaces
-            .into_iter()
-            .filter_map(|marketplace| {
-                let marketplace_name = marketplace.name.clone();
-                let plugins = marketplace
-                    .plugins
+        let (marketplaces, errors) = list_marketplace_manifests(
+            &marketplace_roots,
+            home_dir().as_deref(),
+            |path, manifest| {
+                policy
+                    .validate_install(
+                        &config.config_layer_stack,
+                        self.codex_home.as_path(),
+                        path,
+                        &manifest.name,
+                    )
+                    .ok()?;
+                let (marketplace_name, interface, entries) = manifest.into_entries(path);
+                let entries = entries
+                    .filter_map(|entry| {
+                        // The first valid source claims its ID before product visibility.
+                        let key = entry.id.as_key();
+                        if !seen_plugin_keys.insert(key.clone())
+                            || !self.restriction_product_matches(entry.policy.products.as_deref())
+                        {
+                            return None;
+                        }
+                        Some((key, entry))
+                    })
+                    .collect::<Vec<_>>();
+                // A visible entry claims the path even if an earlier project claimed its ID.
+                if entries.is_empty()
+                    || selection
+                        .as_deref_mut()
+                        .is_some_and(|s| !s.paths.insert(path.clone()))
+                {
+                    return None;
+                }
+                let plugins = entries
                     .into_iter()
-                    .filter_map(|plugin| {
-                        let plugin_key = format!("{}@{marketplace_name}", plugin.name);
-                        if !seen_plugin_keys.insert(plugin_key.clone()) {
-                            return None;
-                        }
-                        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
-                            return None;
-                        }
-                        let plugin_id =
-                            PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
+                    .filter(|(key, _)| {
+                        selection
+                            .as_deref_mut()
+                            .is_none_or(|s| s.plugin_ids.insert(key.clone()))
+                    })
+                    .map(|(plugin_key, entry)| {
+                        let plugin_id = entry.id.clone();
+                        let plugin = MarketplacePlugin::from(
+                            entry.load_manifest(&self.store.manifest_cache),
+                        );
                         let installed = plugin_states.installed.contains(&plugin_key);
-                        let installed_version = installed.then_some(()).and_then(|_| {
-                            plugin_id
-                                .as_ref()
-                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
-                        });
+                        let installed_version = installed
+                            .then(|| self.store.active_plugin_version(&plugin_id))
+                            .flatten();
                         let enabled = plugin_states.enabled.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
-                        let manifest_fallback = plugin.manifest_fallback.clone();
+                        let manifest_fallback = plugin.manifest_fallback;
                         if installed
                             && plugin.source.is_install_materialized()
-                            && let Some(plugin_id) = plugin_id.as_ref()
-                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
+                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
                             && let Some(manifest) = self
                                 .store
                                 .manifest_cache
@@ -2645,10 +2680,7 @@ impl PluginsManager {
                             );
                         }
 
-                        Some(ConfiguredMarketplacePlugin {
-                            // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
-                            // plugin entries from duplicate marketplace files intentionally
-                            // resolve to the first discovered source.
+                        ConfiguredMarketplacePlugin {
                             id: plugin_key,
                             installed_version,
                             installed,
@@ -2660,22 +2692,22 @@ impl PluginsManager {
                             keywords: plugin.keywords,
                             interface,
                             manifest_fallback,
-                        })
+                        }
                     })
                     .collect::<Vec<_>>();
 
                 (!plugins.is_empty()).then_some(ConfiguredMarketplace {
-                    name: marketplace.name,
-                    path: marketplace.path,
-                    interface: marketplace.interface,
+                    name: marketplace_name,
+                    path: path.clone(),
+                    interface,
                     plugins,
                 })
-            })
-            .collect();
+            },
+        );
 
         Ok(ConfiguredMarketplaceListOutcome {
             marketplaces,
-            errors: marketplace_outcome.errors,
+            errors,
         })
     }
 

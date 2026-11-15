@@ -387,6 +387,99 @@ path = {:?}
     assert_eq!(blocked_outcome.marketplaces, Vec::new());
 }
 
+#[tracing_test::traced_test]
+#[tokio::test]
+async fn list_marketplaces_skips_manifests_for_discarded_rows_without_changing_precedence() {
+    let tmp = TempDir::new().unwrap();
+    let shared = tmp.path().join("a-shared");
+    let repo = tmp.path().join("b-repo");
+    write_file(
+        &shared.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "team",
+  "plugins": [
+    {"name": "shared", "source": "./shared"},
+    {"name": "shadowed", "source": "./shadowed", "policy": {"products": []}}
+  ]
+}"#,
+    );
+    write_file(&shared.join("shared/.codex-plugin/plugin.json"), "{");
+    write_file(
+        &repo.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "team",
+  "plugins": [
+    {"name": "shadowed", "source": "./shadowed"},
+    {"name": "repo-only", "source": "./repo-only"}
+  ]
+}"#,
+    );
+    write_file(&repo.join("shadowed/.codex-plugin/plugin.json"), "{");
+    write_plugin_with_version(&repo, "repo-only", "repo-only", Some("2.0.0"));
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        &format!(
+            r#"
+[features]
+plugins = true
+
+[marketplaces.team]
+source_type = "local"
+source = {shared:?}
+"#
+        ),
+    );
+    let config = load_config(tmp.path(), &repo).await;
+    let context = PluginMarketplaceContext {
+        global_config: config.clone(),
+        scopes: vec![
+            PluginMarketplaceScope {
+                cwd: Some(AbsolutePathBuf::try_from(shared).unwrap()),
+                config: config.clone(),
+            },
+            PluginMarketplaceScope {
+                cwd: Some(AbsolutePathBuf::try_from(repo).unwrap()),
+                config,
+            },
+        ],
+        load_errors: Vec::new(),
+    };
+    let result = test_plugins_manager(tmp.path().to_path_buf())
+        .list_marketplaces_for_context(&context, /*include_openai_curated*/ false)
+        .unwrap();
+
+    assert_eq!(result.errors, Vec::new());
+    assert_eq!(
+        result
+            .marketplaces
+            .iter()
+            .filter(|marketplace| marketplace.name == "team")
+            .flat_map(|marketplace| &marketplace.plugins)
+            .map(|plugin| (plugin.id.as_str(), plugin.local_version.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("shared@team", None), ("repo-only@team", Some("2.0.0"))],
+    );
+    logs_assert(|lines| {
+        let reads = lines
+            .iter()
+            .filter(|line| {
+                line.contains("failed to parse plugin manifest") && line.contains("a-shared")
+            })
+            .count();
+        let shadowed_reads = lines
+            .iter()
+            .filter(|line| {
+                line.contains("failed to parse plugin manifest") && line.contains("b-repo")
+            })
+            .count();
+        (reads == 1 && shadowed_reads == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                format!("expected one shared and zero shadowed manifest reads, got {reads} and {shadowed_reads}")
+            })
+    });
+}
+
 fn write_auth_projection_plugin(codex_home: &Path, name: &str, include_app: bool) {
     let plugin_root = codex_home
         .join("plugins/cache")

@@ -154,7 +154,8 @@ impl MarketplacePluginSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct MarketplacePluginPolicy {
     pub installation: MarketplacePluginInstallPolicy,
     pub authentication: MarketplacePluginAuthPolicy,
@@ -257,13 +258,11 @@ pub fn find_marketplace_plugin(
             continue;
         }
 
-        if let Some(plugin) = resolve_marketplace_plugin_entry(
-            marketplace_path,
-            &marketplace_name,
-            plugin,
-            &ManifestCache::disabled(),
-        )? {
-            return Ok(plugin);
+        if let Some(entry) = plugin
+            .validate(marketplace_path, &marketplace_name)
+            .map_err(|PluginIdError::Invalid(message)| MarketplaceError::InvalidPlugin(message))?
+        {
+            return Ok(entry.load_manifest(&ManifestCache::disabled()));
         }
     }
 
@@ -383,38 +382,15 @@ fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) ->
 
 // TODO: allow standalone callers to share a cache across marketplace loads.
 pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
-    load_marketplace_with_cache(path, &ManifestCache::disabled())
+    Ok(load_raw_marketplace_manifest(path)?.resolve(path, &ManifestCache::disabled()))
 }
 
-fn load_marketplace_with_cache(
-    path: &AbsolutePathBuf,
-    manifest_cache: &ManifestCache,
-) -> Result<Marketplace, MarketplaceError> {
-    let marketplace = load_raw_marketplace_manifest(path)?;
-    let mut plugins = Vec::new();
-
-    for plugin in marketplace.plugins {
-        let plugin =
-            match resolve_marketplace_plugin_entry(path, &marketplace.name, plugin, manifest_cache)
-            {
-                Ok(Some(plugin)) => plugin,
-                Ok(None) => continue,
-                Err(MarketplaceError::InvalidPlugin(message)) => {
-                    warn!(
-                        path = %path.display(),
-                        marketplace = %marketplace.name,
-                        error = %message,
-                        "skipping invalid marketplace plugin"
-                    );
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-
+impl From<ResolvedMarketplacePlugin> for MarketplacePlugin {
+    fn from(plugin: ResolvedMarketplacePlugin) -> Self {
         let manifest_fallback = plugin
             .manifest_fallback
-            .contents_if_has_metadata()
-            .map(|_| plugin.manifest_fallback.clone());
+            .has_metadata
+            .then_some(plugin.manifest_fallback);
         let local_version = plugin
             .manifest
             .as_ref()
@@ -424,7 +400,7 @@ fn load_marketplace_with_cache(
             .map(|manifest| manifest.keywords)
             .unwrap_or_default();
 
-        plugins.push(MarketplacePlugin {
+        Self {
             name: plugin.plugin_id.plugin_name,
             local_version,
             source: plugin.source,
@@ -432,15 +408,8 @@ fn load_marketplace_with_cache(
             interface: plugin.interface,
             keywords,
             manifest_fallback,
-        });
+        }
     }
-
-    Ok(Marketplace {
-        name: marketplace.name,
-        path: path.clone(),
-        interface: resolve_marketplace_interface(marketplace.interface),
-        plugins,
-    })
 }
 
 // TODO: pass an owner-provided cache from remaining callers; the manager already does.
@@ -457,26 +426,42 @@ pub(crate) fn list_marketplaces_with_cache(
     home_dir: Option<&Path>,
     manifest_cache: &ManifestCache,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
-    let mut outcome = MarketplaceListOutcome::default();
+    let (marketplaces, errors) =
+        list_marketplace_manifests(additional_roots, home_dir, |path, manifest| {
+            Some(manifest.resolve(path, manifest_cache))
+        });
+    Ok(MarketplaceListOutcome {
+        marketplaces,
+        errors,
+    })
+}
 
-    for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        match load_marketplace_with_cache(&marketplace_path, manifest_cache) {
-            Ok(marketplace) => outcome.marketplaces.push(marketplace),
+pub(crate) fn list_marketplace_manifests<T>(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    mut list: impl FnMut(&AbsolutePathBuf, RawMarketplaceManifest) -> Option<T>,
+) -> (Vec<T>, Vec<MarketplaceListError>) {
+    let mut marketplaces = Vec::new();
+    let mut errors = Vec::new();
+
+    for path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
+        match load_raw_marketplace_manifest(&path) {
+            Ok(manifest) => marketplaces.extend(list(&path, manifest)),
             Err(err) => {
                 warn!(
-                    path = %marketplace_path.display(),
+                    path = %path.display(),
                     error = %err,
                     "skipping marketplace that failed to load"
                 );
-                outcome.errors.push(MarketplaceListError {
-                    path: marketplace_path,
+                errors.push(MarketplaceListError {
+                    path,
                     message: err.to_string(),
                 });
             }
         }
     }
 
-    Ok(outcome)
+    (marketplaces, errors)
 }
 
 fn discover_marketplace_paths_from_roots(
@@ -536,65 +521,63 @@ fn load_raw_marketplace_manifest(
     })
 }
 
-fn resolve_marketplace_plugin_entry(
-    marketplace_path: &AbsolutePathBuf,
-    marketplace_name: &str,
-    plugin: RawMarketplaceManifestPlugin,
-    manifest_cache: &ManifestCache,
-) -> Result<Option<ResolvedMarketplacePlugin>, MarketplaceError> {
-    let RawMarketplaceManifestPlugin {
-        name,
-        source,
-        policy,
-        category,
-        manifest_fields,
-    } = plugin;
-    let Some(source) = resolve_supported_plugin_source(marketplace_path, &name, source) else {
-        return Ok(None);
-    };
-    let manifest_fallback =
-        marketplace_plugin_manifest_fallback(&name, category.as_deref(), &manifest_fields);
+/// A catalog entry with a validated ID and source. Its plugin manifest has not been read yet.
+pub(crate) struct MarketplacePluginEntry {
+    pub(crate) id: PluginId,
+    pub(crate) policy: MarketplacePluginPolicy,
+    source: MarketplacePluginSource,
+    category: Option<String>,
+    manifest_fields: JsonMap<String, JsonValue>,
+}
 
-    let manifest = match &source {
-        MarketplacePluginSource::Local { path } => {
-            if codex_utils_plugins::find_plugin_manifest_path(path.as_path()).is_some() {
-                manifest_cache
-                    .load(path.as_path())
-                    .map(|loaded| loaded.manifest)
-            } else if manifest_fallback.has_metadata {
-                manifest_fallback.parse_for_plugin_root(path.as_path())
-            } else {
-                None
+impl MarketplacePluginEntry {
+    pub(crate) fn load_manifest(self, manifest_cache: &ManifestCache) -> ResolvedMarketplacePlugin {
+        let Self {
+            id,
+            policy,
+            source,
+            category,
+            manifest_fields,
+        } = self;
+        let name = &id.plugin_name;
+        let manifest_fallback =
+            marketplace_plugin_manifest_fallback(name, category.as_deref(), &manifest_fields);
+
+        let manifest = match &source {
+            MarketplacePluginSource::Local { path } => {
+                if codex_utils_plugins::find_plugin_manifest_path(path.as_path()).is_some() {
+                    manifest_cache
+                        .load(path.as_path())
+                        .map(|loaded| loaded.manifest)
+                } else if manifest_fallback.has_metadata {
+                    manifest_fallback.parse_for_plugin_root(path.as_path())
+                } else {
+                    None
+                }
             }
-        }
-        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. }
-            if manifest_fallback.has_metadata =>
-        {
-            manifest_fallback.parse_for_listing()
-        }
-        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
-    };
-    let interface = plugin_interface_with_marketplace_category(
-        manifest
-            .as_ref()
-            .and_then(|manifest| manifest.interface.clone()),
-        category,
-    );
+            MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. }
+                if manifest_fallback.has_metadata =>
+            {
+                manifest_fallback.parse_for_listing()
+            }
+            MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
+        };
+        let interface = plugin_interface_with_marketplace_category(
+            manifest
+                .as_ref()
+                .and_then(|manifest| manifest.interface.clone()),
+            category,
+        );
 
-    Ok(Some(ResolvedMarketplacePlugin {
-        plugin_id: PluginId::new(name, marketplace_name.to_string()).map_err(|err| match err {
-            PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-        })?,
-        source,
-        policy: MarketplacePluginPolicy {
-            installation: policy.installation,
-            authentication: policy.authentication,
-            products: policy.products,
-        },
-        interface,
-        manifest,
-        manifest_fallback,
-    }))
+        ResolvedMarketplacePlugin {
+            plugin_id: id,
+            source,
+            policy,
+            interface,
+            manifest,
+            manifest_fallback,
+        }
+    }
 }
 
 fn resolve_supported_plugin_source(
@@ -1003,11 +986,57 @@ pub fn marketplace_root_dir(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RawMarketplaceManifest {
-    name: String,
+pub(crate) struct RawMarketplaceManifest {
+    pub(crate) name: String,
     #[serde(default)]
     interface: Option<RawMarketplaceManifestInterface>,
     plugins: Vec<RawMarketplaceManifestPlugin>,
+}
+
+impl RawMarketplaceManifest {
+    fn resolve(self, path: &AbsolutePathBuf, manifest_cache: &ManifestCache) -> Marketplace {
+        let (name, interface, entries) = self.into_entries(path);
+        Marketplace {
+            name,
+            path: path.clone(),
+            interface,
+            plugins: entries
+                .map(|entry| entry.load_manifest(manifest_cache).into())
+                .collect(),
+        }
+    }
+
+    /// Yields valid entries in catalog order without reading plugin manifests, so callers
+    /// can apply precedence and visibility rules before loading metadata.
+    pub(crate) fn into_entries(
+        self,
+        path: &AbsolutePathBuf,
+    ) -> (
+        String,
+        Option<MarketplaceInterface>,
+        impl Iterator<Item = MarketplacePluginEntry>,
+    ) {
+        let marketplace_name = self.name.clone();
+        let entries = self.plugins.into_iter().filter_map(move |plugin| {
+            match plugin.validate(path, &marketplace_name) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    warn!(
+                        path = %path.display(),
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "skipping invalid marketplace plugin"
+                    );
+                    None
+                }
+            }
+        });
+        (
+            self.name,
+            resolve_marketplace_interface(self.interface),
+            entries,
+        )
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1023,7 +1052,7 @@ struct RawMarketplaceManifestPlugin {
     name: String,
     source: RawMarketplaceManifestPluginSource,
     #[serde(default)]
-    policy: RawMarketplaceManifestPluginPolicy,
+    policy: MarketplacePluginPolicy,
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
@@ -1031,14 +1060,30 @@ struct RawMarketplaceManifestPlugin {
     manifest_fields: JsonMap<String, JsonValue>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawMarketplaceManifestPluginPolicy {
-    #[serde(default)]
-    installation: MarketplacePluginInstallPolicy,
-    #[serde(default)]
-    authentication: MarketplacePluginAuthPolicy,
-    products: Option<Vec<Product>>,
+impl RawMarketplaceManifestPlugin {
+    fn validate(
+        self,
+        marketplace_path: &AbsolutePathBuf,
+        marketplace_name: &str,
+    ) -> Result<Option<MarketplacePluginEntry>, PluginIdError> {
+        let Self {
+            name,
+            source,
+            policy,
+            category,
+            manifest_fields,
+        } = self;
+        let Some(source) = resolve_supported_plugin_source(marketplace_path, &name, source) else {
+            return Ok(None);
+        };
+        Ok(Some(MarketplacePluginEntry {
+            id: PluginId::new(name, marketplace_name.to_string())?,
+            policy,
+            source,
+            category,
+            manifest_fields,
+        }))
+    }
 }
 
 #[derive(Debug, Deserialize)]
