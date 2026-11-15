@@ -24,8 +24,8 @@ struct Flight {
 
 pub(super) struct Openings {
     active: HashMap<(BackendId, ThreadId), Flight>,
-    // The app event channel rotates on reconnect. This pair has the lifetime of the flights.
-    tx: AppEventSender,
+    // Background completions survive app event channel rotation on reconnect.
+    pub(super) tx: AppEventSender,
     completions: mpsc::UnboundedReceiver<AppEvent>,
 }
 

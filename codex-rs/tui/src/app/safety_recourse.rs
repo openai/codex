@@ -88,7 +88,7 @@ pub(super) async fn continue_with_rewrite(
         if let Some(input) = app.chat_widget.capture_thread_input_state() {
             app.agents_overview.input_states.insert(thread_id, input);
         }
-        app.retain_subscriptions_for_fork();
+        app.retain_thread_subscriptions();
         attached_fork = Some(fork_id);
         app.replace_chat_widget_with_app_server_thread(
             tui,

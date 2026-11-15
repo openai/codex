@@ -2,6 +2,8 @@
 source: tui/src/app/tests/background_exit_tests.rs
 expression: output
 ---
+Archive of thread PENDING_ID was not confirmed.
+Failed to archive thread THREAD_ID: permission denied
 Disconnected from this task. Any running work continues.
 To reconnect, run:
   codex resume THREAD_ID

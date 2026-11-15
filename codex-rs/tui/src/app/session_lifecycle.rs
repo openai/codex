@@ -628,6 +628,13 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self
+            .agents_overview
+            .pending_archives
+            .contains_key(&thread_id)
+        {
+            return Ok(());
+        }
+        if self
             .side_threads
             .get(&thread_id)
             .is_some_and(|side| side.close_request.is_some())

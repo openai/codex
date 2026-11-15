@@ -47,6 +47,9 @@ pub(super) struct AgentsOverviewState {
     pub(super) removed_threads: HashSet<ThreadId>,
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
     pub(super) hidden_threads: HashSet<ThreadId>,
+    /// Hide pending archives; retain their outcomes if shutdown beats event dispatch.
+    pub(super) pending_archives:
+        HashMap<ThreadId, tokio::sync::oneshot::Receiver<Result<(), String>>>,
     pub(super) unread: HashSet<ThreadId>,
     pub(super) last_messages: HashMap<ThreadId, String>,
     pub(super) usage: HashMap<ThreadId, super::agents_overview_usage::AgentsOverviewUsage>,
@@ -461,7 +464,9 @@ impl App {
                 .map(|i| view.rows[i].thread_id)
                 .collect();
             matches.retain(|id, _| {
-                visible.contains(id) || self.agents_overview.hidden_threads.contains(id)
+                visible.contains(id)
+                    || self.agents_overview.hidden_threads.contains(id)
+                    || self.agents_overview.pending_archives.contains_key(id)
             });
         }
         view.load_search_matches(/*additional*/ 0);
@@ -530,7 +535,11 @@ impl App {
                 threads.push(target.clone());
             }
         }
-        threads.retain(is_visible_in_agents_overview);
+        threads.retain(|thread| {
+            is_visible_in_agents_overview(thread)
+                && !ThreadId::from_string(&thread.id)
+                    .is_ok_and(|id| self.agents_overview.pending_archives.contains_key(&id))
+        });
         for thread in &mut threads {
             if thread.parent_thread_id.is_none()
                 && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {

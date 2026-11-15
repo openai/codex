@@ -223,6 +223,19 @@ async fn daemon_disconnect_exit_summary_includes_reconnect_and_stop_instructions
     let thread_id = prepare_running_local_daemon(&mut app)?;
     app.keymap.agents.stop = vec![crate::key_hint::plain(KeyCode::F(10))];
     let mut exit_info = app.exit_info(ExitReason::UserRequested);
+    let (rejected, outcome) = tokio::sync::oneshot::channel();
+    app.agents_overview
+        .pending_archives
+        .insert(thread_id, outcome);
+    rejected.send(Err("permission denied".to_string())).unwrap();
+    let pending_id = ThreadId::new();
+    let (_pending, outcome) = tokio::sync::oneshot::channel();
+    app.agents_overview
+        .pending_archives
+        .insert(pending_id, outcome);
+    exit_info.archive_warnings = app
+        .finish_pending_archives(tokio::time::Instant::now())
+        .await;
     exit_info.token_usage = TokenUsage {
         input_tokens: 10,
         output_tokens: 2,
@@ -232,7 +245,8 @@ async fn daemon_disconnect_exit_summary_includes_reconnect_and_stop_instructions
     let output = exit_info
         .format_exit_messages(/*color_enabled*/ false)
         .join("\n")
-        .replace(&thread_id.to_string(), "THREAD_ID");
+        .replace(&thread_id.to_string(), "THREAD_ID")
+        .replace(&pending_id.to_string(), "PENDING_ID");
     assert_snapshot!("daemon_disconnect_exit", output);
     Ok(())
 }

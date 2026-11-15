@@ -1376,7 +1376,9 @@ See the Codex keymap documentation for supported actions and examples."
                         break Err(err.into());
                     }
                 }
-                if app.pending_open_resume_picker {
+                // Process archive completions before the picker can list or mutate those threads.
+                if app.pending_open_resume_picker && app.agents_overview.pending_archives.is_empty()
+                {
                     app.pending_open_resume_picker = false;
                     match Box::pin(app.open_resume_picker_for_backends(tui, &mut backends)).await {
                         Ok(AppRunControl::Continue) => {}
@@ -1513,6 +1515,12 @@ See the Codex keymap documentation for supported actions and examples."
                         AppRunControl::Continue
                     }
                     Some(event) = app.saved_openings.next_event(&mut app_event_rx) => {
+                        if let AppEvent::ArchiveFinished { backend_id, thread_id, result: Ok(()) } = &event
+                            && *backend_id != displayed_owner
+                            && let Some(slot) = backends.slot(*backend_id)
+                        {
+                            backends.parked_inputs_mut(slot).remove(thread_id);
+                        }
                         let switch_backend = match &event {
                             AppEvent::ChooseNewSessionCheckout { name } | AppEvent::NewSession { name }
                                 if multi_backend => app.other_new_session_backend(&backends).await
@@ -1819,6 +1827,10 @@ See the Codex keymap documentation for supported actions and examples."
             cancellation.cancel();
         }
         app.chat_widget.mention_usage_mut().flush().await;
+        // Closing a remote or embedded connection can abandon an outstanding archive.
+        let archive_warnings = app
+            .finish_pending_archives(tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 5))
+            .await;
         if let Err(err) = backends.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
@@ -1844,9 +1856,14 @@ See the Codex keymap documentation for supported actions and examples."
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
                 }
-                return Err(err);
+                if archive_warnings.is_empty() {
+                    return Err(err);
+                }
+                return Err(err.wrap_err(archive_warnings.join("\n")));
             }
         };
-        Ok(app.exit_info(exit_reason))
+        let mut info = app.exit_info(exit_reason);
+        info.archive_warnings = archive_warnings;
+        Ok(info)
     }
 }

@@ -682,19 +682,25 @@ impl App {
                     app_server_client.thread_tool_transport(),
                     crate::dynamic_tools_mcp::ThreadToolTransport::Mcp(_)
                 );
+            let archiving =
+                thread_id.is_some_and(|id| self.agents_overview.pending_archives.contains_key(&id));
             if !tui_tool
                 || requires_mcp
+                || archiving
                 || codex_protocol::ThreadId::from_string(&params.thread_id)
                     .is_ok_and(|thread_id| self.abandoned_side_threads.contains(&thread_id))
             {
                 let response = crate::dynamic_tools::failure_response(if requires_mcp {
                     "TUI task tools require the approval-gated MCP server"
+                } else if archiving {
+                    "Source task is being archived"
                 } else {
                     "TUI dynamic tools require an active task in the TUI namespace"
                 });
                 self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                     request_id: request_id.clone(),
                     response,
+                    reply: Some(buffered_request.reply),
                 });
                 return;
             }
@@ -713,6 +719,7 @@ impl App {
                     .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
                     .is_none_or(|thread_id| app_server_client.task_tools_available(thread_id));
             let params = params.clone();
+            let reply = buffered_request.reply;
             let mut thread_start_params =
                 crate::app_server_session::thread_start_params_from_config(
                     &self.config,
@@ -751,6 +758,7 @@ impl App {
                 app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                     request_id,
                     response,
+                    reply: Some(reply),
                 });
             });
             self.dynamic_tool_tasks

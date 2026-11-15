@@ -736,6 +736,7 @@ pub(crate) enum AppEvent {
     DynamicToolCallCompleted {
         request_id: AppServerRequestId,
         response: DynamicToolCallResponse,
+        reply: Option<codex_app_server_client::AppServerReplyHandle>,
     },
 
     /// Register task tools inherited by a dynamically created thread.
@@ -801,6 +802,11 @@ pub(crate) enum AppEvent {
 
     /// Archive the current active main thread and return to the command center.
     ArchiveCurrentThread,
+    ArchiveFinished {
+        backend_id: crate::backend_id::BackendId,
+        thread_id: ThreadId,
+        result: Result<(), String>,
+    },
 
     /// Permanently delete the current active main thread and return to the command center.
     DeleteCurrentThread,
