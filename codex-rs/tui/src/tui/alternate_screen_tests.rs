@@ -13,6 +13,7 @@ struct KeyboardScreens {
     main: Vec<u8>,
     alternate: Vec<u8>,
     alternate_active: bool,
+    alternate_scroll: bool,
 }
 
 #[test]
@@ -67,6 +68,8 @@ impl KeyboardScreens {
             match sequence {
                 "[?1049h" => self.alternate_active = true,
                 "[?1049l" => self.alternate_active = false,
+                "[?1007h" => self.alternate_scroll = true,
+                "[?1007l" => self.alternate_scroll = false,
                 _ => {
                     let stack = if self.alternate_active {
                         &mut self.alternate
@@ -92,6 +95,39 @@ impl KeyboardScreens {
 
     fn state(&self) -> (bool, &[u8], &[u8]) {
         (self.alternate_active, &self.main, &self.alternate)
+    }
+}
+
+#[test]
+fn alternate_scroll_is_restored_across_handoff_and_exit() {
+    for initial_scroll in [false, true] {
+        let screen = AlternateScreen::default();
+        screen
+            .initial_scroll_enabled
+            .store(initial_scroll, Ordering::Relaxed);
+        let mut output = Vec::new();
+        let mut terminal = KeyboardScreens {
+            alternate_scroll: initial_scroll,
+            ..Default::default()
+        };
+        enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ true).unwrap();
+        terminal.process(&std::mem::take(&mut output));
+        assert!(!terminal.alternate_scroll);
+
+        screen
+            .configure_input(&mut output, /*capture_mouse*/ false)
+            .unwrap();
+        screen.release_input(&mut output).unwrap();
+        terminal.process(&std::mem::take(&mut output));
+        assert_eq!(terminal.alternate_scroll, initial_scroll);
+
+        screen.leave(&mut output).unwrap();
+        enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ true).unwrap();
+        screen
+            .restore(&mut output, KeyboardRestore::PopStack)
+            .unwrap();
+        terminal.process(&output);
+        assert_eq!(terminal.alternate_scroll, initial_scroll);
     }
 }
 
@@ -262,6 +298,13 @@ fn cleanup_write_failure_does_not_pop_the_wrong_screen() {
                 (stays_in_alternate, expected_main, &[][..]),
             ),
         );
+        if sequence == b"\x1b[?1007l" {
+            let offset = writer.get_ref().output.len();
+            screen
+                .restore(&mut writer, KeyboardRestore::PopStack)
+                .unwrap();
+            assert!(writer.get_ref().output[offset..].starts_with(b"\x1b[?1007l"));
+        }
     }
 }
 

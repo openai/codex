@@ -32,6 +32,8 @@ pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
     mouse_active: AtomicBool::new(/*v*/ false),
     mouse_capture_disabled: AtomicBool::new(/*v*/ false),
     input_configured: AtomicBool::new(/*v*/ false),
+    initial_scroll_enabled: AtomicBool::new(/*v*/ false),
+    scroll_dirty: AtomicBool::new(/*v*/ false),
     keyboard_active: AtomicBool::new(/*v*/ false),
     parent_reports_key_releases: AtomicBool::new(/*v*/ false),
     link_pointer: super::link_pointer::LinkPointer::new(),
@@ -46,6 +48,8 @@ pub(super) struct AlternateScreen {
     mouse_capture_disabled: AtomicBool,
     // A cleanup/setup error must not make the next identical request look already applied.
     input_configured: AtomicBool,
+    pub(super) initial_scroll_enabled: AtomicBool,
+    scroll_dirty: AtomicBool,
     // An editor can take over the screen after Codex has popped its keyboard mode.
     keyboard_active: AtomicBool,
     // Restore the main screen's input classification when this screen's keyboard frame is popped.
@@ -115,6 +119,7 @@ impl AlternateScreen {
     ) -> Result<()> {
         self.input_configured
             .store(/*val*/ false, Ordering::Relaxed);
+        self.scroll_dirty.store(/*val*/ true, Ordering::Relaxed);
         let result = if capture_mouse && !self.mouse_capture_disabled.load(Ordering::Relaxed) {
             // A partial write can already enable reporting; cleanup must still attempt to stop it.
             self.mouse_active.store(/*val*/ true, Ordering::Relaxed);
@@ -191,8 +196,20 @@ impl AlternateScreen {
         } else {
             Ok(())
         };
-        let scroll_result = execute!(writer, DisableAlternateScroll);
+        let scroll_result = self.restore_scroll(writer);
         mouse_result.and(keyboard_result).and(scroll_result)
+    }
+
+    fn restore_scroll(&self, writer: &mut impl Write) -> Result<()> {
+        if self.scroll_dirty.load(Ordering::Relaxed) {
+            if self.initial_scroll_enabled.load(Ordering::Relaxed) {
+                execute!(writer, EnableAlternateScroll)?;
+            } else {
+                execute!(writer, DisableAlternateScroll)?;
+            }
+            self.scroll_dirty.store(/*val*/ false, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     pub(super) fn leave(&self, writer: &mut impl Write) -> Result<()> {
@@ -214,7 +231,9 @@ impl AlternateScreen {
             self.leave(writer)
         } else {
             // A failed mouse cleanup can outlive a successful return to the main screen.
-            self.disable_mouse(writer)
+            let mouse_result = self.disable_mouse(writer);
+            let scroll_result = self.restore_scroll(writer);
+            mouse_result.and(scroll_result)
         };
         if self.active.load(Ordering::Relaxed) {
             // Leave failed: another pop here would still target the alternate stack.

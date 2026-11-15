@@ -544,6 +544,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
                     "terminal startup probes failed: {err}"
                 );
                 crate::terminal_probe::StartupProbe {
+                    alternate_scroll_enabled: None,
                     cursor_position: None,
                     default_colors: None,
                     keyboard_enhancement_supported: None,
@@ -552,6 +553,14 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
             }
         }
     };
+
+    #[cfg(unix)]
+    ALTERNATE_SCREEN.initial_scroll_enabled.store(
+        startup_probe
+            .alternate_scroll_enabled
+            .unwrap_or(/*default*/ false),
+        Ordering::Relaxed,
+    );
 
     #[cfg(unix)]
     crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
