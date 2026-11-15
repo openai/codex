@@ -7,6 +7,7 @@ use crate::app_server_session::ThreadParamsMode;
 use codex_app_server_client::CloudOperation;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::ThreadHistoryMode;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -82,6 +83,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
             }
             if index == 23 {
                 thread.name = None;
+                thread.history_mode = ThreadHistoryMode::Paginated;
             }
             thread.updated_at += 24 - index;
             thread.recency_at = Some(thread.updated_at);
@@ -182,6 +184,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                     }
                 }
                 "thread/read" => {
+                    assert_ne!(params["includeTurns"], true);
                     let thread = rows
                         .iter()
                         .find(|thread| thread.id == params["threadId"])
@@ -190,9 +193,10 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                 }
                 "thread/turns/list" if params["threadId"] == rows[23].id => json!({"data": [{
                     "id":"latest", "status":"completed", "items":[{"type":"userMessage","id":"prompt",
-                    "content":[{"type":"text","text":"A later prompt","textElements":[]}]}]
+                    "content":[{"type":"text","text":"A later prompt","textElements":[]}]},
+                    {"type":"agentMessage","id":"reply","text":"A saved reply"}]
                 }], "nextCursor":null}),
-                "thread/turns/list" => json!({"data": [], "nextCursor": null}),
+                "thread/turns/list" => panic!("overview requested legacy transcript: {params}"),
                 "thread/archive" | "thread/delete" => {
                     socket.send(Message::Text(json!({"id": request.id, "error":{"code":-32603,"message":"try again"}}).to_string().into())).await?;
                     continue;
@@ -378,6 +382,13 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
             .latest_prompt
             .as_deref(),
         Some("A later prompt")
+    );
+    assert_eq!(
+        app.agents_overview
+            .last_messages
+            .get(&ids[23])
+            .map(String::as_str),
+        Some("A saved reply")
     );
     // Another CLI inserts a matching session ahead of the exhausted browse cursor.
     show_reopened_pin.store(true, Ordering::SeqCst);

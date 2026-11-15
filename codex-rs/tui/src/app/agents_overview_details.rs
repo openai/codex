@@ -6,12 +6,14 @@ use super::App;
 use super::ThreadBufferedEvent;
 use super::ThreadEventAttachment;
 use super::agents_overview_view::AgentsOverviewGroup;
+use crate::chatwidget::ChatWidget;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
@@ -53,7 +55,7 @@ pub(super) fn preview_text(text: &str) -> String {
 pub(super) struct AgentsOverviewActivity {
     pub(super) latest_prompt: Option<String>,
     reasoning: Option<ReasoningPreview>,
-    last_message: Option<String>,
+    pub(super) last_message: Option<String>,
 }
 
 struct ReasoningPreview {
@@ -104,6 +106,22 @@ impl App {
                 reasoning.header = crate::chatwidget::extract_first_bold(&reasoning.buffer)
                     .map(|header| preview_text(&header));
                 had_header || reasoning.header.is_some()
+            }
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                item:
+                    codex_app_server_protocol::ThreadItem {
+                        payload: ThreadItemPayload::UserMessage { content, .. },
+                        ..
+                    },
+                ..
+            }) if self.agents_overview.threads[&thread_id]
+                .as_ref()
+                .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy) =>
+            {
+                activity.latest_prompt = Some(preview_markdown(
+                    &ChatWidget::user_message_display_from_inputs(content).message,
+                ));
+                true
             }
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 item:

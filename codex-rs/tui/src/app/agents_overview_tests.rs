@@ -823,26 +823,53 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
     retained_thread.name = Some("New name".to_string());
     retained_thread.status = ThreadStatus::NotLoaded;
     let expected = HashMap::from([
-        (retained, Some(retained_thread)),
+        (retained, Some(retained_thread.clone())),
         (created, Some(created_thread)),
     ]);
     assert_eq!(app.agents_overview.threads, expected);
 
     let request_id = Uuid::new_v4();
     app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
+    let follow_up = ServerNotification::ItemCompleted(
+        codex_app_server_protocol::ItemCompletedNotification::new(
+            retained.to_string(),
+            "turn".into(),
+            ThreadItemPayload::UserMessage {
+                id: "prompt".into(),
+                client_id: None,
+                content: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Current request".into(),
+                    text_elements: Vec::new(),
+                }],
+            },
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        ),
+    );
+    app.track_agents_overview_notification(&follow_up);
     app.apply_agents_overview_thread_refresh(
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
             cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
-            threads: HashMap::from([(retained, None)]),
+            threads: HashMap::from([
+                (retained, Some((retained_thread, false, None))),
+                (created, None),
+            ]),
             recent_seed_complete: true,
             discovery: None,
             pinned_thread_ids: None,
         }),
     );
     assert_eq!(app.agents_overview.threads, expected);
+    assert_eq!(
+        app.agents_overview.activity[&retained]
+            .latest_prompt
+            .as_deref(),
+        Some("Current request")
+    );
+
     let request_id = Uuid::new_v4();
     app.agents_overview.active_refresh = Some((request_id, app_server.backend_id()));
     app.apply_agents_overview_thread_refresh(
@@ -876,6 +903,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
             "new-reasoning",
             "**Checking the revised task**",
         ));
+        app.track_agents_overview_notification(&follow_up);
         let current_request = app.agents_overview.active_refresh.unwrap().0;
         for (request_id, last_messages) in [
             (old_request, stale_messages.clone()),
@@ -896,6 +924,12 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
             assert!(app.agents_overview.last_messages.is_empty());
         }
         assert!(app.agents_overview.activity.contains_key(&retained));
+        assert_eq!(
+            app.agents_overview.activity[&retained]
+                .latest_prompt
+                .as_deref(),
+            Some("Current request")
+        );
         assert!(app.agents_overview.active_refresh.is_none());
     }
 
@@ -1027,10 +1061,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     expected.insert(ids[0]);
     let retained: HashSet<_> = app.agents_overview.threads.keys().copied().collect();
     assert_eq!(retained, expected);
-    assert_eq!(
-        app.agents_overview.last_messages,
-        HashMap::from([(ids[10], "Found the regression in the parser.".to_string())])
-    );
+    assert!(app.agents_overview.last_messages.is_empty());
     let thread = app.agents_overview.threads[&ids[10]].as_ref().unwrap();
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
 
@@ -1453,6 +1484,18 @@ async fn agents_overview_details_render_markdown() {
         .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
         .unwrap();
     assert_eq!(terminal.backend().to_string(), cached);
+    app.track_agents_overview_notification(&ServerNotification::ThreadClosed(
+        ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        },
+    ));
+    assert_eq!(
+        app.agents_overview
+            .last_messages
+            .get(&thread_id)
+            .map(String::as_str),
+        Some(message)
+    );
 
     thread.preview = format!("```\n{}\n```", "long prompt ".repeat(25));
     app.agents_overview.activity.clear();

@@ -22,6 +22,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
@@ -168,7 +169,16 @@ impl App {
                 self.agents_overview
                     .requested_permission_profiles
                     .remove(&thread_id);
-                self.agents_overview.activity.remove(&thread_id);
+                if let Some(message) = self
+                    .agents_overview
+                    .activity
+                    .remove(&thread_id)
+                    .and_then(|activity| activity.last_message)
+                {
+                    self.agents_overview
+                        .last_messages
+                        .insert(thread_id, message);
+                }
                 if let Some(usage) = self.agents_overview.usage.get_mut(&thread_id) {
                     usage.tokens = None;
                 }
@@ -495,22 +505,24 @@ impl App {
                             Ok(response) => {
                                 let mut latest_prompt = None;
                                 let mut last_message = None;
-                                if let Ok(turns) = request_handle
-                                    .request_typed::<ThreadTurnsListResponse>(
-                                        ClientRequest::ThreadTurnsList {
-                                            request_id: RequestId::String(
-                                                Uuid::new_v4().to_string(),
-                                            ),
-                                            params: ThreadTurnsListParams {
-                                                thread_id: thread_id.to_string(),
-                                                cursor: None,
-                                                limit: Some(1),
-                                                sort_direction: None,
-                                                items_view: None,
+                                // Legacy turn listing replays the entire rollout, even for one turn.
+                                if response.thread.history_mode == ThreadHistoryMode::Paginated
+                                    && let Ok(turns) = request_handle
+                                        .request_typed::<ThreadTurnsListResponse>(
+                                            ClientRequest::ThreadTurnsList {
+                                                request_id: RequestId::String(
+                                                    Uuid::new_v4().to_string(),
+                                                ),
+                                                params: ThreadTurnsListParams {
+                                                    thread_id: thread_id.to_string(),
+                                                    cursor: None,
+                                                    limit: Some(1),
+                                                    sort_direction: None,
+                                                    items_view: None,
+                                                },
                                             },
-                                        },
-                                    )
-                                    .await
+                                        )
+                                        .await
                                     && let Some(turn) = turns.data.first()
                                 {
                                     if let Some(ThreadItemPayload::UserMessage {
