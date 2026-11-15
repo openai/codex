@@ -137,23 +137,28 @@ impl ConfigManager {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigManagerError> {
-        let layers = match params.cwd.as_deref() {
-            Some(cwd) => {
-                let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
+        let cwd = params
+            .cwd
+            .map(|cwd| {
+                AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
                     ConfigManagerError::io("failed to resolve config cwd to an absolute path", err)
-                })?;
-                self.load_config_layers(Some(cwd)).await.map_err(|err| {
-                    ConfigManagerError::io("failed to read configuration layers", err)
-                })?
-            }
-            None => self.load_thread_agnostic_config().await.map_err(|err| {
-                ConfigManagerError::io("failed to read configuration layers", err)
-            })?,
-        };
+                })
+            })
+            .transpose()?;
+        let layers = self
+            .load_config_layers(cwd)
+            .await
+            .map_err(|err| ConfigManagerError::io("failed to read configuration layers", err))?;
+        Self::config_read_response(&layers, params.include_layers)
+    }
 
+    pub(super) fn config_read_response(
+        layers: &ConfigLayerStack,
+        include_layers: bool,
+    ) -> Result<ConfigReadResponse, ConfigManagerError> {
         let mut effective_config_toml = ConfigToml::try_from(layers.effective_config())
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
-        effective_config_toml.apps = apps_config_from_layer_stack(&layers);
+        effective_config_toml.apps = apps_config_from_layer_stack(layers);
         layers
             .requirements_toml()
             .apply_exact_to_config(&mut effective_config_toml);
@@ -175,7 +180,7 @@ impl ConfigManager {
                 .is_none()
         });
         origins.retain(|path, _| !path.starts_with("apps."));
-        origins.extend(apps_config_origins_from_layer_stack(&layers));
+        origins.extend(apps_config_origins_from_layer_stack(layers));
         origins.retain(|_, metadata| {
             !matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. })
         });
@@ -186,7 +191,7 @@ impl ConfigManager {
                 .into_iter()
                 .map(|(path, metadata)| (path, config_layer_metadata_to_api(metadata)))
                 .collect(),
-            layers: params.include_layers.then(|| {
+            layers: include_layers.then(|| {
                 layers
                     .all_layers_high_to_low()
                     .filter(|layer| {

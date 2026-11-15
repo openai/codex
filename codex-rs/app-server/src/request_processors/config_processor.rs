@@ -115,9 +115,18 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
-        let fallback_cwd = params.cwd.as_ref().map(PathBuf::from);
-        let mut response = self.config_manager.read(params).await.map_err(map_error)?;
-        let config = self.load_latest_config(fallback_cwd).await?;
+        let cwd = params.cwd.as_ref().map(PathBuf::from);
+        let config = match self.load_latest_config(cwd).await {
+            Ok(config) => config,
+            Err(err) => {
+                // Report layer read/decoding errors before full-config validation errors, as before.
+                self.config_manager.read(params).await.map_err(map_error)?;
+                return Err(err);
+            }
+        };
+        let mut response =
+            ConfigManager::config_read_response(&config.config_layer_stack, params.include_layers)
+                .map_err(map_error)?;
         for feature_key in SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT {
             let Some(feature) = feature_for_key(feature_key) else {
                 continue;
