@@ -214,6 +214,9 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
         crate::connect_remote_app_server(endpoint).await?,
         ThreadParamsMode::Remote,
     );
+    let owner = session.backend_id();
+    app.app_server_backend_id = Some(owner);
+    app.backend_registry.connect(&session);
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -225,7 +228,10 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
         app.agents_overview.pins_by_backend[&session.backend_id()],
         Some(vec![ids[1]])
     );
-    assert!(app.agents_overview.has_more(session.backend_id()));
+    assert!(
+        app.agents_overview
+            .has_more_for(&app.backend_registry, owner)
+    );
     let browse = app.agents_overview.threads.clone();
     let browse_rows = || browse.values().flatten().cloned().collect();
     let mut view = app.agents_overview_view(browse_rows(), Some(ids[4]));
@@ -259,6 +265,11 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     assert!(rendered.contains("1 of 10"), "{rendered}"); // The pinned task has its own group.
     view.handle_key_event(KeyCode::Esc.into());
 
+    if mixed_sources {
+        // Queue Show more behind a metadata refresh before the archive creates a vacancy.
+        app.refresh_agents_overview_threads(&session);
+        app.show_more_agents_overview(&session);
+    }
     app.track_agents_overview_notification(&ServerNotification::ThreadArchived(
         ThreadArchivedNotification {
             thread_id: ids[0].to_string(),
@@ -268,7 +279,9 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     expected.remove(&ids[0]);
     app.refresh_agents_overview_threads(&session);
     finish_overview_refresh(&mut app, &session, &mut rx).await;
-    if !mixed_sources {
+    if mixed_sources {
+        finish_overview_refresh(&mut app, &session, &mut rx).await;
+    } else {
         assert_eq!(app.agents_overview.threads.len(), 9);
         assert!(
             app.agents_overview
@@ -283,31 +296,51 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     assert_eq!(app.agents_overview.threads.len(), 10);
     assert!(app.agents_overview.threads.contains_key(&ids[10]));
     let other = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let other_owner = other.backend_id();
     if mixed_sources {
         let archived = ids[22];
-        app.backend_registry.observe(session.backend_id(), archived);
+        app.backend_registry.observe(owner, archived);
         app.track_agents_overview_notification(&ServerNotification::ThreadArchived(
             ThreadArchivedNotification {
                 thread_id: archived.to_string(),
             },
         ));
         expected.remove(&archived);
+    } else {
+        app.show_more_agents_overview(&session);
     }
-    app.agents_overview.reset_visible_pagination();
+    assert!(
+        app.agents_overview.active_refresh.is_some(),
+        "Show more should load a page after the vacancy is filled"
+    );
+    assert_eq!(
+        app.agents_overview.active_refresh.map(|(_, owner)| owner),
+        Some(owner)
+    );
+    // The page may finish while another backend is displayed, or after returning.
+    app.app_server_backend_id = Some(other_owner);
+    app.backend_registry.connect(&other);
+    assert!(app.backend_registry.request_handle(owner).is_some());
+    assert!(
+        !app.agents_overview
+            .has_more_for(&app.backend_registry, other_owner)
+    );
+    app.show_more_agents_overview(&other);
+    assert!(app.agents_overview.pending_refresh_backends.is_empty());
     if mixed_sources {
         app.refresh_agents_overview_threads(&other);
-        finish_overview_refresh(&mut app, &other, &mut rx).await;
     }
-    app.agents_overview.reset_visible_pagination();
-    app.show_more_agents_overview(&session);
-    // The page may finish while another backend is displayed, or after returning.
-    app.agents_overview.reset_visible_pagination();
+    finish_overview_refresh(&mut app, &other, &mut rx).await;
     if mixed_sources {
-        finish_overview_refresh(&mut app, &session, &mut rx).await;
-    } else {
         finish_overview_refresh(&mut app, &other, &mut rx).await;
-        app.agents_overview.reset_visible_pagination();
+        assert!(app.agents_overview.initialized.contains(&other_owner));
     }
+    app.app_server_backend_id = Some(owner);
+    assert!(
+        app.agents_overview
+            .has_more_for(&app.backend_registry, owner)
+    );
+    app.backend_registry.disconnect(other_owner);
     other.shutdown().await?;
     assert_eq!(
         app.agents_overview
@@ -334,7 +367,10 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     app.refresh_agents_overview_threads(&session);
     finish_overview_refresh(&mut app, &session, &mut rx).await;
     assert_eq!(app.agents_overview.threads, expected);
-    assert!(!app.agents_overview.has_more(session.backend_id()));
+    assert!(
+        !app.agents_overview
+            .has_more_for(&app.backend_registry, owner)
+    );
     let old = app.agents_overview.threads[&ids[23]].as_ref().unwrap();
     assert_eq!(old.preview, "Task 23");
     assert_eq!(
@@ -356,7 +392,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     view.handle_key_event(KeyCode::Esc.into());
     app.agents_overview.threads.clear();
     app.agents_overview.pins_by_backend = [(session.backend_id(), Some(Vec::new()))].into();
-    app.agents_overview.refill_count = 0;
+    app.agents_overview.refill_by_backend.clear();
     app.refresh_agents_overview_threads(&session);
     finish_overview_refresh(&mut app, &session, &mut rx).await;
     assert_eq!(

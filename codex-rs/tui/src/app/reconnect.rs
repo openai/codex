@@ -270,24 +270,40 @@ impl App {
             self.overlay = None;
             self.commit_animation = None;
             self.clear_recap_request(crate::app_event::RecapTrigger::Manual);
-            if let Some(task) = self.agents_overview.refresh_task.take() {
-                task.abort();
-            }
-            self.agents_overview.active_refresh = None;
-            if let Some(owner) = self.app_server_backend_id {
+            let displayed_backend = self.displayed_conversation_backend_id();
+            if let Some(backend_id) = displayed_backend {
+                self.backend_registry.disconnect(backend_id);
+                self.cancel_agents_overview_refresh(backend_id);
+                self.reset_agents_overview_discovery(backend_id);
+                let registry = &self.backend_registry;
+                let other_backend =
+                    |id: &ThreadId| registry.owner(*id).is_some_and(|owner| owner != backend_id);
                 self.agents_overview
-                    .invalidate_discovery(owner, /*displayed*/ true);
+                    .refresh_notifications
+                    .retain(|id, _| other_backend(id));
+                self.agents_overview.usage.retain(|id, _| other_backend(id));
+                self.agents_overview
+                    .activity
+                    .retain(|id, _| other_backend(id));
+                self.agents_overview
+                    .last_messages
+                    .retain(|id, _| other_backend(id));
+            } else {
+                if let Some(task) = self.agents_overview.refresh_task.take() {
+                    task.abort();
+                }
+                self.agents_overview.active_refresh = None;
+                self.agents_overview.refresh_show_more = false;
+                self.agents_overview.active_refresh_thread_ids.clear();
+                self.agents_overview.pending_refresh_backends.clear();
+                self.agents_overview.refresh_notifications.clear();
+                self.agents_overview.usage.clear();
+                self.agents_overview.activity.clear();
+                self.agents_overview.last_messages.clear();
             }
-            self.agents_overview.refresh_show_more = false;
-            self.agents_overview.active_refresh_thread_ids.clear();
-            self.agents_overview.refresh_pending = false;
-            self.agents_overview.refresh_notifications.clear();
             self.agents_overview.pending_pin_change = None;
             self.agents_overview.pending_usage = None;
             self.agents_overview.usage_disabled = false;
-            self.agents_overview.usage.clear();
-            self.agents_overview.activity.clear();
-            self.agents_overview.last_messages.clear();
             self.reconnect.presentation = if self
                 .chat_widget
                 .selected_index_for_active_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
@@ -470,10 +486,9 @@ impl App {
             cancellation.cancel();
         }
         self.agents_overview.dispatched_requests.clear();
-        self.agents_overview.active_refresh = None;
-        self.agents_overview.refresh_show_more = false;
-        self.agents_overview.active_refresh_thread_ids.clear();
-        self.agents_overview.refresh_pending = false;
+        if let Some((_, owner)) = self.agents_overview.active_refresh {
+            self.cancel_agents_overview_refresh(owner);
+        }
         for input in self.agents_overview.input_states.values_mut() {
             input.reconnect_pending = true;
         }
@@ -591,9 +606,8 @@ impl App {
         self.refresh_pending_thread_approvals().await;
         // Discover tasks whose notifications were missed, without clearing retained rows.
         // A hidden overview performs this discovery when it is next opened.
-        self.agents_overview
-            .initialized
-            .remove(&app_server.backend_id());
+        self.reset_agents_overview_discovery(app_server.backend_id());
+        self.backend_registry.connect(app_server);
         if self.reconnect.presentation == ReconnectPresentation::Overview {
             let threads = self
                 .agents_overview
@@ -604,7 +618,6 @@ impl App {
                 .collect();
             let view = self.agents_overview_view(threads, selected);
             self.chat_widget.show_bottom_pane_view(Box::new(view));
-            self.refresh_agents_overview_threads(app_server);
             // The Overview survived request cleanup, but terminal typeahead may have survived too.
             if self.startup_protected_input_boundary {
                 self.render_startup_frame(tui, app_event_rx)?;
@@ -622,6 +635,9 @@ impl App {
             server.reconnect(app_server.request_handle(), self.app_event_tx.clone());
         }
         self.reconnect.offline = false;
+        if self.reconnect.presentation == ReconnectPresentation::Overview {
+            self.refresh_agents_overview_threads(app_server);
+        }
         self.chat_widget.update_account_state(
             bootstrap.status_account_display,
             bootstrap.plan_type,

@@ -1141,9 +1141,13 @@ See the Codex keymap documentation for supported actions and examples."
                 /*server_version*/ None,
             );
         }
+        app.backend_registry.connect(&app_server);
         if let Some(thread_id) = app.current_displayed_thread_id() {
             app.backend_registry
                 .observe(app_server.backend_id(), thread_id);
+        }
+        for session in &other_backends {
+            app.backend_registry.connect(session);
         }
         if start_in_agents_overview {
             app.open_agents_overview(&app_server);
@@ -1627,6 +1631,10 @@ See the Codex keymap documentation for supported actions and examples."
                                 backends.defer_side_startup(event);
                             }
                             Some(event) if owner != displayed_owner || !app.reconnect.offline => {
+                                if matches!(&event.event, codex_app_server_client::AppServerEvent::Disconnected { .. }) {
+                                    app.backend_registry.disconnect(owner);
+                                    app.cancel_agents_overview_refresh(owner);
+                                }
                                 if let Some(slot) = backends.slot(owner) {
                                     let (session, parked_inputs) = backends.session_and_parked_inputs(slot);
                                     app.handle_polled_backend_event(session, displayed_owner, parked_inputs, event).await;
@@ -1634,8 +1642,9 @@ See the Codex keymap documentation for supported actions and examples."
                             }
                             Some(_) => {}
                             None => {
-                                app.agents_overview
-                                    .invalidate_discovery(owner, owner == displayed_owner);
+                                app.backend_registry.disconnect(owner);
+                                app.cancel_agents_overview_refresh(owner);
+                                app.reset_agents_overview_discovery(owner);
                                 if owner == displayed_owner {
                                     if app.reconnect.offline && app.pending_startup_thread_start {
                                         reconnect = None;

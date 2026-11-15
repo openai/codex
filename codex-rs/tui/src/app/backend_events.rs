@@ -37,8 +37,8 @@ impl App {
                 _ => false,
             };
             if invalidates_discovery {
-                self.agents_overview
-                    .invalidate_discovery(event.backend_id, /*displayed*/ false);
+                self.cancel_agents_overview_refresh(event.backend_id);
+                self.reset_agents_overview_discovery(event.backend_id);
             }
             if let AppServerEvent::ServerNotification(notification) = &event.event
                 && let ServerNotificationThreadTarget::Thread(thread_id) =
@@ -51,10 +51,7 @@ impl App {
                         | ServerNotification::ThreadUnarchived(_)
                 ) && self.backend_registry.owner(thread_id) == Some(event.backend_id)
                 {
-                    // A parked removal must not consume the displayed backend's page budget.
-                    let refill_count = self.agents_overview.refill_count;
                     self.track_agents_overview_notification(notification);
-                    self.agents_overview.refill_count = refill_count;
                     self.repaint_agents_overview();
                 }
                 if let ServerNotification::ThreadSettingsUpdated(settings) = notification.as_ref()

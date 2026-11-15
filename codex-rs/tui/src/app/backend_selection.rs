@@ -467,16 +467,19 @@ impl App {
         self.agents_overview.pending_usage = None;
         self.reset_agents_overview_usage_for_backend_switch();
         self.agents_overview.usage_disabled = false;
-        self.agents_overview.reset_visible_pagination();
         self.app_event_tx = AppEventSender::new(self.app_event_tx.app_event_tx.clone());
         self.app_server_backend_id = Some(destination.backend_id());
         self.app_server_target = target;
         self.reconnect = Default::default();
         if let Ok(mut state) = self.agents_overview.view_state.lock() {
             state.connection_notice = None;
-            let destination_id = destination.backend_id();
-            state.has_more = self.agents_overview.initialized.contains(&destination_id)
-                && self.agents_overview.has_more(destination_id);
+            state.has_more = self
+                .agents_overview
+                .has_more_for(&self.backend_registry, destination.backend_id());
+            state.refresh_failed = self
+                .agents_overview
+                .refresh_failed_backends
+                .contains(&destination.backend_id());
             state.restart_history_search();
         }
         self.rate_limit_hard_stop_generation = self.rate_limit_hard_stop_generation.wrapping_add(1);

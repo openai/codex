@@ -5,6 +5,7 @@ use crate::app_event::AgentsOverviewAction;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_model_provider_info::ModelProviderInfo;
@@ -21,9 +22,28 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let started = app_server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
+    attach_thread(&mut app, thread_id);
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.backend_registry.connect(&app_server);
+    app.open_agents_overview(&app_server);
+    finish_overview_refresh(&mut app, &app_server, &mut rx).await;
 
+    let status_changed = |status| {
+        ServerNotification::ThreadStatusChanged(ThreadStatusChangedNotification {
+            thread_id: thread_id.to_string(),
+            status,
+        })
+    };
     for pinned in [true, false] {
+        app.refresh_agents_overview_threads(&app_server);
+        app.track_agents_overview_notification(&status_changed(ThreadStatus::Active {
+            active_flags: Vec::new(),
+        }));
+        assert!(
+            app.agents_overview
+                .refresh_notifications
+                .contains_key(&thread_id)
+        );
         Box::pin(app.handle_event(
             &mut tui,
             &mut app_server,
@@ -34,6 +54,12 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             .agents_overview
             .pending_pin_change
             .expect("pin request started");
+        app.chat_widget.handle_key_event(KeyCode::Esc.into());
+        assert!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_none()
+        );
         let completed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
                 let event = rx.recv().await.expect("pin request completes");
@@ -45,12 +71,19 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             }
         })
         .await?;
-        app.agents_overview
-            .refresh_notifications
-            .insert(thread_id, Vec::new());
         Box::pin(app.handle_event(&mut tui, &mut app_server, completed)).await?;
         assert_eq!(app.agents_overview.pending_pin_change, None);
-        assert!(app.agents_overview.refresh_notifications.is_empty());
+        assert_eq!(app.agents_overview.active_refresh, None);
+        app.track_agents_overview_notification(&status_changed(ThreadStatus::Idle));
+        app.open_agents_overview(&app_server);
+        finish_overview_refresh(&mut app, &app_server, &mut rx).await;
+        assert_eq!(
+            app.agents_overview.threads[&thread_id]
+                .as_ref()
+                .unwrap()
+                .status,
+            ThreadStatus::Idle
+        );
         let threads = list_pinned_threads(&app_server.request_handle())
             .await
             .map_err(color_eyre::eyre::Report::msg)?
@@ -178,6 +211,44 @@ async fn cloud_archive_preserves_attached_child_and_other_tasks() -> Result<()> 
     if let Some(refresh) = app.agents_overview.refresh_task.take() {
         refresh.abort();
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn pin_completion_cancels_the_originating_backends_stale_refresh() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let backend_id = BackendId::new();
+    let thread_id = ThreadId::new();
+    app.backend_registry.observe(backend_id, thread_id);
+    app.agents_overview
+        .pins_by_backend
+        .insert(backend_id, Some(Vec::new()));
+    let pin_request = Uuid::new_v4();
+    app.agents_overview.pending_pin_change = Some((pin_request, backend_id));
+    let stale_refresh = Uuid::new_v4();
+    app.agents_overview.active_refresh = Some((stale_refresh, backend_id));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::AgentsOverviewPinToggled {
+            backend_id,
+            request_id: pin_request,
+            thread_id,
+            pinned: true,
+            result: Ok(()),
+        },
+    ))
+    .await?;
+
+    assert_eq!(app.agents_overview.active_refresh, None);
+    assert_eq!(
+        app.agents_overview.pins_by_backend[&backend_id],
+        Some(vec![thread_id])
+    );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -977,6 +1048,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         };
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.pause_events();
+        app.backend_registry.connect(&app_server);
         app.open_agents_overview(&app_server);
         if action == AgentsOverviewAction::Archive {
             let rollout = app_server

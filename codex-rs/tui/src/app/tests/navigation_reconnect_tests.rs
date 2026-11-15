@@ -159,7 +159,6 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         let stale_request = Uuid::new_v4();
         let refresh_owner = crate::backend_id::BackendId::new();
         app.agents_overview.active_refresh = Some((stale_request, refresh_owner));
-        app.agents_overview.refresh_pending = true;
         let refresh = tokio::spawn(std::future::pending::<()>());
         app.agents_overview.refresh_task = Some(refresh.abort_handle());
         let directory = tempfile::tempdir()?;
@@ -255,8 +254,22 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             crate::connect_remote_app_server(endpoint).await?,
             ThreadParamsMode::Embedded,
         );
+        app.app_server_backend_id = Some(session.backend_id());
+        app.backend_registry.connect(&session);
+        let parked = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let parked_owner = parked.backend_id();
+        app.backend_registry.connect(&parked);
+        app.backend_registry.observe(session.backend_id(), added);
+
+        app.agents_overview.pending_refresh_backends = [session.backend_id()].into();
         if overview_initialized {
             app.agents_overview.initialized.insert(session.backend_id());
+        }
+        if let Some(thread_id) = previous_thread {
+            assert!(
+                app.backend_registry
+                    .observe(session.backend_id(), thread_id)
+            );
         }
         assert!(
             session
@@ -279,15 +292,16 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         app.handle_backend_event(&session, disconnected).await;
         assert_eq!(app.agents_overview.pending_usage, None);
         assert!(app.reconnect.offline);
+        assert!(
+            app.backend_registry
+                .request_handle(session.backend_id())
+                .is_none()
+        );
+        assert!(app.backend_registry.request_handle(parked_owner).is_some());
         assert!(app.agents_overview.last_messages.is_empty());
         assert!(refresh.await.unwrap_err().is_cancelled());
-        assert_eq!(
-            (
-                app.agents_overview.active_refresh.map(|(id, _)| id),
-                app.agents_overview.refresh_pending
-            ),
-            (None, false)
-        );
+        assert_eq!(app.agents_overview.active_refresh, None);
+        assert!(app.agents_overview.pending_refresh_backends.is_empty());
         app.apply_agents_overview_thread_refresh(
             &session,
             stale_request,
@@ -384,6 +398,13 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             Ok::<_, color_eyre::Report>(())
         })
         .await??;
+        assert!(
+            app.backend_registry
+                .request_handle(session.backend_id())
+                .is_some()
+        );
+        assert!(app.backend_registry.request_handle(parked_owner).is_some());
+        parked.shutdown().await?;
         assert!(app.agents_overview.visible_thread_ids.contains(&vanished));
 
         // Missing metadata alone does not evict a retained row; an archive notification does.

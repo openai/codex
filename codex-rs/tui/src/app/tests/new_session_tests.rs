@@ -454,6 +454,7 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
                     socket_path: client_home.path().join("daemon.sock").abs(),
                 },
             };
+            app.backend_registry.connect(&server);
             app.open_agents_overview(&server);
         }
         let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -1211,6 +1212,8 @@ async fn check_retained_draft_handoff(
     let retained = app.chat_widget.capture_thread_input_state().unwrap();
     app.chat_widget
         .restore_user_message_to_composer("draft for the displayed task".into());
+    app.backend_registry.connect(&source);
+    app.backend_registry.connect(&destination);
     let mut backends = BackendSessions::from_initial(source, vec![destination]);
     let destination_slot = backends
         .slot(destination_id)
@@ -1262,7 +1265,7 @@ async fn check_retained_draft_handoff(
     }
 
     app.agents_overview.initialized.insert(outgoing);
-    app.agents_overview.show_more_requested = true;
+    app.agents_overview.show_more_backends.insert(outgoing);
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let pages_before = recorded_params(&requests, "thread/turns/list").len();
     let reads_before = recorded_params(&requests, "thread/read").len();
@@ -1284,9 +1287,22 @@ async fn check_retained_draft_handoff(
         recorded_params(&requests, "thread/turns/list"),
         recorded_params(&requests, "thread/resume"),
     );
+    assert_eq!(
+        app.backend_registry.request_handle(outgoing).is_some(),
+        history_capabilities != HistoryCapabilities::LegacyOnly,
+    );
+    assert!(
+        app.backend_registry
+            .request_handle(destination_id)
+            .is_some()
+    );
     assert!(app.agents_overview.initialized.contains(&outgoing));
     assert!(!app.agents_overview.initialized.contains(&destination_id));
-    assert!(!app.agents_overview.show_more_requested);
+    assert!(
+        !app.agents_overview
+            .show_more_backends
+            .contains(&destination_id)
+    );
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     if saved_history || parked_policy.is_some() {
         assert_eq!(

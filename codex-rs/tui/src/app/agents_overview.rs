@@ -1,5 +1,5 @@
-//! Overview of recent and locally retained sessions and their subagents.
-//! Tasks owned by another app server open as frozen, read-only history snapshots.
+//! Overview of recent and locally retained sessions across registered backends.
+//! Selecting a task on another backend prepares its owner before switching the UI.
 //! Only the immediate attachment of a dashboard-created task is treated as fresh.
 
 #[path = "agents_overview_new.rs"]
@@ -26,14 +26,13 @@ use super::*;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::backend_id::BackendId;
 use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::startup_draft::StartupDraftPump;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_protocol::protocol::SubAgentSource;
+use std::collections::VecDeque;
 
 pub(crate) const AGENTS_OVERVIEW_VIEW_ID: &str = "agents-overview";
 
@@ -57,13 +56,14 @@ pub(super) struct AgentsOverviewState {
     pub(super) initialized: HashSet<BackendId>,
     pub(super) discovery:
         HashMap<BackendId, super::agents_overview_discovery::AgentsOverviewDiscovery>,
-    pub(super) show_more_requested: bool,
+    pub(super) show_more_backends: HashSet<BackendId>,
     pub(super) refresh_show_more: bool,
-    /// Vacancies left by lifecycle removals, filled without expanding the visible window.
-    pub(super) refill_count: usize,
+    pub(super) refresh_failed_backends: HashSet<BackendId>,
+    /// Vacancies left by lifecycle removals, tracked by the backend that owned the row.
+    pub(super) refill_by_backend: HashMap<BackendId, usize>,
     pub(super) active_refresh: Option<(Uuid, BackendId)>,
-    pub(super) refresh_pending: bool,
-    pub(super) refresh_invalidated: bool,
+    /// Other backends queued while the shared overview refresh slot is occupied.
+    pub(super) pending_refresh_backends: VecDeque<BackendId>,
     pub(super) pin_refresh_requested: bool,
     pub(super) refresh_thread_ids: HashSet<ThreadId>,
     pub(super) active_refresh_thread_ids: HashSet<ThreadId>,
@@ -89,30 +89,23 @@ pub(super) struct AgentsOverviewState {
 }
 
 impl AgentsOverviewState {
-    pub(super) fn invalidate_discovery(&mut self, backend: BackendId, displayed: bool) {
-        self.initialized.remove(&backend);
-        self.discovery.remove(&backend);
-        if displayed {
-            self.reset_visible_pagination();
-            self.view_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .has_more = false;
-        }
-        self.refresh_invalidated |= self
-            .active_refresh
-            .is_some_and(|(_, owner)| owner == backend);
+    pub(super) fn refill_count(&self, owner: BackendId) -> usize {
+        self.refill_by_backend
+            .get(&owner)
+            .copied()
+            .unwrap_or_default()
     }
 
-    pub(super) fn reset_visible_pagination(&mut self) {
-        self.show_more_requested = false;
-        self.refill_count = 0;
-    }
-
-    pub(super) fn has_more(&self, backend_id: BackendId) -> bool {
-        self.discovery
-            .get(&backend_id)
-            .is_none_or(super::agents_overview_discovery::AgentsOverviewDiscovery::has_more)
+    pub(super) fn has_more_for(
+        &self,
+        registry: &super::backend_registry::BackendRegistry,
+        owner: BackendId,
+    ) -> bool {
+        registry.request_handle(owner).is_some()
+            && self
+                .discovery
+                .get(&owner)
+                .is_some_and(super::agents_overview_discovery::AgentsOverviewDiscovery::has_more)
     }
 }
 
@@ -150,9 +143,8 @@ impl App {
             } else {
                 "Reconnecting — agent list is stale"
             });
-        } else {
-            self.refresh_agents_overview_threads(app_server);
         }
+        self.refresh_agents_overview_threads(app_server);
     }
 
     pub(super) fn apply_agents_overview_thread_refresh(
@@ -171,10 +163,21 @@ impl App {
         self.agents_overview.refresh_show_more = false;
         self.agents_overview.active_refresh_thread_ids.clear();
         self.agents_overview.refresh_task = None;
-        let invalidated = std::mem::take(&mut self.agents_overview.refresh_invalidated);
         let refill_succeeded = result
             .as_ref()
             .is_ok_and(|refresh| refresh.recent_seed_complete);
+        if !refill_succeeded {
+            self.agents_overview
+                .refresh_failed_backends
+                .insert(refresh_backend_id);
+        } else if result
+            .as_ref()
+            .is_ok_and(|refresh| refresh.discovery.is_some())
+        {
+            self.agents_overview
+                .refresh_failed_backends
+                .remove(&refresh_backend_id);
+        }
         {
             let mut state = self
                 .agents_overview
@@ -182,10 +185,12 @@ impl App {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.loading = false;
-            state.refresh_failed = !invalidated && !refill_succeeded;
+            state.refresh_failed = self
+                .agents_overview
+                .refresh_failed_backends
+                .contains(&app_server.backend_id());
         }
         match result {
-            _ if invalidated => self.agents_overview.refresh_notifications.clear(),
             Ok(mut refresh) => {
                 for id in refresh.cleared_unread {
                     self.agents_overview.unread.remove(&id);
@@ -204,29 +209,29 @@ impl App {
                         .pins_by_backend
                         .insert(refresh_backend_id, pins);
                 }
-                let displayed_refresh = refresh_backend_id == app_server.backend_id();
-                if refresh.discovery.is_some()
-                    || (displayed_refresh && refresh.recent_seed_complete)
-                {
+                if refresh.recent_seed_complete {
                     self.agents_overview.initialized.insert(refresh_backend_id);
-                } else if displayed_refresh {
-                    self.agents_overview.initialized.remove(&refresh_backend_id);
                 }
                 if let Some(discovery) = refresh.discovery {
-                    if displayed_refresh {
-                        let has_more = discovery.has_more();
-                        if !has_more {
-                            self.agents_overview.reset_visible_pagination();
-                        }
+                    if !discovery.has_more() {
                         self.agents_overview
-                            .view_state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .has_more = has_more;
+                            .refill_by_backend
+                            .remove(&refresh_backend_id);
+                        self.agents_overview
+                            .show_more_backends
+                            .remove(&refresh_backend_id);
                     }
                     self.agents_overview
                         .discovery
                         .insert(refresh_backend_id, discovery);
+                    let has_more = self
+                        .agents_overview
+                        .has_more_for(&self.backend_registry, app_server.backend_id());
+                    self.agents_overview
+                        .view_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .has_more = has_more;
                 }
                 for (thread_id, thread) in refresh.threads {
                     if self.agents_overview.removed_threads.contains(&thread_id) {
@@ -256,13 +261,15 @@ impl App {
                             self.agents_overview.usage.remove(&thread_id);
                             continue;
                         }
-                        if displayed_refresh
-                            && !self.agents_overview.threads.contains_key(&thread_id)
+                        if !self.agents_overview.threads.contains_key(&thread_id)
                             && !self.agents_overview.hidden_threads.contains(&thread_id)
                             && is_overview_root(&thread)
+                            && let Some(refill) = self
+                                .agents_overview
+                                .refill_by_backend
+                                .get_mut(&refresh_backend_id)
                         {
-                            self.agents_overview.refill_count =
-                                self.agents_overview.refill_count.saturating_sub(1);
+                            *refill = refill.saturating_sub(1);
                         }
                         self.agents_overview
                             .activity
@@ -300,14 +307,116 @@ impl App {
                 self.track_agents_overview_notification(&notification);
             }
         }
-        if std::mem::take(&mut self.agents_overview.refresh_pending)
-            || invalidated
-            || (refill_succeeded
-                && (self.agents_overview.refill_count > 0
-                    || self.agents_overview.show_more_requested)
-                && self.agents_overview.has_more(app_server.backend_id()))
+        let overview = &mut self.agents_overview;
+        if refill_succeeded {
+            for (&owner, discovery) in &overview.discovery {
+                if owner == app_server.backend_id()
+                    && discovery.has_more()
+                    && (overview.refill_count(owner) > 0
+                        || overview.show_more_backends.contains(&owner))
+                    && !overview.pending_refresh_backends.contains(&owner)
+                {
+                    overview.pending_refresh_backends.push_back(owner);
+                }
+            }
+        }
+        self.drain_agents_overview_refresh_queue();
+        self.repaint_agents_overview();
+    }
+
+    pub(super) fn drain_agents_overview_refresh_queue(&mut self) {
+        if self.agents_overview.active_refresh.is_some() || self.reconnect.offline {
+            return;
+        }
+        let visible = self
+            .chat_widget
+            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+            .is_some();
+        if let Some((backend_id, handle)) = self
+            .agents_overview
+            .pending_refresh_backends
+            .iter()
+            .copied()
+            .filter(|&backend_id| {
+                self.app_server_backend_id
+                    .is_none_or(|owner| owner == backend_id)
+                    && (visible || !self.agents_overview.initialized.contains(&backend_id))
+            })
+            .find_map(|backend_id| {
+                self.backend_registry
+                    .request_handle(backend_id)
+                    .map(|handle| (backend_id, handle))
+            })
         {
-            self.refresh_changed_agents_overview_threads(app_server);
+            self.start_agents_overview_refresh_for_backend(backend_id, handle);
+        }
+    }
+
+    pub(super) fn reset_agents_overview_discovery(&mut self, backend_id: BackendId) {
+        let overview = &mut self.agents_overview;
+        overview.initialized.remove(&backend_id);
+        overview.discovery.remove(&backend_id);
+        overview
+            .removed_threads
+            .retain(|thread_id| self.backend_registry.owner(*thread_id) != Some(backend_id));
+        overview
+            .view_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .has_more = self
+            .app_server_backend_id
+            .is_some_and(|owner| overview.has_more_for(&self.backend_registry, owner));
+    }
+
+    pub(super) fn cancel_agents_overview_refresh(&mut self, backend_id: BackendId) {
+        let overview = &mut self.agents_overview;
+        if overview
+            .active_refresh
+            .is_some_and(|(_, owner)| owner == backend_id)
+        {
+            if let Some(task) = overview.refresh_task.take() {
+                task.abort();
+            }
+            overview.active_refresh = None;
+            overview.refresh_notifications.clear();
+            if std::mem::take(&mut overview.refresh_show_more) {
+                overview.show_more_backends.insert(backend_id);
+            }
+            let removed_threads = &overview.removed_threads;
+            overview.refresh_thread_ids.extend(
+                overview
+                    .active_refresh_thread_ids
+                    .drain()
+                    .filter(|id| !removed_threads.contains(id)),
+            );
+            overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .loading = false;
+        }
+        overview
+            .pending_refresh_backends
+            .retain(|id| *id != backend_id);
+        if self.backend_registry.request_handle(backend_id).is_none() {
+            overview.refresh_failed_backends.remove(&backend_id);
+        }
+        self.drain_agents_overview_refresh_queue();
+        {
+            let mut state = self
+                .agents_overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.has_more = self.app_server_backend_id.is_some_and(|owner| {
+                self.agents_overview
+                    .has_more_for(&self.backend_registry, owner)
+            });
+            state.refresh_failed = self.app_server_backend_id.is_some_and(|owner| {
+                self.agents_overview
+                    .refresh_failed_backends
+                    .contains(&owner)
+            });
         }
         self.repaint_agents_overview();
     }

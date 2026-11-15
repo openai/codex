@@ -31,7 +31,7 @@ async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
         .threads
         .insert(collision, Some(collision_row.clone()));
 
-    for deleted in [false, true] {
+    for (index, deleted) in [false, true].into_iter().enumerate() {
         let id = ThreadId::new();
         assert!(app.backend_registry.observe(owner, id));
         let row = overview_thread(
@@ -66,8 +66,9 @@ async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
         }
         assert!(!app.agents_overview.threads.contains_key(&id));
         assert!(app.agents_overview.threads.contains_key(&collision));
-        assert!(app.agents_overview.refresh_invalidated);
-        assert_eq!(app.agents_overview.refill_count, 0);
+        assert!(app.agents_overview.active_refresh.is_none());
+        assert_eq!(app.agents_overview.refill_count(displayed), 0);
+        assert_eq!(app.agents_overview.refill_count(owner), index + 1);
         app.apply_agents_overview_thread_refresh(
             &server,
             request_id,
@@ -102,8 +103,16 @@ async fn background_archive_and_delete_remove_only_owned_rows() -> Result<()> {
             assert!(!app.agents_overview.removed_threads.contains(&id));
         }
     }
+    app.backend_registry.connect(&server);
+    app.agents_overview
+        .discovery
+        .insert(owner, Default::default());
     app.show_more_agents_overview(&server);
-    assert!(app.agents_overview.refresh_show_more);
+    assert_eq!(
+        app.agents_overview.active_refresh.map(|(_, id)| id),
+        Some(owner)
+    );
+    assert!(!app.agents_overview.refresh_show_more);
     if let Some(task) = app.agents_overview.refresh_task.take() {
         task.abort();
     }
@@ -201,7 +210,7 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
             assert!(!app.agents_overview.discovery.contains_key(&owner));
             assert!(!app.agents_overview.initialized.contains(&owner));
             assert!(app.agents_overview.initialized.contains(&foreign));
-            assert!(app.agents_overview.refresh_invalidated);
+            assert_eq!(app.agents_overview.active_refresh, None);
         }
     }
     assert!(!app.reconnect.offline);

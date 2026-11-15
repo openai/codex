@@ -4534,7 +4534,7 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
         ),
         (
             HistoryCapabilities::ThreadListFails,
-            vec!["recency_at", "recency_at"],
+            vec!["recency_at", "recency_at", "recency_at"],
         ),
     ] {
         let (mut app, _codex_home) = make_history_test_app().await?;
@@ -4576,14 +4576,18 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
                     .collect::<Vec<_>>(),
                 vec![started.session.thread_id]
             );
-            assert!(
+            let initial_list_failed =
+                attempt == 0 && capabilities == HistoryCapabilities::ThreadListFails;
+            assert_eq!(
                 app.agents_overview
                     .initialized
-                    .contains(&app_server.backend_id())
+                    .contains(&app_server.backend_id()),
+                !initial_list_failed
             );
             assert_eq!(
-                app.agents_overview.has_more(app_server.backend_id()),
-                capabilities == HistoryCapabilities::ThreadListFails
+                app.agents_overview
+                    .has_more_for(&app.backend_registry, app_server.backend_id()),
+                initial_list_failed
             );
             if attempt == 0 {
                 app.handle_app_server_event(

@@ -51,6 +51,7 @@ use uuid::Uuid;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
+use crate::backend_id::BackendId;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -426,6 +427,7 @@ pub(crate) enum AppEvent {
     },
     /// Finish moving a task into or out of the shared pinned section.
     AgentsOverviewPinToggled {
+        backend_id: BackendId,
         request_id: Uuid,
         thread_id: ThreadId,
         pinned: bool,
