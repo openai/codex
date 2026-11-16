@@ -451,9 +451,9 @@ impl McpConnectionSet {
         let codex_home = config.codex_home.clone();
         let prefix_mcp_tool_names = config.prefix_mcp_tool_names;
         let non_prefixed_mcp_tool_servers = config.non_prefixed_mcp_tool_servers.clone();
-        let default_protocol_mode = config.protocol_mode;
+        let default_protocol_mode = config.client.protocol_mode;
         let host_owned_apps_protocol_mode = config.host_owned_apps_protocol_mode;
-        let client_elicitation_capability = config.client_elicitation_capability.clone();
+        let client_elicitation_capability = config.client.client_elicitation_capability.clone();
         let tool_plugin_context = crate::mcp::tool_plugin_context(&config);
         let auth = auth.as_ref();
         let mut servers = HashMap::new();
@@ -520,7 +520,8 @@ impl McpConnectionSet {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
-            let server = server.with_read_only_mcp_tools(config.requires_read_only_mcp_tools);
+            let server =
+                server.with_read_only_mcp_tools(config.client.requires_read_only_mcp_tools);
             let registration = config.mcp_server_catalog.server(&server_key);
             let server_name = registration
                 .map_or(server_key.name(), |server| server.name())
@@ -536,7 +537,7 @@ impl McpConnectionSet {
                 &server_name,
                 registration,
                 network_policy_metadata.is_some(),
-                &config.chatgpt_base_url,
+                &config.client.chatgpt_base_url,
             );
             let is_host_owned_codex_apps = registration.is_some_and(|server| {
                 server
@@ -683,7 +684,7 @@ impl McpConnectionSet {
                         },
                     )
                 };
-            let discover_local_stdio = config.discover_local_stdio
+            let discover_local_stdio = config.client.discover_local_stdio
                 && server.can_discover_local_stdio(&server_name, runtime_auth_provider.as_ref());
             let protocol_mode = if discover_local_stdio {
                 McpProtocolMode::DiscoverLocalStdio
@@ -751,7 +752,7 @@ impl McpConnectionSet {
                     (&client_elicitation_capability, &client_mcp_extensions),
                     Some((&connection_identity, cache_mode, server.is_agent_plugin())),
                 )?;
-                context.track_tool_list_changes = config.mcp_tool_list_changed;
+                context.track_tool_list_changes = config.client.mcp_tool_list_changed;
                 context.before_stdio_discovery =
                     expected_protocol_mode == Some(McpProtocolMode::DiscoverLocalStdio);
                 Some(context)
@@ -818,7 +819,7 @@ impl McpConnectionSet {
                                 connection: Arc::clone(connection),
                                 protocol_mode,
                                 startup_readiness: configured_config.startup_readiness,
-                                refresh_tool_list: config.mcp_tool_list_changed,
+                                refresh_tool_list: config.client.mcp_tool_list_changed,
                                 refresh_timeout: startup_timeout,
                                 metadata,
                                 tool_filter: configured_tool_filter,
@@ -841,7 +842,7 @@ impl McpConnectionSet {
             let mut legacy_to_upgrade = None;
             if let Some(previous_view) =
                 reusable_previous.and_then(|previous| previous.servers.get(&server_key))
-                && previous_view.refresh_tool_list == config.mcp_tool_list_changed
+                && previous_view.refresh_tool_list == config.client.mcp_tool_list_changed
                 && (same_owner || !previous_view.connection.may_use_legacy_fallback())
             {
                 let connection = Arc::clone(&previous_view.connection);
@@ -894,7 +895,7 @@ impl McpConnectionSet {
                             connection,
                             protocol_mode,
                             startup_readiness: configured_config.startup_readiness,
-                            refresh_tool_list: config.mcp_tool_list_changed,
+                            refresh_tool_list: config.client.mcp_tool_list_changed,
                             refresh_timeout: startup_timeout,
                             metadata,
                             tool_filter: configured_tool_filter,
@@ -1050,7 +1051,7 @@ impl McpConnectionSet {
                     }),
                     protocol_mode,
                     startup_readiness: configured_config.startup_readiness,
-                    refresh_tool_list: config.mcp_tool_list_changed,
+                    refresh_tool_list: config.client.mcp_tool_list_changed,
                     refresh_timeout: startup_timeout,
                     metadata,
                     tool_filter: configured_tool_filter,
@@ -1301,14 +1302,18 @@ impl McpConnectionSet {
             .is_some_and(|(left, right)| Arc::ptr_eq(&left.connection, &right.connection))
     }
 
-    pub(crate) async fn authentication_failed_servers(&self) -> Vec<McpServerKey> {
+    pub(crate) async fn authentication_failed_servers(
+        &self,
+        include: impl Fn(&McpServerKey) -> bool,
+    ) -> Vec<McpServerKey> {
         let mut failed_servers = Vec::new();
         for (server_name, view) in &self.servers {
-            if view
-                .connection
-                .client
-                .startup_complete
-                .load(Ordering::Acquire)
+            if include(server_name)
+                && view
+                    .connection
+                    .client
+                    .startup_complete
+                    .load(Ordering::Acquire)
                 && let Err(error) = view.connection.client().await
                 && error.is_authentication_required()
             {
@@ -1323,7 +1328,7 @@ impl McpConnectionSet {
         config: &crate::McpConfig,
     ) -> Vec<McpServerKey> {
         let mut candidates = Vec::new();
-        for server_name in self.authentication_failed_servers().await {
+        for server_name in self.authentication_failed_servers(|_| true).await {
             if let Some(view) = self.servers.get(&server_name)
                 && let Some(identity) = view.connection.identity.as_ref()
                 && let Some(server) = config.mcp_server_catalog.server(&server_name)

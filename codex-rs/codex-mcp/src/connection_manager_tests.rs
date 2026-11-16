@@ -2267,7 +2267,7 @@ async fn shared_apps_snapshot_requires_writable_discovery_and_a_shared_cache() -
         );
 
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-        config.requires_read_only_mcp_tools = read_only;
+        config.client.requires_read_only_mcp_tools = read_only;
         let mut catalog = crate::ResolvedMcpCatalog::builder();
         catalog.register(crate::McpServerRegistration::from_hosted_apps(
             "fixture",
@@ -2342,7 +2342,7 @@ async fn hosted_apps_protocol_mode_is_independent_of_generic_mode() -> anyhow::R
         ),
     ] {
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-        config.protocol_mode = generic_mode;
+        config.client.protocol_mode = generic_mode;
         config.host_owned_apps_protocol_mode = hosted_mode;
         let mut catalog = crate::ResolvedMcpCatalog::builder();
         catalog.register(crate::McpServerRegistration::from_hosted_apps(
@@ -5029,11 +5029,11 @@ fn gov_codex_apps_retain_local_chatgpt_auth_provider() -> anyhow::Result<()> {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = codex_model_provider::auth_provider_from_auth(&auth);
     let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-    config.chatgpt_base_url = "https://gov.chatgpt.com/backend-api/".to_string();
+    config.client.chatgpt_base_url = "https://gov.chatgpt.com/backend-api/".to_string();
     config.apps_enabled = true;
 
     let local_config = crate::codex_apps_mcp_server_config(
-        &config.chatgpt_base_url,
+        &config.client.chatgpt_base_url,
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
     );
@@ -5902,7 +5902,7 @@ async fn read_only_policy_does_not_reuse_a_writable_connection() {
     .await;
     for read_only in [false, true] {
         let mut mcp_config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-        mcp_config.requires_read_only_mcp_tools = read_only;
+        mcp_config.client.requires_read_only_mcp_tools = read_only;
         let reconciled = reconcile_reusable_server_with_mcp_config(
             &previous,
             "docs",
@@ -6837,7 +6837,7 @@ async fn reconciliation_replaces_connection_when_protocol_mode_changes() {
     .await;
     let codex_home = tempdir().expect("tempdir");
     let mut mcp_config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-    mcp_config.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
+    mcp_config.client.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
 
     let reconciled = McpConnectionSet::new(
         /*ema_auth*/ None,
@@ -6902,7 +6902,7 @@ async fn reconciliation_reuses_legacy_stdio_server_when_modern_protocol_is_enabl
     .await;
     let codex_home = tempdir().expect("tempdir");
     let mut mcp_config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-    mcp_config.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
+    mcp_config.client.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
 
     let reconciled = McpConnectionSet::new(
         /*ema_auth*/ None,

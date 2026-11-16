@@ -57,6 +57,7 @@ use crate::McpProtocolMode;
 use crate::McpServerKey;
 use crate::McpServerSource;
 use crate::ResolvedMcpCatalog;
+use crate::ResolvedMcpServer;
 use crate::connection_manager::McpConnectionSet;
 use crate::runtime::McpPublicationGate;
 use crate::runtime::McpRuntimeContext;
@@ -125,6 +126,23 @@ pub enum McpServerPermissions {
     Environment(Arc<FileSystemSandboxContext>),
 }
 
+/// Runtime-wide settings used to initialize MCP clients and discover their tools.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpClientConfig {
+    /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
+    pub chatgpt_base_url: String,
+    /// Requests server-side read-only filtering and invocation checks for MCP tools.
+    pub requires_read_only_mcp_tools: bool,
+    /// Protocol mode for servers other than the host-owned Codex Apps registration.
+    pub protocol_mode: McpProtocolMode,
+    /// Try protocol discovery before initializing eligible local stdio servers.
+    pub discover_local_stdio: bool,
+    /// Refresh ordinary server catalogs after tools/list_changed notifications.
+    pub mcp_tool_list_changed: bool,
+    /// Client-side elicitation capabilities advertised during MCP initialization.
+    pub client_elicitation_capability: ElicitationCapability,
+}
+
 /// MCP runtime settings derived from `codex_core::config::Config`.
 ///
 /// Each published runtime and prepared call owns one immutable copy of these
@@ -133,12 +151,10 @@ pub enum McpServerPermissions {
 /// runtime entry points such as [`effective_mcp_servers`].
 #[derive(Debug, Clone)]
 pub struct McpConfig {
-    /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
-    pub chatgpt_base_url: String,
+    /// Shared settings that shape client initialization and tool discovery.
+    pub client: McpClientConfig,
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
-    /// Requests server-side read-only filtering and invocation checks for MCP tools.
-    pub requires_read_only_mcp_tools: bool,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Trusted enterprise IdP inherited after normal catalog and policy resolution.
@@ -203,16 +219,8 @@ pub struct McpConfig {
     pub prefix_mcp_tool_names: bool,
     /// MCP servers whose model-visible tool namespaces omit the `mcp__` prefix.
     pub non_prefixed_mcp_tool_servers: Vec<String>,
-    /// Protocol mode for servers other than the host-owned Codex Apps registration.
-    pub protocol_mode: McpProtocolMode,
-    /// Try protocol discovery before initializing eligible local stdio servers.
-    pub discover_local_stdio: bool,
-    /// Refresh ordinary server catalogs after tools/list_changed notifications.
-    pub mcp_tool_list_changed: bool,
     /// Independent protocol mode for the trusted, HTTP Codex Apps registration.
     pub host_owned_apps_protocol_mode: McpProtocolMode,
-    /// Client-side elicitation capabilities advertised during MCP initialization.
-    pub client_elicitation_capability: ElicitationCapability,
     /// Resolved MCP registrations keyed by exact server identity.
     pub mcp_server_catalog: ResolvedMcpCatalog,
     /// Plugin declarations used to attribute connector tools to plugin display names.
@@ -439,31 +447,36 @@ pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<McpServerKey, EffectiveMcpServer> {
-    let mut servers = config
+    config
         .mcp_server_catalog
         .servers()
-        .map(|(key, registration)| {
-            let mut server = registration.config().clone();
-            match &server.auth {
-                McpServerAuth::ChatGpt => {
-                    if !is_trusted_chatgpt_mcp_server(&server.transport, &config.chatgpt_base_url) {
-                        server.auth = McpServerAuth::OAuth;
-                    }
-                }
-                McpServerAuth::OAuth | McpServerAuth::EmaAuth => {}
-            }
-            let effective = EffectiveMcpServer::from_config_with_policy(
-                server,
-                registration.credential_policy(),
-            )
-            .with_agent_plugin(registration.source().is_agent_plugin());
-            (key.clone(), effective)
+        .filter_map(|(key, registration)| {
+            effective_mcp_server(config, auth, registration).map(|server| (key.clone(), server))
         })
-        .collect::<HashMap<_, _>>();
-    if !host_owned_codex_apps_enabled(config, auth) {
-        servers.retain(|key, _| key.name() != CODEX_APPS_MCP_SERVER_NAME);
+        .collect()
+}
+
+/// Materializes one registration under the same auth rules used for full catalog discovery.
+pub(crate) fn effective_mcp_server(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    registration: &ResolvedMcpServer,
+) -> Option<EffectiveMcpServer> {
+    if registration.name() == CODEX_APPS_MCP_SERVER_NAME
+        && !host_owned_codex_apps_enabled(config, auth)
+    {
+        return None;
     }
-    servers
+    let mut server = registration.config().clone();
+    if matches!(server.auth, McpServerAuth::ChatGpt)
+        && !is_trusted_chatgpt_mcp_server(&server.transport, &config.client.chatgpt_base_url)
+    {
+        server.auth = McpServerAuth::OAuth;
+    }
+    Some(
+        EffectiveMcpServer::from_config_with_policy(server, registration.credential_policy())
+            .with_agent_plugin(registration.source().is_agent_plugin()),
+    )
 }
 
 pub fn tool_plugin_context(config: &McpConfig) -> ToolPluginContext {
@@ -537,7 +550,22 @@ pub struct McpServerStatusSnapshot {
     pub resources: HashMap<McpServerKey, Vec<Resource>>,
     pub resource_templates: HashMap<McpServerKey, Vec<ResourceTemplate>>,
     pub auth_statuses: HashMap<McpServerKey, McpAuthStatus>,
-    pub server_keys: Vec<McpServerKey>,
+    pub server_keys: HashSet<McpServerKey>,
+}
+
+impl McpServerStatusSnapshot {
+    /// Combines discovery results for disjoint sets of servers on a status page.
+    pub fn extend(&mut self, other: Self) {
+        self.server_infos.extend(other.server_infos);
+        self.server_capabilities.extend(other.server_capabilities);
+        self.tool_list_meta.extend(other.tool_list_meta);
+        self.tools_by_server.extend(other.tools_by_server);
+        self.tools_errors.extend(other.tools_errors);
+        self.resources.extend(other.resources);
+        self.resource_templates.extend(other.resource_templates);
+        self.auth_statuses.extend(other.auth_statuses);
+        self.server_keys.extend(other.server_keys);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -839,11 +867,10 @@ fn convert_mcp_resource_templates(
 pub(crate) async fn collect_mcp_server_status_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionSet,
     auth_status_entries: HashMap<McpServerKey, crate::mcp::auth::McpAuthStatusEntry>,
-    server_keys: Vec<McpServerKey>,
+    server_keys: HashSet<McpServerKey>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
-    let selected_servers: HashSet<&McpServerKey> = server_keys.iter().collect();
-    let include_server = |key: &McpServerKey| selected_servers.contains(key);
+    let include_server = |key: &McpServerKey| server_keys.contains(key);
     let ((server_infos, (tools, tools_errors, tool_list_meta)), resources, resource_templates) = tokio::join!(
         async {
             let server_infos = mcp_connection_manager
@@ -892,7 +919,10 @@ pub(crate) async fn collect_mcp_server_status_snapshot_from_manager(
     // Status-only discovery has no event channel. Report OAuth and EMA failures from the completed
     // connection attempt instead of retaining the credential-presence status read beforehand.
     let mut auth_statuses = auth_statuses_from_entries(&auth_status_entries);
-    for key in mcp_connection_manager.authentication_failed_servers().await {
+    for key in mcp_connection_manager
+        .authentication_failed_servers(include_server)
+        .await
+    {
         if auth_statuses.get(&key) == Some(&McpAuthStatus::OAuth)
             || auth_status_entries
                 .get(&key)

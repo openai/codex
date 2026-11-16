@@ -357,6 +357,29 @@ impl McpServerConnectionIdentity {
             && self.requires_read_only_mcp_tools == other.requires_read_only_mcp_tools
     }
 
+    /// Runtime auth, stored OAuth and dynamic headers may change independently of a registration.
+    pub(crate) fn has_fixed_status_credentials(&self) -> bool {
+        if self.runtime_auth.is_some()
+            || self.oauth_store.is_some()
+            || matches!(self.auth, McpServerAuth::EmaAuth)
+        {
+            return false;
+        }
+        match &self.transport {
+            McpServerTransportConfig::Stdio { env_vars, .. } => env_vars.is_empty(),
+            McpServerTransportConfig::StreamableHttp {
+                bearer_token_env_var,
+                env_http_headers,
+                http_headers_helper,
+                ..
+            } => {
+                bearer_token_env_var.is_none()
+                    && env_http_headers.as_ref().is_none_or(HashMap::is_empty)
+                    && http_headers_helper.is_none()
+            }
+        }
+    }
+
     pub(crate) fn oauth_credentials(&self) -> Result<Option<&StoredOAuthTokens>, &String> {
         self.oauth_credentials.as_ref().map(|credentials| {
             credentials

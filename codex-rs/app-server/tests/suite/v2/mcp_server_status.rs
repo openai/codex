@@ -103,12 +103,16 @@ async fn recording_widget_server() -> (MockServer, serde_json::Value) {
             let result = match request["method"].as_str() {
                 Some("initialize") => json!({
                     "protocolVersion": "2025-11-25",
-                    "capabilities": { "tools": {} },
+                    "capabilities": { "tools": {}, "resources": {} },
                     "serverInfo": { "name": "widget", "version": "1.0.0" }
                 }),
                 Some("tools/list") => json!({ "tools": [response_tool.clone()] }),
-                Some("resources/list") => json!({ "resources": [] }),
-                Some("resources/templates/list") => json!({ "resourceTemplates": [] }),
+                Some("resources/list") => json!({
+                    "resources": [{"uri": "ui://widget.html", "name": "widget"}]
+                }),
+                Some("resources/templates/list") => json!({
+                    "resourceTemplates": [{"uriTemplate": "ui://widgets/{id}", "name": "widget by ID"}]
+                }),
                 _ => return ResponseTemplate::new(202),
             };
             ResponseTemplate::new(200).set_body_json(json!({
@@ -120,14 +124,19 @@ async fn recording_widget_server() -> (MockServer, serde_json::Value) {
     (server, tool)
 }
 
-/// Selected status reads return the thread's tools without repeating MCP discovery.
+#[test_case("http_headers = { Authorization = \"Bearer fixed-test-token\" }", 1; "fixed authorization")]
+#[test_case("", 2; "stored OAuth authority")]
 #[tokio::test]
-async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
+async fn mcp_server_status_discovers_thread_inventory(
+    headers: &str,
+    expected_lightweight_initializations: usize,
+) -> Result<()> {
     let (server, tool) = recording_widget_server().await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
+        .with_root_config("mcp_oauth_credentials_store = \"file\"")
         .with_extra_config(&format!(
-            "[mcp_servers.widget]\nurl = \"{}/mcp\"",
+            "[mcp_servers.widget]\nurl = \"{}/mcp\"\n{headers}",
             server.uri()
         ))
         .write(codex_home.path())?;
@@ -149,9 +158,22 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
     )
     .await??;
 
-    for detail in [
-        McpServerStatusDetail::ToolsAndAuthOnly,
-        McpServerStatusDetail::Full,
+    for (detail, server_name, initializations) in [
+        (
+            McpServerStatusDetail::ToolsAndAuthOnly,
+            Some("widget".to_owned()),
+            1,
+        ),
+        (
+            McpServerStatusDetail::ToolsAndAuthOnly,
+            None,
+            expected_lightweight_initializations,
+        ),
+        (
+            McpServerStatusDetail::Full,
+            None,
+            expected_lightweight_initializations + 1,
+        ),
     ] {
         let response: ListMcpServerStatusResponse = app
             .request(|request_id| ClientRequest::McpServerStatusList {
@@ -159,34 +181,54 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
                 params: ListMcpServerStatusParams {
                     environment_id: None,
                     thread_id: Some(thread.id.clone()),
-                    server_name: Some("widget".to_string()),
+                    server_name,
                     detail: Some(detail),
                     cursor: None,
                     limit: None,
                 },
             })
             .await?;
-        assert_eq!(response.data.len(), 1);
-        assert_eq!(response.data[0].name, "widget");
+        let [status] = response.data.as_slice() else {
+            anyhow::bail!("expected the widget server");
+        };
+        assert_eq!(status.name, "widget");
         assert_eq!(
-            response.data[0].tools,
+            status.tools,
             std::collections::HashMap::from([(
                 "open_widget".to_string(),
                 serde_json::from_value(tool.clone())?
             )])
         );
         assert_eq!(response.next_cursor, None);
+        let requests = server.received_requests().await.expect("recorded requests");
+        let count = |method| {
+            let matcher = body_partial_json(json!({ "method": method }));
+            requests
+                .iter()
+                .filter(|request| matcher.matches(request))
+                .count()
+        };
+        assert_eq!(count("initialize"), initializations);
+        assert_eq!(count("tools/list"), initializations);
+        match detail {
+            McpServerStatusDetail::ToolsAndAuthOnly => {
+                assert_eq!(count("resources/list"), 0);
+                assert_eq!(count("resources/templates/list"), 0);
+            }
+            McpServerStatusDetail::Full => {
+                assert_eq!(count("resources/list"), 1);
+                assert_eq!(count("resources/templates/list"), 1);
+                let [resource] = status.resources.as_slice() else {
+                    anyhow::bail!("expected the widget resource");
+                };
+                let [template] = status.resource_templates.as_slice() else {
+                    anyhow::bail!("expected the widget template");
+                };
+                assert_eq!(resource.uri, "ui://widget.html");
+                assert_eq!(template.uri_template, "ui://widgets/{id}");
+            }
+        }
     }
-    let discovery_methods: Vec<_> = server
-        .received_requests()
-        .await
-        .unwrap()
-        .iter()
-        .filter_map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).ok())
-        .filter_map(|request| request["method"].as_str().map(str::to_owned))
-        .filter(|method| matches!(method.as_str(), "initialize" | "tools/list"))
-        .collect();
-    assert_eq!(discovery_methods, ["initialize", "tools/list"]);
     Ok(())
 }
 
@@ -1046,6 +1088,82 @@ MCP_TEST_PID_FILE = {}
 }
 
 #[tokio::test]
+async fn dormant_thread_status_returns_live_inventory_without_waking_the_thread() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::McpLazyStdioStartup)
+        .with_extra_config(&format!(
+            "[mcp_servers.memo]\ncommand = {}\nenabled_tools = [\"echo\"]",
+            toml::Value::String(stdio_server_bin()?),
+        ))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let start = |request_id| ClientRequest::ThreadStart {
+        request_id,
+        params: ThreadStartParams::default(),
+    };
+    let first: ThreadStartResponse = app.request(start).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_matching_notification("memo MCP ready", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification.params.as_ref().is_some_and(|params| {
+                    params["threadId"] == first.thread.id
+                        && params["name"] == "memo"
+                        && params["status"] == "ready"
+                })
+        }),
+    )
+    .await??;
+    let second: ThreadStartResponse = app.request(start).await?;
+    for detail in [
+        McpServerStatusDetail::ToolsAndAuthOnly,
+        McpServerStatusDetail::Full,
+    ] {
+        let response: ListMcpServerStatusResponse = app
+            .request(|request_id| ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    thread_id: Some(second.thread.id.clone()),
+                    server_name: None,
+                    environment_id: None,
+                    detail: Some(detail),
+                    cursor: None,
+                    limit: None,
+                },
+            })
+            .await?;
+        let [row] = response.data.as_slice() else {
+            anyhow::bail!("expected the memo server");
+        };
+        assert_eq!(
+            row.runtime_status,
+            Some(McpServerConnectionStatus::NotStarted)
+        );
+        assert_eq!(
+            row.tools["echo"].annotations,
+            Some(json!({"readOnlyHint": true}))
+        );
+        if detail == McpServerStatusDetail::Full {
+            let [resource] = row.resources.as_slice() else {
+                anyhow::bail!("expected the memo resource");
+            };
+            let [template] = row.resource_templates.as_slice() else {
+                anyhow::bail!("expected the memo template");
+            };
+            assert_eq!(resource.uri, "memo://codex/example-note");
+            assert_eq!(template.uri_template, "memo://codex/{slug}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) =
@@ -1133,6 +1251,7 @@ async fn mcp_server_status_list_reports_thread_runtime_connections() -> Result<(
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
             "[mcp_servers.connected]\nurl = \"{mcp_server_url}/mcp\"\n\
+             http_headers = {{ Authorization = \"Bearer fixed-test-token\" }}\n\
              [mcp_servers.disabled]\nurl = \"{mcp_server_url}/mcp\"\nenabled = false\n"
         ))
         .write(codex_home.path())?;
@@ -1188,6 +1307,7 @@ async fn mcp_server_status_list_reports_thread_runtime_connections() -> Result<(
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
             "[mcp_servers.connected]\nurl = \"{replacement_url}/mcp\"\n\
+             http_headers = {{ Authorization = \"Bearer fixed-test-token\" }}\n\
              [mcp_servers.disabled]\nurl = \"{mcp_server_url}/mcp\"\nenabled = false\n"
         ))
         .write(codex_home.path())?;
@@ -1411,6 +1531,7 @@ impl ServerHandler for McpStatusServer {
         );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
+        tool.title = Some(self.origin.clone());
         Ok(ListToolsResult::with_all_items(vec![tool]))
     }
 
@@ -1748,7 +1869,7 @@ async fn mcp_server_status_keeps_same_named_environment_inventory_separate() -> 
                     environment_id: None,
                     thread_id: Some(thread.id.clone()),
                     server_name: None,
-                    detail: Some(McpServerStatusDetail::Full),
+                    detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
                     cursor: (index != 0).then(|| index.to_string()),
                     limit: Some(1),
                 },
@@ -1763,6 +1884,10 @@ async fn mcp_server_status_keeps_same_named_environment_inventory_separate() -> 
         assert_eq!(row.http_origin, expected.http_origin);
         assert_eq!(row.auth_status, expected.auth_status);
         assert_eq!(row.tools, expected.tools);
+        assert_eq!(
+            row.tools["lookup"].title.as_deref(),
+            expected.http_origin.as_deref()
+        );
         assert_eq!(page.next_cursor.as_deref(), next_cursor);
     }
     for (environment_id, expected) in [

@@ -1322,6 +1322,14 @@ impl CodexThread {
         self.session.runtime_mcp_config_and_context(config).await
     }
 
+    /// Projects the current settings for a status read against the thread's published connections.
+    pub async fn mcp_status_config_and_context(
+        &self,
+        config: &crate::config::Config,
+    ) -> (codex_mcp::McpConfig, codex_mcp::McpRuntimeContext) {
+        self.session.mcp_status_config_and_context(config).await
+    }
+
     /// Captures the exact MCP config and environment bindings for the current thread state.
     pub async fn current_mcp_config_and_runtime_context(
         &self,
@@ -1474,6 +1482,21 @@ impl CodexThread {
                 expected_registration,
                 &runtime_context,
             )
+            .await
+    }
+
+    /// Returns tool inventories from eligible connections on the requested page.
+    pub async fn matching_mcp_status_snapshot(
+        &self,
+        config: &codex_mcp::McpConfig,
+        auth: Option<&codex_login::CodexAuth>,
+        keys: &std::collections::HashSet<codex_mcp::McpServerKey>,
+        context: &codex_mcp::McpRuntimeContext,
+    ) -> codex_mcp::McpServerStatusSnapshot {
+        self.session
+            .services
+            .mcp_runtime
+            .matching_status_snapshot(config, auth, keys, context)
             .await
     }
 

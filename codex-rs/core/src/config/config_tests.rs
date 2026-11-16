@@ -7811,7 +7811,7 @@ async fn to_mcp_config_flows_independent_mcp_2026_features() -> std::io::Result<
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
         (
-            mcp_config.protocol_mode,
+            mcp_config.client.protocol_mode,
             mcp_config.host_owned_apps_protocol_mode,
         ),
         (
@@ -7824,7 +7824,7 @@ async fn to_mcp_config_flows_independent_mcp_2026_features() -> std::io::Result<
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
         (
-            mcp_config.protocol_mode,
+            mcp_config.client.protocol_mode,
             mcp_config.host_owned_apps_protocol_mode,
         ),
         (
@@ -7838,7 +7838,7 @@ async fn to_mcp_config_flows_independent_mcp_2026_features() -> std::io::Result<
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
         (
-            mcp_config.protocol_mode,
+            mcp_config.client.protocol_mode,
             mcp_config.host_owned_apps_protocol_mode,
         ),
         (
@@ -7864,7 +7864,7 @@ async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
-        mcp_config.client_elicitation_capability,
+        mcp_config.client.client_elicitation_capability,
         ElicitationCapability::new()
             .with_form(FormElicitationCapability::new())
             .with_url(UrlElicitationCapability::new())
@@ -7873,7 +7873,7 @@ async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::
     let _ = config.features.disable(Feature::AuthElicitation);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
-        mcp_config.client_elicitation_capability,
+        mcp_config.client.client_elicitation_capability,
         ElicitationCapability::default()
     );
 

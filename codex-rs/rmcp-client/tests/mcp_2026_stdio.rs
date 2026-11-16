@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::Context;
 use codex_exec_server::Environment;
 use codex_rmcp_client::Elicitation;
 use codex_rmcp_client::ElicitationAction;
@@ -79,6 +80,11 @@ async fn exercise_stdio_server(
     let elicitation_count = Arc::new(AtomicUsize::new(0));
     let observed_elicitations = Arc::clone(&elicitation_count);
     let legacy_session = server_mode.starts_with("legacy");
+    let handshake_timeout = match protocol_mode {
+        // Discovery can wait for a silent probe, then stop and relaunch the helper.
+        McpProtocolMode::DiscoverLocalStdio => Duration::from_secs(30),
+        McpProtocolMode::Legacy | McpProtocolMode::V20260728 => Duration::from_secs(5),
+    };
     let initialized = client
         .initialize(
             InitializeRequestParams::new(
@@ -86,11 +92,7 @@ async fn exercise_stdio_server(
                 Implementation::new("codex-mcp-client", "0.0.0-test"),
             )
             .with_protocol_version(ProtocolVersion::V_2025_06_18),
-            Some(Duration::from_secs(if server_mode.ends_with("-late") {
-                30
-            } else {
-                5
-            })),
+            Some(handshake_timeout),
             Box::new(move |_request_id, request| {
                 let observed_elicitations = Arc::clone(&observed_elicitations);
                 async move {
@@ -262,7 +264,8 @@ async fn unmarked_stdio_helpers_recover_from_failed_or_late_discovery() -> anyho
             /*opt_in*/ false,
             /*use_executor*/ false,
         )
-        .await?;
+        .await
+        .with_context(|| format!("stdio discovery failed in {mode} mode"))?;
     }
     Ok(())
 }

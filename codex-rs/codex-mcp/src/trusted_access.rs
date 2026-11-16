@@ -129,14 +129,14 @@ impl TrustedAccessContext {
         let mut context = Self::new(
             auth.clone(),
             input.auth_manager.clone()?,
-            input.config.chatgpt_base_url.clone(),
+            input.config.client.chatgpt_base_url.clone(),
             input.runtime_context.local_http_client(),
         );
         context.runtime_auth = input
             .runtime_auth
             .as_ref()
             .filter(|_| {
-                codex_http_client::classify_openai_api_url(&input.config.chatgpt_base_url)
+                codex_http_client::classify_openai_api_url(&input.config.client.chatgpt_base_url)
                     != codex_http_client::OpenAiDestination::Other
             })
             .map(|runtime| {

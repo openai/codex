@@ -91,6 +91,7 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
 use codex_mcp::DEFAULT_OPTIONAL_MCP_STARTUP_GRACE;
+use codex_mcp::McpClientConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpProtocolMode;
@@ -2035,9 +2036,23 @@ impl Config {
         }
 
         McpConfig {
-            chatgpt_base_url: self.chatgpt_base_url.clone(),
+            client: McpClientConfig {
+                chatgpt_base_url: self.chatgpt_base_url.clone(),
+                requires_read_only_mcp_tools: false,
+                protocol_mode: self.mcp_protocol_mode(),
+                discover_local_stdio: self.features.enabled(Feature::McpConnectionSharing),
+                mcp_tool_list_changed: self.features.enabled(Feature::McpToolListChanged),
+                client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
+                    ElicitationCapability::new()
+                        .with_form(FormElicitationCapability::new())
+                        .with_url(UrlElicitationCapability::new())
+                } else {
+                    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                    // indicates this should be an empty object.
+                    ElicitationCapability::default()
+                },
+            },
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
-            requires_read_only_mcp_tools: false,
             codex_home: self.codex_home.to_path_buf(),
             mcp_enterprise_managed_auth: self.mcp_enterprise_managed_auth.clone(),
             ema_state: Default::default(),
@@ -2045,7 +2060,6 @@ impl Config {
             xaa_enabled: self.features.enabled(Feature::UseXaa)
                 && self.mcp_enterprise_managed_auth.is_some(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
-            mcp_tool_list_changed: self.features.enabled(Feature::McpToolListChanged),
             oauth_refresh_mode: if self.features.enabled(Feature::McpOAuthRefreshCoordination) {
                 McpOAuthRefreshMode::Coordinated
             } else {
@@ -2085,21 +2099,10 @@ impl Config {
             } else {
                 Vec::new()
             },
-            protocol_mode: self.mcp_protocol_mode(),
-            discover_local_stdio: self.features.enabled(Feature::McpConnectionSharing),
             host_owned_apps_protocol_mode: if self.features.enabled(Feature::CodexAppsMcp20260728) {
                 McpProtocolMode::V20260728
             } else {
                 McpProtocolMode::Legacy
-            },
-            client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability::new()
-                    .with_form(FormElicitationCapability::new())
-                    .with_url(UrlElicitationCapability::new())
-            } else {
-                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                // indicates this should be an empty object.
-                ElicitationCapability::default()
             },
             mcp_server_catalog: catalog.build(),
             connector_snapshot:

@@ -91,6 +91,38 @@ impl Session {
         &self,
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
+        let environments = self.services.turn_environments.snapshot().await;
+        self.project_mcp_config_and_context(config, &environments)
+            .await
+    }
+
+    /// Compares status requests against the permission and environment inputs used at publication.
+    pub(crate) async fn mcp_status_config_and_context(
+        &self,
+        config: &Config,
+    ) -> (McpConfig, McpRuntimeContext) {
+        let environments = self.services.turn_environments.snapshot().await;
+        let (mut mcp_config, context) = self
+            .project_mcp_config_and_context(config, &environments)
+            .await;
+        // Runtime publication uses the per-turn config, whose cwd follows the local selection.
+        mcp_config.host_cwd = environments
+            .local_environment_cwd()
+            .unwrap_or_else(|| config.cwd.clone());
+        Self::bind_mcp_server_environments(
+            &mut mcp_config,
+            config,
+            &environments,
+            self.services.auth_manager.auth_cached().as_ref(),
+        );
+        (mcp_config, context)
+    }
+
+    async fn project_mcp_config_and_context(
+        &self,
+        config: &Config,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
         let (session_source, host_fallback_cwd, disabled_plugin_ids) = {
             let state = self.state.lock().await;
@@ -100,17 +132,16 @@ impl Session {
                 state.active_disabled_plugin_ids.clone(),
             )
         };
-        let environments = self.services.turn_environments.snapshot().await;
         let environment_selections = environments.all_selections();
         let selected_capability_roots = self
-            .resolve_selected_capability_roots_for_step(&environments)
+            .resolve_selected_capability_roots_for_step(environments)
             .await;
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(&selected_capability_roots);
         let (executor_capability_discovery_v2, inventory_changed) = self
             .executor_capability_discovery_for_step_v2(
                 config,
-                &environments,
+                environments,
                 /*skill_turn*/ None,
             )
             .await;
@@ -118,7 +149,7 @@ impl Session {
             .executor_capability_discovery_for_step(
                 config,
                 &selected_capability_roots,
-                &environments,
+                environments,
                 executor_capability_discovery_v2.as_deref(),
                 /*skill_turn*/ None,
             )
@@ -151,10 +182,10 @@ impl Session {
                 )
                 .await;
         let mcp_config = self
-            .project_selected_environment_mcp_servers(config, &environments, mcp_projection)
+            .project_selected_environment_mcp_servers(config, environments, mcp_projection)
             .await
             .config;
-        let runtime_context = self.mcp_runtime_context(&environments, &host_fallback_cwd);
+        let runtime_context = self.mcp_runtime_context(environments, &host_fallback_cwd);
         (mcp_config, runtime_context)
     }
 

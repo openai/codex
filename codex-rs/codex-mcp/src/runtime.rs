@@ -206,6 +206,21 @@ fn ensure_host_owned_apps_registration(
 }
 
 impl PublishedMcpRuntime {
+    fn environments_match(
+        &self,
+        selections: &[TurnEnvironmentSelection],
+        ready_environments: &HashMap<String, Arc<Environment>>,
+    ) -> bool {
+        self.config.is_some()
+            && self.environment_selections.as_ref() == selections
+            && self.ready_environments.len() == ready_environments.len()
+            && ready_environments.iter().all(|(id, environment)| {
+                self.ready_environments
+                    .get(id)
+                    .is_some_and(|published| Arc::ptr_eq(published, environment))
+            })
+    }
+
     // Shared by dirty detection and cache-key publication so their auth rules agree.
     fn auth_matches(&self, auth: Option<&CodexAuth>) -> bool {
         match (self.auth.as_ref(), auth) {
@@ -671,13 +686,13 @@ impl McpRuntime {
 
     /// Checks the current generation before retrying servers detected outside the refresh gate.
     pub async fn has_authentication_failed_servers(&self, server_names: &[McpServerKey]) -> bool {
-        self.current
+        !self
+            .current
             .load_full()
             .connections
-            .authentication_failed_servers()
+            .authentication_failed_servers(|name| server_names.contains(name))
             .await
-            .into_iter()
-            .any(|server_name| server_names.contains(&server_name))
+            .is_empty()
     }
 
     /// Waits for the selected server without capturing an execution binding.
@@ -737,16 +752,9 @@ impl McpRuntime {
         selections: &[TurnEnvironmentSelection],
         ready_environments: &HashMap<String, Arc<Environment>>,
     ) -> bool {
-        let current = self.current.load();
-        current.config.is_some()
-            && current.environment_selections.as_ref() == selections
-            && current.ready_environments.len() == ready_environments.len()
-            && ready_environments.iter().all(|(id, environment)| {
-                current
-                    .ready_environments
-                    .get(id)
-                    .is_some_and(|published| Arc::ptr_eq(published, environment))
-            })
+        self.current
+            .load()
+            .environments_match(selections, ready_environments)
     }
 
     pub fn enable_full_access_form_input(&self) {

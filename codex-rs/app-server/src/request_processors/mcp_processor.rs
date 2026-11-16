@@ -470,6 +470,9 @@ impl McpRequestProcessor {
             let auth = mcp_manager.auth_manager().auth().await;
             let runtime_auth = mcp_manager.runtime_auth_for_config(&config);
             let (mcp_config, runtime_context) = match thread.as_ref() {
+                Some(thread) if detail == McpSnapshotDetail::ToolsAndAuthOnly => {
+                    thread.mcp_status_config_and_context(&config).await
+                }
                 Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
                 None => (
                     mcp_manager
@@ -496,68 +499,64 @@ impl McpRequestProcessor {
                 selected.as_ref(),
                 &params,
             )?;
-            let page: HashSet<_> = keys.iter().collect();
-            servers.retain(|key, _| page.contains(key));
-            let mut snapshot = collect_mcp_server_status_snapshot_with_detail(
-                &mcp_config,
-                auth.as_ref(),
-                Some(&self.auth_manager),
-                runtime_auth,
-                runtime_context,
-                mcp_manager.codex_apps_tools_cache(),
-                mcp_manager.tool_catalog_cache(),
-                detail,
-                servers,
-            )
-            .await;
-            if mcp_config.xaa_enabled
-                && let Some(thread) = thread.as_ref()
+            let page: HashSet<_> = keys.iter().cloned().collect();
+            let mut snapshot = match &thread {
+                Some(thread)
+                    if detail == McpSnapshotDetail::ToolsAndAuthOnly && !page.is_empty() =>
+                {
+                    thread
+                        .matching_mcp_status_snapshot(
+                            &mcp_config,
+                            auth.as_ref(),
+                            &page,
+                            &runtime_context,
+                        )
+                        .await
+                }
+                _ => McpServerStatusSnapshot::default(),
+            };
+            // Enterprise-managed servers use the credentials on their admitted thread connection.
+            if let Some(thread) = &thread
+                && mcp_config.xaa_enabled
             {
-                // EMA can only use its admitted thread connection. Keep ordinary
-                // status discovery unchanged and replace the threadless EMA results.
-                for (key, server) in mcp_config.mcp_server_catalog.servers() {
-                    if !page.contains(key)
-                        || !matches!(server.config().auth, McpServerAuth::EmaAuth)
+                for key in &keys {
+                    let Some(registration) = mcp_config.mcp_server_catalog.server(key) else {
+                        continue;
+                    };
+                    if !servers.contains_key(key)
+                        || !matches!(registration.config().auth, McpServerAuth::EmaAuth)
                     {
                         continue;
                     }
-                    let registration = Some(server);
-                    let (selected_config, selected) = thread
+                    let (_, selected) = thread
                         .mcp_server_status_snapshot(
                             key.name(),
                             key.scoped_environment_id(),
                             detail,
-                            registration,
+                            Some(registration),
                         )
                         .await
                         .map_err(|error| {
                             internal_error(format!("failed to read MCP server status: {error:#}"))
                         })?;
-                    if selected_config.mcp_server_catalog.server(key) != registration {
-                        continue;
-                    }
-                    snapshot.server_infos.remove(key);
-                    snapshot.server_infos.extend(selected.server_infos);
-                    snapshot.server_capabilities.remove(key);
-                    snapshot
-                        .server_capabilities
-                        .extend(selected.server_capabilities);
-                    snapshot.tools_by_server.remove(key);
-                    snapshot.tools_by_server.extend(selected.tools_by_server);
-                    snapshot.tool_list_meta.remove(key);
-                    snapshot.tool_list_meta.extend(selected.tool_list_meta);
-                    snapshot.tools_errors.remove(key);
-                    snapshot.tools_errors.extend(selected.tools_errors);
-                    snapshot.resources.remove(key);
-                    snapshot.resources.extend(selected.resources);
-                    snapshot.resource_templates.remove(key);
-                    snapshot
-                        .resource_templates
-                        .extend(selected.resource_templates);
-                    snapshot.auth_statuses.remove(key);
-                    snapshot.auth_statuses.extend(selected.auth_statuses);
+                    snapshot.extend(selected);
                 }
             }
+            servers.retain(|key, _| page.contains(key) && !snapshot.server_keys.contains(key));
+            snapshot.extend(
+                collect_mcp_server_status_snapshot_with_detail(
+                    &mcp_config,
+                    auth.as_ref(),
+                    Some(&self.auth_manager),
+                    runtime_auth,
+                    runtime_context,
+                    mcp_manager.codex_apps_tools_cache(),
+                    mcp_manager.tool_catalog_cache(),
+                    detail,
+                    servers,
+                )
+                .await,
+            );
             // Discovery can finish a thread connection's startup after we select the page.
             runtime_statuses = match thread.as_ref() {
                 Some(thread) if !keys.is_empty() => {

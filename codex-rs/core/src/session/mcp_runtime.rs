@@ -286,25 +286,17 @@ impl Session {
         self.services.thread_extension_data.insert(selected_plugins);
     }
 
-    pub(super) fn build_mcp_runtime_input(
-        &self,
-        desired: &McpDesiredState,
-        mcp_projection: McpRuntimeProjection,
-        ready_selected_capability_roots: &[SelectedCapabilityRoot],
-        elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) -> McpRuntimeInput {
-        let auth = desired.auth.clone();
-        let McpRuntimeProjection {
-            mut config,
-            plugins_available,
-            selected_plugins: _,
-        } = mcp_projection;
-        config.approval_policy = desired.config.permissions.approval_policy.clone();
-        config.permission_profile = desired.config.permissions.effective_permission_profile();
-        config.host_cwd = desired.config.cwd.clone();
-        config.approvals_reviewer = desired.config.approvals_reviewer;
-        config.environment_cwds = desired
-            .environments
+    /// Freezes the same environment and permission inputs for status reads and runtime publication.
+    pub(super) fn bind_mcp_server_environments(
+        config: &mut McpConfig,
+        settings: &Config,
+        environments: &TurnEnvironmentSnapshot,
+        auth: Option<&CodexAuth>,
+    ) -> HashMap<McpServerKey, codex_mcp::EffectiveMcpServer> {
+        config.approval_policy = settings.permissions.approval_policy.clone();
+        config.permission_profile = settings.permissions.effective_permission_profile();
+        config.approvals_reviewer = settings.approvals_reviewer;
+        config.environment_cwds = environments
             .turn_environments()
             .map(|environment| {
                 (
@@ -316,9 +308,8 @@ impl Session {
         config
             .environment_cwds
             .entry(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
-            .or_insert_with(|| PathUri::from_abs_path(&desired.config.cwd));
-        config.environment_use_mxc = desired
-            .environments
+            .or_insert_with(|| PathUri::from_abs_path(&config.host_cwd));
+        config.environment_use_mxc = environments
             .turn_environments()
             .map(|environment| {
                 (
@@ -333,13 +324,12 @@ impl Session {
             .entry(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
             .or_insert(
                 cfg!(windows)
-                    && desired.config.effective_local_windows_sandbox_type()
-                        == SandboxType::WindowsMxc,
+                    && settings.effective_local_windows_sandbox_type() == SandboxType::WindowsMxc,
             );
-        let mcp_servers = effective_mcp_servers(&config, auth.as_ref());
+        let mcp_servers = effective_mcp_servers(config, auth);
         config.set_server_permissions(
             &mcp_servers,
-            desired.environments.turn_environments().map(|environment| {
+            environments.turn_environments().map(|environment| {
                 // Freeze the executor paths used to interpret this profile with the MCP call.
                 let mut sandbox = environment.sandbox_context(/*additional_permissions*/ None);
                 sandbox.permissions = sandbox
@@ -350,6 +340,29 @@ impl Session {
                     Arc::new(sandbox),
                 )
             }),
+        );
+        mcp_servers
+    }
+
+    pub(super) fn build_mcp_runtime_input(
+        &self,
+        desired: &McpDesiredState,
+        mcp_projection: McpRuntimeProjection,
+        ready_selected_capability_roots: &[SelectedCapabilityRoot],
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+    ) -> McpRuntimeInput {
+        let auth = desired.auth.clone();
+        let McpRuntimeProjection {
+            mut config,
+            plugins_available,
+            selected_plugins: _,
+        } = mcp_projection;
+        config.host_cwd = desired.config.cwd.clone();
+        let mcp_servers = Self::bind_mcp_server_environments(
+            &mut config,
+            &desired.config,
+            &desired.environments,
+            auth.as_ref(),
         );
         let mcp_config = Arc::new(config);
         let runtime_context =
