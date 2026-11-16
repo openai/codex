@@ -3,12 +3,16 @@
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
+use crate::custom_terminal::Frame;
 use crate::key_hint::KeyBinding;
 use crate::keymap::KeymapContext;
 use crate::keymap::RuntimeKeymap;
 use crate::markdown_render::FileLink;
 use crate::markdown_render::SourceLocation;
 use crate::motion::MotionMode;
+use crate::pets::ImageProtocol;
+use crate::sidebar_image::DocumentContent;
+use crate::sidebar_image::SidebarImage;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::visible_lines;
@@ -17,7 +21,6 @@ use crate::transcript_view::ViewAction;
 use codex_app_server_client::AppServerPath;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
@@ -61,6 +64,14 @@ impl HistoryCell for FileCell {
     }
 }
 
+pub(super) struct DocumentRenderOptions<'a> {
+    pub(super) motion: MotionMode,
+    pub(super) frames: &'a tui::FrameRequester,
+    pub(super) keymap: &'a RuntimeKeymap,
+    pub(super) resize_hint: Option<&'a str>,
+    pub(super) image_protocol: Option<ImageProtocol>,
+}
+
 pub(super) struct Document {
     source: ThreadId,
     pub(super) path: PathUri,
@@ -73,6 +84,7 @@ pub(super) struct Document {
 enum State {
     Loading(Instant),
     Failed(String),
+    Image(Box<SidebarImage>),
     Ready {
         view: Box<TranscriptView>,
         cells: [Arc<dyn HistoryCell>; 1],
@@ -129,9 +141,10 @@ impl Document {
         }
     }
 
-    pub(super) fn loaded(&mut self, result: Result<String, String>) {
+    pub(super) fn loaded(&mut self, result: Result<DocumentContent, String>) {
         self.state = match result {
-            Ok(source) => {
+            Ok(DocumentContent::Image(image)) => State::Image(image),
+            Ok(DocumentContent::Text(source)) => {
                 let title = self.title();
                 let code =
                     self.location.is_some() || !crate::markdown_render::is_markdown_file(&title);
@@ -207,7 +220,7 @@ impl Document {
         if restore_markdown || (location.is_some() && line_starts.is_empty()) {
             // Coordinate links show source. Plain Markdown links restore rendering.
             let source = source.to_owned();
-            self.loaded(Ok(source));
+            self.loaded(Ok(DocumentContent::Text(source)));
         } else {
             *target = location.and_then(|location| source_target(source, line_starts, location));
             if let Some((_, offset)) = target {
@@ -221,15 +234,25 @@ impl Document {
     pub(super) fn paint(
         &mut self,
         area: Rect,
-        buf: &mut Buffer,
-        motion: MotionMode,
-        frames: &tui::FrameRequester,
-        keymap: &RuntimeKeymap,
-        resize_hint: Option<&str>,
+        frame: &mut Frame<'_>,
+        options: DocumentRenderOptions<'_>,
     ) -> Option<Position> {
+        let DocumentRenderOptions {
+            motion,
+            frames,
+            keymap,
+            resize_hint,
+            image_protocol,
+        } = options;
+        let buf = &mut *frame.buffer;
         ratatui::widgets::Clear.render(area, buf);
         let body = area.inner(ratatui::layout::Margin::new(1, 0));
         match &mut self.state {
+            State::Image(image) => {
+                frame
+                    .image_placements
+                    .extend(image.paint(body, buf, image_protocol, resize_hint))
+            }
             State::Loading(started) => {
                 let glyph = crate::motion::loading_glyph(*started, motion, frames);
                 Line::from(vec![
@@ -510,10 +533,32 @@ impl App {
         let reader = server.request_view();
         let tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = reader
-                .read_document(source, &original_path, &path)
-                .await
-                .map_err(|error| format!("{error:#}"));
+            let result = async {
+                if (FileLink {
+                    path: path.inferred_native_path_string(),
+                    location,
+                })
+                .is_image()
+                {
+                    let bytes = reader
+                        .read_preview_file(source, &original_path, &path)
+                        .await?;
+                    tokio::task::spawn_blocking(move || match SidebarImage::decode(&bytes) {
+                        Ok(image) => Ok(DocumentContent::Image(Box::new(image))),
+                        Err(image_error) => AppServerSession::preview_text(bytes)
+                            .map(DocumentContent::Text)
+                            .map_err(|_| image_error),
+                    })
+                    .await?
+                } else {
+                    reader
+                        .read_document(source, &original_path, &path)
+                        .await
+                        .map(DocumentContent::Text)
+                }
+            }
+            .await
+            .map_err(|error| format!("{error:#}"));
             tx.send(AppEvent::SidebarDocumentLoaded {
                 backend_id,
                 parent,

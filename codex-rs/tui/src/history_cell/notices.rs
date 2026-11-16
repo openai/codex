@@ -344,11 +344,20 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_interruption_notice() -> PlainHistoryCell {
-    PlainHistoryCell::new(vec![
-        Line::from("■ Conversation interrupted - use /feedback if something went wrong")
-            .style(crate::style::secondary_text_style()),
-    ])
+#[derive(Debug)]
+pub(crate) struct InterruptionNotice(pub(crate) Option<String>);
+
+impl HistoryCell for InterruptionNotice {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![
+            Line::from("■ Conversation interrupted - use /feedback if something went wrong")
+                .style(crate::style::secondary_text_style()),
+        ]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(/*width*/ u16::MAX))
+    }
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {

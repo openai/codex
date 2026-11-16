@@ -10,6 +10,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::history_cell::is_session_history_prefix_cell;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::thread_transcript::RawReasoningVisibility;
+use crate::thread_transcript::TranscriptCells;
 use crate::thread_transcript::thread_items_to_transcript_cells;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadItemsListResponse;
@@ -108,19 +109,46 @@ impl App {
         };
         let width = tui.terminal.last_known_screen_size.width;
         self.remove_hidden_review_cells(tui, &turns, &hidden_item_ids, thread_id, &cwd, visibility);
-        let cells = self.project_older_history_cells(
+        let split_turn = items
+            .last()
+            .and_then(|(turn_id, last)| {
+                turns.iter().find(|turn| {
+                    turn.id == *turn_id
+                        && matches!(turn.status, TurnStatus::Completed | TurnStatus::Interrupted)
+                        && turn.items.last().is_some_and(|item| item.id() != last.id())
+                })
+            })
+            .filter(|_| self.local_settings.transcript_mode.is_owned());
+        let existing = self
+            .side_companions
+            .get(&thread_id)
+            .filter(|_| parked)
+            .map_or(self.transcript_cells.as_slice(), |pane| {
+                pane.cells.as_slice()
+            });
+        let split_insertion = split_image_insertion(existing, split_turn);
+        let (cells, split_images) = self.project_older_history_cells(
             items,
             &turns,
             &hidden_item_ids,
             thread_id,
             &cwd,
             visibility,
+            split_insertion.is_some(),
         );
         if let Some(pane) = self.side_companions.get_mut(&thread_id).filter(|_| parked) {
+            let images = split_insertion.and_then(|index| {
+                if split_images.is_empty() {
+                    return None;
+                }
+                let inserted = index..index + split_images.len();
+                pane.splice_older_cells(index..index, split_images);
+                Some(inserted)
+            });
             let index = history_prefix_len(&pane.cells);
             let inserted = index..index + cells.len();
             pane.splice_older_cells(index..index, cells);
-            pane.view.history_loaded(&pane.cells, inserted);
+            pane.view.history_page_loaded(&pane.cells, inserted, images);
             pane.view.history = if app_server.has_older_history(thread_id) {
                 TranscriptHistoryState::Partial
             } else {
@@ -130,9 +158,20 @@ impl App {
             tui.frame_requester().schedule_frame();
             return Ok(());
         }
+        let images = split_insertion.and_then(|index| {
+            if split_images.is_empty() {
+                return None;
+            }
+            let inserted = index..index + split_images.len();
+            if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+                overlay.insert_history_page(index, split_images.clone());
+            }
+            self.transcript_cells.splice(index..index, split_images);
+            Some(inserted)
+        });
         let inserted = self.prepend_older_transcript_cells(cells);
         self.transcript_view
-            .history_loaded(&self.transcript_cells, inserted.clone());
+            .history_page_loaded(&self.transcript_cells, inserted.clone(), images);
         if !inserted.is_empty() {
             self.join_older_activity_group(inserted.end, &turns);
         }
@@ -240,6 +279,10 @@ impl App {
     }
 
     /// Project each terminal row on the page containing the end of its turn.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Projection needs the thread context and whether its split turn has a rendered end."
+    )]
     fn project_older_history_cells(
         &mut self,
         items: Vec<(String, ThreadItemPayload)>,
@@ -248,9 +291,12 @@ impl App {
         thread_id: ThreadId,
         cwd: &AbsolutePathBuf,
         visibility: RawReasoningVisibility,
-    ) -> Vec<Arc<dyn HistoryCell>> {
+        relocate_split_images: bool,
+    ) -> (TranscriptCells, TranscriptCells) {
         let mut cells = Vec::new();
+        let mut split_images = Vec::new();
         for (range, turn_end) in completion::group_turn_items(&items, turns) {
+            let start = cells.len();
             // Internal prompts stay invisible, but still separate adjacent tool groups.
             for visible in items[range]
                 .split(|(turn_id, item)| hidden_item_ids.contains(&(turn_id.as_str(), item.id())))
@@ -263,10 +309,24 @@ impl App {
                     Some(&self.config),
                 ));
             }
-            let Some(turn) = turn_end else { continue };
+            let Some(turn) = turn_end else {
+                if relocate_split_images {
+                    split_images.extend(
+                        cells.extract_if(start.., |cell| generated_image(cell.as_ref()).is_some()),
+                    );
+                }
+                continue;
+            };
+            if self.local_settings.transcript_mode.is_owned()
+                && turn.status != TurnStatus::InProgress
+            {
+                cells[start..].sort_by_key(|cell| generated_image(cell.as_ref()).is_some());
+            }
             if turn.status == TurnStatus::Interrupted && !self.side_threads.contains_key(&thread_id)
             {
-                cells.push(Arc::new(history_cell::new_interruption_notice()));
+                cells.push(Arc::new(history_cell::InterruptionNotice(Some(
+                    turn.id.clone(),
+                ))));
             }
             if turn.status == TurnStatus::Completed
                 && let Some(completion) = if let Some(pane) =
@@ -287,10 +347,14 @@ impl App {
                 cells.push(Arc::new(completion));
             }
         }
-        for cell in cells.iter_mut().filter_map(Arc::get_mut) {
+        for cell in cells
+            .iter_mut()
+            .chain(&mut split_images)
+            .filter_map(Arc::get_mut)
+        {
             self.link_viewed_image(cell);
         }
-        cells
+        (cells, split_images)
     }
 
     /// Insert each page once, keeping session headers and any backtrack selection in place.
@@ -397,6 +461,34 @@ impl App {
         }
         tui.frame_requester().schedule_frame();
     }
+}
+
+fn generated_image(cell: &dyn HistoryCell) -> Option<&history_cell::ImageGenerationHistoryCell> {
+    cell.as_any()
+        .downcast_ref::<history_cell::ImageGenerationHistoryCell>()
+        .filter(|image| image.is_turn_output())
+}
+
+/// The first page can contain the answer while an older page contains its image.
+fn split_image_insertion(
+    existing: &[Arc<dyn HistoryCell>],
+    split_turn: Option<&Turn>,
+) -> Option<usize> {
+    let turn = split_turn?;
+    let end = existing.iter().position(|cell| {
+        let cell = cell.as_any();
+        cell.downcast_ref::<history_cell::FinalMessageSeparator>()
+            .is_some_and(|cell| cell.turn_id.as_deref() == Some(turn.id.as_str()))
+            || cell
+                .downcast_ref::<history_cell::InterruptionNotice>()
+                .is_some_and(|cell| cell.0.as_deref() == Some(turn.id.as_str()))
+    })?;
+    Some(
+        existing[..end]
+            .iter()
+            .rposition(|cell| generated_image(cell.as_ref()).is_none())
+            .map_or(0, |index| index + 1),
+    )
 }
 
 /// Classify internal review prompts across page boundaries before rendering any older items.

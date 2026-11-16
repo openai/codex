@@ -315,6 +315,7 @@ pub(crate) enum CapturedSideStream {
 #[derive(Debug)]
 pub(crate) struct CapturedSideDisplay {
     pub(crate) rendered_completion_turn_ids: std::collections::HashMap<String, bool>,
+    pub(crate) generated_images: crate::history_cell::PendingGeneratedImages,
     pub(crate) active: Option<Box<dyn HistoryCell>>,
     pub(crate) auxiliary: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     pub(crate) draft: Box<crate::bottom_pane::TextArea>,
@@ -540,7 +541,7 @@ pub(crate) enum AppEvent {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,
         request: uuid::Uuid,
-        result: Result<String, String>,
+        result: Result<crate::sidebar_image::DocumentContent, String>,
     },
     SavedSideChatsLoaded {
         backend_id: crate::backend_id::BackendId,

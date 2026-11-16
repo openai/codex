@@ -138,6 +138,7 @@ impl StartupDraft {
         );
         terminal_restore_guard.events = Some(tui.event_broker.clone());
         tui.terminal_app_over_ssh = initialized_terminal.terminal_app_over_ssh;
+        tui.herdr_kitty_graphics = initialized_terminal.herdr_kitty_graphics;
         tui.set_alt_screen_enabled(screen.use_alt_screen);
         let mut pump = StartupDraftPump::new(&tui, initial_screen, session_action);
         pump.motion = screen.welcome_motion;

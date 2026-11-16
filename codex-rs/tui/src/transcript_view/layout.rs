@@ -89,9 +89,19 @@ fn cell_content_layout(
     if let Some(protocol) = presentation.image_protocol
         && let Some(path) = cell.image_path()
     {
+        use crate::transcript_image::PreviewKind;
+        let kind = if cell
+            .as_any()
+            .is::<crate::history_cell::ImageGenerationHistoryCell>()
+        {
+            PreviewKind::Generated
+        } else {
+            PreviewKind::Inspected
+        };
         layout.image =
-            crate::transcript_image::TranscriptImage::load(path.as_path(), width, protocol)
+            crate::transcript_image::TranscriptImage::load(path.as_path(), width, protocol, kind)
                 .map(Arc::new);
+        layout.image_left_aligned = kind == PreviewKind::Generated;
     }
     layout
 }

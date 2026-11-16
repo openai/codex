@@ -419,7 +419,7 @@ impl ChatWidget {
                 }
             }
         }
-        self.on_interrupted_turn(reason);
+        self.on_interrupted_turn_with_id(reason, Some(turn_id));
         self.input_queue.pending_steers.extend(later);
         for (message, record) in unconfirmed {
             self.input_queue.queued_user_messages.push_back(message);
@@ -430,7 +430,12 @@ impl ChatWidget {
         self.refresh_pending_input_preview();
     }
 
+    #[cfg(test)]
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        self.on_interrupted_turn_with_id(reason, /*turn_id*/ None);
+    }
+
+    fn on_interrupted_turn_with_id(&mut self, reason: TurnAbortReason, turn_id: Option<&str>) {
         self.requeue_image_submission();
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
@@ -454,12 +459,16 @@ impl ChatWidget {
                     /*hint*/ None,
                 ));
             } else {
-                self.add_to_history(match reason {
-                    TurnAbortReason::BudgetLimited => history_cell::new_error_event(
-                        "Goal budget reached - the turn was stopped.".to_string(),
+                match reason {
+                    TurnAbortReason::BudgetLimited => {
+                        self.add_to_history(history_cell::new_error_event(
+                            "Goal budget reached - the turn was stopped.".to_string(),
+                        ))
+                    }
+                    TurnAbortReason::Interrupted => self.add_to_history(
+                        history_cell::InterruptionNotice(turn_id.map(str::to_owned)),
                     ),
-                    TurnAbortReason::Interrupted => history_cell::new_interruption_notice(),
-                });
+                }
             }
         }
 

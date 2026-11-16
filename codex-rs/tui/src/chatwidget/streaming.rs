@@ -258,6 +258,7 @@ impl ChatWidget {
             });
         let display = CapturedSideDisplay {
             rendered_completion_turn_ids: self.turn_lifecycle.rendered_completion_turn_ids.clone(),
+            generated_images: std::mem::take(&mut self.turn_lifecycle.generated_images),
             active,
             last_completed_agent_message: self.transcript.last_completed_agent_message.clone(),
             auxiliary: self

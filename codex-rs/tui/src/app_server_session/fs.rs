@@ -81,6 +81,10 @@ impl AppServerSession {
         let bytes = self
             .read_preview_file(source, original_path, resolved_path)
             .await?;
+        Self::preview_text(bytes)
+    }
+
+    pub(crate) fn preview_text(bytes: Vec<u8>) -> Result<String> {
         let text = String::from_utf8(bytes).wrap_err("Not a UTF-8 text file")?;
         color_eyre::eyre::ensure!(
             !text

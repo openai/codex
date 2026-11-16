@@ -493,6 +493,40 @@ async fn document_preview_scenario() -> Result<()> {
             .await?;
         assert_eq!(app.sidebar().unwrap().documents.len(), remaining);
     }
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
+            crate::pets::PetImageUnsupportedReason::Terminal,
+        ));
+    image::RgbImage::new(24, 16).save(dir.path().join("figure.png"))?;
+    app.open_document(
+        &mut tui,
+        &mut server,
+        parent,
+        FileLink {
+            path: "figure.png".into(),
+            location: None,
+        },
+    )
+    .await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
+    let image = side_frame(&mut app, &mut tui, Size::new(160, 15))?;
+    let image_rows = image
+        .lines()
+        .map(|row| row.rsplit('│').next().unwrap_or(row).trim())
+        .filter(|row| {
+            row.contains("PNG ·")
+                || row.contains("Image preview unavailable")
+                || row.contains("←/→ tabs")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(image_rows, @"
+    PNG · 24 × 16
+    Image preview unavailable in this terminal
+    ←/→ tabs · Esc close
+    ");
+    assert_eq!(app.sidebar().unwrap().documents.len(), 2);
     app.open_document(
         &mut tui,
         &mut server,
@@ -507,11 +541,41 @@ async fn document_preview_scenario() -> Result<()> {
         crate::pager_overlay::TranscriptOverlay::new(Vec::new(), app.keymap.pager.clone()),
     ));
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
-    assert_eq!(app.sidebar().unwrap().documents.len(), 2);
+    assert_eq!(app.sidebar().unwrap().documents.len(), 3);
     assert!(app.overlay.take().is_some());
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
     let after_overlay = side_frame(&mut app, &mut tui, size)?;
-    assert!(after_overlay.contains("Last section."), "{after_overlay}");
+    assert!(after_overlay.contains("PNG · 24 × 16"), "{after_overlay}");
+    std::fs::write(
+        dir.path().join("pointer.png"),
+        "version https://git-lfs.github.com/spec/v1
+size 123
+",
+    )?;
+    app.open_document(
+        &mut tui,
+        &mut server,
+        parent,
+        FileLink {
+            path: "pointer.png".into(),
+            location: None,
+        },
+    )
+    .await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
+    let pointer = side_frame(&mut app, &mut tui, Size::new(200, 15))?;
+    insta::assert_snapshot!(pointer.lines().filter_map(|row| row.split_once('│')).map(|(_, row)| row.trim()).filter_map(|row| row.split_once(' ').map(|(_, line)| line.trim())).filter(|row| row.starts_with("version ") || row.starts_with("size ")).collect::<Vec<_>>().join("
+"), @"
+    version https://git-lfs.github.com/spec/v1
+    size 123
+    ");
+    let Some(SidebarContent::Document(pointer_id)) = app.sidebar().unwrap().visible_content()
+    else {
+        panic!("the pointer preview should be visible");
+    };
+    app.sidebar_mut().remove_document(pointer_id);
+
     let child = ThreadId::new();
     app.side_threads.insert(child, SideThreadState::new(parent));
     let (stream, display) = app.chat_widget.take_side_display(/*width*/ 120);

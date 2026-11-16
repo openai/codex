@@ -919,6 +919,33 @@ fn search_scans_a_page_inserted_after_the_retained_session_header() {
 }
 
 #[test]
+fn search_resumes_from_the_text_in_a_page_with_a_relocated_image() {
+    let mut cells = vec![cell("answer"), cell("completion")];
+    let mut view = TranscriptView {
+        area: Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 6,
+        ),
+        history: TranscriptHistoryState::Partial,
+        ..TranscriptView::default()
+    };
+    view.begin_search();
+    view.paste_search("needle");
+    finish_scan(&mut view, &cells);
+    assert!(view.search.needs_history(view.history));
+
+    let match_cell = cell("older needle");
+    cells.insert(/*index*/ 1, cell("Generated image"));
+    cells.insert(/*index*/ 0, Arc::clone(&match_cell));
+    view.history = TranscriptHistoryState::Complete;
+    view.history_page_loaded(&cells, 0..1, Some(1..2));
+    finish_scan(&mut view, &cells);
+    assert_eq!(
+        view.search.current.as_ref().unwrap().anchor.key,
+        EntryKey::cell(&match_cell)
+    );
+}
+
+#[test]
 fn search_finds_the_first_older_entry_after_replaying_the_session_header() {
     let header = || -> Arc<dyn HistoryCell> {
         Arc::new(crate::history_cell::SessionHeaderHistoryCell::new(

@@ -49,7 +49,7 @@ fn alternate_scroll_report(input: &[u8]) -> Option<bool> {
 mod imp {
     use super::DefaultColors;
     use super::parse_default_colors;
-    use super::startup_replay::startup_replay_input;
+    use super::startup_replay::parse_startup_input;
     use super::terminal_identity;
     use std::fs::File;
     use std::fs::OpenOptions;
@@ -73,13 +73,14 @@ mod imp {
     static DA1_SUPPORTED: AtomicBool = AtomicBool::new(false);
 
     /// Results from the TUI's one-shot startup terminal probe.
-    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
     pub(crate) struct StartupProbe {
         pub(crate) alternate_scroll_enabled: Option<bool>,
         pub(crate) cursor_position: Option<Position>,
         pub(crate) default_colors: Option<DefaultColors>,
         pub(crate) keyboard_enhancement_supported: Option<bool>,
         pub(crate) terminal_app_over_ssh: Option<bool>,
+        pub(crate) kitty_graphics: bool,
     }
 
     /// Whether the startup probe should query keyboard enhancement support.
@@ -305,6 +306,7 @@ mod imp {
     pub(crate) fn startup(
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
+        probe_herdr: bool,
     ) -> io::Result<StartupProbe> {
         DA1_SUPPORTED.store(false, Ordering::Relaxed);
         let mut tty = Tty::open()?;
@@ -319,6 +321,10 @@ mod imp {
         }
         // Query before DA1 so its reply acts as a barrier even if mode 1007 is unsupported.
         query.extend_from_slice(b"\x1B[?1007$p");
+        if probe_herdr {
+            // Query a single inline RGB pixel without storing or displaying an image.
+            query.extend_from_slice(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\");
+        }
         // DA1 finishes keyboard detection and establishes whether we can use it at exit.
         query.extend_from_slice(b"\x1B[c\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\");
         if query_identity {
@@ -332,12 +338,17 @@ mod imp {
             timeout,
             keyboard_probe,
             query_identity,
+            probe_herdr,
             &mut buffer,
         );
-        crossterm::event::buffer_input(&startup_replay_input(&buffer))?;
+        let (replay, kitty_graphics) = parse_startup_input(&buffer, probe_herdr);
+        crossterm::event::buffer_input(&replay)?;
         let saw_da1 = find_primary_device_attributes(&buffer).is_some();
         DA1_SUPPORTED.store(saw_da1, Ordering::Relaxed);
-        result
+        result.map(|probe| StartupProbe {
+            kitty_graphics,
+            ..probe
+        })
     }
 
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
@@ -373,15 +384,13 @@ mod imp {
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
         query_identity: bool,
+        probe_herdr: bool,
         buffer: &mut Vec<u8>,
     ) -> io::Result<StartupProbe> {
         let deadline = Instant::now() + timeout;
         let mut probe = StartupProbe {
-            alternate_scroll_enabled: None,
-            cursor_position: None,
-            default_colors: None,
-            keyboard_enhancement_supported: None,
             terminal_app_over_ssh: (!query_identity).then_some(/*t*/ false),
+            ..Default::default()
         };
         let mut saw_supported_keyboard = false;
         loop {
@@ -392,7 +401,9 @@ mod imp {
                 buffer,
                 keyboard_probe,
             );
-            if startup_probe_complete(&probe, keyboard_probe) {
+            if startup_probe_complete(&probe, keyboard_probe)
+                && (!probe_herdr || find_primary_device_attributes(buffer).is_some())
+            {
                 return Ok(probe);
             }
             let now = Instant::now();
@@ -698,6 +709,7 @@ mod imp {
                 default_colors: None,
                 keyboard_enhancement_supported: None,
                 terminal_app_over_ssh: Some(false),
+                kitty_graphics: false,
             };
             let mut saw_supported_keyboard = false;
             update_startup_probe(
@@ -718,6 +730,7 @@ mod imp {
                     }),
                     keyboard_enhancement_supported: Some(true),
                     terminal_app_over_ssh: Some(false),
+                    kitty_graphics: false,
                 }
             );
             assert!(startup_probe_complete(
@@ -734,6 +747,7 @@ mod imp {
                 default_colors: None,
                 keyboard_enhancement_supported: None,
                 terminal_app_over_ssh: None,
+                kitty_graphics: false,
             };
             let mut supported_keyboard = false;
             let input =
@@ -772,6 +786,7 @@ mod imp {
                 Duration::from_millis(/*millis*/ 5),
                 StartupKeyboardEnhancementProbe::Skip,
                 /*query_identity*/ true,
+                /*probe_herdr*/ false,
                 &mut buffer,
             )
             .expect("finish within probe deadline");
@@ -792,6 +807,7 @@ mod imp {
                 Duration::from_secs(/*secs*/ 1),
                 StartupKeyboardEnhancementProbe::Query,
                 /*query_identity*/ false,
+                /*probe_herdr*/ false,
                 &mut buffer,
             )
             .expect("read terminal responses after buffered typeahead");
@@ -807,11 +823,15 @@ mod imp {
                     }),
                     keyboard_enhancement_supported: Some(true),
                     terminal_app_over_ssh: Some(false),
+                    kitty_graphics: false,
                 }
             );
             let mut expected_replay = vec![b'x'; 2_048];
             expected_replay.extend_from_slice(b"\x1B[20;10R\x1B[?64;1;2c\x1B[?7u");
-            assert_eq!(startup_replay_input(&buffer), expected_replay);
+            assert_eq!(
+                parse_startup_input(&buffer, /*probe_herdr*/ false),
+                (expected_replay, false)
+            );
         }
 
         #[test]

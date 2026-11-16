@@ -556,7 +556,13 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
     image::RgbaImage::from_pixel(8, 16, image::Rgba([80, 30, 20, 255])).save(&path)?;
     let protocol = crate::pets::ImageProtocol::KittyLocalFile;
     let image = Arc::new(
-        crate::transcript_image::TranscriptImage::load(&path, area.width, protocol).unwrap(),
+        crate::transcript_image::TranscriptImage::load(
+            &path,
+            area.width,
+            protocol,
+            crate::transcript_image::PreviewKind::Inspected,
+        )
+        .unwrap(),
     );
     let neighbor = Rect::new(/*x*/ 4, /*y*/ 9, image.columns, image.rows);
     let presented = |tui: &tui::Tui| {
@@ -583,6 +589,7 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
                 area: neighbor,
                 first_row: 0,
                 file: None,
+                terminal_id: None,
             });
     })?;
     app.finish_conversation(&mut tui, painted)?;

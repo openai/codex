@@ -1153,6 +1153,8 @@ async fn image_generation_begin_restores_working_status_after_single_line_preamb
 #[tokio::test]
 async fn image_generation_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+    handle_turn_started(&mut chat, "turn-1");
 
     handle_image_generation_end(
         &mut chat,
@@ -1162,13 +1164,28 @@ async fn image_generation_call_adds_history_cell() {
         Some(test_path_buf("/tmp/ig-1.png").abs()),
     );
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected a single history cell");
+    assert!(drain_insert_history(&mut rx).is_empty());
+    complete_assistant_message(
+        &mut chat,
+        "image-answer",
+        "Here is the square.",
+        Some(MessagePhase::FinalAnswer),
+    );
+    handle_turn_completed(&mut chat, "turn-1", Some(2_000));
+    let cells = drain_insert_history_with(&mut rx, |cell| {
+        if cell.as_any().is::<history_cell::FinalMessageSeparator>() {
+            return vec!["Worked for 2s".into()];
+        }
+        cell.display_lines(/*width*/ 80)
+    });
     let platform_file_url = url::Url::from_file_path(test_path_buf("/tmp/ig-1.png"))
         .expect("test path should convert to file URL")
         .to_string();
-    let combined =
-        lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>()
+        .replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
 
     handle_image_generation_end(

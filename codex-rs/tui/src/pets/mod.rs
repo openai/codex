@@ -48,6 +48,7 @@ pub(crate) use image_protocol::PetImageUnsupportedReason;
 #[cfg(not(test))]
 pub(crate) use image_protocol::detect_pet_image_support;
 pub(crate) use image_protocol::kitty_delete_image;
+pub(crate) use image_protocol::kitty_move_image;
 pub(crate) use image_protocol::kitty_transmit_png_file_with_id;
 pub(crate) use image_protocol::kitty_transmit_png_with_id;
 pub(crate) use picker::PET_PICKER_VIEW_ID;

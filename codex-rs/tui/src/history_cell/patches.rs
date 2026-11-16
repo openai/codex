@@ -280,7 +280,7 @@ pub(crate) fn new_image_generation_call(
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) -> ImageGenerationHistoryCell {
-    let detail = revised_prompt.unwrap_or(call_id);
+    let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
     let failed = status == "failed";
     let heading = if failed {
         vec!["✗ ".red().bold(), "Image generation failed".bold()].into()
@@ -296,21 +296,52 @@ pub(crate) fn new_image_generation_call(
     }
 
     ImageGenerationHistoryCell {
+        id: call_id,
         lines,
         failed,
-        saved_path: saved_path.filter(|_| !failed),
+        saved_path: saved_path.filter(|_| status == "completed"),
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct ImageGenerationHistoryCell {
+    pub(crate) id: String,
     failed: bool,
     lines: Vec<Line<'static>>,
     saved_path: Option<AbsolutePathBuf>,
 }
 
+impl ImageGenerationHistoryCell {
+    /// A completed generation with a saved artifact belongs to the answer.
+    pub(crate) fn is_turn_output(&self) -> bool {
+        self.saved_path.is_some()
+    }
+}
+
+/// Hold saved results until the turn can place them after the answer.
+#[derive(Debug, Default)]
+pub(crate) struct PendingGeneratedImages(HashMap<String, Vec<ImageGenerationHistoryCell>>);
+
+impl PendingGeneratedImages {
+    pub(crate) fn record(&mut self, turn_id: String, image: ImageGenerationHistoryCell) {
+        let images = self.0.entry(turn_id).or_default();
+        if let Some(existing) = images.iter_mut().find(|existing| existing.id == image.id) {
+            *existing = image;
+        } else {
+            images.push(image);
+        }
+    }
+
+    pub(crate) fn take(&mut self, turn_id: &str) -> Vec<ImageGenerationHistoryCell> {
+        self.0.remove(turn_id).unwrap_or_default()
+    }
+}
+
 impl HistoryCell for ImageGenerationHistoryCell {
     fn tool_call_labels(&self) -> Vec<String> {
+        if self.is_turn_output() {
+            return Vec::new();
+        }
         let label = if self.failed {
             "Image generation failed"
         } else {
@@ -321,6 +352,46 @@ impl HistoryCell for ImageGenerationHistoryCell {
 
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines =
+            crate::terminal_hyperlinks::plain_hyperlink_lines(self.display_lines(width));
+        if let Some(path) = &self.saved_path
+            && let Some(line) = lines.last_mut()
+            && let Some(span) = line.line.spans.last()
+        {
+            let width = crate::line_truncation::span_width(span);
+            let start = line.line.width().saturating_sub(width);
+            line.hyperlinks
+                .push(crate::terminal_hyperlinks::TerminalHyperlink::document(
+                    start..start + width,
+                    crate::markdown_render::FileLink {
+                        path: path.to_string_lossy().into_owned(),
+                        location: None,
+                    },
+                ));
+        }
+        lines
+    }
+
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let Some(path) = &self.saved_path else {
+            return self.display_hyperlink_lines(width);
+        };
+        let mut line = HyperlinkLine::from(Line::from("  Generated image".dim()));
+        line.hyperlinks.push(TerminalHyperlink::document(
+            2..line.line.width(),
+            crate::markdown_render::FileLink {
+                path: path.to_string_lossy().into_owned(),
+                location: None,
+            },
+        ));
+        vec![line]
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

@@ -49,6 +49,7 @@ fn preview_at(protocol: ImageProtocol, y: u16) -> ImagePlacement {
         area: Rect::new(/*x*/ 0, y, /*width*/ 2, /*height*/ 1),
         first_row: 0,
         file: None,
+        terminal_id: None,
     }
 }
 

@@ -341,8 +341,9 @@ impl AppServerSession {
             if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id)
                 && !turn.items.iter().any(|item| item.id() == entry.item.id())
             {
+                let turn_id = entry.turn_id.clone();
                 let item = ThreadItem::try_from(entry)?;
-                items.push((turn.id.clone(), item.payload.clone()));
+                items.push((turn_id, item.payload.clone()));
                 turn.items.insert(/*index*/ 0, item);
                 turn.items_view = TurnItemsView::Summary;
             }

@@ -609,7 +609,7 @@ fn image_generation_call_renders_saved_path() {
         "call-image-generation".to_string(),
         "completed",
         Some("A tiny blue square".to_string()),
-        Some(saved_path),
+        Some(saved_path.clone()),
     );
 
     assert_eq!(
@@ -620,6 +620,18 @@ fn image_generation_call_renders_saved_path() {
             expected_saved_path,
         ],
     );
+    let lines = cell.transcript_hyperlink_lines(/*width*/ 80);
+    let link = &lines.last().unwrap().hyperlinks[0];
+    assert_eq!(
+        link.reader_destination(/*documents*/ true),
+        Some(crate::terminal_hyperlinks::ReaderLink::Document(
+            crate::markdown_render::FileLink {
+                path: saved_path.to_string_lossy().into_owned(),
+                location: None,
+            },
+        )),
+    );
+    assert_eq!(link.reader_destination(/*documents*/ false), None);
 }
 
 fn session_configured_event(model: &str) -> ThreadSessionState {

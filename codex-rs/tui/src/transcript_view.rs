@@ -439,8 +439,14 @@ impl TranscriptView {
             if skip >= rows.len() {
                 continue;
             }
+            let image_indent = if visible.layout.image_left_aligned {
+                // Match the two-column prefix the assistant's Markdown uses.
+                2
+            } else {
+                self.area.width.saturating_sub(image.columns) / 2
+            };
             let area = Rect::new(
-                self.area.x + self.area.width.saturating_sub(image.columns) / 2,
+                self.area.x + image_indent,
                 entry_y + skip as u16,
                 image.columns,
                 (rows.len() - skip) as u16,
@@ -450,6 +456,7 @@ impl TranscriptView {
                 area,
                 first_row: visible.row.saturating_sub(image_start),
                 file: None,
+                terminal_id: None,
             });
         }
         placements

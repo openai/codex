@@ -30,6 +30,7 @@ pub(crate) struct ImagePlacement {
     pub(crate) area: Rect,
     pub(crate) first_row: usize,
     pub(crate) file: Option<tempfile::NamedTempFile>,
+    pub(crate) terminal_id: Option<u32>,
 }
 
 impl ImagePlacement {
@@ -40,6 +41,7 @@ impl ImagePlacement {
             area: self.area,
             first_row: self.first_row,
             file: None,
+            terminal_id: None,
         }
     }
 }
@@ -73,10 +75,29 @@ pub(crate) fn terminal_cell_size() -> Option<(u32, u32)> {
         })
 }
 
+/// Generated output is larger than an image shown as a tool detail.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewKind {
+    Inspected,
+    Generated,
+}
+
 impl TranscriptImage {
     fn load_pixels(path: &Path, max_width: u32, max_height: u32) -> Option<RgbaImage> {
+        if max_width == 0 || max_height == 0 {
+            return None;
+        }
+        let image = Self::decode(path)?;
+        Some(
+            image
+                .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
+                .to_rgba8(),
+        )
+    }
+
+    fn decode(path: &Path) -> Option<DynamicImage> {
         let metadata = path.metadata().ok()?;
-        if max_width == 0 || !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
+        if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
             return None;
         }
         let reader = image::ImageReader::open(path)
@@ -87,32 +108,53 @@ impl TranscriptImage {
         // screenshots usable, but never allocate hundreds of MB for an optional thumbnail.
         let mut limits = image::Limits::default();
         limits.max_alloc = Some(32 * 1024 * 1024);
-        let image = crate::image_decode::decode_oriented(reader, limits).ok()?;
-        Some(
-            image
-                .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
-                .to_rgba8(),
-        )
+        crate::image_decode::decode_oriented(reader, limits).ok()
     }
 
-    pub(crate) fn load(path: &Path, width: u16, protocol: ImageProtocol) -> Option<Self> {
-        let columns = width.saturating_sub(2).min(48);
+    pub(crate) fn load(
+        path: &Path,
+        width: u16,
+        protocol: ImageProtocol,
+        kind: PreviewKind,
+    ) -> Option<Self> {
+        let columns = width.saturating_sub(2);
+        if columns == 0 {
+            return None;
+        }
         // Sixel paints physical pixels. Guessing could paint outside the reserved rows.
         let (cell_width, cell_height) = match protocol {
             ImageProtocol::Sixel => terminal_cell_size()?,
-            ImageProtocol::Kitty | ImageProtocol::KittyLocalFile => (8, 16),
+            ImageProtocol::Kitty | ImageProtocol::KittyLocalFile => match kind {
+                PreviewKind::Inspected => (8, 16),
+                PreviewKind::Generated => terminal_cell_size().unwrap_or((8, 16)),
+            },
         };
-        // The sprite encoder scans each active color per Sixel band. Bound both its CPU
-        // work and worst-case output even with large terminal cells or high-entropy images.
-        let (max_width, max_height) = match protocol {
-            ImageProtocol::Sixel => (160, 80),
-            ImageProtocol::Kitty | ImageProtocol::KittyLocalFile => (384, 160),
+        let image = Self::decode(path)?;
+        // Keep the current Sixel encoding and tmux placeholder budgets.
+        let (columns, max_width, max_height) = match (protocol, kind) {
+            (ImageProtocol::Sixel, _) => (columns.min(48), 160, 80.min(6 * cell_height)),
+            (_, PreviewKind::Inspected) => (columns.min(48), 384, 6 * cell_height),
+            (_, PreviewKind::Generated) => {
+                let ratio = f64::from(image.width()) / f64::from(image.height());
+                let max_width = if ratio >= 2.0 {
+                    768
+                } else if ratio >= 1.01 {
+                    480
+                } else {
+                    400
+                };
+                let max_height = if crate::tui::tmux_fullscreen_image_base().is_some() {
+                    6 * cell_height
+                } else {
+                    400
+                };
+                (columns, max_width, max_height)
+            }
         };
-        let pixels = Self::load_pixels(
-            path,
-            (u32::from(columns) * cell_width).min(max_width),
-            (6 * cell_height).min(max_height),
-        )?;
+        let max_width = (u32::from(columns) * cell_width).min(max_width);
+        let pixels = image
+            .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
+            .to_rgba8();
         Some(Self {
             protocol,
             columns: pixels.width().div_ceil(cell_width) as u16,

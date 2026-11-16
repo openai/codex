@@ -39,6 +39,12 @@ pub(crate) struct FileLink {
     pub(crate) location: Option<SourceLocation>,
 }
 
+impl FileLink {
+    pub(crate) fn is_image(&self) -> bool {
+        self.location.is_none() && crate::sidebar_image::supports_path(&self.path)
+    }
+}
+
 pub(crate) fn is_markdown_file(path: &str) -> bool {
     path.rsplit_once('.').is_some_and(|(_, ext)| {
         ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")

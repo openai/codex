@@ -219,6 +219,7 @@ mod session_start;
 mod session_state;
 mod shortcut_help;
 mod sidebar_chooser;
+mod sidebar_image;
 mod sidebar_tab_strip;
 mod skills_helpers;
 mod slash_command;

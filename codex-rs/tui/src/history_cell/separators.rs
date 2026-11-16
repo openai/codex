@@ -19,6 +19,7 @@ use std::collections::HashMap;
 /// restoring the conversation constructs new cells and refreshes whether the timestamp needs a date.
 #[derive(Debug)]
 pub struct FinalMessageSeparator {
+    pub(crate) turn_id: Option<String>,
     elapsed_seconds: Option<u64>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
     completed_at: Option<DateTime<Local>>,
@@ -51,7 +52,10 @@ impl FinalMessageSeparator {
             return None;
         }
         rendered_completion_turn_ids.insert(turn.id.clone(), has_label);
-        let cell = Self::new(elapsed_seconds, /*runtime_metrics*/ None);
+        let cell = Self {
+            turn_id: Some(turn.id.clone()),
+            ..Self::new(elapsed_seconds, /*runtime_metrics*/ None)
+        };
         Some(match completed_at {
             Some(completed_at) => cell.with_completed_at(completed_at, ClockFormat::system()),
             None => cell,
@@ -64,6 +68,7 @@ impl FinalMessageSeparator {
         runtime_metrics: Option<RuntimeMetricsSummary>,
     ) -> Self {
         Self {
+            turn_id: None,
             elapsed_seconds,
             runtime_metrics,
             completed_at: None,

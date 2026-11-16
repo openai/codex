@@ -112,6 +112,7 @@ pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) terminal_app_over_ssh: bool,
+    pub(crate) herdr_kitty_graphics: Option<bool>,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
@@ -517,6 +518,12 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let backend = CrosstermBackend::new(stdout());
 
     #[cfg(unix)]
+    let probe_herdr = {
+        let info = codex_terminal_detection::terminal_info();
+        info.multiplexer.is_none() && info.term_program.as_deref() == Some("herdr")
+    };
+
+    #[cfg(unix)]
     let startup_probe = {
         use crate::terminal_probe::StartupKeyboardEnhancementProbe;
 
@@ -526,8 +533,11 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         } else {
             StartupKeyboardEnhancementProbe::Query
         };
-        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
-        {
+        match crate::terminal_probe::startup(
+            crate::terminal_probe::DEFAULT_TIMEOUT,
+            keyboard_probe,
+            probe_herdr,
+        ) {
             Ok(probe) => {
                 tracing::info!(
                     duration_ms = %started_at.elapsed().as_millis(),
@@ -543,13 +553,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
                     duration_ms = %started_at.elapsed().as_millis(),
                     "terminal startup probes failed: {err}"
                 );
-                crate::terminal_probe::StartupProbe {
-                    alternate_scroll_enabled: None,
-                    cursor_position: None,
-                    default_colors: None,
-                    keyboard_enhancement_supported: None,
-                    terminal_app_over_ssh: None,
-                }
+                crate::terminal_probe::StartupProbe::default()
             }
         }
     };
@@ -613,6 +617,10 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
             .unwrap_or(/*default*/ false),
         #[cfg(not(unix))]
         terminal_app_over_ssh: false,
+        #[cfg(unix)]
+        herdr_kitty_graphics: probe_herdr.then_some(startup_probe.kitty_graphics),
+        #[cfg(not(unix))]
+        herdr_kitty_graphics: None,
         stderr_guard,
     };
     restore_guard.active = false;
@@ -744,6 +752,7 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     // Cache the startup result so later configuration loads use the same terminal policy.
     pub(crate) terminal_app_over_ssh: bool,
+    pub(crate) herdr_kitty_graphics: Option<bool>,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     scrollback: ScrollbackStrategy,
@@ -822,6 +831,7 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             terminal_app_over_ssh: false,
+            herdr_kitty_graphics: None,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             scrollback,

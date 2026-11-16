@@ -8,6 +8,7 @@
 //! Plain Enter returns an empty composer to latest after transcript interactions and prompt editing.
 
 use super::sidebar::PaneFocus;
+use super::sidebar_document::DocumentRenderOptions;
 use super::turn_tips::TipSurface;
 use super::*;
 use crate::bottom_pane::CommandPopupPlacement;
@@ -244,7 +245,7 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: Size,
     ) -> Result<Rect> {
-        self.transcript_view.image_protocol = self.prepare_frame_images();
+        self.transcript_view.image_protocol = self.prepare_frame_images(tui);
         let frames = tui.frame_requester();
         if self.conversation_frame.sidebar.is_some() || self.conversation_frame.chat_strip.is_some()
         {
@@ -312,6 +313,7 @@ impl App {
             })
         });
         let sidebar_parent = self.sidebar_parent();
+        let sidebar_image_protocol = self.preview_image_protocol(tui);
         let sidebar_motion =
             MotionMode::from_animations_enabled(self.local_settings.tui.animations);
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
@@ -369,6 +371,9 @@ impl App {
                 }
                 Some(sidebar::SidebarLayout::Panel { sidebar, focus, .. }) => {
                     let focused = *focus == PaneFocus::Sidebar;
+                    frame
+                        .image_placements
+                        .retain(|image| !sidebar.intersects(image.area));
                     if focused {
                         frame.cursor_position = None;
                     }
@@ -381,11 +386,14 @@ impl App {
                         let [_, body] = side_pane::tab_and_body(*sidebar);
                         if let Some(cursor) = doc.paint(
                             body,
-                            frame.buffer,
-                            sidebar_motion,
-                            &frames,
-                            &self.keymap,
-                            resize_hint,
+                            frame,
+                            DocumentRenderOptions {
+                                motion: sidebar_motion,
+                                frames: &frames,
+                                keymap: &self.keymap,
+                                resize_hint,
+                                image_protocol: sidebar_image_protocol,
+                            },
                         ) && focused
                         {
                             frame.cursor_position = Some(cursor);
@@ -508,9 +516,6 @@ impl App {
                             frame.buffer,
                         );
                     }
-                    frame
-                        .image_placements
-                        .retain(|image| !sidebar.intersects(image.area));
                 }
                 None => {}
             }

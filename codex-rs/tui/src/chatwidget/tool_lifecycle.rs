@@ -27,19 +27,37 @@ impl ChatWidget {
 
     pub(super) fn on_image_generation_end(
         &mut self,
-        call_id: String,
-        status: String,
-        revised_prompt: Option<String>,
-        saved_path: Option<AbsolutePathBuf>,
+        turn_id: &str,
+        item: codex_app_server_protocol::ImageGenerationItem,
     ) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_image_generation_call(
-            call_id,
-            &status,
-            revised_prompt,
-            saved_path,
-        ));
+        let image = history_cell::new_image_generation_call(
+            item.id,
+            &item.status,
+            item.revised_prompt,
+            item.saved_path,
+        );
+        if self.local_settings.transcript_mode.is_owned()
+            && !turn_id.is_empty()
+            && image.is_turn_output()
+        {
+            self.turn_lifecycle
+                .generated_images
+                .record(turn_id.to_owned(), image);
+        } else {
+            self.add_to_history(image);
+        }
         self.request_redraw();
+    }
+
+    pub(super) fn flush_generated_images(&mut self, turn_id: &str) {
+        let images = self.turn_lifecycle.generated_images.take(turn_id);
+        if !images.is_empty() {
+            self.flush_answer_and_plan_streams();
+            for image in images {
+                self.add_to_history(image);
+            }
+        }
     }
 
     pub(super) fn on_file_change_completed(&mut self, item: ThreadItemPayload) {

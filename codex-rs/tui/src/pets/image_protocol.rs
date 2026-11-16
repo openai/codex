@@ -259,6 +259,14 @@ impl KittyPlacement {
     }
 }
 
+pub(crate) fn kitty_move_image(id: u32, area: ratatui::layout::Rect) -> String {
+    let (columns, rows) = (area.width, area.height);
+    // Lowercase i removes placements but keeps the uploaded pixel data.
+    wrap_for_tmux_if_needed(&format!(
+        "{ESC}_Ga=d,d=i,i={id},q=2;{ST}{ESC}_Ga=p,i={id},c={columns},r={rows},C=1,q=2;{ST}"
+    ))
+}
+
 pub fn kitty_transmit_png_with_id(
     path: &Path,
     columns: u16,

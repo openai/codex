@@ -164,16 +164,29 @@ fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
     image::RgbaImage::from_pixel(480, 160, image::Rgba([255, 0, 0, 255]))
         .save(&path)
         .unwrap();
+    let square_path = dir.path().join("generated.png");
+    image::RgbImage::new(768, 768).save(&square_path).unwrap();
     let cells: Vec<Arc<dyn HistoryCell>> = vec![
         Arc::new(new_view_image_tool_call(
             "view-call".to_string(),
             LegacyAppPathString::from_string(path.to_string_lossy().into_owned()),
         )),
+        Arc::new(
+            crate::history_cell::AgentMarkdownCell::new(
+                "Here is the image.".to_string(),
+                dir.path(),
+            )
+            .with_phase(Some(codex_protocol::models::MessagePhase::FinalAnswer)),
+        ),
         Arc::new(new_image_generation_call(
             "image-call".to_string(),
             "completed",
-            Some("A red rectangle".to_string()),
-            Some(AbsolutePathBuf::try_from(path.clone()).unwrap()),
+            Some("A square".to_string()),
+            Some(AbsolutePathBuf::try_from(square_path.clone()).unwrap()),
+        )),
+        Arc::new(crate::history_cell::FinalMessageSeparator::new(
+            Some(2),
+            /*runtime_metrics*/ None,
         )),
     ];
     let area = Rect::new(
@@ -193,8 +206,18 @@ fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
     let text_only = buf.clone();
     view.image_protocol = Some(ImageProtocol::Kitty);
     view.render(area, &mut buf, &cells);
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    view.render(area, &mut buf, &cells);
     let collapsed = frame(&buf);
     let collapsed_areas: Vec<_> = view.image_placements().iter().map(|p| p.area).collect();
+    assert_eq!(collapsed_areas.len(), 1);
+    assert!(
+        collapsed.find("Here is the image.").unwrap() < collapsed.find("Generated image").unwrap()
+    );
+    assert_eq!(collapsed_areas[0].x, area.x + 2);
+    assert!(collapsed_areas[0].height > 6);
+    view.sync_turn_details(&cells, /*enabled*/ false, /*active*/ None);
+    view.render(area, &mut buf, &cells);
     // Find may request full text, but only manual expansion may reveal inspected pixels.
     assert!(
         view.entry_layout(&cells, /*index*/ 0, /*full_content*/ true)
@@ -220,7 +243,8 @@ fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
             frame(&buf)
         )
     );
-    for (index, expected) in text.iter().enumerate() {
+    for index in [0, 2] {
+        let expected = &text[index];
         let layout = view.layout(&cells, index).unwrap();
         assert_eq!(layout.text(), expected);
         let pinned_narrow = layout.rewrap(/*width*/ 8);
@@ -231,7 +255,7 @@ fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
     }
     // Short, inset viewports may begin in an image. Its placement stays inside the viewport.
     let short = Rect::new(
-        /*x*/ 7, /*y*/ 5, /*width*/ 16, /*height*/ 3,
+        /*x*/ 7, /*y*/ 5, /*width*/ 16, /*height*/ 5,
     );
     view.jump_to_latest();
     view.render(short, &mut Buffer::empty(short), &cells);
@@ -266,6 +290,7 @@ fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
 
     // Resumed sessions with a deleted file fall back to the original text entry.
     std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&square_path).unwrap();
     view.image_protocol = Some(ImageProtocol::Kitty);
     view.render(area, &mut buf, &cells);
     assert_eq!(buf, text_only);

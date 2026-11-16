@@ -145,13 +145,14 @@ async fn resume_places_interruption_before_searches_split_across_pages() {
         (audit.id.clone(), audit.items[0].payload.clone()),
     ];
     let cwd = app.config.cwd.clone();
-    let older = app.project_older_history_cells(
+    let (older, _) = app.project_older_history_cells(
         page,
         &[canceled, audit],
         &HashSet::new(),
         ThreadId::new(),
         &cwd,
         RawReasoningVisibility::Hidden,
+        /*relocate_split_images*/ false,
     );
     cells.splice(0..0, older);
     let rows = cells
@@ -168,6 +169,86 @@ async fn resume_places_interruption_before_searches_split_across_pages() {
             "• Searched the web for newer",
         ]
     );
+}
+
+#[tokio::test]
+async fn generated_image_from_an_older_page_follows_its_answer() {
+    let (mut app, _, _) = crate::app::tests::make_test_app_with_channels().await;
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+    for status in [TurnStatus::Completed, TurnStatus::Interrupted] {
+        let completed = status == TurnStatus::Completed;
+        let mut turn = turn("image-turn", status, &[]);
+        let answer: ThreadItemPayload = serde_json::from_value(serde_json::json!({
+            "type": "agentMessage", "id": "answer", "text": "Here is the drawing.",
+            "phase": "final_answer",
+        }))
+        .unwrap();
+        turn.duration_ms = Some(2_000);
+        turn.items.push(ThreadItem::untimed(answer.clone()));
+        let cwd = app.config.cwd.clone();
+        let (mut existing, _) = app.project_older_history_cells(
+            vec![(turn.id.clone(), answer)],
+            std::slice::from_ref(&turn),
+            &HashSet::new(),
+            ThreadId::new(),
+            &cwd,
+            RawReasoningVisibility::Hidden,
+            /*relocate_split_images*/ false,
+        );
+
+        let path = app.config.cwd.as_path().join("drawing.png");
+        let image: ThreadItemPayload = serde_json::from_value(serde_json::json!({
+            "type": "imageGeneration", "id": "image", "status": "completed",
+            "revisedPrompt": "A drawing", "result": "", "savedPath": path,
+        }))
+        .unwrap();
+        turn.items
+            .insert(/*index*/ 0, ThreadItem::untimed(image.clone()));
+        let cwd = app.config.cwd.clone();
+        let mut previous = super::tests::turn("previous", TurnStatus::Completed, &[]);
+        previous.items.push(ThreadItem::untimed(image.clone()));
+        let items = vec![
+            (previous.id.clone(), image.clone()),
+            (turn.id.clone(), image),
+        ];
+        let turns = [previous, turn];
+        let (older, images) = app.project_older_history_cells(
+            items,
+            &turns,
+            &HashSet::new(),
+            ThreadId::new(),
+            &cwd,
+            RawReasoningVisibility::Hidden,
+            /*relocate_split_images*/ true,
+        );
+        assert_eq!(
+            older
+                .iter()
+                .filter(|cell| generated_image(cell.as_ref()).is_some())
+                .count(),
+            1
+        );
+        assert_eq!(images.len(), 1);
+        let index = split_image_insertion(&existing, Some(&turns[1])).unwrap();
+        existing.splice(index..index, images);
+        let rows: Vec<_> = existing
+            .iter()
+            .flat_map(|cell| cell.compact_hyperlink_lines(/*width*/ 80))
+            .map(|line| line.line.to_string())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "• Here is the drawing.",
+                "  Generated image",
+                if completed {
+                    "  Worked for 2s"
+                } else {
+                    "■ Conversation interrupted - use /feedback if something went wrong"
+                }
+            ]
+        );
+    }
 }
 
 #[tokio::test]
@@ -222,13 +303,14 @@ async fn hidden_last_item_keeps_turn_groups_and_completion_boundaries() {
             })
             .collect::<Vec<_>>();
 
-        let cells = app.project_older_history_cells(
+        let (cells, _) = app.project_older_history_cells(
             items.clone(),
             &turns,
             &hidden,
             thread_id,
             &cwd,
             RawReasoningVisibility::Hidden,
+            /*relocate_split_images*/ false,
         );
         let groups = cells
             .iter()
@@ -252,13 +334,14 @@ async fn hidden_last_item_keeps_turn_groups_and_completion_boundaries() {
             ),
         );
 
-        let repeated = app.project_older_history_cells(
+        let (repeated, _) = app.project_older_history_cells(
             items,
             &turns,
             &hidden,
             thread_id,
             &cwd,
             RawReasoningVisibility::Hidden,
+            /*relocate_split_images*/ false,
         );
         assert_eq!(
             repeated

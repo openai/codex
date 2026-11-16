@@ -1,16 +1,42 @@
 ---
 source: tui/src/transcript_view/layout_tests.rs
-assertion_line: 210
+assertion_line: 239
 expression: "format!(\"Collapsed inspection / generated output\\n{collapsed}\\nGraphics: {collapsed_areas:?}\\n\\nExpanded inspection / generated output\\n{}\\nGraphics: {expanded_areas:?}\",\nframe(&buf))"
 ---
 Collapsed inspection / generated output
-• Viewed image artifact.png
-    + Show details
+    ▸ Viewed image /workspace/artifact.png
 
-• Generated Image:
-  └ A red rectangle
-  └ Saved to: file:///workspace/artifact.png
-Graphics: [Rect { x: 52, y: 6, width: 36, height: 6 }]
+• Here is the image.
+
+  Generated image
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Worked for 2s
+Graphics: [Rect { x: 2, y: 5, width: 50, height: 25 }]
 
 Expanded inspection / generated output
 • Viewed image /workspace/artifact.png
@@ -22,7 +48,34 @@ Expanded inspection / generated output
 
 
 
-• Generated Image:
-  └ A red rectangle
-  └ Saved to: file:///workspace/artifact.png
-Graphics: [Rect { x: 52, y: 2, width: 36, height: 6 }, Rect { x: 52, y: 12, width: 36, height: 6 }]
+• Here is the image.
+
+  Generated image
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Worked for 2s
+Graphics: [Rect { x: 52, y: 2, width: 36, height: 6 }, Rect { x: 2, y: 12, width: 50, height: 25 }]

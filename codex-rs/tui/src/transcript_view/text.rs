@@ -47,6 +47,7 @@ use ratatui::text::Line;
 /// One cell's logical text and its width-dependent display rows.
 pub(crate) struct TextLayout {
     pub(super) image: Option<std::sync::Arc<crate::transcript_image::TranscriptImage>>,
+    pub(super) image_left_aligned: bool,
     logical: Vec<LogicalLine>,
     text: String,
     rows: Vec<TextRow>,
@@ -212,6 +213,7 @@ impl TextLayout {
             layout = layout.with_control(control.label.clone(), control.anchor);
         }
         layout.image = self.image.clone();
+        layout.image_left_aligned = self.image_left_aligned;
         if self.leading_blank_hidden {
             layout = layout.without_leading_blank_row();
         }
@@ -941,6 +943,7 @@ impl TextLayout {
         }
         Self {
             image: None,
+            image_left_aligned: false,
             logical,
             text,
             rows,
