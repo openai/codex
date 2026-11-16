@@ -49,7 +49,7 @@ struct RoutingInput<'a> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RoutingOutput {
+pub(super) struct RoutingOutput {
     routes: Vec<Vec<String>>,
     descriptions: BTreeMap<String, ChannelDescription>,
 }

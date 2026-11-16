@@ -14,26 +14,35 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-analytics = { workspace = true }
+codex-api = { workspace = true }
+codex-context-fragments = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
+codex-guardian-context = { workspace = true }
 codex-guardian-reviewer = { workspace = true }
 codex-history = { workspace = true }
+codex-http-client = { workspace = true }
+codex-login = { workspace = true }
 codex-message-board = { workspace = true }
+codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-websocket-client = { workspace = true }
+http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { workspace = true, features = ["time"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 codex-attachment-store = { workspace = true }
-codex-context-fragments = { workspace = true }
 core_test_support = { workspace = true }
 futures = { workspace = true }
 insta = { workspace = true }

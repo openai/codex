@@ -12,6 +12,10 @@ mod delivery;
 mod evidence;
 mod host;
 mod housekeeper;
+#[allow(dead_code, reason = "Wired into the housekeeper in the next PR.")]
+mod housekeeper_sampler;
+#[allow(dead_code, reason = "Wired into the housekeeper in the next PR.")]
+mod housekeeper_transport;
 mod private_thread;
 pub use host::install;
 mod retrieval_tools;
