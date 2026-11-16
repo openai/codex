@@ -942,6 +942,7 @@ mod tests {
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use codex_rollout::RolloutItem;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     use super::*;
@@ -1170,7 +1171,7 @@ mod tests {
         )
         .await
         .expect("state db should initialize");
-        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let store = Arc::new(LocalThreadStore::new(config.clone(), Some(runtime.clone())));
         let thread_id = ThreadId::default();
         let mut params = create_thread_params(thread_id);
         params.history_mode = ThreadHistoryMode::Paginated;
@@ -1197,11 +1198,13 @@ mod tests {
             })
         };
 
+        let parent = turn_context("parent-model", AskForApproval::Never);
+        let child = turn_context("child-model", AskForApproval::OnRequest);
         let mut guard = crate::LiveThreadInitGuard::default();
         let live_thread = LiveThread::create_with_inherited_model_context(
             store,
             params,
-            &[turn_context("parent-model", AskForApproval::Never)],
+            &[user_message_item("legacy-only event"), parent.clone()],
             &mut guard,
         )
         .await
@@ -1219,7 +1222,7 @@ mod tests {
         assert_eq!(inherited_metadata.model, None);
 
         live_thread
-            .append_items(&[turn_context("child-model", AskForApproval::OnRequest)])
+            .append_items(std::slice::from_ref(&child))
             .await
             .expect("append child context");
         let child_metadata = runtime
@@ -1229,6 +1232,47 @@ mod tests {
             .expect("sqlite metadata");
         assert_eq!(child_metadata.model.as_deref(), Some("child-model"));
         assert_eq!(child_metadata.approval_mode, "on-request");
+
+        let path = live_thread.local_rollout_path().await.unwrap().unwrap();
+        live_thread.shutdown().await.expect("close child writer");
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
+        let mut lines = raw
+            .lines()
+            .map(|line| codex_rollout::parse_rollout_line(line).unwrap());
+        let header = lines.next().expect("session metadata");
+        let RolloutItem::SessionMeta(meta) = &header.item else {
+            panic!("expected session metadata");
+        };
+        // Just the persisted parent record precedes the first child record at ordinal 2.
+        assert_eq!(meta.meta.subagent_history_start_ordinal, Some(2));
+        let records: Vec<_> = lines
+            .map(|line| (line.ordinal, serde_json::json!(line.item)))
+            .collect();
+        assert_eq!(
+            records,
+            vec![
+                (Some(1), serde_json::json!(parent)),
+                (Some(2), serde_json::json!(child))
+            ]
+        );
+
+        let cold_store = LocalThreadStore::new(config, Some(runtime));
+        let replay = cold_store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(path),
+                history: None,
+                history_revision: None,
+                include_archived: false,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("resume from disk");
+        assert_eq!(
+            serde_json::json!(*replay),
+            serde_json::json!([header.item, parent, child])
+        );
+        cold_store.shutdown_thread(thread_id).await.unwrap();
     }
 
     #[tokio::test]
