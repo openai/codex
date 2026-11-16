@@ -22,7 +22,7 @@ pub(crate) use self::types::NestedToolCall;
 pub(crate) use self::types::Observation;
 pub(crate) use self::types::ObserveMode;
 pub(crate) use self::types::SessionRuntimeDelegate;
-pub(crate) use self::types::ToolDefinition;
+pub(crate) use self::types::ToolCatalog;
 pub(crate) use self::types::ToolKind;
 pub(crate) use self::types::ToolName;
 use crate::TaskFailureHandler;

@@ -1,3 +1,5 @@
+use codex_code_mode_protocol::EnabledToolMetadata;
+use codex_code_mode_protocol::normalize_code_mode_identifier;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -72,6 +74,25 @@ impl InProcessCodeModeSession {
         }
     }
 
+    fn runtime_request(&self, request: ExecuteRequest) -> runtime::CreateCellRequest {
+        let tools = request
+            .enabled_tools
+            .into_iter()
+            .map(|tool| EnabledToolMetadata {
+                global_name: normalize_code_mode_identifier(&tool.name),
+                tool_name: tool.tool_name,
+                description: tool.description,
+                kind: tool.kind,
+            })
+            .collect();
+        runtime::CreateCellRequest {
+            output_truncation: self.options.output_truncation,
+            tool_call_id: request.tool_call_id,
+            enabled_tools: tools,
+            source: request.source,
+        }
+    }
+
     pub async fn execute(
         &self,
         request: ExecuteRequest,
@@ -84,7 +105,7 @@ impl InProcessCodeModeSession {
         let started = self
             .runtime
             .execute(
-                runtime_request(request, self.options.output_truncation),
+                self.runtime_request(request),
                 runtime::ObserveMode::YieldAfter(self.resolve_yield_timeout(yield_time_ms))
                     .with_yield_signal(preempt.unwrap_or_default()),
                 Arc::new(ProtocolDelegate { delegate }),
@@ -121,7 +142,7 @@ impl InProcessCodeModeSession {
         let started = self
             .runtime
             .execute(
-                runtime_request(request, self.options.output_truncation),
+                self.runtime_request(request),
                 runtime::ObserveMode::PendingFrontier,
                 Arc::new(ProtocolDelegate { delegate }),
             )
@@ -372,33 +393,6 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
 
     fn cell_closed(&self, cell_id: &runtime::CellId) {
         self.delegate.cell_closed(&protocol_cell_id(cell_id));
-    }
-}
-
-fn runtime_request(
-    request: ExecuteRequest,
-    output_truncation: CodeModeOutputTruncation,
-) -> runtime::CreateCellRequest {
-    runtime::CreateCellRequest {
-        output_truncation,
-        tool_call_id: request.tool_call_id,
-        enabled_tools: request
-            .enabled_tools
-            .into_iter()
-            .map(|definition| runtime::ToolDefinition {
-                name: definition.name,
-                tool_name: runtime::ToolName {
-                    name: definition.tool_name.name,
-                    namespace: definition.tool_name.namespace,
-                },
-                description: definition.description,
-                kind: match definition.kind {
-                    CodeModeToolKind::Function => runtime::ToolKind::Function,
-                    CodeModeToolKind::Freeform => runtime::ToolKind::Freeform,
-                },
-            })
-            .collect(),
-        source: request.source,
     }
 }
 

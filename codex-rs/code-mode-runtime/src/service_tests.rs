@@ -1364,6 +1364,96 @@ text("done");
 }
 
 #[tokio::test]
+async fn catalog_globals_preserve_mutations_within_each_cell() {
+    let service = InProcessCodeModeSession::new();
+    let source = r#"
+const entry = ALL_TOOLS[0];
+const name = entry.name;
+entry.name = "local";
+const callback = tools[name];
+tools[name] = null;
+text(JSON.stringify([name, typeof callback, ALL_TOOLS[0].name, tools[name]]));
+"#;
+    for _ in 0..2 {
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                enabled_tools: vec![echo_tool()],
+                yield_time_ms: None,
+                ..execute_request(source)
+            },
+        )
+        .await;
+        let RuntimeResponse::Result {
+            content_items,
+            error_text: None,
+            ..
+        } = response
+        else {
+            panic!("catalog lookup failed: {response:?}");
+        };
+        assert_eq!(
+            content_items,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: r#"["echo","function","local",null]"#.into(),
+            }]
+        );
+    }
+}
+
+#[tokio::test]
+async fn catalog_globals_ignore_inherited_setters() {
+    let service = InProcessCodeModeSession::new();
+    let source = r#"
+let setterCalls = 0;
+Object.defineProperty(Object.prototype, "name", {
+  configurable: true,
+  set(value) { setterCalls++; globalThis.ALL_TOOLS = []; }
+});
+for (const key of ["description", "echo"]) {
+  Object.defineProperty(Object.prototype, key, {
+    configurable: true,
+    set(value) { setterCalls++; }
+  });
+}
+Object.defineProperty(Array.prototype, "0", {
+  configurable: true,
+  set(value) { setterCalls++; }
+});
+const entry = ALL_TOOLS[0];
+const callback = tools.echo;
+delete Object.prototype.name;
+delete Object.prototype.description;
+delete Object.prototype.echo;
+delete Array.prototype[0];
+text(JSON.stringify([entry.name, entry.description, typeof callback, setterCalls]));
+"#;
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            yield_time_ms: None,
+            ..execute_request(source)
+        },
+    )
+    .await;
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: None,
+        ..
+    } = response
+    else {
+        panic!("catalog lookup failed: {response:?}");
+    };
+    assert_eq!(
+        content_items,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: r#"["echo","","function",0]"#.into(),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn global_scope_contains_only_allowed_items() {
     let service = InProcessCodeModeSession::new();
 

@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 
 use super::super::RuntimeEvent;
 use super::super::RuntimeState;
-use super::super::ToolCallbackMetadata;
 use super::super::globals;
 use crate::session_runtime::OutputItem;
 use crate::v8_init::ensure_v8_initialized;
@@ -107,26 +106,19 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (runtime_command_tx, _runtime_command_rx) = std_mpsc::channel();
         let tool_name = ToolName::plain("echo");
-        globals::install_globals(
-            scope,
-            &[EnabledToolMetadata {
-                global_name: "echo".to_string(),
-                tool_name: tool_name.clone(),
-                description: String::new(),
-                kind: CodeModeToolKind::Function,
-            }],
-        )
-        .expect("install globals");
+        globals::install_globals(scope).expect("install globals");
         scope.set_slot(RuntimeState {
             event_tx: event_tx.into(),
             pending_tool_calls: HashMap::new(),
             pending_timeouts: HashMap::new(),
             stored_values: HashMap::new(),
             stored_value_writes: HashMap::new(),
-            enabled_tools: vec![ToolCallbackMetadata {
+            enabled_tools: Arc::from([EnabledToolMetadata {
+                global_name: "echo".into(),
+                description: String::new(),
                 tool_name,
                 kind: CodeModeToolKind::Function,
-            }],
+            }]),
             next_tool_call_id: 1,
             next_timeout_id: 1,
             tool_call_id: "cell".to_string(),

@@ -18,7 +18,6 @@ use self::callbacks::report_task_result;
 use self::callbacks::spawn_notification;
 use self::callbacks::spawn_tool;
 use self::conversions::cell_tool_kind;
-use self::conversions::runtime_request;
 use self::types::CellCommand;
 pub(crate) use self::types::CellError;
 pub(crate) use self::types::CellEventFuture;
@@ -68,7 +67,7 @@ impl CellActor {
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
             stored_values,
-            runtime_request(request),
+            request,
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
             task_failure_handler.clone(),

@@ -27,7 +27,7 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
         pending_timeouts: HashMap::new(),
         stored_values: HashMap::new(),
         stored_value_writes: HashMap::new(),
-        enabled_tools: Vec::new(),
+        enabled_tools: Default::default(),
         next_tool_call_id: 1,
         next_timeout_id: 1,
         tool_call_id: "cell".to_string(),
