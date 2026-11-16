@@ -1,3 +1,5 @@
+use codex_core_plugins::store::PLUGINS_CACHE_DIR;
+use codex_utils_path_uri::PathUri;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -9,7 +11,11 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
 
+use super::mention_usage::MentionUsage;
 use super::picker_rows::render_rows_single_line;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
@@ -90,6 +96,7 @@ pub(crate) struct SkillPopup {
     query: String,
     mentions: Vec<MentionItem>,
     frequencies: HashMap<String, usize>,
+    plugin_cache_roots: Vec<PathBuf>,
     state: ScrollState,
 }
 
@@ -99,13 +106,52 @@ impl SkillPopup {
             query: String::new(),
             mentions,
             frequencies: HashMap::new(),
+            plugin_cache_roots: Vec::new(),
             state: ScrollState::new(),
         }
     }
 
-    pub(crate) fn with_frequencies(mut self, frequencies: HashMap<String, usize>) -> Self {
-        self.frequencies = frequencies;
+    pub(super) fn with_frequencies(mut self, usage: &MentionUsage) -> Self {
+        if let Some(home) = usage.codex_home() {
+            let root = home.join(PLUGINS_CACHE_DIR);
+            // Skill discovery returns canonical paths rendered for the app server API.
+            if let Ok(canonical) =
+                dunce::canonicalize(&root).and_then(PathUri::from_host_native_path)
+            {
+                self.plugin_cache_roots
+                    .push(canonical.inferred_native_path_string().into());
+            }
+            self.plugin_cache_roots.push(root);
+        }
+        for (path, count) in usage.frequencies() {
+            let key = self.plugin_skill_key(&path).unwrap_or(path);
+            *self.frequencies.entry(key).or_default() += count;
+        }
         self
+    }
+
+    fn plugin_skill_key(&self, path: &str) -> Option<String> {
+        let skill = Path::new(path);
+        let relative = self
+            .plugin_cache_roots
+            .iter()
+            .find_map(|root| skill.strip_prefix(root).ok())?;
+        let mut parts = relative.components();
+        if let (
+            Some(Component::Normal(marketplace)),
+            Some(Component::Normal(plugin)),
+            Some(Component::Normal(_version)),
+        ) = (parts.next(), parts.next(), parts.next())
+            && parts
+                .as_path()
+                .file_name()
+                .is_some_and(|name| name == "SKILL.md")
+        {
+            let mut key = Path::new(marketplace).join(plugin).join("*");
+            key.extend(parts.map(Component::as_os_str));
+            return Some(format!("plugin-skill://{}", key.display()));
+        }
+        None
     }
 
     pub(crate) fn set_mentions(&mut self, mentions: Vec<MentionItem>) {
@@ -212,8 +258,11 @@ impl SkillPopup {
             };
             let frequency = mention
                 .path
-                .as_ref()
-                .and_then(|path| self.frequencies.get(path))
+                .as_deref()
+                .and_then(|path| {
+                    let key = self.plugin_skill_key(path);
+                    self.frequencies.get(key.as_deref().unwrap_or(path))
+                })
                 .copied()
                 .unwrap_or_default();
             (
@@ -461,8 +510,8 @@ mod tests {
                 &["logging-best-practices", "Logging Best Practices"],
             ),
             named_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"]),
-        ])
-        .with_frequencies(HashMap::from([("plugin://github".to_owned(), 50)]));
+        ]);
+        popup.frequencies.insert("plugin://github".to_owned(), 50);
         popup.set_query("pr");
 
         let filtered_items: Vec<(String, Option<String>)> = popup

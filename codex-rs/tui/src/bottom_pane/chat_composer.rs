@@ -37,6 +37,7 @@
 //! owning plugin is listed. `$` lists individual skills and apps, but not plugins.
 //! Disabling `mentions_v2` restores file-only `@` search and adds plugins back to `$`.
 //! Confirmed `$` picker selections inform future ordering within each match tier.
+//! A cached plugin skill keeps its ranking when its installed version changes.
 //!
 //! # Key Event Routing
 //!
@@ -4263,8 +4264,7 @@ impl ChatComposer {
                 popup.set_mentions(mentions);
             }
             _ => {
-                let mut popup =
-                    SkillPopup::new(mentions).with_frequencies(self.mention_usage.frequencies());
+                let mut popup = SkillPopup::new(mentions).with_frequencies(&self.mention_usage);
                 popup.set_query(&query);
                 self.popups.active = ActivePopup::Skill(popup);
             }
@@ -7165,16 +7165,48 @@ mod tests {
 
     #[test]
     fn skill_popup_prefers_confirmed_selections_within_match_tier() {
+        let home = tempfile::tempdir().expect("temporary home");
+        let cache = home
+            .path()
+            .join(codex_core_plugins::store::PLUGINS_CACHE_DIR);
+        #[cfg(unix)]
+        {
+            let target = home.path().join("plugin-cache");
+            std::fs::create_dir(&target).unwrap();
+            std::fs::create_dir(cache.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, &cache).unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&cache).unwrap();
+        let old_path = cache.join("example/tools/1.0.0/skills/status/SKILL.md");
+        std::fs::write(
+            home.path().join("mention_usage.json"),
+            serde_json::to_vec(&[old_path]).unwrap(),
+        )
+        .unwrap();
+        let current_path = dunce::canonicalize(cache)
+            .unwrap()
+            .join("example/tools/2.0.0/skills/status/SKILL.md");
+        let status = SkillMetadata {
+            path: codex_utils_path_uri::PathUri::from_host_native_path(current_path)
+                .unwrap()
+                .into(),
+            ..test_skill_metadata("status")
+        };
         snapshot_composer_state(
             "skill_popup_prefers_confirmed_selections_within_match_tier",
             /*enhanced_keys_supported*/ false,
             |composer| {
+                composer.mention_usage = MentionUsage::load(
+                    home.path(),
+                    codex_config::types::HistoryPersistence::SaveAll,
+                );
                 composer.set_skill_mentions(Some(vec![
                     test_skill_metadata("statsig"),
-                    test_skill_metadata("status"),
+                    status.clone(),
                     test_skill_metadata("hello-statsig"),
                 ]));
-                for name in ["hello-statsig", "hello-statsig", "status"] {
+                for name in ["hello-statsig", "hello-statsig"] {
                     let text = format!("${name}");
                     composer.set_text_content(text.clone(), Vec::new(), Vec::new());
                     composer.set_current_cursor(text.len());
@@ -7191,8 +7223,8 @@ mod tests {
                 assert_eq!(
                     popup
                         .selected_mention()
-                        .map(|item| item.insert_text.as_str()),
-                    Some("$status")
+                        .map(|item| (item.insert_text.as_str(), item.path.as_deref())),
+                    Some(("$status", Some(status.path.as_str())))
                 );
             },
         );
