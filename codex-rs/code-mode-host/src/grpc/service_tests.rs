@@ -99,6 +99,7 @@ pub(super) fn execute_request(
     source: &str,
 ) -> proto::ExecuteRequest {
     proto::ExecuteRequest {
+        catalog_revision: None,
         session_id: session_id.to_string(),
         execution_id: execution_id.to_string(),
         tool_call_id: "outer-call".to_string(),

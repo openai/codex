@@ -58,6 +58,7 @@ async fn execution_timing_includes_javascript_but_excludes_delayed_reads() -> Re
         let observed = Instant::now();
         let mut execution = client
             .execute(grpc::ExecuteRequest {
+                catalog_revision: None,
                 session_id: opened.session_id.clone(),
                 execution_id: format!("execution-{index}"),
                 tool_call_id: format!("call-{index}"),

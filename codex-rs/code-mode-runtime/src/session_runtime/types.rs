@@ -80,8 +80,8 @@ pub(crate) enum CellEvent {
     },
 }
 
-/// Tool metadata in callback slot order for the lifetime of a cell.
-pub(crate) type ToolCatalog = Arc<[codex_code_mode_protocol::EnabledToolMetadata]>;
+/// Ordered callback slots frozen for a cell. Sessions can share individual tool definitions.
+pub(crate) type ToolCatalog = Arc<[Arc<codex_code_mode_protocol::EnabledToolMetadata>]>;
 
 /// Transport-neutral input for creating a cell.
 ///

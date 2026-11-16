@@ -21,10 +21,14 @@ use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::SessionId;
+use codex_code_mode_protocol::host::TOOL_CATALOG_CAPABILITY;
+use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_install_context::InstallContext;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+use crate::tool_catalog::CatalogAdmission;
 
 use self::connection::Connection;
 use self::connection::ConnectionError;
@@ -224,6 +228,7 @@ enum SessionState {
 
 #[derive(Clone)]
 struct SessionBinding {
+    catalog: Arc<tokio::sync::Mutex<crate::tool_catalog::Catalog>>,
     connection: Arc<Connection>,
     remote: RemoteSession,
     cleanup: SessionCleanup,
@@ -292,10 +297,28 @@ impl ProcessOwnedCodeModeSession {
         request.max_output_tokens = self
             .server_output_budget(request.max_output_tokens)
             .map(|tokens| tokens.min(i32::MAX as usize));
-        binding
+        let admission = binding
+            .connection
+            .supports(TOOL_CATALOG_CAPABILITY)
+            .then(|| CatalogAdmission::prepare(&binding.catalog, &request.enabled_tools))
+            .flatten();
+        if admission
+            .as_ref()
+            .is_some_and(CatalogAdmission::reuses_catalog)
+        {
+            request.enabled_tools.clear();
+        }
+        let mut request = WireExecuteRequest::try_from(request)
+            .map_err(|error| format!("failed to encode code-mode execute request: {error}"))?;
+        request.catalog_revision = admission.as_ref().map(CatalogAdmission::revision);
+        let started = binding
             .connection
             .execute(binding.remote, request, delegate, preempt)
-            .await
+            .await?;
+        if let Some(admission) = admission {
+            admission.accepted();
+        }
+        Ok(started)
     }
 
     pub async fn wait(
@@ -382,6 +405,7 @@ impl SessionInner {
                     )
                     .await;
                 cleanup.map(|cleanup| SessionBinding {
+                    catalog: Default::default(),
                     connection,
                     remote: remote.clone(),
                     cleanup,

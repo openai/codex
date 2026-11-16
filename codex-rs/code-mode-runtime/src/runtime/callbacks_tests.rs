@@ -113,12 +113,12 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
             pending_timeouts: HashMap::new(),
             stored_values: HashMap::new(),
             stored_value_writes: HashMap::new(),
-            enabled_tools: Arc::from([EnabledToolMetadata {
+            enabled_tools: Arc::from([Arc::new(EnabledToolMetadata {
                 global_name: "echo".into(),
                 description: String::new(),
                 tool_name,
                 kind: CodeModeToolKind::Function,
-            }]),
+            })]),
             next_tool_call_id: 1,
             next_timeout_id: 1,
             tool_call_id: "cell".to_string(),

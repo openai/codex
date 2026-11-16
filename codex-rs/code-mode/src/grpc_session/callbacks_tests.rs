@@ -73,6 +73,7 @@ async fn tool_call_heartbeats_do_not_enter_callback_admission() {
 fn session(client: GrpcClient) -> Arc<SessionInner> {
     let client = Arc::new(client);
     Arc::new(SessionInner {
+        catalog: None,
         id: "session".to_string(),
         output_truncation: CodeModeOutputTruncation::Client,
         route: None,

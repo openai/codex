@@ -84,11 +84,20 @@ impl SessionInner {
             call_id = %request.tool_call_id,
         );
         let trace = codex_otel::span_w3c_trace_context(&execute_span);
-        let request = conversion::execute_request(&self.id, execution_id.clone(), request)?;
+        let admission = self.catalog.as_ref().and_then(|cache| {
+            crate::tool_catalog::CatalogAdmission::prepare(cache, &request.enabled_tools)
+        });
+        let mut request = conversion::execute_request(&self.id, execution_id.clone(), request)?;
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .begin_execution(&request, delegate)?;
+        if let Some(admission) = &admission {
+            request.catalog_revision = Some(admission.revision());
+            if admission.reuses_catalog() {
+                request.enabled_tools.clear();
+            }
+        }
         let ownership = ExecutionOwnership {
             session: Arc::clone(self),
             execution_id: execution_id.clone(),
@@ -108,9 +117,13 @@ impl SessionInner {
                 .instrument(execute_span)
                 .await;
         });
-        started_rx
+        let started = started_rx
             .await
-            .map_err(|_| "gRPC code-mode execution driver ended unexpectedly".to_string())?
+            .map_err(|_| "gRPC code-mode execution driver ended unexpectedly".to_string())??;
+        if let Some(admission) = admission {
+            admission.accepted();
+        }
+        Ok(started)
     }
 
     async fn drive_execution(

@@ -31,6 +31,7 @@ use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::TOOL_CATALOG_CAPABILITY;
 use codex_code_mode_protocol::host::WireContentItem;
 use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_code_mode_protocol::host::WireOutputTruncation;
@@ -98,6 +99,7 @@ async fn decode_frame(frame: EncodedFrame) -> HostToClient {
 
 fn execute_request(source: &str) -> WireExecuteRequest {
     WireExecuteRequest {
+        catalog_revision: None,
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -284,6 +286,7 @@ impl AsyncWrite for BlockingWriter {
 #[tokio::test]
 async fn supported_capabilities_are_negotiated_when_optional_or_required() {
     for capability in [
+        TOOL_CATALOG_CAPABILITY,
         SESSION_RESOURCE_LIMITS_CAPABILITY,
         BOUNDED_OUTPUT_CAPABILITY,
         LARGE_DELEGATE_CAPACITY_CAPABILITY,

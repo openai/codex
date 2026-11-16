@@ -203,6 +203,9 @@ impl From<WireToolDefinition> for ToolDefinition {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireExecuteRequest {
+    /// A nonempty catalog installs this revision. An empty list references it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_revision: Option<u64>,
     pub tool_call_id: String,
     pub enabled_tools: Vec<WireToolDefinition>,
     pub source: String,
@@ -215,6 +218,7 @@ impl TryFrom<ExecuteRequest> for WireExecuteRequest {
 
     fn try_from(value: ExecuteRequest) -> Result<Self, Self::Error> {
         Ok(Self {
+            catalog_revision: None,
             tool_call_id: value.tool_call_id,
             enabled_tools: value.enabled_tools.into_iter().map(Into::into).collect(),
             source: value.source,

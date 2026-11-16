@@ -130,6 +130,7 @@ impl GrpcHostState {
             .try_send(Ok(proto::SessionEvent {
                 event: Some(proto::session_event::Event::Opened(proto::SessionOpened {
                     session_id: id.to_string(),
+                    supports_catalog_revision: true,
                     output_truncation: match session.runtime.output_truncation() {
                         CodeModeOutputTruncation::Server => {
                             Some(proto::OutputTruncation::Server.into())

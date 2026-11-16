@@ -39,6 +39,7 @@ fn execute_request_preserves_tool_schemas_namespaces_and_limits() {
     assert_eq!(
         execute_request("session", "execution".to_string(), request),
         Ok(grpc::ExecuteRequest {
+            catalog_revision: None,
             session_id: "session".to_string(),
             execution_id: "execution".to_string(),
             tool_call_id: "outer".to_string(),

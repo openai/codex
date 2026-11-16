@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::CodeModeSessionOptions;
-use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::TerminateRequest;
@@ -14,6 +13,7 @@ use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireCellId;
+use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_code_mode_protocol::host::WireWaitRequest;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -39,7 +39,7 @@ pub(in crate::remote_session::connection) enum DriverCommand {
     Execute {
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
-        request: ExecuteRequest,
+        request: WireExecuteRequest,
         caller_cancellation: CancellationToken,
         yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<DeliveredExecute, String>>,

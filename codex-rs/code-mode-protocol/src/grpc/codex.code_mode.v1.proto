@@ -95,6 +95,8 @@ message SessionOpened {
   string session_id = 1;
   // Absent (including from an older host) means the client owns truncation.
   optional OutputTruncation output_truncation = 2;
+  // Clients may send ExecuteRequest.catalog_revision when advertised.
+  bool supports_catalog_revision = 3;
 }
 
 message CloseSessionRequest {
@@ -202,6 +204,8 @@ message ExecuteRequest {
   repeated ToolDefinition enabled_tools = 5;
   optional uint64 yield_time_ms = 6;
   optional uint64 max_output_tokens = 7;
+  // Nonempty enabled_tools installs a session-local revision. Empty references it.
+  optional uint64 catalog_revision = 8;
 }
 
 message ExecuteEvent {

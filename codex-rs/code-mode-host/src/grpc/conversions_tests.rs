@@ -25,6 +25,7 @@ fn rejects_missing_names_unknown_tool_kinds_and_invalid_json_schemas() {
         output_schema_json: None,
     };
     let request = |definition| proto::ExecuteRequest {
+        catalog_revision: None,
         session_id: "session".to_string(),
         execution_id: "execution".to_string(),
         tool_call_id: "call".to_string(),

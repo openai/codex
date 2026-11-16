@@ -21,6 +21,8 @@ pub const LARGE_DELEGATE_CAPACITY_CAPABILITY: &str = "delegate-capacity-4096";
 /// Stdio connection support for the optional `session/open.outputTruncation` field.
 /// Each session selects its own setting after the connection hello.
 pub const BOUNDED_OUTPUT_CAPABILITY: &str = "bounded-output-v1";
+/// Session-local catalog revisions on execute requests.
+pub const TOOL_CATALOG_CAPABILITY: &str = "tool-catalog-revision-v1";
 /// Maximum aggregate text bytes retained per server-truncated observation.
 pub const BOUNDED_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
 

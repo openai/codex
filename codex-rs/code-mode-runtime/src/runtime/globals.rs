@@ -89,7 +89,7 @@ fn catalog_global(
 
 fn build_tools_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    enabled_tools: &[EnabledToolMetadata],
+    enabled_tools: &[Arc<EnabledToolMetadata>],
 ) -> Result<v8::Local<'s, v8::Object>, String> {
     let prototype = v8::Object::new(scope)
         .get_prototype(scope)
@@ -111,7 +111,7 @@ fn build_tools_object<'s>(
 
 fn build_all_tools_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    enabled_tools: &[EnabledToolMetadata],
+    enabled_tools: &[Arc<EnabledToolMetadata>],
 ) -> Result<v8::Local<'s, v8::Value>, String> {
     let mut items = Vec::with_capacity(enabled_tools.len());
     let name_key = v8::String::new(scope, "name")

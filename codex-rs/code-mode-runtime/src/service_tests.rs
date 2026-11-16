@@ -547,6 +547,63 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
+#[test]
+fn catalog_revisions_freeze_each_cells_tools_and_isolate_sessions() {
+    let service = InProcessCodeModeSession::new();
+    let register = |service: &InProcessCodeModeSession, revision, description: &str| {
+        let mut request = execute_request("");
+        request.enabled_tools = vec![ToolDefinition {
+            description: description.to_string(),
+            ..echo_tool()
+        }];
+        service.runtime_request(request, Some(revision))
+    };
+    let first = register(&service, 1, "first").unwrap();
+    let hit = service
+        .runtime_request(execute_request(""), Some(1))
+        .unwrap();
+    assert!(Arc::ptr_eq(&first.enabled_tools, &hit.enabled_tools));
+    let second = register(&service, 2, "second").unwrap();
+    let late = register(&service, 1, "late").unwrap();
+    assert_eq!(late.enabled_tools[0].description, "late");
+    assert_eq!(first.enabled_tools[0].description, "first");
+    assert!(register(&service, 2, "conflict").is_err());
+    assert!(
+        service
+            .runtime_request(execute_request(""), Some(1))
+            .is_err()
+    );
+    let hit = service
+        .runtime_request(execute_request(""), Some(2))
+        .unwrap();
+    assert!(Arc::ptr_eq(&second.enabled_tools, &hit.enabled_tools));
+    let other = InProcessCodeModeSession::new();
+    assert!(other.runtime_request(execute_request(""), Some(2)).is_err());
+    let shared = register(&other, 1, "second").unwrap();
+    assert!(Arc::ptr_eq(
+        &second.enabled_tools[0],
+        &shared.enabled_tools[0]
+    ));
+    assert!(other.runtime_request(execute_request(""), Some(2)).is_err());
+    let distinct = register(&other, 2, "distinct").unwrap();
+    assert!(!Arc::ptr_eq(
+        &second.enabled_tools[0],
+        &distinct.enabled_tools[0]
+    ));
+    let weak = Arc::downgrade(&distinct.enabled_tools[0]);
+    drop(other);
+    assert!(weak.upgrade().is_some());
+    drop(distinct);
+    assert!(weak.upgrade().is_none());
+    assert!(
+        service
+            .runtime_request(execute_request(""), /*revision*/ None)
+            .unwrap()
+            .enabled_tools
+            .is_empty()
+    );
+}
+
 async fn execute(service: &InProcessCodeModeSession, request: ExecuteRequest) -> RuntimeResponse {
     service
         .execute(

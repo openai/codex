@@ -219,6 +219,7 @@ impl GrpcCodeModeHost {
         validation::identifier(&request.execution_id, "execution ID")?;
         let request_permit = self.state.request_permit()?;
         let execution_id = request.execution_id.clone();
+        let catalog_revision = request.catalog_revision;
         let request = conversions::execute_request(request)?;
         let cell_permit = self.state.cell_permit()?;
         let yield_signal = session.reserve_execution(&execution_id)?;
@@ -230,7 +231,7 @@ impl GrpcCodeModeHost {
             _ = session.closed.cancelled() => {
                 return Err(Status::cancelled("code-mode session is closed"));
             }
-            result = session.runtime.execute(request, Arc::new(delegate::GrpcDelegate::new(Arc::downgrade(&session))), Some(yield_signal)) => {
+            result = session.runtime.execute_with_catalog(request, catalog_revision, Arc::new(delegate::GrpcDelegate::new(Arc::downgrade(&session))), Some(yield_signal)) => {
                 result.map_err(Status::failed_precondition)?
             }
         };

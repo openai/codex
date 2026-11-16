@@ -267,6 +267,7 @@ impl GrpcCodeModeSessionProvider {
         }
 
         let inner = Arc::new(SessionInner {
+            catalog: opened.supports_catalog_revision.then(Default::default),
             id: opened.session_id,
             output_truncation,
             route,
@@ -409,6 +410,7 @@ impl Drop for GrpcCodeModeSession {
 }
 
 pub(super) struct SessionInner {
+    catalog: Option<Arc<tokio::sync::Mutex<crate::tool_catalog::Catalog>>>,
     pub(super) id: String,
     output_truncation: CodeModeOutputTruncation,
     // Affinity belongs to the session: parents and children may share a transport

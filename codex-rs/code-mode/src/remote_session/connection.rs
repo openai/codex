@@ -14,7 +14,6 @@ use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::CodeModeSessionOptions;
-use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
@@ -34,6 +33,8 @@ use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::TOOL_CATALOG_CAPABILITY;
+use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_code_mode_protocol::host::YIELD_OBSERVATION_CAPABILITY;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use tokio::io::AsyncBufReadExt;
@@ -220,11 +221,14 @@ impl Connection {
                 Capability::new(BOUNDED_OUTPUT_CAPABILITY).map_err(|error| error.to_string())?;
             let delegate_capacity = Capability::new(LARGE_DELEGATE_CAPACITY_CAPABILITY)
                 .map_err(|error| error.to_string())?;
+            let catalog_capability =
+                Capability::new(TOOL_CATALOG_CAPABILITY).map_err(|error| error.to_string())?;
             let optional_capabilities = CapabilitySet::try_new([
                 session_limits_capability,
                 yield_capability,
                 output_capability,
                 delegate_capacity,
+                catalog_capability,
             ])
             .map_err(|error| error.to_string())?;
             let hello = ClientHello::new(
@@ -341,7 +345,7 @@ impl Connection {
         self.alive.load(Ordering::Acquire)
     }
 
-    fn supports(&self, capability: &str) -> bool {
+    pub(super) fn supports(&self, capability: &str) -> bool {
         self.capabilities
             .iter()
             .any(|value| value.as_str() == capability)
@@ -392,7 +396,7 @@ impl Connection {
     pub(super) async fn execute(
         &self,
         session: RemoteSession,
-        request: ExecuteRequest,
+        request: WireExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
         yield_signal: Option<CancellationToken>,
     ) -> Result<StartedCell, String> {
