@@ -847,15 +847,15 @@ impl TextLayout {
         }
     }
 
-    /// Resolve the displayed link using the same destination policy as terminal OSC-8 output.
-    pub(super) fn link_at(&self, row: usize, column: u16) -> Option<String> {
+    /// Resolve an OSC-8 destination or a document target when the workspace enables previews.
+    pub(super) fn link_at(&self, row: usize, column: u16, documents: bool) -> Option<String> {
         let row = self.rows.get(row)?;
         let column = usize::from(column).checked_sub(row.first_column - row.prefix_columns)?;
         row.line
             .hyperlinks
             .iter()
             .find(|link| link.columns.contains(&column))?
-            .terminal_destination()
+            .reader_destination(documents)
     }
 
     fn visible_rows(&self, area: Rect, start_row: usize) -> impl Iterator<Item = (u16, &TextRow)> {

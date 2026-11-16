@@ -191,9 +191,14 @@ fn aligned_text_excludes_synthetic_leading_columns() {
     let mut line = HyperlinkLine::new(Line::default().right_aligned());
     line.push_span("wide".into(), Some("https://example.com"));
     let layout = TextLayout::new(vec![line], /*width*/ 8);
-    assert_eq!(layout.link_at(/*row*/ 0, /*column*/ 3), None);
     assert_eq!(
-        layout.link_at(/*row*/ 0, /*column*/ 4).as_deref(),
+        layout.link_at(/*row*/ 0, /*column*/ 3, /*documents*/ false),
+        None
+    );
+    assert_eq!(
+        layout
+            .link_at(/*row*/ 0, /*column*/ 4, /*documents*/ false)
+            .as_deref(),
         Some("https://example.com")
     );
     assert_eq!(
@@ -266,7 +271,8 @@ fn selected_revision_rewraps_both_directions_with_styles_and_indents() {
     restored.render(narrow_area, &mut restored_buffer, /*start_row*/ 0);
     assert_eq!(restored_buffer, original_buffer);
     assert_eq!(
-        wide.link_at(/*row*/ 0, /*column*/ 8).as_deref(),
+        wide.link_at(/*row*/ 0, /*column*/ 8, /*documents*/ false)
+            .as_deref(),
         Some("https://example.com")
     );
 }
@@ -418,4 +424,34 @@ fn background_stdin_copy_preserves_indentation_and_newlines() {
     );
     assert!(layout.text().ends_with(stdin));
     assert_eq!(layout.rewrap(/*width*/ 48).text(), layout.text());
+}
+
+#[test]
+fn rendered_markdown_file_targets_are_only_interactive_in_the_workspace() {
+    let markdown = "[Guide](./guide.md)\n\n| File |\n| --- |\n| [Notes](./notes.md) |";
+    let lines = crate::markdown_render::render_markdown_lines_with_width_and_cwd(
+        markdown,
+        Some(40),
+        /*cwd*/ None,
+    );
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| &line.hyperlinks)
+            .all(|link| link.terminal_destination().is_none())
+    );
+    let layout = TextLayout::new(lines, /*width*/ 40);
+    let destinations = |documents| {
+        let layout = &layout;
+        (0..layout.row_count())
+            .flat_map(|row| {
+                (0..40).filter_map(move |column| layout.link_at(row, column, documents))
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(destinations(false), std::collections::BTreeSet::new());
+    assert_eq!(
+        destinations(true),
+        ["./guide.md".to_owned(), "./notes.md".to_owned()].into()
+    );
 }

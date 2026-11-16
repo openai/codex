@@ -56,11 +56,18 @@ pub(super) fn annotate_spoken_artifacts(lines: &mut [HyperlinkLine], cwd: &Path)
             let byte_start = token_start + token.len() - leading.len();
             let byte_end = byte_start + candidate.len();
             let columns = display_width(&text[..byte_start])..display_width(&text[..byte_end]);
-            if line.hyperlinks.iter().any(|existing| {
+            let overlaps = |existing: &TerminalHyperlink| {
                 existing.columns.start < columns.end && columns.start < existing.columns.end
-            }) {
+            };
+            if line
+                .hyperlinks
+                .iter()
+                .any(|existing| !existing.is_document() && overlaps(existing))
+            {
                 continue;
             }
+            line.hyperlinks
+                .retain(|existing| !existing.is_document() || !overlaps(existing));
             line.hyperlinks
                 .push(TerminalHyperlink::trusted_workspace_file(columns, file));
             if let Some(source) = &line.source {

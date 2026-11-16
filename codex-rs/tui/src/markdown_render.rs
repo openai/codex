@@ -52,11 +52,11 @@ use crate::render::line_utils::line_to_static;
 use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::source_span_width;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::terminal_hyperlinks::web_destination;
-use crate::width::char_width;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -76,6 +76,7 @@ use ratatui::text::Text;
 use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_segmentation::UnicodeSegmentation;
 
 mod inline_directives;
 mod list_spacing;
@@ -2016,14 +2017,17 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         let mut out = HyperlinkLine::new(Line::default());
         let mut copy = None;
         let mut byte_offset = 1;
+        let mut output_column = 1;
         out.push_span("|".into(), /*destination*/ None);
         for cell in row {
             out.push_span(" ".into(), /*destination*/ None);
             byte_offset += 1;
+            output_column += 1;
             for (index, line) in cell.lines.iter().enumerate() {
                 if index > 0 {
                     out.push_span(" ".into(), /*destination*/ None);
                     byte_offset += 1;
+                    output_column += 1;
                 }
                 let text = line
                     .line
@@ -2031,43 +2035,78 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     .iter()
                     .map(|span| span.content.as_ref())
                     .collect::<String>();
-                let mut column = 0usize;
-                let mut current_destination = None;
+                // Link ranges count graphemes within each original span. Flattening
+                // the line can join graphemes across style boundaries.
+                let mut source_graphemes = line
+                    .line
+                    .spans
+                    .iter()
+                    .flat_map(|span| span.content.graphemes(/*is_extended*/ true))
+                    .peekable();
+                let mut source_byte = 0;
+                let mut source_column = 0;
+                let mut current_link = None;
+                let mut run_start = output_column;
                 let mut current_text = String::new();
                 let flush = |out: &mut HyperlinkLine,
                              current_text: &mut String,
-                             destination: Option<&str>| {
-                    if !current_text.is_empty() {
-                        out.push_span(Span::raw(std::mem::take(current_text)), destination);
+                             link: Option<&TerminalHyperlink>,
+                             columns: std::ops::Range<usize>| {
+                    if current_text.is_empty() {
+                        return;
+                    }
+                    let span = Span::raw(std::mem::take(current_text));
+                    out.push_span(span, /*destination*/ None);
+                    if let Some(link) = link
+                        && !columns.is_empty()
+                    {
+                        out.hyperlinks.push(link.with_columns(columns));
                     }
                 };
-                for (byte, ch) in text.char_indices() {
-                    let destination = line
+                for (byte, grapheme) in text.grapheme_indices(/*is_extended*/ true) {
+                    while let Some(source) =
+                        source_graphemes.next_if(|source| source_byte + source.len() <= byte)
+                    {
+                        source_byte += source.len();
+                        source_column += display_width(source);
+                    }
+                    let link = line
                         .hyperlinks
                         .iter()
-                        .find(|link| link.columns.contains(&column))
-                        .map(|link| link.destination.as_str());
-                    if destination != current_destination {
-                        flush(&mut out, &mut current_text, current_destination);
-                        current_destination = destination;
+                        .find(|link| link.columns.contains(&source_column));
+                    if link != current_link {
+                        flush(
+                            &mut out,
+                            &mut current_text,
+                            current_link,
+                            run_start..output_column,
+                        );
+                        current_link = link;
+                        run_start = output_column;
                     }
-                    if ch == '|' {
-                        current_text.push_str("\\|");
+                    if grapheme.starts_with('|') {
+                        current_text.push('\\');
                         byte_offset += 1;
-                    } else {
-                        current_text.push(ch);
+                        output_column += 1;
                     }
+                    current_text.push_str(grapheme);
                     if let Some(mut source) = line.source.clone() {
-                        source.range = byte..byte + ch.len_utf8();
+                        source.range = byte..byte + grapheme.len();
                         crate::markdown_copy::table::append(&mut copy, &source, byte_offset);
                     }
-                    byte_offset += ch.len_utf8();
-                    column += char_width(ch);
+                    byte_offset += grapheme.len();
+                    output_column += display_width(grapheme);
                 }
-                flush(&mut out, &mut current_text, current_destination);
+                flush(
+                    &mut out,
+                    &mut current_text,
+                    current_link,
+                    run_start..output_column,
+                );
             }
             out.push_span(" |".into(), /*destination*/ None);
             byte_offset += 2;
+            output_column += 2;
         }
         crate::markdown_copy::table::attach(&mut out, copy);
         out
@@ -2297,27 +2336,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 // Link destinations are rendered as " (url)" suffixes. When parsing table cells,
                 // append the suffix into the active cell buffer rather than the outer paragraph
                 // line to avoid detached url lines.
+                let span = Span::styled(link.destination.clone(), self.styles.link);
                 if self.in_table_cell() {
                     self.push_span_to_table_cell(" (".into());
-                    let mut destination = HyperlinkLine::new(Line::default());
-                    destination.push_span(
-                        Span::styled(link.destination.clone(), self.styles.link),
-                        web_destination(&link.destination).as_deref(),
-                    );
-                    if let Some(table_state) = self.table_state.as_mut()
-                        && let Some(cell) = table_state.current_cell.as_mut()
-                    {
-                        cell.push_annotated(destination, &self.copy_inline);
-                    }
+                    self.push_link_target(span, &link.destination);
                     self.push_span_to_table_cell(")".into());
                 } else {
                     self.push_span(" (".into());
-                    let mut destination = HyperlinkLine::new(Line::default());
-                    destination.push_span(
-                        Span::styled(link.destination.clone(), self.styles.link),
-                        web_destination(&link.destination).as_deref(),
-                    );
-                    self.push_annotated(destination);
+                    self.push_link_target(span, &link.destination);
                     self.push_span(")".into());
                 }
             } else if let Some(local_target_display) = link.local_target_display {
@@ -2346,7 +2372,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         self.push_span_to_table_cell(" (".into());
                     }
                     self.copy_inline.push(crate::markdown_copy::Inline::Literal);
-                    self.push_span_to_table_cell(span);
+                    self.push_link_target(span, &link.destination);
                     self.copy_inline.pop();
                     if show_label {
                         self.push_span_to_table_cell(")".into());
@@ -2368,7 +2394,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         self.push_span(" (".into());
                     }
                     self.copy_inline.push(crate::markdown_copy::Inline::Literal);
-                    self.push_span(span);
+                    self.push_link_target(span, &link.destination);
                     self.copy_inline.pop();
                     if show_label {
                         self.push_span(")".into());
@@ -2376,6 +2402,28 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     self.line_ends_with_local_link_target = true;
                 }
             }
+        }
+    }
+
+    fn push_link_target(&mut self, span: Span<'static>, destination: &str) {
+        let mut target = HyperlinkLine::default();
+        if let Some(path) = local_links::sidebar_file_link(destination) {
+            let width = span_width(&span);
+            target.line.push_span(span);
+            target
+                .hyperlinks
+                .push(TerminalHyperlink::document(0..width, path));
+        } else {
+            target.push_span(span, Some(destination));
+        }
+        if let Some(cell) = self
+            .table_state
+            .as_mut()
+            .and_then(|table| table.current_cell.as_mut())
+        {
+            cell.push_annotated(target, &self.copy_inline);
+        } else {
+            self.push_annotated(target);
         }
     }
 

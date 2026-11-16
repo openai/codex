@@ -403,6 +403,20 @@ fn spoken_artifacts_link_only_real_workspace_files_and_preserve_existing_urls() 
         ordinary.display_hyperlink_lines(/*width*/ 90)[0].hyperlinks[0].destination,
         "https://example.com"
     );
+    let report = workspace.path().join("report.md");
+    std::fs::write(&report, "# Report").expect("report file");
+    let linked = AgentMarkdownCell::new_spoken("[Report](report.md)".into(), workspace.path());
+    let expected = url::Url::from_file_path(report.canonicalize().expect("canonical report"))
+        .expect("workspace file URL")
+        .to_string();
+    assert_eq!(
+        linked.display_hyperlink_lines(/*width*/ 90)[0]
+            .hyperlinks
+            .iter()
+            .filter_map(crate::terminal_hyperlinks::TerminalHyperlink::terminal_destination)
+            .collect::<Vec<_>>(),
+        vec![expected],
+    );
     let bare = AgentMarkdownCell::new_spoken("src/lib.rs".to_string(), workspace.path());
     assert_eq!(
         bare.display_hyperlink_lines(/*width*/ 40)[0]

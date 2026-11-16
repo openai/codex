@@ -12,7 +12,6 @@
 //! fallback" rather than attempting wrapped rendering at zero width, which
 //! would produce empty or unstable output.
 
-use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 /// Returns the display width Ratatui uses for terminal text without its `u16` limit.
@@ -22,15 +21,6 @@ pub(crate) fn display_width(text: &str) -> usize {
             .chars()
             .filter(|ch| matches!(ch, '\u{FF9E}' | '\u{FF9F}'))
             .count()
-}
-
-/// Returns a scalar's terminal width, treating halfwidth sound marks as visible cells.
-pub(crate) fn char_width(ch: char) -> usize {
-    if matches!(ch, '\u{FF9E}' | '\u{FF9F}') {
-        1
-    } else {
-        UnicodeWidthChar::width(ch).unwrap_or(0)
-    }
 }
 
 /// Returns usable content width after reserving fixed columns.
@@ -67,8 +57,6 @@ mod tests {
         assert_eq!(display_width("ｶﾞﾊﾟ"), 4);
         assert_eq!(display_width("ｶﾞﾞ"), 3);
         assert_eq!(display_width("界ﾞ"), 3);
-        assert_eq!(char_width('\u{FF9E}'), 1);
-        assert_eq!(char_width('\u{FF9F}'), 1);
 
         let text = "a".repeat(65_536);
         assert_eq!(display_width(&text), 65_536);

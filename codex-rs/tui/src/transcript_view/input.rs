@@ -116,7 +116,9 @@ impl TranscriptView {
             return None;
         }
         let visible = self.visible.get(usize::from(row - self.area.y))?;
-        visible.layout.link_at(visible.row, column - self.area.x)
+        visible
+            .layout
+            .link_at(visible.row, column - self.area.x, self.document_links)
     }
 
     pub(crate) fn navigate_pager(

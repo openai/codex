@@ -173,23 +173,15 @@ fn render_aligned_field(
         .unwrap_or_else(|| cell_width(value).max(MIN_VALUE_WIDTH));
     let wrapped_value = wrap_cell(value, value_width);
     for (line_index, value_line) in wrapped_value.into_iter().enumerate() {
-        let mut spans = Vec::new();
-        let mut copy = None;
-        if line_index == 0 {
-            let label = header.plain_text();
-            let label_source = label_line(header, label_style);
-            if let Some(source) = &label_source.source {
-                crate::markdown_copy::table::append(&mut copy, source, FIELD_LEADING_PADDING);
-            }
-            spans.push(Span::raw(" ".repeat(FIELD_LEADING_PADDING)));
-            spans.push(Span::styled(label.clone(), label_style));
-            spans.push(Span::raw(" ".repeat(
-                label_width.saturating_sub(display_width(&label)) + FIELD_GAP,
-            )));
+        let prefix = if line_index == 0 {
+            let mut label = label_line(header, label_style);
+            let padding = label_width.saturating_sub(label.source_width()) + FIELD_GAP;
+            label.line.push_span(Span::raw(" ".repeat(padding)));
+            prefix_line(" ".repeat(FIELD_LEADING_PADDING).into(), label)
         } else {
-            spans.push(Span::raw(" ".repeat(value_indent)));
-        }
-        push_prefixed_value_line(out, spans, value_line, copy);
+            HyperlinkLine::new(Line::raw(" ".repeat(value_indent)))
+        };
+        out.push(join_lines(prefix, value_line));
     }
 }
 
@@ -210,74 +202,69 @@ fn render_stacked_field(
         &mut wrapped_labels,
     );
     for label_line in remap_wrapped_line(&label, wrapped_labels) {
-        let mut spans = vec![Span::raw(" ".repeat(FIELD_LEADING_PADDING))];
-        let mut copy = None;
-        if let Some(source) = &label_line.source {
-            crate::markdown_copy::table::append(&mut copy, source, FIELD_LEADING_PADDING);
-        }
-        spans.extend(label_line.line.spans);
-        let mut line = HyperlinkLine::new(Line::from(spans));
-        crate::markdown_copy::table::attach(&mut line, copy);
-        out.push(line);
+        out.push(prefix_line(
+            " ".repeat(FIELD_LEADING_PADDING).into(),
+            label_line,
+        ));
     }
 
     let value_width = available_width
         .map(|width| width.saturating_sub(STACKED_VALUE_INDENT).max(1))
         .unwrap_or_else(|| cell_width(value).max(1));
     for value_line in wrap_cell(value, value_width) {
-        push_prefixed_value_line(
-            out,
-            vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))],
+        out.push(prefix_line(
+            " ".repeat(STACKED_VALUE_INDENT).into(),
             value_line,
-            /*copy*/ None,
-        );
+        ));
     }
 }
 
-fn push_prefixed_value_line(
-    out: &mut Vec<HyperlinkLine>,
-    mut prefix: Vec<Span<'static>>,
-    mut value_line: HyperlinkLine,
-    mut copy: Option<crate::markdown_copy::table::TableLine>,
-) {
-    let bytes = prefix.iter().map(|span| span.content.len()).sum();
-    if let Some(source) = &value_line.source {
-        crate::markdown_copy::table::append(&mut copy, source, bytes);
-    }
-    let shift = prefix
-        .iter()
-        .map(|span| display_width(span.content.as_ref()))
-        .sum::<usize>();
-    prefix.append(&mut value_line.line.spans);
-    let mut output_line = HyperlinkLine::new(Line::from(prefix));
-    crate::markdown_copy::table::attach(&mut output_line, copy);
-    output_line
-        .hyperlinks
-        .extend(value_line.hyperlinks.into_iter().map(|mut link| {
-            link.columns = link.columns.start + shift..link.columns.end + shift;
-            link
-        }));
-    out.push(output_line);
+fn prefix_line(prefix: Span<'static>, line: HyperlinkLine) -> HyperlinkLine {
+    join_lines(HyperlinkLine::new(Line::from(prefix)), line)
 }
 
-fn label_line(header: &TableCell, style: Style) -> HyperlinkLine {
-    let mut line = HyperlinkLine::new(Line::from(Span::styled(header.plain_text(), style)));
+fn join_lines(mut prefix: HyperlinkLine, mut line: HyperlinkLine) -> HyperlinkLine {
     let mut copy = None;
-    let mut offset = 0;
-    for header_line in &header.lines {
-        if let Some(source) = &header_line.source {
-            crate::markdown_copy::table::append(&mut copy, source, offset);
-        }
-        offset += header_line
+    if let Some(source) = &prefix.source {
+        crate::markdown_copy::table::append(&mut copy, source, /*offset*/ 0);
+    }
+    if let Some(source) = &line.source {
+        let bytes = prefix
             .line
             .spans
             .iter()
             .map(|span| span.content.len())
-            .sum::<usize>()
-            + 1;
+            .sum();
+        crate::markdown_copy::table::append(&mut copy, source, bytes);
     }
-    crate::markdown_copy::table::attach(&mut line, copy);
-    line
+    let shift = prefix.source_width();
+    prefix.line.spans.append(&mut line.line.spans);
+    prefix
+        .hyperlinks
+        .extend(line.hyperlinks.into_iter().map(|mut link| {
+            link.columns = link.columns.start + shift..link.columns.end + shift;
+            link
+        }));
+    crate::markdown_copy::table::attach(&mut prefix, copy);
+    prefix
+}
+
+fn label_line(header: &TableCell, style: Style) -> HyperlinkLine {
+    let mut label = HyperlinkLine::new(Line::default());
+    for (index, line) in header.lines.iter().enumerate() {
+        if index > 0 {
+            label.line.push_span(Span::raw(" "));
+        }
+        label = join_lines(label, line.clone());
+    }
+    if label.hyperlinks.is_empty() {
+        label.line = Line::from(Span::styled(header.plain_text(), style));
+    } else {
+        for span in &mut label.line.spans {
+            span.style = style;
+        }
+    }
+    label
 }
 
 fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {

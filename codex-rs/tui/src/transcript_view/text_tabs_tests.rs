@@ -35,9 +35,15 @@ fn styled_tabs_use_row_stops_including_the_gutter() {
     );
     assert_eq!(
         (
-            layout.link_at(/*row*/ 0, /*column*/ 16).as_deref(),
-            layout.link_at(/*row*/ 0, /*column*/ 24).as_deref(),
-            layout.link_at(/*row*/ 0, /*column*/ 13).as_deref()
+            layout
+                .link_at(/*row*/ 0, /*column*/ 16, /*documents*/ false)
+                .as_deref(),
+            layout
+                .link_at(/*row*/ 0, /*column*/ 24, /*documents*/ false)
+                .as_deref(),
+            layout
+                .link_at(/*row*/ 0, /*column*/ 13, /*documents*/ false)
+                .as_deref()
         ),
         (
             Some("https://example.com/one"),
@@ -87,7 +93,9 @@ fn tab_stops_restart_after_wrapping_and_resize_preserves_source_and_links() {
         [(1, 3), (1, 8), (2, 2)],
     );
     assert_eq!(
-        layout.link_at(/*row*/ 1, /*column*/ 8).as_deref(),
+        layout
+            .link_at(/*row*/ 1, /*column*/ 8, /*documents*/ false)
+            .as_deref(),
         Some("https://example.com/x")
     );
     let wide = layout.rewrap(/*width*/ 40);

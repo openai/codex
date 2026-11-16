@@ -53,6 +53,8 @@ enum DestinationKind {
     Web,
     /// A generated visualization, validated workspace artifact, or locally viewed image.
     TrustedFile,
+    /// A local document target used only by an enabled workspace transcript.
+    Document,
 }
 
 /// An existing, inert source file proven to remain inside its session workspace.
@@ -158,6 +160,26 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn document(columns: Range<usize>, path: String) -> Self {
+        Self {
+            columns,
+            destination: path,
+            destination_kind: DestinationKind::Document,
+        }
+    }
+
+    pub(crate) fn is_document(&self) -> bool {
+        self.destination_kind == DestinationKind::Document
+    }
+
+    pub(crate) fn reader_destination(&self, documents: bool) -> Option<String> {
+        if documents && self.is_document() {
+            Some(self.destination.clone())
+        } else {
+            self.terminal_destination()
+        }
+    }
+
     pub(crate) fn with_columns(&self, columns: Range<usize>) -> Self {
         Self {
             columns,
@@ -168,6 +190,7 @@ impl TerminalHyperlink {
 
     pub(crate) fn terminal_destination(&self) -> Option<String> {
         match self.destination_kind {
+            DestinationKind::Document => None,
             DestinationKind::Web => web_destination(&self.destination),
             DestinationKind::TrustedFile => trusted_file_destination(&self.destination),
         }

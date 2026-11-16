@@ -5,6 +5,7 @@
 //! relative to the session working directory when possible. This module only formats destinations;
 //! it does not resolve files or infer execution-host paths from the frontend filesystem.
 
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use codex_utils_string::normalize_markdown_hash_location_suffix;
 use regex_lite::Regex;
@@ -25,6 +26,26 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
         Ok(regex) => regex,
         Err(error) => panic!("invalid hash location regex: {error}"),
     });
+
+pub(crate) fn sidebar_file_link(destination: &str) -> Option<String> {
+    if destination.len() > 8192 || destination.contains(['#', '?']) {
+        return None;
+    }
+    if destination.starts_with("file://") && Url::parse(destination).ok()?.has_host() {
+        return None;
+    }
+    let (path, location) = parse_local_link_target(destination)?;
+    let extension = path.rsplit_once('.')?.1;
+    (location.is_none()
+        && (extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown"))
+        && path.len() <= 4096
+        && !path.starts_with('~')
+        && !path.starts_with("//")
+        && !path.chars().any(char::is_control)
+        && (is_absolute_local_link_path(&path) || Url::parse(&path).is_err())
+        && (is_local_path_like_link(destination) || Url::parse(destination).is_err()))
+    .then_some(path)
+}
 
 pub(super) fn is_local_path_like_link(dest_url: &str) -> bool {
     dest_url.starts_with("file://")
@@ -56,8 +77,8 @@ pub(super) fn render_local_link_target(dest_url: &str, cwd: Option<&Path>) -> Op
 /// Split a local-link destination into `(normalized_path_text, location_suffix)`.
 ///
 /// The returned path text never includes a trailing `#L..` or `:line[:col]` suffix. Path
-/// normalization preserves `~/...` and rewrites path separators into display-stable forward
-/// slashes. The suffix, when present, is returned separately in normalized markdown form.
+/// normalization preserves home-relative paths and uses forward slashes as separators.
+/// A backslash in a POSIX file URI is part of the filename and is preserved.
 ///
 /// Returns `None` only when the destination looks like a `file://` URL but cannot be parsed into a
 /// local path. Plain path-like inputs always return `Some(...)` even if they are relative.
@@ -66,7 +87,12 @@ fn parse_local_link_target(dest_url: &str) -> Option<(String, Option<String>)> {
         let url = Url::parse(dest_url).ok()?;
         // Infer the path's OS from the URI, not the host running the TUI.
         let path = PathUri::parse(&url[..url::Position::AfterPath]).ok()?;
-        let path_text = normalize_local_link_path_text(&path.inferred_native_path_string());
+        let native_path = path.inferred_native_path_string();
+        let path_text = if path.infer_path_convention() == Some(PathConvention::Posix) {
+            native_path
+        } else {
+            normalize_local_link_path_text(&native_path)
+        };
         let location_suffix = url
             .fragment()
             .and_then(normalize_hash_location_suffix_fragment);
