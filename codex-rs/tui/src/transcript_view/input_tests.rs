@@ -175,6 +175,63 @@ fn hover_links_match_wrapped_click_targets_and_refresh_after_scrolling() {
 }
 
 #[test]
+fn workspace_file_links_show_the_title_with_subtle_hover_and_open_the_same_location() {
+    use crate::markdown_render::FileLink;
+    use crate::markdown_render::SourceLocation;
+    use ratatui::style::Modifier;
+
+    crate::markdown_render::preferences::set_document_links(/*enabled*/ true);
+    let (mut view, cells) = transcript(
+        "[Guide](./guide.md#L3C2) and [](./guide.md#L3C2)",
+        /*width*/ 32,
+    );
+    view.document_links = true;
+    let area = view.area;
+    let mut idle = Buffer::empty(area);
+    view.render(area, &mut idle, &cells);
+    let title = ScreenPosition::new(area.x + 3, area.y);
+    let path = ScreenPosition::new(area.x + 13, area.y);
+    let mut observations = vec![
+        crate::transcript_view::tests::text(&idle)
+            .trim()
+            .to_string(),
+    ];
+
+    for (name, point) in [("title", title), ("filename", path)] {
+        let mut hovered = idle.clone();
+        view.paint_document_links(&mut hovered, Some(point));
+        observations.push(format!(
+            "{name}: underline={}, hover bold={}, background unchanged={}",
+            hovered[point].modifier.contains(Modifier::UNDERLINED),
+            hovered[point].modifier.contains(Modifier::BOLD),
+            hovered[point].bg == idle[point].bg,
+        ));
+        view.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), point.x, point.y),
+            &cells,
+        );
+        let Some(ViewAction::OpenDocument(link)) = view.handle_mouse(
+            mouse(MouseEventKind::Up(MouseButton::Left), point.x, point.y),
+            &cells,
+        ) else {
+            panic!("{name} click should open a document");
+        };
+        assert_eq!(
+            link,
+            FileLink {
+                path: "./guide.md".to_string(),
+                location: Some(SourceLocation { line: 3, column: 2 }),
+            },
+        );
+    }
+    insta::assert_snapshot!(observations.join("\n"), @"
+    • Guide and ./guide.md:3:2
+    title: underline=true, hover bold=true, background unchanged=true
+    filename: underline=false, hover bold=true, background unchanged=true
+    ");
+}
+
+#[test]
 fn shift_click_extends_a_double_clicked_word_in_both_directions() {
     let (mut view, cells) = transcript("alpha beta gamma", /*width*/ 24);
     let area = view.area;

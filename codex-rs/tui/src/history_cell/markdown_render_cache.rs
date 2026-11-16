@@ -18,6 +18,7 @@ pub(super) struct MarkdownRenderCacheKey {
     pub(super) terminal_fg: Option<(u8, u8, u8)>,
     pub(super) terminal_bg: Option<(u8, u8, u8)>,
     pub(super) color_level: crate::terminal_palette::StdoutColorLevel,
+    pub(super) document_links: bool,
 }
 
 impl MarkdownRenderCache {
@@ -38,6 +39,7 @@ impl MarkdownRenderCache {
             terminal_fg: crate::terminal_palette::default_fg(),
             terminal_bg: crate::terminal_palette::default_bg(),
             color_level: crate::terminal_palette::stdout_color_level(),
+            document_links: crate::markdown_render::preferences::document_links_enabled(),
         };
         let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((cached_key, lines)) = cached.as_ref()

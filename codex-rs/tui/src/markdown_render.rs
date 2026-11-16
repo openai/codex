@@ -81,6 +81,9 @@ use unicode_segmentation::UnicodeSegmentation;
 mod inline_directives;
 mod list_spacing;
 mod local_links;
+pub(crate) use local_links::FileLink;
+pub(crate) use local_links::SourceLocation;
+pub(crate) use local_links::is_markdown_file;
 mod math;
 mod mermaid;
 pub(crate) mod preferences;
@@ -2411,12 +2414,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         }
     }
 
-    fn label_document_path(&self) -> Option<String> {
+    fn label_document_path(&self) -> Option<FileLink> {
         let link = self.link.as_ref().filter(|link| link.style_label)?;
         local_links::sidebar_file_link(&link.destination)
     }
 
-    fn document_label_span(&self, span: Span<'static>, path: String) -> HyperlinkLine {
+    fn document_label_span(&self, span: Span<'static>, path: FileLink) -> HyperlinkLine {
         let width = span_width(&span);
         let mut line = HyperlinkLine::new(Line::from(span));
         let mut link = TerminalHyperlink::document(0..width, path);
@@ -2427,12 +2430,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn push_link_target(&mut self, span: Span<'static>, destination: &str, source: usize) {
         let mut target = HyperlinkLine::default();
-        if let Some(path) = local_links::sidebar_file_link(destination) {
+        if let Some(link) = local_links::sidebar_file_link(destination) {
             let width = span_width(&span);
             target.line.push_span(span);
             target
                 .hyperlinks
-                .push(TerminalHyperlink::document(0..width, path));
+                .push(TerminalHyperlink::document(0..width, link));
         } else {
             target.push_span(span, Some(destination));
         }

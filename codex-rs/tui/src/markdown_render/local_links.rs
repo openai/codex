@@ -27,24 +27,53 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
         Err(error) => panic!("invalid hash location regex: {error}"),
     });
 
-pub(crate) fn sidebar_file_link(destination: &str) -> Option<String> {
-    if destination.len() > 8192 || destination.contains(['#', '?']) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SourceLocation {
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FileLink {
+    pub(crate) path: String,
+    pub(crate) location: Option<SourceLocation>,
+}
+
+pub(crate) fn is_markdown_file(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, ext)| {
+        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+    })
+}
+
+pub(crate) fn sidebar_file_link(destination: &str) -> Option<FileLink> {
+    if destination.len() > 8192 || destination.contains('?') {
         return None;
     }
     if destination.starts_with("file://") && Url::parse(destination).ok()?.has_host() {
         return None;
     }
     let (path, location) = parse_local_link_target(destination)?;
-    let extension = path.rsplit_once('.')?.1;
-    (location.is_none()
-        && (extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown"))
+    if destination.contains('#') && location.is_none() {
+        return None;
+    }
+    let location = if let Some(suffix) = location {
+        let start = suffix.strip_prefix(':')?.split(['-', '–']).next()?;
+        let (line, column) = start.split_once(':').unwrap_or((start, "1"));
+        Some(SourceLocation {
+            line: line.parse::<usize>().ok()?.max(1),
+            column: column.parse::<usize>().ok()?.max(1),
+        })
+    } else {
+        None
+    };
+    (!path.is_empty()
+        && !path.ends_with('/')
         && path.len() <= 4096
         && !path.starts_with('~')
         && !path.starts_with("//")
         && !path.chars().any(char::is_control)
-        && (is_absolute_local_link_path(&path) || Url::parse(&path).is_err())
-        && (is_local_path_like_link(destination) || Url::parse(destination).is_err()))
-    .then_some(path)
+        && (is_absolute_local_link_path(&path) || Url::parse(&path).is_err()))
+    .then_some(FileLink { path, location })
 }
 
 pub(super) fn is_local_path_like_link(dest_url: &str) -> bool {

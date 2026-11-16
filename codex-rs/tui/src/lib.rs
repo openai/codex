@@ -2105,6 +2105,10 @@ async fn run_ratatui_app(
 
     let local_settings = crate::local_settings::LocalSettings::for_tui(&config, &tui);
     crate::markdown_render::preferences::init(local_settings.tui.rendering);
+    crate::markdown_render::preferences::set_document_links(
+        local_settings.workspace_enabled(&config)
+            && app_server_target.thread_params_mode() != ThreadParamsMode::Cloud,
+    );
     // Configure syntax highlighting theme from the final config — onboarding
     // and resume/fork can both reload config with a different tui_theme, so
     // this must happen after the last possible reload.

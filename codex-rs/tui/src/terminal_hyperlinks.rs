@@ -33,6 +33,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use url::Url;
 
 use crate::line_truncation::line_width;
+use crate::markdown_render::FileLink;
+use crate::markdown_render::SourceLocation;
 use crate::render::line_utils::line_to_borrowed;
 use crate::render::line_utils::line_to_static;
 use crate::width::display_width;
@@ -76,7 +78,22 @@ enum DestinationKind {
     /// A generated visualization, validated workspace artifact, or locally viewed image.
     TrustedFile,
     /// A local document target used only by an enabled workspace transcript.
-    Document,
+    Document(Option<SourceLocation>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ReaderLink {
+    External(String),
+    Document(FileLink),
+}
+
+impl ReaderLink {
+    pub(crate) fn into_destination(self) -> String {
+        match self {
+            Self::External(url) => url,
+            Self::Document(link) => link.path,
+        }
+    }
 }
 
 /// An existing, inert source file proven to remain inside its session workspace.
@@ -185,24 +202,27 @@ impl TerminalHyperlink {
         }
     }
 
-    pub(crate) fn document(columns: Range<usize>, path: String) -> Self {
+    pub(crate) fn document(columns: Range<usize>, link: FileLink) -> Self {
         Self {
             columns,
-            destination: path,
-            destination_kind: DestinationKind::Document,
+            destination: link.path,
+            destination_kind: DestinationKind::Document(link.location),
             markdown_source: None,
         }
     }
 
     pub(crate) fn is_document(&self) -> bool {
-        self.destination_kind == DestinationKind::Document
+        matches!(self.destination_kind, DestinationKind::Document(_))
     }
 
-    pub(crate) fn reader_destination(&self, documents: bool) -> Option<String> {
-        if documents && self.is_document() {
-            Some(self.destination.clone())
+    pub(crate) fn reader_destination(&self, documents: bool) -> Option<ReaderLink> {
+        if documents && let DestinationKind::Document(location) = self.destination_kind {
+            Some(ReaderLink::Document(FileLink {
+                path: self.destination.clone(),
+                location,
+            }))
         } else {
-            self.terminal_destination()
+            self.terminal_destination().map(ReaderLink::External)
         }
     }
 
@@ -217,7 +237,7 @@ impl TerminalHyperlink {
 
     pub(crate) fn terminal_destination(&self) -> Option<String> {
         match self.destination_kind {
-            DestinationKind::Document => None,
+            DestinationKind::Document(_) => None,
             DestinationKind::Web => web_destination(&self.destination),
             DestinationKind::TrustedFile => trusted_file_destination(&self.destination),
         }

@@ -872,6 +872,9 @@ impl App {
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         self.transcript_view.document_links = self.document_preview_available(tui, app_server);
+        crate::markdown_render::preferences::set_document_links(
+            self.transcript_view.document_links,
+        );
         self.transcript_view
             .sync_patch_approval(self.chat_widget.current_patch_approval());
         // A chooser action must never decide a modal that has not been painted yet.
@@ -899,7 +902,9 @@ impl App {
         tui.link_hover.observe(&event);
         let current = tui.link_hover.position();
         if previous != current
-            && self.hovered_sidebar_target(previous) != self.hovered_sidebar_target(current)
+            && (self.hovered_sidebar_target(previous) != self.hovered_sidebar_target(current)
+                || previous.is_some_and(|point| self.transcript_view.has_document_link_at(point))
+                || current.is_some_and(|point| self.transcript_view.has_document_link_at(point)))
         {
             tui.frame_requester().schedule_frame();
         }

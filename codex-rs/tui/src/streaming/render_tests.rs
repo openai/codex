@@ -138,7 +138,23 @@ fn incremental_file_citations_preserve_metadata_unicode_and_markdown() {
 
         render.lines
     });
-    assert_debug_snapshot!("incremental_file_citations", rendered_cases);
+    assert_eq!(
+        rendered_cases.each_ref().map(|lines| lines
+            .iter()
+            .flat_map(|line| &line.hyperlinks)
+            .map(|link| link.reader_destination(/*documents*/ true))
+            .collect::<Vec<_>>()),
+        ["Quarterly Report.xlsx", "Résumé *final* ✨.xlsx"].map(|name| vec![Some(
+            crate::terminal_hyperlinks::ReaderLink::Document(crate::markdown_render::FileLink {
+                path: cwd.join(name).to_string_lossy().replace('\\', "/"),
+                location: None,
+            })
+        )])
+    );
+    assert_debug_snapshot!(
+        "incremental_file_citations",
+        rendered_cases.map(visible_lines)
+    );
 }
 
 #[test]

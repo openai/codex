@@ -484,14 +484,16 @@ impl SidePaneLayout {
                 frames.schedule_frame_in(Duration::from_secs(1));
             }
         }
-        companion.view.render_parked(
-            transcript,
-            frame.buffer,
-            &companion.cells,
-            companion.display.active.as_deref(),
-            &companion.display.auxiliary,
-            collapse_turn_details,
-        );
+        crate::markdown_render::preferences::with_visible_local_paths(|| {
+            companion.view.render_parked(
+                transcript,
+                frame.buffer,
+                &companion.cells,
+                companion.display.active.as_deref(),
+                &companion.display.auxiliary,
+                collapse_turn_details,
+            );
+        });
         frame
             .image_placements
             .extend(companion.view.image_placements());

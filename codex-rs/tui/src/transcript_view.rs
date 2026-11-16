@@ -10,6 +10,7 @@ mod bookmark;
 mod composer_gap;
 mod copy_mode;
 mod disclosure;
+mod document;
 mod follow_control;
 mod footer;
 mod input;
@@ -31,8 +32,10 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::tui::SelectionCopy;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position as ScreenPosition;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -345,24 +348,58 @@ impl TranscriptView {
         self.render_search(buf);
     }
 
-    pub(crate) fn paint_document_scroll_indicators(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        cells: &[Arc<dyn HistoryCell>],
-    ) {
-        if area.height < 2 || area.width < 3 {
-            return;
+    pub(crate) fn has_document_link_at(&self, pointer: ScreenPosition) -> bool {
+        self.document_links
+            && self
+                .raw_link_at(pointer)
+                .is_some_and(|(_, link)| link.is_document())
+    }
+
+    fn raw_link_at(&self, pointer: ScreenPosition) -> Option<(&VisibleRow, &TerminalHyperlink)> {
+        if !self.area.contains(pointer) {
+            return None;
         }
-        let start = self.start(cells);
-        for (visible, row, arrow) in [
-            (start > (0, 0), area.top(), "↑"),
-            (start < self.bottom_start(cells), area.bottom() - 1, "↓"),
-        ] {
-            if visible {
-                buf[(area.right() - 1, row)]
-                    .set_symbol(arrow)
-                    .set_style(crate::style::secondary_text_style());
+        let row = self.visible.get(usize::from(pointer.y - self.area.y))?;
+        let link = row.layout.raw_link_at(row.row, pointer.x - self.area.x)?;
+        Some((row, link))
+    }
+
+    pub(crate) fn paint_document_links(&self, buf: &mut Buffer, pointer: Option<ScreenPosition>) {
+        let Some((hit_row, hit_link)) = pointer
+            .filter(|_| self.document_links && !self.has_active_interaction())
+            .and_then(|pointer| self.raw_link_at(pointer))
+            .filter(|(_, link)| link.is_document())
+        else {
+            return;
+        };
+        for (y, row) in (self.area.top()..self.area.bottom()).zip(&self.visible) {
+            if row.key != hit_row.key {
+                continue;
+            }
+            let Some((inset, links)) = row.layout.row_links(row.row) else {
+                continue;
+            };
+            for link in links.iter().filter(|link| link.is_document()) {
+                if !(std::ptr::eq(hit_link, link) && hit_row.row == row.row
+                    || hit_link.markdown_source.is_some()
+                        && hit_link.markdown_source == link.markdown_source
+                        && hit_link.destination == link.destination)
+                {
+                    continue;
+                }
+                let columns = (inset + link.columns.start)
+                    ..(inset + link.columns.end).min(usize::from(self.area.width));
+                if !columns.is_empty() {
+                    buf.set_style(
+                        Rect::new(
+                            self.area.x + columns.start as u16,
+                            y,
+                            columns.len() as u16,
+                            1,
+                        ),
+                        ratatui::style::Style::default().bold(),
+                    );
+                }
             }
         }
     }

@@ -511,6 +511,7 @@ impl App {
         self.chat_widget.local_settings.tui.status_line_provider =
             self.local_settings.tui.status_line_provider.clone();
         self.config = config;
+        self.refresh_transcript_document_links();
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }

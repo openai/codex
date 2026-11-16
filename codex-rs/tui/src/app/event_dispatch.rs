@@ -3583,15 +3583,15 @@ impl App {
                     Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
                 }
             }
-            AppEvent::OpenSidebarDocument { backend_id, source, path } => {
+            AppEvent::OpenSidebarDocument { backend_id, source, link } => {
                 if app_server.backend_id() == backend_id
                     && self.current_displayed_thread_id() == Some(source)
                     && self.document_preview_available(tui, app_server)
                 {
-                    Box::pin(self.open_document(tui, app_server, source, path)).await?;
+                    Box::pin(self.open_document(tui, app_server, source, link)).await?;
                 }
             }
-            AppEvent::SidebarDocumentResolved { backend_id, parent, source, request, original_path, path, } => {
+            AppEvent::SidebarDocumentResolved { backend_id, parent, source, request, original_path, path, location, } => {
                 if backend_id == app_server.backend_id()
                     && self.sidebar_parent() == Some(parent)
                     && let Some(pane) = self.sidebars.get_mut(&Some(parent))
@@ -3605,7 +3605,7 @@ impl App {
                         && self.current_displayed_thread_id() == Some(source)
                         && self.document_preview_available(tui, app_server);
                     match path {
-                        Ok(path) => Box::pin(self.open_resolved_document(tui, app_server, source, original_path, path, focus)).await?,
+                        Ok(path) => Box::pin(self.open_resolved_document(tui, app_server, source, original_path, path, location, focus)).await?,
                         Err(error) if focus => self.chat_widget.add_error_message(format!("Could not open file: {error}")),
                         Err(_) => {}
                     }

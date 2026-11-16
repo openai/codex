@@ -110,6 +110,7 @@ pub(super) struct LayoutCache {
 #[derive(PartialEq, Eq)]
 struct RenderState {
     theme: u64,
+    document_links: bool,
     foreground: Option<(u8, u8, u8)>,
     background: Option<(u8, u8, u8)>,
     color_level: crate::terminal_palette::StdoutColorLevel,
@@ -318,6 +319,7 @@ impl LayoutCache {
         self.frame = self.frame.wrapping_add(/*rhs*/ 1);
         let state = RenderState {
             theme: crate::render::highlight::syntax_theme_revision(),
+            document_links: crate::markdown_render::preferences::document_links_enabled(),
             foreground: crate::terminal_palette::default_fg(),
             background: crate::terminal_palette::default_bg(),
             color_level: crate::terminal_palette::stdout_color_level(),

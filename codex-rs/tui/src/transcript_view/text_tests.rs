@@ -192,12 +192,13 @@ fn aligned_text_excludes_synthetic_leading_columns() {
     line.push_span("wide".into(), Some("https://example.com"));
     let layout = TextLayout::new(vec![line], /*width*/ 8);
     assert_eq!(
-        layout.link_at(/*row*/ 0, /*column*/ 3, /*documents*/ false),
+        layout.reader_link_at(/*row*/ 0, /*column*/ 3, /*documents*/ false),
         None
     );
     assert_eq!(
         layout
-            .link_at(/*row*/ 0, /*column*/ 4, /*documents*/ false)
+            .reader_link_at(/*row*/ 0, /*column*/ 4, /*documents*/ false)
+            .map(crate::terminal_hyperlinks::ReaderLink::into_destination)
             .as_deref(),
         Some("https://example.com")
     );
@@ -271,7 +272,8 @@ fn selected_revision_rewraps_both_directions_with_styles_and_indents() {
     restored.render(narrow_area, &mut restored_buffer, /*start_row*/ 0);
     assert_eq!(restored_buffer, original_buffer);
     assert_eq!(
-        wide.link_at(/*row*/ 0, /*column*/ 8, /*documents*/ false)
+        wide.reader_link_at(/*row*/ 0, /*column*/ 8, /*documents*/ false)
+            .map(crate::terminal_hyperlinks::ReaderLink::into_destination)
             .as_deref(),
         Some("https://example.com")
     );
@@ -445,7 +447,11 @@ fn rendered_markdown_file_targets_are_only_interactive_in_the_workspace() {
         let layout = &layout;
         (0..layout.row_count())
             .flat_map(|row| {
-                (0..40).filter_map(move |column| layout.link_at(row, column, documents))
+                (0..40).filter_map(move |column| {
+                    layout
+                        .reader_link_at(row, column, documents)
+                        .map(crate::terminal_hyperlinks::ReaderLink::into_destination)
+                })
             })
             .collect::<std::collections::BTreeSet<_>>()
     };

@@ -201,6 +201,7 @@ fn empty_reader_local_links_keep_a_visible_destination() {
     for markdown in [
         "[](empty.md)",
         "[](./empty.md)",
+        "[](src/empty.md#L42)",
         "[ ](./empty.md)",
         "[\u{200d}](./empty.md)",
     ] {

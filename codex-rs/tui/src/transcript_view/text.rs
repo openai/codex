@@ -32,6 +32,8 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::LogicalLineSource;
+use crate::terminal_hyperlinks::ReaderLink;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
@@ -847,8 +849,8 @@ impl TextLayout {
         }
     }
 
-    pub(super) fn document_links(&self) -> Vec<(Range<usize>, String)> {
-        let mut stops: Vec<(Range<usize>, String)> = Vec::new();
+    pub(super) fn document_links(&self) -> Vec<(Range<usize>, ReaderLink)> {
+        let mut stops: Vec<(Range<usize>, ReaderLink)> = Vec::new();
         let mut previous_source = None;
         for (index, row) in self.rows.iter().enumerate() {
             let inset = row.first_column - row.prefix_columns;
@@ -884,14 +886,25 @@ impl TextLayout {
     }
 
     /// Resolve an OSC-8 destination or a document target when the workspace enables previews.
-    pub(super) fn link_at(&self, row: usize, column: u16, documents: bool) -> Option<String> {
+    #[cfg(test)]
+    pub(super) fn reader_link_at(
+        &self,
+        row: usize,
+        column: u16,
+        documents: bool,
+    ) -> Option<ReaderLink> {
+        self.raw_link_at(row, column)?.reader_destination(documents)
+    }
+
+    pub(super) fn raw_link_at(&self, row: usize, column: u16) -> Option<&TerminalHyperlink> {
+        let (inset, links) = self.row_links(row)?;
+        let column = usize::from(column).checked_sub(inset)?;
+        links.iter().find(|link| link.columns.contains(&column))
+    }
+
+    pub(super) fn row_links(&self, row: usize) -> Option<(usize, &[TerminalHyperlink])> {
         let row = self.rows.get(row)?;
-        let column = usize::from(column).checked_sub(row.first_column - row.prefix_columns)?;
-        row.line
-            .hyperlinks
-            .iter()
-            .find(|link| link.columns.contains(&column))?
-            .reader_destination(documents)
+        Some((row.first_column - row.prefix_columns, &row.line.hyperlinks))
     }
 
     fn visible_rows(&self, area: Rect, start_row: usize) -> impl Iterator<Item = (u16, &TextRow)> {

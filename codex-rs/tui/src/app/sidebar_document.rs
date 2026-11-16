@@ -6,6 +6,8 @@ use super::*;
 use crate::key_hint::KeyBinding;
 use crate::keymap::KeymapContext;
 use crate::keymap::RuntimeKeymap;
+use crate::markdown_render::FileLink;
+use crate::markdown_render::SourceLocation;
 use crate::motion::MotionMode;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -18,10 +20,12 @@ use codex_utils_path_uri::PathUri;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::widgets::Widget;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 struct FileCell {
     source: String,
+    language: Option<String>,
 }
 
 impl HistoryCell for FileCell {
@@ -38,6 +42,12 @@ impl HistoryCell for FileCell {
     }
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        if let Some(language) = &self.language {
+            return crate::render::highlight::highlight_code_to_lines(&self.source, language)
+                .into_iter()
+                .map(HyperlinkLine::new)
+                .collect();
+        }
         crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
             &self.source,
             Some(width.into()),
@@ -56,6 +66,7 @@ pub(super) struct Document {
     pub(super) path: PathUri,
     pub(super) backend: crate::backend_id::BackendId,
     link: Option<usize>,
+    location: Option<SourceLocation>,
     state: State,
 }
 
@@ -65,6 +76,8 @@ enum State {
     Ready {
         view: Box<TranscriptView>,
         cells: [Arc<dyn HistoryCell>; 1],
+        line_starts: Vec<usize>,
+        target: Option<(usize, usize)>,
     },
 }
 
@@ -83,8 +96,9 @@ impl Document {
 
     pub(super) fn allows_tab_shortcut(&self, key: KeyEvent) -> bool {
         match &self.state {
-            State::Ready { view, .. } => {
-                !view.has_active_interaction() && (key.code != KeyCode::Esc || self.link.is_none())
+            State::Ready { view, target, .. } => {
+                !view.has_active_interaction()
+                    && (key.code != KeyCode::Esc || (self.link.is_none() && target.is_none()))
             }
             _ => true,
         }
@@ -105,6 +119,10 @@ impl Document {
         }
     }
 
+    fn title(&self) -> String {
+        self.path.basename().unwrap_or_default()
+    }
+
     pub(super) fn connection_replaced(&mut self) {
         if matches!(self.state, State::Loading(_)) {
             self.state = State::Failed("Connection changed. Reopen this file to try again.".into());
@@ -114,15 +132,90 @@ impl Document {
     pub(super) fn loaded(&mut self, result: Result<String, String>) {
         self.state = match result {
             Ok(source) => {
-                let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(FileCell { source })];
+                let title = self.title();
+                let code =
+                    self.location.is_some() || !crate::markdown_render::is_markdown_file(&title);
+                const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+                if code && source.len() > MAX_SOURCE_BYTES {
+                    self.state = State::Failed("Source preview limit is 1 MiB".into());
+                    return;
+                }
+                // Like the transcript layout, count one LF per logical line, including CRLF input.
+                let mut start = 0;
+                let line_starts = if code {
+                    source
+                        .lines()
+                        .map(|line| {
+                            let offset = start;
+                            start += line.len() + 1;
+                            offset
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                const MAX_SOURCE_LINES: usize = 10_000;
+                if line_starts.len() > MAX_SOURCE_LINES {
+                    self.state =
+                        State::Failed(format!("Source preview limit is {MAX_SOURCE_LINES} lines"));
+                    return;
+                }
+                let language = code.then(|| {
+                    title
+                        .rsplit_once('.')
+                        .map_or(title.as_str(), |(_, ext)| ext)
+                        .to_owned()
+                });
+                let target = self
+                    .location
+                    .and_then(|loc| source_target(&source, &line_starts, loc));
+                let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(FileCell { source, language })];
                 let mut view = Box::<TranscriptView>::default();
                 view.document_links = true;
                 view.show_follow_control = false;
-                view.jump_to_beginning(&cells);
-                State::Ready { view, cells }
+                view.jump_to_offset(&cells, target.map_or(0, |(_, offset)| offset));
+                State::Ready {
+                    view,
+                    cells,
+                    line_starts,
+                    target,
+                }
             }
             Err(error) => State::Failed(error),
         };
+    }
+
+    fn go_to(&mut self, location: Option<SourceLocation>) {
+        let was_located = self.location.is_some();
+        let restore_markdown = location.is_none()
+            && was_located
+            && crate::markdown_render::is_markdown_file(&self.title());
+        self.location = location;
+        self.link = None;
+        let State::Ready {
+            view,
+            cells,
+            line_starts,
+            target,
+        } = &mut self.state
+        else {
+            return;
+        };
+        let Some(source) = cells[0].copy_source() else {
+            return;
+        };
+        if restore_markdown || (location.is_some() && line_starts.is_empty()) {
+            // Coordinate links show source. Plain Markdown links restore rendering.
+            let source = source.to_owned();
+            self.loaded(Ok(source));
+        } else {
+            *target = location.and_then(|location| source_target(source, line_starts, location));
+            if let Some((_, offset)) = target {
+                view.cancel_search();
+                view.end_selection(cells);
+                view.jump_to_offset(cells, *offset);
+            }
+        }
     }
 
     pub(super) fn paint(
@@ -151,7 +244,12 @@ impl Document {
                     .wrap(ratatui::widgets::Wrap { trim: false })
                     .render(body, buf);
             }
-            State::Ready { view, cells } => {
+            State::Ready {
+                view,
+                cells,
+                line_starts,
+                target,
+            } => {
                 view.set_keymap_bindings(keymap);
                 if view.tick_selection(cells) {
                     frames.schedule_frame_in(std::time::Duration::from_millis(45));
@@ -177,7 +275,14 @@ impl Document {
                             .map(|hint| {
                                 crate::footer_hint::shortcut(&hint.display_label(), "select")
                             }),
-                        Some(crate::footer_hint::shortcut("Esc", "close")),
+                        Some(crate::footer_hint::shortcut(
+                            "Esc",
+                            if target.is_some() {
+                                "clear highlight"
+                            } else {
+                                "close"
+                            },
+                        )),
                     ]
                     .into_iter()
                     .flatten(),
@@ -203,7 +308,13 @@ impl Document {
                 if content.width > 2 {
                     viewport.width -= 1;
                 }
-                view.render(viewport, buf, cells);
+                view.render_document(
+                    viewport,
+                    buf,
+                    cells,
+                    line_starts,
+                    target.filter(|_| !view.has_active_interaction()),
+                );
                 if let Some(index) = self.link {
                     view.paint_document_link(cells, index, buf);
                 }
@@ -234,6 +345,29 @@ impl Document {
         }
         None
     }
+}
+
+fn source_target(
+    source: &str,
+    starts: &[usize],
+    location: SourceLocation,
+) -> Option<(usize, usize)> {
+    let index = (location.line - 1).min(starts.len().saturating_sub(1));
+    let start = *starts.get(index)?;
+    let line = source.lines().nth(index)?;
+    let column = line
+        .char_indices()
+        .nth(location.column - 1)
+        .map_or(line.len(), |(byte, _)| byte);
+    let column = if column == line.len() {
+        column
+    } else {
+        line.grapheme_indices(/*is_extended*/ true)
+            .take_while(|(byte, _)| *byte <= column)
+            .last()
+            .map_or(0, |(byte, _)| byte)
+    };
+    Some((index + 1, start + column))
 }
 
 impl App {
@@ -267,7 +401,16 @@ impl App {
         self.conversation_focus_available(tui)
             && self.sidebar_chooser_available()
             && server.thread_params_mode() != crate::app_server_session::ThreadParamsMode::Cloud
+            && server.app_server_platform_family() != Some("windows")
+            && (server.uses_remote_workspace() || !cfg!(windows))
             && self.current_displayed_thread_id().is_some()
+    }
+
+    pub(super) fn refresh_transcript_document_links(&self) {
+        crate::markdown_render::preferences::set_document_links(
+            self.local_settings.workspace_enabled(&self.config)
+                && self.app_server_target.thread_params_mode() != crate::ThreadParamsMode::Cloud,
+        );
     }
 
     pub(super) async fn open_document(
@@ -275,8 +418,10 @@ impl App {
         tui: &mut tui::Tui,
         server: &mut AppServerSession,
         source: ThreadId,
-        path: AppServerPath,
+        link: FileLink,
     ) -> Result<()> {
+        let location = link.location;
+        let path = AppServerPath::from_app_server(link.path);
         let Some(parent) = self.sidebar_parent() else {
             return Ok(());
         };
@@ -297,12 +442,17 @@ impl App {
                 request,
                 original_path: path,
                 path: resolved,
+                location,
             });
         });
         tui.frame_requester().schedule_frame();
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "The safe read needs both paths, and the caller supplies navigation and focus."
+    )]
     pub(super) async fn open_resolved_document(
         &mut self,
         tui: &mut tui::Tui,
@@ -310,6 +460,7 @@ impl App {
         source: ThreadId,
         original_path: AppServerPath,
         path: PathUri,
+        location: Option<SourceLocation>,
         focus: bool,
     ) -> Result<()> {
         let Some(parent) = self.sidebar_parent() else {
@@ -327,6 +478,9 @@ impl App {
                 return Ok(());
             }
             if !failed {
+                if let Some(doc) = self.sidebar_mut().documents.get_mut(&id) {
+                    doc.go_to(location);
+                }
                 return self
                     .activate_sidebar_tab(tui, server, SidebarTab::Document(id))
                     .await;
@@ -342,6 +496,7 @@ impl App {
                 path: path.clone(),
                 backend: backend_id,
                 link: None,
+                location,
                 state: State::Loading(Instant::now()),
             },
         );
@@ -387,7 +542,7 @@ impl App {
             && mouse.kind == MouseEventKind::Moved
         {
             if let Some(Document {
-                state: State::Ready { view, cells },
+                state: State::Ready { view, cells, .. },
                 ..
             }) = pane.documents.get_mut(&id)
                 && view.handle_mouse(*mouse, cells).is_some()
@@ -411,12 +566,21 @@ impl App {
                 if key.kind != KeyEventKind::Press && (escape || key.code == KeyCode::Enter) {
                     return true;
                 }
-                if let State::Ready { view, cells } = &mut doc.state {
+                if let State::Ready {
+                    view,
+                    cells,
+                    target,
+                    ..
+                } = &mut doc.state
+                {
                     if escape && view.has_active_interaction() && !view.is_select_mode() {
                         view.cancel_search();
                         view.end_selection(cells);
                         None
-                    } else if escape && doc.link.take().is_some() {
+                    } else if escape
+                        && (doc.link.take().is_some()
+                            || (!view.has_active_interaction() && target.take().is_some()))
+                    {
                         None
                     } else if !view.is_search_editing()
                         && (self.keymap.app.find_transcript.is_pressed(*key)
@@ -446,7 +610,7 @@ impl App {
                     } else if crate::key_hint::plain(KeyCode::Enter).is_press(*key)
                         && let Some(index) = doc.link.take()
                     {
-                        view.document_link(cells, index).map(ViewAction::OpenLink)
+                        view.document_link(cells, index).map(ViewAction::from)
                     } else {
                         doc.link = None;
                         if view.has_active_interaction() {
@@ -493,7 +657,7 @@ impl App {
                     return false;
                 }
                 if let Some(Document {
-                    state: State::Ready { view, cells },
+                    state: State::Ready { view, cells, .. },
                     link,
                     ..
                 }) = pane.documents.get_mut(&id)
@@ -504,7 +668,14 @@ impl App {
                     view.copy_on_select_clear_selection =
                         self.transcript_view.copy_on_select_clear_selection;
                     view.primary_selection = self.transcript_view.primary_selection;
-                    view.handle_mouse(*mouse, cells)
+                    let mut mouse = *mouse;
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) {
+                        mouse.column = mouse.column.max(view.remaining_area().x);
+                    }
+                    view.handle_mouse(mouse, cells)
                 } else {
                     None
                 }
@@ -512,25 +683,24 @@ impl App {
             _ => return false,
         };
         match action {
-            Some(ViewAction::OpenLink(url)) => {
-                if let Some(url) = crate::terminal_hyperlinks::web_destination(&url) {
-                    self.open_url_in_browser(url);
-                } else if let Some(doc) = pane.documents.get(&id)
+            Some(ViewAction::OpenDocument(link)) => {
+                if let Some(doc) = pane.documents.get(&id)
                     && let Some(parent) = doc.path.parent()
                 {
-                    let result = match LegacyAppPathString::from_string(url)
+                    let result = match LegacyAppPathString::from_string(link.path)
                         .resolve_against(&parent, /*user_home_dir*/ None)
                     {
                         Ok(path) if !path.to_url().has_host() => {
+                            let source = doc.source;
                             let original_path =
                                 AppServerPath::from_app_server(path.inferred_native_path_string());
-                            let source = doc.source;
                             self.open_resolved_document(
                                 tui,
                                 server,
                                 source,
                                 original_path,
                                 path,
+                                link.location,
                                 /*focus*/ true,
                             )
                             .await
@@ -541,6 +711,11 @@ impl App {
                     if let Err(error) = result {
                         self.chat_widget.add_error_message(error.to_string());
                     }
+                }
+            }
+            Some(ViewAction::OpenLink(url)) => {
+                if let Some(url) = crate::terminal_hyperlinks::web_destination(&url) {
+                    self.open_url_in_browser(url);
                 }
             }
             Some(action) => {

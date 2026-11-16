@@ -117,7 +117,7 @@ pub(super) struct Selection {
     pointer_origin_row: u16,
     pub(super) resume_on_empty: bool,
     pub(super) pointer: Option<ScreenPosition>,
-    pub(super) pressed_link: Option<String>,
+    pub(super) pressed_link: Option<crate::terminal_hyperlinks::ReaderLink>,
     origin: (Anchor, Anchor),
     table_cell: Option<TableSelection>,
     unit: SelectionUnit,
@@ -661,7 +661,10 @@ impl TranscriptView {
             | ViewAction::CopyOnSelect(text)
             | ViewAction::PrimarySelection(text)
             | ViewAction::CopyAndFollow(text) => text.as_str(),
-            ViewAction::Changed | ViewAction::ExitSelectMode | ViewAction::OpenLink(_) => {
+            ViewAction::Changed
+            | ViewAction::ExitSelectMode
+            | ViewAction::OpenLink(_)
+            | ViewAction::OpenDocument(_) => {
                 return None;
             }
         };

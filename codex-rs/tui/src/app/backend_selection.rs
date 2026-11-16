@@ -470,6 +470,7 @@ impl App {
         self.app_event_tx = AppEventSender::new(self.app_event_tx.app_event_tx.clone());
         self.app_server_backend_id = Some(destination.backend_id());
         self.app_server_target = target;
+        self.refresh_transcript_document_links();
         self.reconnect = Default::default();
         if let Ok(mut state) = self.agents_overview.view_state.lock() {
             state.connection_notice = None;

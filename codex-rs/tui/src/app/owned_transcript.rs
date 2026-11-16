@@ -302,6 +302,15 @@ impl App {
             .mouse
             .filter(|mouse| self.pane_resize.is_none() && !tui.shortcut_hud_contains(*mouse))
             .map(|mouse| (mouse.column, mouse.row).into());
+        let tui_link_position = pointer.filter(|_| {
+            tui.link_hover.mouse.is_some_and(|mouse| {
+                mouse.modifiers.is_empty()
+                    || mouse.modifiers.intersects(
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::SUPER,
+                    )
+            })
+        });
         let sidebar_parent = self.sidebar_parent();
         let sidebar_motion =
             MotionMode::from_animations_enabled(self.local_settings.tui.animations);
@@ -342,6 +351,10 @@ impl App {
                 .or(self.app_server_backend_id)
                 .map(|owner| self.backend_registry.thread_label_style(owner))
                 .unwrap_or_default();
+            let link_pointer =
+                tui_link_position.filter(|_| self.chat_widget.no_modal_or_popup_active());
+            self.transcript_view
+                .paint_document_links(frame.buffer, link_pointer);
             match &self.conversation_frame.sidebar {
                 Some(sidebar::SidebarLayout::Chat(panes)) => {
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
@@ -1252,19 +1265,15 @@ impl App {
                     }
                 }
             } else if let ViewAction::OpenLink(url) = action {
-                if url.starts_with("file://")
-                    || crate::terminal_hyperlinks::web_destination(&url).is_some()
-                {
-                    self.open_url_in_browser(url);
-                } else if self.transcript_view.document_links
-                    && let Some(source) = self.current_displayed_thread_id()
-                {
-                    self.app_event_tx.send(AppEvent::OpenSidebarDocument {
-                        backend_id: app_server.backend_id(),
-                        source,
-                        path: codex_app_server_client::AppServerPath::from_app_server(url),
-                    });
-                }
+                self.open_url_in_browser(url);
+            } else if let ViewAction::OpenDocument(link) = action
+                && let Some(source) = self.current_displayed_thread_id()
+            {
+                self.app_event_tx.send(AppEvent::OpenSidebarDocument {
+                    backend_id: app_server.backend_id(),
+                    source,
+                    link,
+                });
             }
         }
         if was_select_mode && !self.transcript_view.is_select_mode() {

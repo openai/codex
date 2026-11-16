@@ -18,6 +18,8 @@ use crossterm::event::MouseEventKind;
 use ratatui::layout::Position as ScreenPosition;
 
 use super::*;
+use crate::markdown_render::FileLink;
+use crate::terminal_hyperlinks::ReaderLink;
 
 pub(crate) enum ViewAction {
     Changed,
@@ -27,6 +29,16 @@ pub(crate) enum ViewAction {
     PrimarySelection(String),
     CopyAndFollow(String),
     OpenLink(String),
+    OpenDocument(FileLink),
+}
+
+impl From<ReaderLink> for ViewAction {
+    fn from(link: ReaderLink) -> Self {
+        match link {
+            ReaderLink::External(url) => Self::OpenLink(url),
+            ReaderLink::Document(link) => Self::OpenDocument(link),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -106,19 +118,20 @@ impl TranscriptView {
             | ViewAction::ExitSelectMode
             | ViewAction::Copy(_)
             | ViewAction::CopyAndFollow(_)
+            | ViewAction::OpenDocument(_)
             | ViewAction::OpenLink(_) => SelectionCopy::EXPLICIT,
         }
     }
 
     /// Resolve links in the last rendered transcript, sharing geometry with click activation.
     pub(crate) fn link_at(&self, column: u16, row: u16) -> Option<String> {
-        if !self.area.contains(ScreenPosition::new(column, row)) {
-            return None;
-        }
-        let visible = self.visible.get(usize::from(row - self.area.y))?;
-        visible
-            .layout
-            .link_at(visible.row, column - self.area.x, self.document_links)
+        self.reader_link_at(column, row)
+            .map(ReaderLink::into_destination)
+    }
+
+    fn reader_link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
+        let (_, link) = self.raw_link_at(ScreenPosition::new(column, row))?;
+        link.reader_destination(self.document_links)
     }
 
     pub(crate) fn cycle_document_link(
@@ -155,7 +168,7 @@ impl TranscriptView {
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
         index: usize,
-    ) -> Option<String> {
+    ) -> Option<ReaderLink> {
         self.layout(cells, /*index*/ 0)?
             .document_links()
             .into_iter()
@@ -477,7 +490,7 @@ impl TranscriptView {
                     None
                 };
                 let link = link.filter(|destination| {
-                    self.link_at(event.column, event.row).as_ref() == Some(destination)
+                    self.reader_link_at(event.column, event.row).as_ref() == Some(destination)
                 });
                 if self
                     .selection
@@ -492,7 +505,7 @@ impl TranscriptView {
                     self.end_selection(cells);
                 }
                 if let Some(link) = link {
-                    return Some(ViewAction::OpenLink(link));
+                    return Some(link.into());
                 }
                 if let Some(text) = selected.filter(|text| !text.is_empty()) {
                     if self.copy_on_select {
@@ -605,8 +618,8 @@ impl TranscriptView {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
         {
             return self
-                .link_at(event.column, event.row)
-                .map(ViewAction::OpenLink);
+                .reader_link_at(event.column, event.row)
+                .map(ViewAction::from);
         }
         if event.modifiers == KeyModifiers::SHIFT && self.has_selection_range() {
             self.last_click = None;
@@ -633,7 +646,7 @@ impl TranscriptView {
             }
         }
         let link = (mode == MouseMode::Interactive && clicks == 1 && event.modifiers.is_empty())
-            .then(|| self.link_at(event.column, event.row))
+            .then(|| self.reader_link_at(event.column, event.row))
             .flatten();
         self.begin_selection(cells, event.column, event.row, clicks);
         if let Some(selection) = &mut self.selection {

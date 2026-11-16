@@ -1,62 +1,32 @@
 ---
 source: tui/src/streaming/render_tests.rs
-expression: rendered_cases
+expression: rendered_cases.map(visible_lines)
 ---
 [
     [
-        HyperlinkLine {
-            line: Line::from_iter([
-                Span::from("# ").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
-                Span::from("Output").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
-            ]),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::default(),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::from_iter([
-                Span::from("• ").fg(Color::Rgb(148, 226, 213)),
-                Span::from("Quarterly Report.xlsx").fg(Color::Rgb(166, 227, 161)),
-            ]),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::default(),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::from("Continue."),
-            hyperlinks: [],
-        },
+        Line::from_iter([
+            Span::from("# ").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
+            Span::from("Output").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
+        ]),
+        Line::default(),
+        Line::from_iter([
+            Span::from("• ").fg(Color::Rgb(148, 226, 213)),
+            Span::from("Quarterly Report.xlsx").fg(Color::Rgb(166, 227, 161)),
+        ]),
+        Line::default(),
+        Line::from("Continue."),
     ],
     [
-        HyperlinkLine {
-            line: Line::from_iter([
-                Span::from("# ").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
-                Span::from("Output").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
-            ]),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::default(),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::from_iter([
-                Span::from("• ").fg(Color::Rgb(148, 226, 213)),
-                Span::from("Résumé *final* ✨.xlsx").fg(Color::Rgb(166, 227, 161)),
-            ]),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::default(),
-            hyperlinks: [],
-        },
-        HyperlinkLine {
-            line: Line::from("Continue."),
-            hyperlinks: [],
-        },
+        Line::from_iter([
+            Span::from("# ").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
+            Span::from("Output").fg(Color::Rgb(243, 139, 168)).bold().underlined(),
+        ]),
+        Line::default(),
+        Line::from_iter([
+            Span::from("• ").fg(Color::Rgb(148, 226, 213)),
+            Span::from("Résumé *final* ✨.xlsx").fg(Color::Rgb(166, 227, 161)),
+        ]),
+        Line::default(),
+        Line::from("Continue."),
     ],
 ]

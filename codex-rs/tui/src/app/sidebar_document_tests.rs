@@ -54,21 +54,24 @@ async fn document_preview_scenario() -> Result<()> {
         size,
         Default::default(),
     );
-    let screen = side_frame(&mut app, &mut tui, size)?;
-    let (column, row) = screen
-        .lines()
-        .enumerate()
-        .find_map(|(row, line)| {
-            let byte = line.find("guide.md")?;
-            Some((line[..byte].width() as u16, row as u16))
-        })
-        .expect("the local link's path is visible");
-    let press = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column,
-        row,
-        modifiers: KeyModifiers::NONE,
+    let link_press = |screen: &str, label: &str| {
+        let (column, row) = screen
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                let byte = line.find(label)?;
+                Some((line[..byte].width() as u16, row as u16))
+            })
+            .expect("the local link is visible");
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
     };
+    let screen = side_frame(&mut app, &mut tui, size)?;
+    let press = link_press(&screen, "guide.md");
     let modified_press = MouseEvent {
         modifiers: KeyModifiers::CONTROL,
         ..press
@@ -85,11 +88,10 @@ async fn document_preview_scenario() -> Result<()> {
     app.local_settings.tui.keymap.global.select_transcript =
         Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x [".into())));
     enable_side_retention(&mut app)?;
+    crate::markdown_render::preferences::set_document_links(/*enabled*/ true);
     let enabled = side_frame(&mut app, &mut tui, size)?;
-    assert_eq!(
-        enabled.lines().nth(row as usize),
-        screen.lines().nth(row as usize)
-    );
+    assert!(!enabled.contains("guide.md"));
+    let press = link_press(&enabled, "Guide");
     let release = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         ..press
@@ -128,7 +130,10 @@ async fn document_preview_scenario() -> Result<()> {
             "Middle.\n\n".repeat(12)
         ),
     )?;
-    let path = AppServerPath::from_app_server("guide.md");
+    let path = FileLink {
+        path: "guide.md".into(),
+        location: None,
+    };
     app.open_document(&mut tui, &mut server, parent, path.clone())
         .await?;
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
@@ -327,7 +332,7 @@ async fn document_preview_scenario() -> Result<()> {
     insta::assert_snapshot!(highlighted, @"Next");
     for key in [KeyCode::Home, KeyCode::Enter] {
         assert!(
-            app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(key.into()))
+            Box::pin(app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(key.into())))
                 .await
         );
     }
@@ -337,8 +342,12 @@ async fn document_preview_scenario() -> Result<()> {
     view.jump_to_latest();
     side_frame(&mut app, &mut tui, size)?;
     assert!(
-        app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(KeyCode::Tab.into()))
-            .await
+        Box::pin(app.handle_document_input(
+            &mut tui,
+            &mut server,
+            &TuiEvent::Key(KeyCode::Tab.into())
+        ))
+        .await
     );
     Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into())))
         .await?;
@@ -379,7 +388,10 @@ async fn document_preview_scenario() -> Result<()> {
         &mut tui,
         &mut server,
         parent,
-        AppServerPath::from_app_server("closed.md"),
+        FileLink {
+            path: "closed.md".into(),
+            location: None,
+        },
     )
     .await?;
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
@@ -397,11 +409,98 @@ async fn document_preview_scenario() -> Result<()> {
     .await?;
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
     assert_eq!(app.sidebar().unwrap().documents.len(), 1);
+    std::fs::write(
+        dir.path().join("main.rs"),
+        "// first\r\n// second\r\nlet value = 3;\r\n",
+    )?;
+    for location in [None, Some(SourceLocation { line: 3, column: 5 })] {
+        app.open_document(
+            &mut tui,
+            &mut server,
+            parent,
+            FileLink {
+                path: "./main.rs".into(),
+                location,
+            },
+        )
+        .await?;
+        Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+        if location.is_none() {
+            Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await))
+                .await?;
+            let Some(SidebarContent::Document(id)) = app.sidebar().unwrap().visible_content()
+            else {
+                panic!("the source tab should be visible");
+            };
+            app.sidebar_mut()
+                .documents
+                .get_mut(&id)
+                .unwrap()
+                .reader()
+                .unwrap()
+                .0
+                .begin_search();
+        }
+    }
+    let source = side_frame(&mut app, &mut tui, Size::new(200, 15))?;
+    let preview = source
+        .lines()
+        .filter_map(|line| line.rsplit_once('│'))
+        .map(|(_, sidebar)| sidebar.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(preview, @"
+    guide.md       × main.rs        ×                              +
+    3 let value = 3;                                               ↑
+    ↑/↓ read · f3 find · Tab link · f8 select · Esc clear highlight
+    ");
+    let panel = app.conversation_frame.panel_area().unwrap();
+    let buffer = tui.terminal.previous_buffer();
+    let target_cell = &buffer[(panel.x + 7, panel.y + 1)];
+    let adjacent = &buffer[(panel.x + 8, panel.y + 1)];
+    assert_eq!(target_cell.symbol(), "v");
+    assert_ne!(
+        target_cell
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        adjacent
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+    );
+    assert_eq!(app.sidebar().unwrap().documents.len(), 2);
+    let Some(SidebarContent::Document(id)) = app.sidebar().unwrap().visible_content() else {
+        panic!("the source tab should be visible");
+    };
+    let (view, cells) = app
+        .sidebar_mut()
+        .documents
+        .get_mut(&id)
+        .unwrap()
+        .reader()
+        .unwrap();
+    assert!(view.begin_select_mode(cells));
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
+        .await?;
+    let State::Ready { view, target, .. } = &app.sidebar().unwrap().documents[&id].state else {
+        panic!("the source tab should be ready");
+    };
+    assert!(!view.is_select_mode());
+    assert!(target.is_some());
+    assert!(!view.has_active_interaction());
+    for remaining in [2, 1] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
+            .await?;
+        assert_eq!(app.sidebar().unwrap().documents.len(), remaining);
+    }
     app.open_document(
         &mut tui,
         &mut server,
         parent,
-        AppServerPath::from_app_server("notes.md"),
+        FileLink {
+            path: "notes.md".into(),
+            location: None,
+        },
     )
     .await?;
     app.overlay = Some(crate::pager_overlay::Overlay::Transcript(
@@ -439,7 +538,10 @@ async fn document_preview_scenario() -> Result<()> {
             &mut tui,
             &mut server,
             parent,
-            AppServerPath::from_app_server(format!("{directory}/shared/guide.md")),
+            FileLink {
+                path: format!("{directory}/shared/guide.md"),
+                location: None,
+            },
         ))
         .await?;
         Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
@@ -478,7 +580,10 @@ async fn document_preview_scenario() -> Result<()> {
             &mut tui,
             &mut server,
             parent,
-            AppServerPath::from_app_server(format!("{directory}/guide.md")),
+            FileLink {
+                path: format!("{directory}/guide.md"),
+                location: None,
+            },
         ))
         .await?;
         Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;

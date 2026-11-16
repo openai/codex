@@ -525,7 +525,7 @@ pub(crate) enum AppEvent {
     OpenSidebarDocument {
         backend_id: crate::backend_id::BackendId,
         source: ThreadId,
-        path: codex_app_server_client::AppServerPath,
+        link: crate::markdown_render::FileLink,
     },
     SidebarDocumentResolved {
         backend_id: crate::backend_id::BackendId,
@@ -534,6 +534,7 @@ pub(crate) enum AppEvent {
         request: uuid::Uuid,
         original_path: codex_app_server_client::AppServerPath,
         path: std::result::Result<codex_utils_path_uri::PathUri, String>,
+        location: Option<crate::markdown_render::SourceLocation>,
     },
     SidebarDocumentLoaded {
         backend_id: crate::backend_id::BackendId,
