@@ -1,6 +1,7 @@
 //! Orthogonal routes with unique lanes and endpoint positions, in all four directions.
 //!
 //! Routes never share segments. Crossings are explicitly marked; labels occupy reserved gutters.
+//! Flat flowchart groups reserve frames around their nodes and internal routes.
 
 use super::Direction;
 use super::Graph;
@@ -74,23 +75,100 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
             }
         })
         .collect::<Vec<_>>();
-    let mut starts = vec![0; graph.nodes.len()];
-    let mut along = 0;
-    for i in 0..graph.nodes.len() {
-        let i = if matches!(graph.direction, Direction::Up | Direction::Left) {
-            graph.nodes.len() - 1 - i
-        } else {
-            i
-        };
-        starts[i] = along;
-        along += sizes[i] + 2;
+    let grouped = !graph.subgraphs.is_empty();
+    let inset = if grouped { 2 } else { 0 };
+    let mut membership = vec![None; graph.nodes.len()];
+    for (group, subgraph) in graph.subgraphs.iter().enumerate() {
+        for &node in &subgraph.nodes {
+            membership[node] = Some(group);
+        }
     }
-    let first_lane = box_cross + if horizontal { 4 } else { label_width + 5 };
-    let across = if graph.edges.is_empty() {
-        box_cross
-    } else {
-        first_lane + graph.edges.len() * 2 - 1
-    };
+    // Keep a group's members contiguous even when an edge referenced them before its declaration.
+    let mut order = Vec::new();
+    for (node, &group) in membership.iter().enumerate() {
+        if order.contains(&node) {
+            continue;
+        }
+        if let Some(group) = group {
+            let mut members = graph.subgraphs[group].nodes.clone();
+            members.sort_unstable();
+            order.extend(members);
+        } else {
+            order.push(node);
+        }
+    }
+    if matches!(graph.direction, Direction::Up | Direction::Left) {
+        order.reverse();
+    }
+    let mut starts = vec![0; graph.nodes.len()];
+    let mut frames = vec![(0, 0); graph.subgraphs.len()];
+    let mut along = 0;
+    let mut position = 0;
+    while position < order.len() {
+        let node = order[position];
+        if let Some(group) = membership[node] {
+            let frame_start = along;
+            along += 2;
+            while position < order.len() && membership[order[position]] == Some(group) {
+                let node = order[position];
+                starts[node] = along;
+                along += sizes[node] + 2;
+                position += 1;
+            }
+            if horizontal {
+                along = along.max(frame_start + graph.subgraphs[group].label.width() + 4);
+            }
+            frames[group] = (frame_start, along - 1);
+            along += 2;
+        } else {
+            starts[node] = along;
+            along += sizes[node] + 2;
+            position += 1;
+        }
+    }
+    let first_lane = inset + box_cross + if horizontal { 4 } else { label_width + 5 };
+    let internal = graph
+        .edges
+        .iter()
+        .map(|edge| membership[edge.from].is_some() && membership[edge.from] == membership[edge.to])
+        .collect::<Vec<_>>();
+    let internal_count = internal.iter().filter(|&&value| value).count();
+    let mut frame_cross = inset + box_cross + 2;
+    if !graph.edges.is_empty() {
+        frame_cross = frame_cross.max(first_lane + internal_count * 2 + 1);
+    }
+    if !horizontal {
+        frame_cross = frame_cross.max(
+            graph
+                .subgraphs
+                .iter()
+                .map(|group| group.label.width() + 4)
+                .max()
+                .unwrap_or(0),
+        );
+    }
+    let external_lane = if grouped { frame_cross + 2 } else { first_lane };
+    let mut next_internal = 0;
+    let mut next_external = 0;
+    let lanes = internal
+        .iter()
+        .map(|&internal| {
+            if internal {
+                let lane = first_lane + next_internal * 2;
+                next_internal += 1;
+                lane
+            } else {
+                let lane = external_lane + next_external * 2;
+                next_external += 1;
+                lane
+            }
+        })
+        .collect::<Vec<_>>();
+    let across = lanes
+        .iter()
+        .max()
+        .map_or(inset + box_cross, |lane| lane + 1)
+        .max(if grouped { frame_cross } else { 0 });
     let (width, height) = if horizontal {
         (along - 2, across)
     } else {
@@ -106,6 +184,30 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
         cells: vec![vec![Cell::edge(' '); width]; height],
         horizontal,
     };
+    for (group, &(start, end)) in frames.iter().enumerate() {
+        for x in 1..frame_cross - 1 {
+            canvas.set(x, start, Cell::node('─'));
+            canvas.set(x, end, Cell::node('─'));
+        }
+        for y in start + 1..end {
+            canvas.set(/*across*/ 0, y, Cell::node('│'));
+            canvas.set(frame_cross - 1, y, Cell::node('│'));
+        }
+        for (x, y, ch) in [
+            (0, start, '┌'),
+            (frame_cross - 1, start, '┐'),
+            (0, end, '└'),
+            (frame_cross - 1, end, '┘'),
+        ] {
+            canvas.set(x, y, Cell::node(ch));
+        }
+        let (x, y) = if horizontal {
+            (start + 2, 0)
+        } else {
+            (2, start)
+        };
+        put_text(&mut canvas.cells[y], x, &graph.subgraphs[group].label)?;
+    }
     for (i, lines) in labels.iter().enumerate() {
         let start = starts[i];
         let end = start + sizes[i] - 1;
@@ -113,23 +215,23 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
             Shape::Stadium => ['╭', '╮', '╰', '╯'],
             Shape::Rectangle | Shape::Decision => ['┌', '┐', '└', '┘'],
         };
-        canvas.set(/*across*/ 0, start, Cell::node(top_left));
-        canvas.set(box_cross - 1, start, Cell::node(top_right));
-        canvas.set(/*across*/ 0, end, Cell::node(bottom_left));
-        canvas.set(box_cross - 1, end, Cell::node(bottom_right));
+        canvas.set(inset, start, Cell::node(top_left));
+        canvas.set(inset + box_cross - 1, start, Cell::node(top_right));
+        canvas.set(inset, end, Cell::node(bottom_left));
+        canvas.set(inset + box_cross - 1, end, Cell::node(bottom_right));
         for x in 1..box_cross - 1 {
-            canvas.set(x, start, Cell::node('─'));
-            canvas.set(x, end, Cell::node('─'));
+            canvas.set(inset + x, start, Cell::node('─'));
+            canvas.set(inset + x, end, Cell::node('─'));
         }
         for y in start + 1..end {
-            canvas.set(/*across*/ 0, y, Cell::node('│'));
-            canvas.set(box_cross - 1, y, Cell::node('│'));
+            canvas.set(inset, y, Cell::node('│'));
+            canvas.set(inset + box_cross - 1, y, Cell::node('│'));
         }
         for (j, line) in lines.iter().enumerate() {
             let (x, y) = if horizontal {
-                (start + 2, j + 1)
+                (start + 2, inset + j + 1)
             } else {
-                (2, start + j + 1)
+                (inset + 2, start + j + 1)
             };
             put_text(&mut canvas.cells[y], x, line)?;
         }
@@ -154,19 +256,20 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
     for (i, edge) in graph.edges.iter().enumerate() {
         let (source, target) = endpoints[i];
         for y in source.min(target) + 1..source.max(target) {
-            canvas.set(
-                first_lane + 2 * i,
-                y,
-                Cell::edge(if edge.dashed { '┆' } else { '│' }),
-            );
+            canvas.set(lanes[i], y, Cell::edge(if edge.dashed { '┆' } else { '│' }));
         }
     }
     for (i, edge) in graph.edges.iter().enumerate() {
         let (source, target) = endpoints[i];
-        let lane = first_lane + 2 * i;
+        let lane = lanes[i];
         for y in [source, target] {
-            for x in box_cross..lane {
-                let ch = if matches!(canvas.get(x, y), '│' | '┆') {
+            for x in inset + box_cross..lane {
+                let ch = if grouped
+                    && x == frame_cross - 1
+                    && membership[if y == source { edge.from } else { edge.to }].is_some()
+                {
+                    '┼'
+                } else if matches!(canvas.get(x, y), '│' | '┆') {
                     '╪'
                 } else if edge.dashed {
                     '┄'
@@ -176,10 +279,10 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
                 canvas.set(x, y, Cell::edge(ch));
             }
         }
-        canvas.set(box_cross - 1, source, Cell::node('├'));
-        canvas.set(box_cross - 1, target, Cell::node('├'));
-        canvas.set(box_cross, source, Cell::edge(edge.source_tip));
-        canvas.set(box_cross, target, Cell::edge(edge.target_tip));
+        canvas.set(inset + box_cross - 1, source, Cell::node('├'));
+        canvas.set(inset + box_cross - 1, target, Cell::node('├'));
+        canvas.set(inset + box_cross, source, Cell::edge(edge.source_tip));
+        canvas.set(inset + box_cross, target, Cell::edge(edge.target_tip));
         canvas.set(
             lane,
             source,
@@ -192,9 +295,9 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
         );
         for (port, label) in [(source, &edge.label), (target, &edge.target_label)] {
             let (x, y) = if horizontal {
-                (port + 1, box_cross + 1)
+                (port + 1, inset + box_cross + 1)
             } else {
-                (box_cross + 2, port)
+                (inset + box_cross + 2, port)
             };
             put_text(&mut canvas.cells[y], x, label)?;
         }

@@ -21,6 +21,7 @@ fn mermaid_fences_use_native_renderer_for_every_family() {
     for source in [
         "%% heading\nflowchart TD; A --> B",
         "graph LR; A --> B",
+        "flowchart TB; subgraph Old[Old approach]; A --> B; end; subgraph New[New approach]; C --> D; end; B --> C",
         "flowchart; A -- send --> B & C; B <-.-> C",
         "sequenceDiagram; A->>B: request; B-->>A: response",
         "stateDiagram-v2; [*] --> Active; Active --> [*]",

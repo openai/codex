@@ -141,11 +141,19 @@ impl Edge {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct Subgraph {
+    id: String,
+    label: String,
+    nodes: Vec<usize>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Graph {
     direction: Direction,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
+    subgraphs: Vec<Subgraph>,
 }
 
 impl Graph {
