@@ -2869,6 +2869,7 @@ mod tests {
         push_list_threads_query(
             &mut builder,
             ThreadFilterOptions {
+                included_thread_ids: None,
                 archived_only: false,
                 allowed_sources: &allowed_sources,
                 model_providers: Some(&model_providers),
