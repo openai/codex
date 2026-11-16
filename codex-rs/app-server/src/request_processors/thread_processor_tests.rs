@@ -1199,6 +1199,199 @@ mod thread_processor_behavior_tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn late_turn_completion_keeps_the_next_command_approval_answerable() -> Result<()> {
+        use crate::request_processors::thread_lifecycle::ListenerTaskContext;
+        use crate::request_processors::thread_lifecycle::ensure_conversation_listener;
+        use codex_app_server_protocol::ThreadActiveFlag;
+        use codex_extension_api::ExtensionFuture;
+        use codex_extension_api::ExtensionRegistryBuilder;
+        use codex_extension_api::TurnLifecycleContributor;
+        use codex_extension_api::TurnStopInput;
+        use core_test_support::responses;
+        use core_test_support::test_codex::test_codex;
+
+        #[derive(Default)]
+        struct StopGate {
+            entered: CancellationToken,
+            release: CancellationToken,
+        }
+
+        impl TurnLifecycleContributor for StopGate {
+            fn on_turn_stop<'a>(&'a self, _: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+                Box::pin(async {
+                    if !self.entered.is_cancelled() {
+                        self.entered.cancel();
+                        self.release.cancelled().await;
+                    }
+                })
+            }
+        }
+
+        let gate = Arc::new(StopGate::default());
+        let _release_on_drop = gate.release.clone().drop_guard();
+        let mut extensions = ExtensionRegistryBuilder::new();
+        extensions.turn_lifecycle_contributor(gate.clone());
+        let server = responses::start_mock_server().await;
+        let model = responses::mount_sse_sequence(
+            &server,
+            vec![
+                responses::sse_completed("first"),
+                responses::sse(vec![
+                    responses::ev_exec_command_call_with_args(
+                        "command",
+                        &json!({
+                            "cmd": "echo approval-delivered",
+                            "sandbox_permissions": "require_escalated",
+                            "justification": "test approval"
+                        }),
+                    ),
+                    responses::ev_completed("command-request"),
+                ]),
+                responses::sse_completed("second"),
+            ],
+        )
+        .await;
+        let test = test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_config(|config| {
+                config.permissions.approval_policy =
+                    codex_config::Constrained::allow_any(AskForApproval::OnRequest);
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::workspace_write())
+                    .expect("test allows workspace-write");
+                config.approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::User;
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        let thread_id = test.session_configured.thread_id;
+        let connection_id = ConnectionId(7);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(crate::CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let thread_state_manager = ThreadStateManager::new();
+        thread_state_manager
+            .connection_initialized(connection_id, ConnectionCapabilities::default())
+            .await;
+        let skills_watcher = SkillsWatcher::new(
+            test.thread_manager.skills_service(),
+            &test.config.codex_home,
+            outgoing.clone(),
+        );
+        let thread_watch_manager = ThreadWatchManager::new();
+        let thread_status = thread_watch_manager.subscribe(thread_id).await;
+        ensure_conversation_listener(
+            ListenerTaskContext {
+                thread_manager: test.thread_manager.clone(),
+                thread_state_manager,
+                outgoing: outgoing.clone(),
+                pending_thread_unloads: Default::default(),
+                thread_watch_manager,
+                codex_home: test.config.codex_home.to_path_buf(),
+                skills_watcher: skills_watcher.clone(),
+                turn_cost_worker: None,
+            },
+            thread_id,
+            connection_id,
+            /*raw_events_enabled*/ false,
+        )
+        .await
+        .expect("listener should attach to the test thread");
+
+        let start = async |text: &str| -> Result<String> {
+            let TurnInputSubmission::Started { turn_id, .. } = test
+                .codex
+                .start_or_steer_turn(TurnInputRequest::user_input(vec![CoreInputItem::Text {
+                    text: text.to_owned(),
+                    text_elements: vec![],
+                }]))
+                .await?
+            else {
+                anyhow::bail!("expected a new turn")
+            };
+            Ok(turn_id)
+        };
+        let first = start("first").await?;
+        tokio::time::timeout(std::time::Duration::from_secs(20), gate.entered.cancelled())
+            .await
+            .expect("A must reach its stop hook");
+        let second = start("second").await?;
+        let mut next_message = async |stage: &str| loop {
+            if let OutgoingEnvelope::ToConnection { message, .. } =
+                tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv())
+                    .await
+                    .expect(stage)
+                    .expect("listener closed")
+            {
+                break message;
+            }
+        };
+        let approval_id = loop {
+            match next_message("waiting for B to request approval").await {
+                OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    request_id,
+                    params,
+                }) => {
+                    assert_eq!(params.turn_id, second);
+                    break request_id;
+                }
+                OutgoingMessage::AppServerNotification(envelope)
+                    if matches!(envelope.notification, ServerNotification::TurnCompleted(_)) =>
+                {
+                    anyhow::bail!("turn completed before B requested approval");
+                }
+                _ => {}
+            }
+        };
+
+        gate.release.cancel();
+        let mut wait_for_completion = async |expected: &str| {
+            loop {
+                if let OutgoingMessage::AppServerNotification(envelope) =
+                    next_message(expected).await
+                    && let ServerNotification::TurnCompleted(completed) = envelope.notification
+                {
+                    assert_eq!(completed.turn.id, expected);
+                    break;
+                }
+            }
+        };
+        wait_for_completion(&first).await;
+        assert_eq!(
+            *thread_status.borrow(),
+            ThreadStatus::Active {
+                active_flags: vec![ThreadActiveFlag::WaitingOnApproval],
+            }
+        );
+        assert!(
+            outgoing
+                .pending_requests_for_thread(thread_id)
+                .await
+                .iter()
+                .any(|request| request.id() == &approval_id),
+            "A's completion removed B's approval"
+        );
+        outgoing
+            .notify_client_response(connection_id, approval_id, json!({"decision": "accept"}))
+            .await;
+        wait_for_completion(&second).await;
+        let output = model
+            .function_call_output_text("command")
+            .expect("command output");
+        assert!(
+            output
+                .lines()
+                .any(|line| line.trim() == "approval-delivered"),
+            "{output}"
+        );
+        test.codex.shutdown_and_wait().await?;
+        skills_watcher.shutdown();
+        Ok(())
+    }
+
     #[test]
     fn summary_from_state_db_metadata_preserves_agent_nickname() -> Result<()> {
         let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;

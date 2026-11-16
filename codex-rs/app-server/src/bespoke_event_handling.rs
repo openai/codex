@@ -158,10 +158,20 @@ pub(crate) async fn apply_bespoke_event_handling(
         id: event_turn_id,
         msg,
     } = event;
+    // A late terminal event must preserve the newer turn's requests and watch status.
+    let finishes_latest_turn = matches!(&msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+        && thread_state
+            .lock()
+            .await
+            .last_started_turn_id
+            .as_deref()
+            .is_none_or(|latest| latest == event_turn_id);
+    if finishes_latest_turn {
+        outgoing.abort_pending_server_requests().await;
+    }
     let approval_starts_command = msg.command_approval_start().is_some();
     match msg {
         EventMsg::TurnStarted(payload) => {
-            // While not technically necessary as it was already done on TurnComplete, be extra cautios and abort any pending server requests.
             outgoing.abort_pending_server_requests().await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
@@ -190,13 +200,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TurnComplete(turn_complete_event) => {
-            // All per-thread requests are bound to a turn, so abort them.
-            outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
-            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
-            thread_watch_manager
-                .note_turn_completed(&conversation_id.to_string(), turn_failed)
-                .await;
+            if finishes_latest_turn {
+                let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
+                thread_watch_manager
+                    .note_turn_completed(&conversation_id.to_string(), turn_failed)
+                    .await;
+            }
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,
@@ -1277,13 +1287,13 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
-            // All per-thread requests are bound to a turn, so abort them.
-            outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
 
-            thread_watch_manager
-                .note_turn_interrupted(&conversation_id.to_string())
-                .await;
+            if finishes_latest_turn {
+                thread_watch_manager
+                    .note_turn_interrupted(&conversation_id.to_string())
+                    .await;
+            }
             handle_turn_interrupted(
                 conversation_id,
                 event_turn_id,

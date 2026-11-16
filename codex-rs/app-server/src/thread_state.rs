@@ -128,6 +128,8 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) network_approvals: HashMap<String, PendingNetworkApproval>,
     pub(crate) turn_summary: TurnSummary,
+    /// A terminal event can arrive after the listener has already started the next turn.
+    pub(crate) last_started_turn_id: Option<String>,
     pub(crate) last_terminal_turn_id: Option<String>,
     /// Lets an internal runtime replacement wait until the old listener has processed Core's
     /// `ShutdownComplete` event before that listener is superseded.
@@ -198,6 +200,7 @@ impl ThreadState {
         self.shutdown_drain = None;
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.last_started_turn_id = None;
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
     }
@@ -235,6 +238,7 @@ impl ThreadState {
 
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
+            self.last_started_turn_id = Some(event_turn_id.to_owned());
             self.turn_summary = TurnSummary {
                 started_at: payload.started_at,
                 ..Default::default()
