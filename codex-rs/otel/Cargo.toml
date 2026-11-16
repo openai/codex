@@ -39,6 +39,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "reqwest-rustls",
     "tls",
     "tls-roots",
+    "zstd-http",
 ]}
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
