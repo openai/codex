@@ -4860,6 +4860,25 @@
       },
       "type": "object"
     },
+    "RolloutTraceToml": {
+      "additionalProperties": false,
+      "description": "Storage budgets for one native rollout trace, shared by the root and its children.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes for the manifest, event log, and compressed payload shards. Defaults to 256 MiB.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_payload_bytes": {
+          "description": "Maximum uncompressed bytes retained per new body or separated value. Defaults to 64 MiB.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RuntimeAgentInstancesConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -9130,6 +9149,14 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "rollout_trace": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RolloutTraceToml"
+        }
+      ],
+      "description": "Capture limits for local rollout traces when recording is enabled."
     },
     "sandbox_mode": {
       "allOf": [

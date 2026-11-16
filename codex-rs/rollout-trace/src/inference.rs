@@ -487,7 +487,9 @@ mod tests {
         assert_eq!(inference.codex_turn_id, "turn-1");
         assert_eq!(inference.execution.status, ExecutionStatus::Completed);
         assert_eq!(inference.upstream_request_id, Some("req-1".to_string()));
-        assert_eq!(rollout.raw_payloads.len(), 3);
+        let prepared = &rollout.raw_payloads[&inference.prepared_prompt_payload_id];
+        assert_eq!(prepared.parts.len(), 1);
+        assert_eq!(rollout.raw_payloads.len(), 4);
 
         Ok(())
     }

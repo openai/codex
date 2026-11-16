@@ -15,11 +15,13 @@ use crate::model::ToolCallKind;
 use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventPayload;
+use crate::reducer::test_support::ROOT_THREAD_ID;
 use crate::reducer::test_support::append_inference_completion;
 use crate::reducer::test_support::append_inference_start;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::expect_replay_error;
 use crate::reducer::test_support::message;
+use crate::reducer::test_support::start_thread;
 use crate::reducer::test_support::start_turn;
 use crate::reducer::test_support::trace_context;
 use crate::replay_bundle;
@@ -1373,17 +1375,31 @@ fn context_compaction_boundary_repeats_prefix_and_reuses_replacement_items() -> 
 
 #[test]
 fn late_tool_start_links_model_call_and_output_versions_in_order() -> anyhow::Result<()> {
-    let temp = TempDir::new()?;
-    let writer = create_started_writer(&temp)?;
+    late_tool_start_with_image_limit(/*body_limit*/ 2048)
+}
+
+#[test]
+fn missing_image_preserves_message_order_and_late_tool_links() -> anyhow::Result<()> {
+    late_tool_start_with_image_limit(/*body_limit*/ 512)
+}
+
+fn late_tool_start_with_image_limit(body_limit: usize) -> anyhow::Result<()> {
+    let (temp, writer) =
+        crate::writer::capture_tests::limited_trace(body_limit, /*bundle*/ 64 << 10)?;
+    start_thread(&writer, ROOT_THREAD_ID, "/root")?;
     start_turn(&writer, "turn-1")?;
 
-    let request = writer.write_json_payload(
-        RawPayloadKind::InferenceRequest,
-        &json!({
-            // Cross the 9/10 item-ID boundary so lexical order differs from history order.
-            "input": vec![message("user", "run tests"); 7]
-        }),
-    )?;
+    // Cross the 9/10 item-ID boundary; one photo may be missing, but its message
+    // and every subsequent request, tool and output retain their original positions.
+    let mut input = vec![message("user", "run tests"); 6];
+    input.push(
+        json!({"type":"message", "id":"photo", "role":"user", "content":[
+        {"type":"input_text","text":"before"},
+        {"type":"input_image","image_url":format!("data:image/png;base64,{}", "x".repeat(1024))},
+        {"type":"input_text","text":"after"}]}),
+    );
+    let request =
+        writer.write_json_payload(RawPayloadKind::InferenceRequest, &json!({"input":input}))?;
     append_inference_start(&writer, "inference-1", "turn-1", request)?;
 
     let response = writer.write_json_payload(
@@ -1456,10 +1472,30 @@ fn late_tool_start_links_model_call_and_output_versions_in_order() -> anyhow::Re
         },
     )?;
 
+    drop(writer);
     let rollout = replay_bundle(temp.path())?;
     let first_inference = &rollout.inference_calls["inference-1"];
     let second_inference = &rollout.inference_calls["inference-2"];
     let tool_call = &rollout.tool_calls["tool-1"];
+    let photo = &rollout.conversation_items[&first_inference.request_item_ids[6]];
+    assert_eq!(photo.responses_item_id.as_deref(), Some("photo"));
+    let [
+        ConversationPart::Text { text: before },
+        ConversationPart::PayloadRef { raw_payload_id, .. },
+        ConversationPart::Text { text: after },
+    ] = photo.body.parts.as_slice()
+    else {
+        panic!("expected an image between its two text parts");
+    };
+    assert_eq!((before.as_str(), after.as_str()), ("before", "after"));
+    assert_eq!(
+        rollout.raw_payloads[raw_payload_id].is_complete(),
+        body_limit >= 1024
+    );
+    assert_eq!(
+        second_inference.request_item_ids[..7],
+        first_inference.request_item_ids
+    );
     let output_item_ids = &second_inference.request_item_ids[8..];
 
     assert_eq!(

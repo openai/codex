@@ -34,7 +34,9 @@ async fn enabled_recording_cannot_silently_fail_to_start() -> Result<()> {
     let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
     let home = TempDir::new()?;
     let server = create_mock_responses_server_sequence(Vec::new()).await;
-    MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_extra_config("[rollout_trace]\nmax_payload_bytes = 64")
+        .write(home.path())?;
     let trace_root = home.path().join("traces");
     std::fs::write(&trace_root, "file")?;
     let mut app = TestAppServer::builder()
@@ -61,16 +63,39 @@ async fn enabled_recording_cannot_silently_fail_to_start() -> Result<()> {
     std::fs::remove_file(&trace_root)?;
     std::fs::create_dir(&trace_root)?;
     app.start_thread(ThreadStartParams::default()).await?;
-    assert!(app.shutdown_gracefully().await?.success());
     let mut bundles = std::fs::read_dir(trace_root)?;
     let bundle = bundles.next().unwrap()?.path();
     assert!(bundles.next().is_none());
-    assert_eq!(
-        reduce_with_recording_binary(&codex, home.path(), &bundle)
-            .await?
-            .recording_status,
-        codex_rollout_trace::RecordingStatus::Complete
+
+    // A separate root with a budget too small for its manifest must fail at startup.
+    let request_id = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            config: Some([("rollout_trace".into(), json!({"max_bytes": 1}))].into()),
+            ..Default::default()
+        })
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert!(
+        error
+            .error
+            .message
+            .contains("manifest exceeds trace byte limit")
     );
+    assert!(app.shutdown_gracefully().await?.success());
+    let trace = reduce_with_recording_binary(&codex, home.path(), &bundle).await?;
+    assert_eq!(
+        trace.recording_status,
+        codex_rollout_trace::RecordingStatus::ClosedWithPartialPayloads
+    );
+    assert!(trace.raw_payloads.values().any(|p| matches!(
+        p.capture,
+        codex_rollout_trace::PayloadCapture::Truncated {
+            retained_bytes: 64,
+            ..
+        }
+    )));
     Ok(())
 }
 

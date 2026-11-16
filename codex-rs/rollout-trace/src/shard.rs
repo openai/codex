@@ -1,4 +1,4 @@
-//! Whole JSON bodies in ordered Zstandard shards. Each record is a little-endian
+//! Retained payload bytes in ordered Zstandard shards. Each record is a little-endian
 //! u16 ID length and u64 body length, followed by the UTF-8 ID and the body bytes.
 //! A flush publishes one record without resetting the compression window.
 
@@ -24,8 +24,9 @@ use crate::payload::PayloadCapture;
 use crate::payload::RawPayloadId;
 use crate::payload::RawPayloadRef;
 
-const TARGET_BYTES: usize = 32 * 1024 * 1024;
-const WINDOW_LOG: u32 = 23; // 8 MiB of match history across payloads.
+const WINDOW_LOG: u32 = 23;
+// One match window per shard lets a 16 MiB hosted export admit whole media shards.
+const TARGET_BYTES: usize = 1 << WINDOW_LOG;
 const HEADER_BYTES: usize = 10;
 
 fn shard_path(directory: &Path, number: u64) -> PathBuf {
@@ -37,6 +38,8 @@ pub(crate) struct ShardWriter {
     active: Option<Encoder<'static, BufWriter<File>>>,
     number: u64,
     bytes: usize,
+    closed_bytes: u64,
+    active_bytes: u64,
 }
 
 impl ShardWriter {
@@ -46,12 +49,49 @@ impl ShardWriter {
             active: None,
             number: 0,
             bytes: 0,
+            closed_bytes: 0,
+            active_bytes: 0,
         }
+    }
+
+    /// Reserve the final empty block and checksum while a flushed frame is still live.
+    pub(crate) fn charged_bytes(&self) -> u64 {
+        self.closed_bytes + self.active_bytes + if self.active.is_some() { 7 } else { 0 }
+    }
+
+    /// Near the budget boundary, trial-compress one independent frame. A body that
+    /// does not fit then leaves both the published prefix and future small writes intact.
+    pub(crate) fn append_with_limit(
+        &mut self,
+        id: &str,
+        body: &[u8],
+        limit: u64,
+    ) -> Result<Option<u64>> {
+        let size = HEADER_BYTES + id.len() + body.len();
+        let bound = zstd::zstd_safe::compress_bound(size) as u64 + 128;
+        if self.charged_bytes().saturating_add(bound) <= limit {
+            return self.append(id, body).map(Some);
+        }
+        self.finish()?;
+        if self.closed_bytes >= limit {
+            return Ok(None);
+        }
+        let mut encoder = new_encoder(Vec::new())?;
+        write_record(&mut encoder, id, body)?;
+        let frame = encoder.finish()?;
+        if frame.len() as u64 > limit - self.closed_bytes {
+            return Ok(None);
+        }
+        let number = self.number + 1;
+        let mut file = File::create_new(shard_path(&self.directory, number))?;
+        file.write_all(&frame)?;
+        self.closed_bytes += frame.len() as u64;
+        self.number = number;
+        Ok(Some(number))
     }
 
     /// Returns the shard containing this whole record once it is readable.
     pub(crate) fn append(&mut self, id: &str, body: &[u8]) -> Result<u64> {
-        let id_len = u16::try_from(id.len())?;
         let size = HEADER_BYTES + id.len() + body.len();
         if self.bytes.saturating_add(size) > TARGET_BYTES {
             self.finish()?;
@@ -64,17 +104,12 @@ impl ShardWriter {
                 let path = shard_path(&self.directory, self.number);
                 let file = File::create_new(&path)
                     .with_context(|| format!("create shard {}", path.display()))?;
-                let mut encoder = Encoder::new(BufWriter::new(file), 3)?;
-                encoder.window_log(WINDOW_LOG)?;
-                encoder.include_checksum(true)?;
-                self.active.insert(encoder)
+                self.active.insert(new_encoder(BufWriter::new(file))?)
             }
         };
-        encoder.write_all(&id_len.to_le_bytes())?;
-        encoder.write_all(&(body.len() as u64).to_le_bytes())?;
-        encoder.write_all(id.as_bytes())?;
-        encoder.write_all(body)?;
+        write_record(encoder, id, body)?;
         encoder.flush()?;
+        self.active_bytes = encoder.get_ref().get_ref().metadata()?.len();
         self.bytes += size;
         Ok(self.number)
     }
@@ -82,10 +117,28 @@ impl ShardWriter {
     /// Flushes the frame footer before the event log can publish RecordingCompleted.
     pub(crate) fn finish(&mut self) -> Result<()> {
         if let Some(active) = self.active.take() {
-            active.finish()?.flush()?;
+            let mut file = active.finish()?;
+            file.flush()?;
+            self.closed_bytes += file.get_ref().metadata()?.len();
+            self.active_bytes = 0;
         }
         Ok(())
     }
+}
+
+fn new_encoder<W: Write>(sink: W) -> Result<Encoder<'static, W>> {
+    let mut encoder = Encoder::new(sink, 3)?;
+    encoder.window_log(WINDOW_LOG)?;
+    encoder.include_checksum(true)?;
+    Ok(encoder)
+}
+
+fn write_record(sink: &mut impl Write, id: &str, body: &[u8]) -> Result<()> {
+    sink.write_all(&u16::try_from(id.len())?.to_le_bytes())?;
+    sink.write_all(&(body.len() as u64).to_le_bytes())?;
+    sink.write_all(id.as_bytes())?;
+    sink.write_all(body)?;
+    Ok(())
 }
 
 struct DecodedShard {

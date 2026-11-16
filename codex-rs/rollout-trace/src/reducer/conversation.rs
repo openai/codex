@@ -74,7 +74,10 @@ impl TraceReducer {
         codex_turn_id: &str,
         request_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
-        let payload = self.payload_reader.read_json(request_payload)?;
+        if !request_payload.capture.is_complete() {
+            return Ok(Vec::new());
+        }
+        let payload = self.payload_reader.observed_json(request_payload)?;
         let Some(input) = payload.get("input") else {
             bail!(
                 "inference request payload {} did not contain input",
@@ -117,9 +120,12 @@ impl TraceReducer {
                 .map(|inference| {
                     let mut ids = inference.request_item_ids.clone();
                     ids.extend(inference.response_item_ids.clone());
-                    ids
+                    let incomplete = std::iter::once(&inference.raw_request_payload_id)
+                        .chain(inference.raw_response_payload_id.as_ref())
+                        .any(|id| !self.rollout.raw_payloads[id].is_complete());
+                    (ids, incomplete)
                 });
-            let Some(mut item_ids) = previous_items else {
+            let Some((mut item_ids, incomplete)) = previous_items else {
                 bail!(
                     "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
                 );
@@ -133,7 +139,9 @@ impl TraceReducer {
                     produced_by: Vec::new(),
                     start_index: item_ids.len(),
                     mode: ReconcileMode::AppendOnly,
-                    snapshot_override: None,
+                    // After a capture gap, the number of known prefix items is not
+                    // a position in the thread's last fully observed snapshot.
+                    snapshot_override: incomplete.then_some(item_ids.as_slice()),
                 },
             )?;
             item_ids.extend(delta_item_ids);
@@ -170,7 +178,10 @@ impl TraceReducer {
         inference_call_id: &InferenceCallId,
         response_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
-        let payload = self.payload_reader.read_json(response_payload)?;
+        if !response_payload.capture.is_complete() {
+            return Ok(Vec::new());
+        }
+        let payload = self.payload_reader.observed_json(response_payload)?;
         let Some(output_items) = payload.get("output_items").and_then(Value::as_array) else {
             bail!(
                 "inference response payload {} did not contain output_items",
@@ -346,14 +357,18 @@ impl TraceReducer {
         compaction_id: &CompactionId,
         checkpoint_payload: &RawPayloadRef,
     ) -> Result<ReducedCompactionCheckpoint> {
-        let payload = self.payload_reader.read_json(checkpoint_payload)?;
-        let input_history = required_array(&payload, "input_history", checkpoint_payload)?;
-        let replacement_history =
-            required_array(&payload, "replacement_history", checkpoint_payload)?;
-
-        let input_items = normalize::normalize_model_items(input_history, checkpoint_payload)?;
-        let replacement_items =
-            normalize::normalize_model_items(replacement_history, checkpoint_payload)?;
+        let (input_items, replacement_items) = if checkpoint_payload.capture.is_complete() {
+            let payload = self.payload_reader.observed_json(checkpoint_payload)?;
+            let input = required_array(&payload, "input_history", checkpoint_payload)?;
+            let replacement = required_array(&payload, "replacement_history", checkpoint_payload)?;
+            (
+                normalize::normalize_model_items(input, checkpoint_payload)?,
+                normalize::normalize_model_items(replacement, checkpoint_payload)?,
+            )
+        } else {
+            // The install event still establishes a compaction boundary.
+            (Vec::new(), Vec::new())
+        };
         let input_candidates = self
             .thread_conversation_snapshots
             .get(thread_id)

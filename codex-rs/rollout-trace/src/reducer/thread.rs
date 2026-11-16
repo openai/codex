@@ -42,6 +42,7 @@ impl TraceReducer {
 
         let metadata = metadata_payload
             .as_ref()
+            .filter(|p| p.capture.is_complete())
             .map(|payload| self.thread_started_metadata(payload))
             .transpose()?;
         let spawn = metadata
@@ -79,6 +80,12 @@ impl TraceReducer {
                 task_name,
                 agent_role,
             }
+        } else if thread_id != self.rollout.root_thread_id
+            && metadata_payload
+                .as_ref()
+                .is_some_and(|p| !p.capture.is_complete())
+        {
+            AgentOrigin::Unknown
         } else {
             AgentOrigin::Root
         };

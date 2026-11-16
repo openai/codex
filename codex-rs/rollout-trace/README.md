@@ -110,9 +110,8 @@ writer. Disabled contexts accept the same calls and record nothing.
 
 When tracing is enabled, a thread can start or resume only if its recorder
 initializes successfully. A later write failure stops recording. Partial
-bundles remain available for replay. The reducer sets `recording_status` to `complete` in
-`state.json` when it reads the closing record written by the last trace handle,
-including when the recorded task was interrupted.
+bundles remain available for replay. The reduced `recording_status` is `unclosed` until the closing record arrives. It then becomes
+`complete` or `closed_with_partial_payloads` according to the referenced captures.
 
 ## Bundle Layout
 
@@ -124,12 +123,26 @@ A trace bundle contains:
   events, terminal output, compaction data, and protocol snapshots.
 - `state.json`: reduced trace for consumers, written by `codex debug trace-reduce`.
 
-Schema v3 stores whole JSON bodies in numbered Zstandard shards. Every reference in
-`trace.jsonl` carries the payload ID and shard number. The reducer collects these
-references in `state.json` under `raw_payloads`, so the same index serves every
-payload kind. `PayloadReader::read` resolves a reference to JSON bytes and caches
-the two most recently read shards. An oversized shard occupies the cache alone.
-Reduce a bundle with the binary that recorded it.
+Schema v3 indexes numbered Zstandard shards in `state.json` under `raw_payloads`.
+Prepared prompts share exact input items. Inline images have independent references and shards,
+so losing an attachment preserves its position, sibling text and tool links. A composite record
+stores the literal JSON fragments around its ordered `parts`. Interleaving both reconstructs the
+original bytes, including whitespace and escapes. Hashes cover each entire value before truncation.
+`PayloadReader::read` returns the original bytes for complete bodies. A truncated body
+records its original and retained lengths and can be inspected with `read_prefix`.
+
+Configure the capture limits in `config.toml`. Both values are in bytes.
+
+```toml
+[rollout_trace]
+max_payload_bytes = 67108864  # Default: 64 MiB per new body or separated value
+max_bytes = 268435456         # Default: 256 MiB per bundle
+```
+
+The bundle budget covers the manifest, event log, layouts, and compressed payloads.
+Space is reserved for later events carrying explicit omissions.
+If even an event cannot fit, the log ends at the preceding complete event.
+The optional reduced-state cache is generated separately. Reduce a bundle with its recording binary.
 
 For an inference call, `raw_request_payload_id` resolves to the outgoing HTTP
 body or WebSocket message, including its `previous_response_id` and incremental
@@ -150,9 +163,9 @@ and write the closing marker. A recording failure prevents the marker.
 
 Each shard is one Zstandard frame (level 3, 8 MiB window, checksum enabled).
 Each record contains a little-endian 16-bit ID length, a little-endian 64-bit
-body length, the UTF-8 ID, then the JSON bytes. The writer flushes a record
+retained body length, the UTF-8 ID, then the retained bytes. The writer flushes a record
 before publishing its reference, and rotates before the next record would
-exceed 32 MiB uncompressed. An oversized record occupies one shard. The final
+exceed 8 MiB uncompressed. An oversized record occupies one shard. The final
 frame is sealed before the writer publishes `RecordingCompleted`. A live bundle
 can be reduced through its published records with the last frame still open.
 

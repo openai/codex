@@ -352,7 +352,10 @@ impl TraceReducer {
                     .thread_id
                     .context("history acceptance has no thread")?;
                 self.thread_mut(&thread_id)?;
-                if let Some(payload) = agent_message_payload {
+                // Keep the acceptance edge even when a capture limit hid the receipt body.
+                if let Some(payload) = agent_message_payload
+                    && payload.capture.is_complete()
+                {
                     self.record_agent_receipt(
                         &thread_id,
                         event.codex_turn_id,

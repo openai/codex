@@ -18,7 +18,7 @@ codex-code-mode = { workspace = true }
 codex-protocol = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 zstd = { workspace = true }

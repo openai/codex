@@ -50,7 +50,8 @@ impl TraceReducer {
             return Ok(None);
         }
         let operation_kind = TerminalOperationKind::WriteStdin;
-        let Some(invocation_payload) = invocation_payload else {
+        let Some(invocation_payload) = invocation_payload.filter(|p| p.capture.is_complete())
+        else {
             // Payload writes are best-effort in the live recorder. If the
             // canonical invocation is missing, keep the ToolCall but avoid
             // fabricating a lossy terminal row.
@@ -92,6 +93,9 @@ impl TraceReducer {
             return Ok(None);
         };
 
+        if !runtime_payload.capture.is_complete() {
+            return Ok(None);
+        }
         let payload = self.payload_reader.read_json(runtime_payload)?;
         let payload: ExecCommandBeginPayload =
             serde_json::from_value(payload).with_context(|| {
@@ -172,14 +176,10 @@ impl TraceReducer {
             bail!("terminal end referenced unknown operation {operation_id}");
         };
         let response = response_payload
+            .filter(|p| p.capture.is_complete())
             .map(|payload| {
                 let value = self.payload_reader.read_json(payload)?;
-                let response = parse_terminal_response_payload(
-                    value,
-                    &operation_kind,
-                    &payload.raw_payload_id,
-                )?;
-                Ok::<_, anyhow::Error>((payload.raw_payload_id.clone(), response))
+                parse_terminal_response_payload(value, &operation_kind, &payload.raw_payload_id)
             })
             .transpose()?;
 
@@ -191,8 +191,10 @@ impl TraceReducer {
             operation.execution.ended_seq = Some(seq);
             operation.execution.status = status;
 
-            if let Some((raw_payload_id, response)) = response {
-                push_unique(&mut operation.raw_payload_ids, &raw_payload_id);
+            if let Some(payload) = response_payload {
+                push_unique(&mut operation.raw_payload_ids, &payload.raw_payload_id);
+            }
+            if let Some(response) = response {
                 operation.result = Some(response.result);
                 response.process_id
             } else {

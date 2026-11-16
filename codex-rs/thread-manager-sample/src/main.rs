@@ -356,6 +356,7 @@ async fn new_config(
         log_dir: codex_home.join("log").to_path_buf(),
         codex_home,
         history: History::default(),
+        rollout_trace_limits: Default::default(),
         ephemeral: true,
         allow_persistent_dynamic_tool_updates: false,
         extra_config: None,

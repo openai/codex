@@ -161,6 +161,16 @@ pub struct FeatureToggleToml {
     pub enabled: Option<bool>,
 }
 
+/// Storage budgets for one native rollout trace, shared by the root and its children.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RolloutTraceToml {
+    /// Maximum uncompressed bytes retained per new body or separated value. Defaults to 64 MiB.
+    pub max_payload_bytes: Option<usize>,
+    /// Maximum bytes for the manifest, event log, and compressed payload shards. Defaults to 256 MiB.
+    pub max_bytes: Option<u64>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -370,6 +380,9 @@ pub struct ConfigToml {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default = "default_history")]
     pub history: Option<History>,
+
+    /// Capture limits for local rollout traces when recording is enabled.
+    pub rollout_trace: Option<RolloutTraceToml>,
 
     /// Directory where Codex stores the SQLite state DB.
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.

@@ -79,5 +79,6 @@ pub use tool_dispatch::ToolDispatchRequester;
 pub use tool_dispatch::ToolDispatchResult;
 /// No-op-capable handle for recording one resolved tool dispatch.
 pub use tool_dispatch::ToolDispatchTraceContext;
+pub use writer::TraceCaptureLimits;
 /// Append-only writer used by hot-path Codex instrumentation.
 pub use writer::TraceWriter;

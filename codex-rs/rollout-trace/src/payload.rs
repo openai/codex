@@ -93,3 +93,79 @@ pub enum RawPayloadKind {
     /// Runtime notification payload carried when a child agent reports back to its parent.
     AgentResult,
 }
+
+/// Select whole JSON values whose bytes can be stored independently. Only model-facing
+/// payloads use this layout. Other consumers can continue reading their single raw record.
+pub(crate) fn capture_parts(
+    kind: RawPayloadKind,
+    body: &[u8],
+    limit: usize,
+) -> anyhow::Result<Vec<(std::ops::Range<usize>, RawPayloadKind)>> {
+    use serde_json::value::RawValue;
+    use std::collections::BTreeMap;
+
+    if !matches!(
+        kind,
+        RawPayloadKind::PreparedPrompt
+            | RawPayloadKind::ModelItem
+            | RawPayloadKind::InferenceRequest
+            | RawPayloadKind::InferenceResponse
+            | RawPayloadKind::WarmupContext
+            | RawPayloadKind::CompactionCheckpoint
+    ) {
+        return Ok(Vec::new());
+    }
+    let text = std::str::from_utf8(body)?;
+    if !matches!(text.trim_start().as_bytes().first(), Some(b'{' | b'['))
+        || kind != RawPayloadKind::PreparedPrompt
+            && text.len() <= limit
+            && !text.contains("data:image/")
+    {
+        return Ok(Vec::new());
+    }
+    let mut pending = vec![(String::new(), serde_json::from_str::<&RawValue>(text)?)];
+    let mut ranges = Vec::new();
+    while let Some((field, raw)) = pending.pop() {
+        let value = raw.get();
+        let mut select = |value: &str, kind| {
+            let start = value.as_ptr() as usize - text.as_ptr() as usize;
+            ranges.push((start..start + value.len(), kind));
+        };
+        match value.as_bytes()[0] {
+            b'[' if (kind == RawPayloadKind::PreparedPrompt && field == "input")
+                || (value.len() > limit
+                    && matches!(
+                        field.as_str(),
+                        "input" | "output_items" | "input_history" | "replacement_history"
+                    )) =>
+            {
+                for item in serde_json::from_str::<Vec<&RawValue>>(value)? {
+                    select(item.get(), RawPayloadKind::ModelItem);
+                }
+            }
+            b'"' if (field == "image_url" && value.starts_with("\"data:image/"))
+                || (field == "text" && value.len() > limit) =>
+            {
+                select(value, RawPayloadKind::ContentValue);
+            }
+            b'{' | b'['
+                if value.len() > limit
+                    || value.contains("data:image/")
+                    || (kind == RawPayloadKind::PreparedPrompt && field.is_empty()) =>
+            {
+                if value.starts_with('{') {
+                    pending.extend(serde_json::from_str::<BTreeMap<String, &RawValue>>(value)?);
+                } else {
+                    pending.extend(
+                        serde_json::from_str::<Vec<&RawValue>>(value)?
+                            .into_iter()
+                            .map(|item| ("[]".into(), item)),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    ranges.sort_unstable_by_key(|(range, _)| range.start);
+    Ok(ranges)
+}

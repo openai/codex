@@ -142,6 +142,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::McpOAuthRefreshMode;
+use codex_rollout_trace::TraceCaptureLimits;
 use codex_sandboxing::SandboxType;
 pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1039,6 +1040,9 @@ pub struct Config {
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
+
+    /// Limits shared by all threads recording into one native rollout trace.
+    pub rollout_trace_limits: TraceCaptureLimits,
 
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
@@ -4153,6 +4157,12 @@ impl Config {
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
+        let rollout_trace = cfg.rollout_trace.unwrap_or_default();
+        let defaults = TraceCaptureLimits::default();
+        let rollout_trace_limits = TraceCaptureLimits {
+            max_payload_bytes: rollout_trace.max_payload_bytes.unwrap_or(defaults.max_payload_bytes),
+            max_bytes: rollout_trace.max_bytes.unwrap_or(defaults.max_bytes),
+        };
 
         if multi_agent_v2.max_concurrent_threads_per_session == 0 {
             return Err(std::io::Error::new(
@@ -4762,6 +4772,7 @@ impl Config {
             application_network_policy: Default::default(),
             application_auth_route_config: None,
             history,
+            rollout_trace_limits,
             ephemeral: ephemeral.unwrap_or_default(),
             allow_persistent_dynamic_tool_updates: false,
             extra_config: None,

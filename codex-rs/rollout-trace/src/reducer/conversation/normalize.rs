@@ -4,7 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_protocol::models::AgentMessageInputContent;
-use codex_protocol::models::ResponseItem;
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
@@ -40,7 +40,9 @@ pub(super) fn normalize_model_items(
 ) -> Result<Vec<NormalizedConversationItem>> {
     let mut normalized_items = Vec::new();
     for item in items {
-        if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+        if item.get("type").and_then(Value::as_str) == Some("additional_tools")
+            || unavailable_ref(item, raw_payload).is_some()
+        {
             continue;
         }
 
@@ -208,22 +210,19 @@ fn normalize_agent_message_item(
     raw_payload: &RawPayloadRef,
 ) -> Result<NormalizedConversationItem> {
     let raw_payload_id = &raw_payload.raw_payload_id;
-    let response_item =
-        serde_json::from_value::<ResponseItem>(item.clone()).with_context(|| {
-            format!("failed to parse agent_message item in payload {raw_payload_id}")
-        })?;
-    let ResponseItem::AgentMessage {
-        author,
-        recipient,
-        content,
-        ..
-    } = response_item
-    else {
-        bail!("item in payload {raw_payload_id} was not an agent_message");
-    };
-    let parts = content
-        .into_iter()
-        .map(|content| match content {
+    let routing = AgentMessageMetadata::deserialize(item).with_context(|| {
+        format!("failed to parse agent_message routing in payload {raw_payload_id}")
+    })?;
+    let mut parts = Vec::new();
+    for part in item["content"]
+        .as_array()
+        .context("expected agent_message content array")?
+    {
+        if let Some(missing) = unavailable_ref(&part["text"], raw_payload) {
+            parts.push(payload_ref_part("text", missing));
+            continue;
+        }
+        parts.push(match AgentMessageInputContent::deserialize(part)? {
             AgentMessageInputContent::InputText { text } => ConversationPart::Text { text },
             AgentMessageInputContent::EncryptedContent { encrypted_content } => {
                 ConversationPart::Encoded {
@@ -231,8 +230,8 @@ fn normalize_agent_message_item(
                     value: encrypted_content,
                 }
             }
-        })
-        .collect::<Vec<_>>();
+        });
+    }
     if parts.is_empty() {
         bail!("agent_message item in payload {raw_payload_id} contained no content");
     }
@@ -242,7 +241,7 @@ fn normalize_agent_message_item(
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Message,
-        agent_message: Some(AgentMessageMetadata { author, recipient }),
+        agent_message: Some(routing),
         body: ConversationBody { parts },
         call_id: None,
     })
@@ -359,6 +358,10 @@ fn append_reasoning_parts(
             }
         };
 
+        if let Some(missing) = unavailable_ref(&content_item["text"], raw_payload) {
+            parts.push(payload_ref_part(expected_type, missing));
+            continue;
+        }
         let Some(text) = content_item.get("text").and_then(Value::as_str) else {
             bail!(
                 "reasoning item in payload {} had {expected_type} entry without string text",
@@ -400,6 +403,14 @@ fn channel_from_phase(phase: &str) -> Option<ConversationChannel> {
     }
 }
 
+/// Only interpret recorder-produced gaps backed by a partial reference in this payload.
+fn unavailable_ref<'a>(value: &Value, root: &'a RawPayloadRef) -> Option<&'a RawPayloadRef> {
+    let marker = value.as_object().filter(|obj| obj.len() == 1)?;
+    let id = marker.get("$trace_unavailable")?.as_str()?;
+    root.references()
+        .find(|r| r.raw_payload_id == id && !r.capture.is_complete())
+}
+
 fn content_parts(
     content: Option<&Value>,
     raw_payload: &RawPayloadRef,
@@ -416,6 +427,8 @@ fn content_parts(
                     parts.push(ConversationPart::Text {
                         text: text.to_string(),
                     });
+                } else if let Some(missing) = unavailable_ref(&part["text"], raw_payload) {
+                    parts.push(payload_ref_part("text", missing));
                 }
             }
             other => {
@@ -427,7 +440,10 @@ fn content_parts(
                 serde_json::to_writer(&mut digest, &canonical)?;
                 parts.push(ConversationPart::PayloadRef {
                     label: other.unwrap_or("content").to_string(),
-                    raw_payload_id: raw_payload.raw_payload_id.clone(),
+                    raw_payload_id: unavailable_ref(&part["image_url"], raw_payload)
+                        .unwrap_or(raw_payload)
+                        .raw_payload_id
+                        .clone(),
                     content_sha256: Some(format!("{:x}", digest.finalize())),
                 });
             }

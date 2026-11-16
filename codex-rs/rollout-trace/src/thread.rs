@@ -33,6 +33,7 @@ use crate::RolloutStatus;
 use crate::ToolCallId;
 use crate::ToolDispatchInvocation;
 use crate::ToolDispatchTraceContext;
+use crate::TraceCaptureLimits;
 use crate::TraceWriter;
 use crate::protocol_event::codex_turn_trace_event;
 use crate::protocol_event::tool_runtime_trace_event;
@@ -101,11 +102,14 @@ impl ThreadTraceContext {
     }
 
     /// Starts tracing when configured; an enabled recorder must initialize successfully.
-    pub fn start_root(metadata: ThreadStartedTraceMetadata) -> anyhow::Result<Self> {
+    pub fn start_root(
+        metadata: ThreadStartedTraceMetadata,
+        limits: TraceCaptureLimits,
+    ) -> anyhow::Result<Self> {
         let Some(root) = std::env::var_os(CODEX_ROLLOUT_TRACE_ROOT_ENV) else {
             return Ok(Self::disabled());
         };
-        start_root_in_root(&PathBuf::from(root), metadata)
+        start_root_in_root(&PathBuf::from(root), metadata, limits)
     }
 
     /// Starts a root trace in a known directory.
@@ -116,7 +120,7 @@ impl ThreadTraceContext {
         root: &Path,
         metadata: ThreadStartedTraceMetadata,
     ) -> anyhow::Result<Self> {
-        start_root_in_root(root, metadata)
+        start_root_in_root(root, metadata, TraceCaptureLimits::default())
     }
 
     /// Starts one thread lifecycle inside an existing rollout bundle.
@@ -551,15 +555,17 @@ impl ThreadTraceContext {
 fn start_root_in_root(
     root: &Path,
     metadata: ThreadStartedTraceMetadata,
+    limits: TraceCaptureLimits,
 ) -> anyhow::Result<ThreadTraceContext> {
     let trace_id = Uuid::new_v4().to_string();
     let thread_id = metadata.thread_id.clone();
     let bundle_dir = root.join(format!("trace-{trace_id}-{thread_id}"));
-    let writer = TraceWriter::create(
+    let writer = TraceWriter::create_with_limits(
         &bundle_dir,
         trace_id.clone(),
         thread_id.clone(),
         thread_id.clone(),
+        limits,
     )?;
     let writer = Arc::new(writer);
 
