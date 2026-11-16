@@ -65,6 +65,7 @@ fn environment_state(
         per_environment: false,
         shell_version: None,
         current_date,
+        current_date_is_utc: false,
         timezone,
         network,
         filesystem: None,
@@ -425,11 +426,18 @@ fn shell_version_diff_clears_previously_visible_version() {
     );
 }
 
-#[test]
-fn current_date_diff_clears_once_and_recovers() {
+#[test_case::test_case(false; "local")]
+#[test_case::test_case(true; "utc")]
+fn current_date_diff_clears_once_and_recovers(current_date_is_utc: bool) {
     let available = EnvironmentsState {
         current_date: Some("2026-06-17".to_string()),
+        current_date_is_utc,
         ..Default::default()
+    };
+    let tag = if current_date_is_utc {
+        "current_date_utc"
+    } else {
+        "current_date"
     };
     let unavailable = EnvironmentsState::default();
     assert_eq!(
@@ -444,7 +452,9 @@ fn current_date_diff_clears_once_and_recovers() {
             .expect("removed current date")
             .render()
             .expect_text(),
-        "<environment_context>\n  <current_date status=\"unavailable\" />\n</environment_context>"
+        format!(
+            "<environment_context>\n  <{tag} status=\"unavailable\" />\n</environment_context>"
+        )
     );
     assert!(
         unavailable
@@ -469,6 +479,6 @@ fn current_date_diff_clears_once_and_recovers() {
             .expect("restored current date")
             .render()
             .expect_text(),
-        "<environment_context>\n  <current_date>2026-06-17</current_date>\n</environment_context>"
+        format!("<environment_context>\n  <{tag}>2026-06-17</{tag}>\n</environment_context>")
     );
 }

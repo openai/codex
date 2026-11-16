@@ -96,7 +96,7 @@ Settings:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
-      <current_date><CURRENT_DATE></current_date>
+      <current_date_utc><CURRENT_DATE></current_date_utc>
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
     </environment_context>
@@ -216,7 +216,7 @@ Settings: unavailable (items only)
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
-      <current_date><CURRENT_DATE></current_date>
+      <current_date_utc><CURRENT_DATE></current_date_utc>
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
     </environment_context>
@@ -313,7 +313,7 @@ Settings: same as window 1
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
-      <current_date><CURRENT_DATE></current_date>
+      <current_date_utc><CURRENT_DATE></current_date_utc>
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
     </environment_context>

@@ -155,7 +155,7 @@ impl Normalizer {
             Regex::new(r"(<(cwd|root|path|glob)>)([^<]*)").expect("environment path regex")
         });
         let host = HOST.get_or_init(|| {
-            Regex::new(r"(<(shell|shell_version|current_date|timezone)>)[^<]*")
+            Regex::new(r"(<(shell|shell_version|current_date|current_date_utc|timezone)>)[^<]*")
                 .expect("host context regex")
         });
         for captures in cwd.captures_iter(text) {
@@ -198,7 +198,7 @@ impl Normalizer {
             let label = match &captures[2] {
                 "shell" => "HOST_SHELL",
                 "shell_version" => "HOST_SHELL_VERSION",
-                "current_date" => "CURRENT_DATE",
+                "current_date" | "current_date_utc" => "CURRENT_DATE",
                 "timezone" => "HOST_TIMEZONE",
                 _ => unreachable!(),
             };

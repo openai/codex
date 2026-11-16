@@ -371,10 +371,18 @@ impl Session {
                 self.read_clock_for_context(turn_context, "environment_date")
                     .await?
                     .map(|current_time| {
-                        current_time
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d")
-                            .to_string()
+                        if turn_context
+                            .config
+                            .features
+                            .enabled(Feature::UtcEnvironmentDate)
+                        {
+                            current_time.format("%Y-%m-%d").to_string()
+                        } else {
+                            current_time
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d")
+                                .to_string()
+                        }
                     })
             } else {
                 None

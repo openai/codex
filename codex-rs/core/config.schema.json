@@ -1493,6 +1493,9 @@
             "use_xaa": {
               "type": "boolean"
             },
+            "utc_environment_date": {
+              "type": "boolean"
+            },
             "view_image": {
               "type": "boolean"
             },
@@ -8740,6 +8743,9 @@
           "type": "boolean"
         },
         "use_xaa": {
+          "type": "boolean"
+        },
+        "utc_environment_date": {
           "type": "boolean"
         },
         "view_image": {

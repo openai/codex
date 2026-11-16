@@ -105,6 +105,10 @@ async fn extension_window_prefix_survives_compaction(compaction: &str) -> Result
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             configure_scenario_catalog(config);
+            config
+                .features
+                .enable(Feature::UtcEnvironmentDate)
+                .expect("enable UTC environment date");
             config.workspace_roots = vec![config.cwd.clone()];
             if local_compaction {
                 config.model_provider.name = "Local compaction test".to_string();
