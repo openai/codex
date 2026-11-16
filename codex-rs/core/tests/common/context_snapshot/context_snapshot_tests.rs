@@ -383,6 +383,47 @@ fn portable_tool_schema_normalizes_embedded_code_mode_shell_guidance() {
 }
 
 #[test]
+fn portable_tool_schema_normalizes_only_the_exact_powershell_login_description() {
+    let plain = "Request login-shell startup. Omit to inherit.";
+    let powershell = "Login-shell startup. In PowerShell, false skips profiles. Keep them enabled for profile-defined commands, even unattended. Omit to inherit.";
+    let tool = |description: &str| {
+        json!({
+            "name": "exec_command",
+            "parameters": {"properties": {"login": {"description": description}}}
+        })
+    };
+    assert_eq!(
+        portable_tool_schema(&tool(plain)),
+        portable_tool_schema(&tool(powershell))
+    );
+    assert_ne!(
+        portable_tool_schema(&tool(plain)),
+        portable_tool_schema(&tool("Different advice"))
+    );
+    let embedded = |description: &str| {
+        json!({
+            "name": "exec",
+            "description": format!("  // {description}\n  login?: boolean;")
+        })
+    };
+    assert_eq!(
+        portable_tool_schema(&embedded(plain)),
+        portable_tool_schema(&embedded(powershell))
+    );
+    let direct = |description: &str| {
+        json!({
+            "name": "exec_command",
+            "description": format!("  // {description}\n  login?: boolean;"),
+            "parameters": {"properties": {"login": {"description": description}}}
+        })
+    };
+    assert_eq!(
+        portable_tool_schema(&direct(plain)),
+        portable_tool_schema(&direct(powershell))
+    );
+}
+
+#[test]
 fn one_renderer_handles_text_image_and_function_calls() {
     let items = vec![
         json!({ "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": "<skills_instructions>\nbody\n</skills_instructions>" }] }),

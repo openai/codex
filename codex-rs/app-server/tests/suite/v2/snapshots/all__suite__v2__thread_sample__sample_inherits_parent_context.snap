@@ -16,8 +16,8 @@ Settings:
   stream: true
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=ba5ddd25650ac9fa):
+        - namespace/functions; hash=5fbfd3cadf9e76ac
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -77,8 +77,8 @@ Settings:
 ## Window 2 (after request 2: input repeated)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=ba5ddd25650ac9fa):
+        - namespace/functions; hash=5fbfd3cadf9e76ac
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -137,8 +137,8 @@ Settings: same as window 1
 ## Window 3 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=ba5ddd25650ac9fa):
+        - namespace/functions; hash=5fbfd3cadf9e76ac
           - function/exec_command
           - function/write_stdin
           - function/request_user_input

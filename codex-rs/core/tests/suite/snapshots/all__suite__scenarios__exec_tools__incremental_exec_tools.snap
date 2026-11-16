@@ -6,8 +6,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=b2c6697017b587f1):
-        - namespace/functions; hash=e9ce2d0830f744bb
+00:additional_tools/developer (1; hash=ebe8da72443f764e):
+        - namespace/functions; hash=21ab6fa72d590f2c
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -129,8 +129,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 2 (after request 10: settings changed (model))
 -- request 11 (turn) --
-00:additional_tools/developer (1; hash=b2c6697017b587f1):
-        - namespace/functions; hash=e9ce2d0830f744bb
+00:additional_tools/developer (1; hash=ebe8da72443f764e):
+        - namespace/functions; hash=21ab6fa72d590f2c
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -260,8 +260,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 3 (after request 11: settings changed (model))
 -- request 12 (turn) --
-00:additional_tools/developer (1; hash=b2c6697017b587f1):
-        - namespace/functions; hash=e9ce2d0830f744bb
+00:additional_tools/developer (1; hash=ebe8da72443f764e):
+        - namespace/functions; hash=21ab6fa72d590f2c
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -399,8 +399,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 4 (after request 13: input diverged at item 00)
 -- request 14 (turn) --
-00:additional_tools/developer (1; hash=c3cdfbca78ae91e2):
-        - namespace/functions; hash=36087e37fe329f5c
+00:additional_tools/developer (1; hash=20c3cb0b60f0cef5):
+        - namespace/functions; hash=9eca0b2ac343e1bb
           - custom/exec
           - function/wait
           - function/request_user_input

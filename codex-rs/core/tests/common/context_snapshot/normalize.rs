@@ -460,6 +460,8 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction.";
     // Exact current Windows-only suffix. A change to its wording must be reviewed explicitly.
     const WINDOWS_SAFETY_SUFFIX_HASH: u64 = 0x6de3_23e4_7060_6128;
+    const UNIX_LOGIN: &str = "Request login-shell startup. Omit to inherit.";
+    const POWERSHELL_LOGIN: &str = "Login-shell startup. In PowerShell, false skips profiles. Keep them enabled for profile-defined commands, even unattended. Omit to inherit.";
     const UNIX_WAIT: &str =
         "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.";
     const WINDOWS_WAIT: &str = "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms.";
@@ -489,6 +491,10 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
                 *description =
                     format!("{start}### `exec_command`\n{BASE}{}", &rest[suffix.len()..]);
             }
+            *description = description.replace(
+                &format!("  // {POWERSHELL_LOGIN}\n  login?: boolean;"),
+                &format!("  // {UNIX_LOGIN}\n  login?: boolean;"),
+            );
             for platform_wait in [UNIX_WAIT, WINDOWS_WAIT] {
                 *description = description.replace(
                     &format!("  // {platform_wait}"),
@@ -516,6 +522,16 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
             &format!("  // {WINDOWS_WAIT}"),
             &format!("  // {UNIX_WAIT}"),
         );
+        *description = description.replace(
+            &format!("  // {POWERSHELL_LOGIN}\n  login?: boolean;"),
+            &format!("  // {UNIX_LOGIN}\n  login?: boolean;"),
+        );
+    }
+    if let Some(Value::String(login)) =
+        definition.pointer_mut("/parameters/properties/login/description")
+        && login == POWERSHELL_LOGIN
+    {
+        *login = UNIX_LOGIN.to_string();
     }
     if let Some(Value::String(wait)) =
         definition.pointer_mut("/parameters/properties/yield_time_ms/description")

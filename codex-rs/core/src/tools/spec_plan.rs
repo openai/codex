@@ -1307,6 +1307,12 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
         exec_permission_approvals_enabled,
         include_environment_id,
         include_windows_shell_guidance: should_include_windows_shell_guidance(context.environments),
+        has_powershell: context.environments.turn_environments().any(|environment| {
+            environment
+                .shell
+                .as_ref()
+                .is_some_and(|shell| shell.shell_type == crate::shell::ShellType::PowerShell)
+        }),
     };
     if features.enabled(Feature::UnifiedExec) {
         registry.add(ExecCommandHandler::new(options));

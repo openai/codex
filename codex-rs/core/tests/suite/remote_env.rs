@@ -409,6 +409,13 @@ async fn remote_test_env_exposes_target_shell_and_exec_guidance_to_model() -> Re
             .map(str::trim),
         Some(expected_shell),
     );
+    let login_description = exec_command["parameters"]["properties"]["login"]["description"]
+        .as_str()
+        .context("login should have a description")?;
+    assert_eq!(
+        login_description.contains("In PowerShell, false skips profiles."),
+        expected_shell == "<shell>powershell</shell>",
+    );
 
     Ok(())
 }
@@ -2368,7 +2375,8 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     let exec_command_parameters = response_mock
         .requests()
         .iter()
-        .map(|request| {
+        .enumerate()
+        .map(|(index, request)| {
             let body = request.body_json();
             let exec_command = body["tools"]
                 .as_array()
@@ -2376,14 +2384,22 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
                 .iter()
                 .find(|tool| tool["name"] == "exec_command")
                 .context("exec_command should stay available")?;
-            let parameters = &exec_command["parameters"];
-            parameters["properties"]
+            let mut parameters = exec_command["parameters"].clone();
+            let login = parameters["properties"]
                 .get("login")
                 .context("login should be advertised regardless of environment state or policy")?;
+            let description = login["description"].as_str().context("login description")?;
+            let ready = matches!(index, 4 | 5 | 8);
+            assert_eq!(
+                description.contains("In PowerShell, false skips profiles."),
+                ready && matches!(test_target_os(), TestTargetOs::Windows),
+            );
             parameters["properties"].get("shell").context(
                 "shell should be advertised regardless of environment state or shell mode",
             )?;
-            Ok(parameters.clone())
+            // Only shell-specific wording may change when the executor becomes ready.
+            parameters["properties"]["login"]["description"] = Value::Null;
+            Ok(parameters)
         })
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(

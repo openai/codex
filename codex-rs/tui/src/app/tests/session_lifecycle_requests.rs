@@ -561,7 +561,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             .iter()
             .flat_map(|cell| cell.display_lines(/*width*/ 80))
             .map(|line| line.to_string())
-            .filter(|line| line.contains("response"))
+            .filter(|line| line.starts_with("• ") && line.contains("response"))
             .collect::<Vec<_>>()
             .join("\n")
     };

@@ -16,8 +16,8 @@ Settings:
   stream: true
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=23179252be1abe5f):
-        - namespace/functions; hash=9962be1e4c2d492b
+00:additional_tools/developer (2; hash=fb72c6881199d93a):
+        - namespace/functions; hash=156a5fb9ac78d36a
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -64,8 +64,8 @@ Settings:
 Settings: relative to window 1
   model: "catalog-approval-headings-b"
 -- request 2 (turn) --
-00:additional_tools/developer (2; hash=23179252be1abe5f):
-        - namespace/functions; hash=9962be1e4c2d492b
+00:additional_tools/developer (2; hash=fb72c6881199d93a):
+        - namespace/functions; hash=156a5fb9ac78d36a
           - function/exec_command
           - function/write_stdin
           - function/request_user_input

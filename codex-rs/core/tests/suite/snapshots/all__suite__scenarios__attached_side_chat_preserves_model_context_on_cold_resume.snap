@@ -6,8 +6,8 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=e019c949fc483f83):
-        - namespace/functions; hash=03340277aa23936f
+00:additional_tools/developer (3; hash=e43eac769da0e93e):
+        - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -108,8 +108,8 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 2 (after request 1: settings changed (prompt_cache_key))
 -- request 2 (turn) --
-00:additional_tools/developer (3; hash=e019c949fc483f83):
-        - namespace/functions; hash=03340277aa23936f
+00:additional_tools/developer (3; hash=e43eac769da0e93e):
+        - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
           - function/request_user_input

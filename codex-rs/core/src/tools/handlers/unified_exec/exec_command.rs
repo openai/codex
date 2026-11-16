@@ -36,8 +36,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
 use codex_utils_string::truncate_middle_chars;
 
-use super::super::shell_spec::CommandToolOptions;
-use super::super::shell_spec::create_exec_command_tool_with_environment_id;
+use super::super::shell_spec::create_exec_command_tool;
 use super::ExecCommandArgs;
 use super::ExecCommandWorkdirArgs;
 use super::post_unified_exec_tool_use_payload;
@@ -47,12 +46,13 @@ use super::preparation::ParsedExecCommand;
 // A byte limit is a conservative hard token bound even for byte-fallback tokenizers.
 const EXEC_COMMAND_REJECTION_MAX_BYTES: usize = 900;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct ExecCommandHandlerOptions {
     pub(crate) allow_tty: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
     pub(crate) include_environment_id: bool,
     pub(crate) include_windows_shell_guidance: bool,
+    pub(crate) has_powershell: bool,
 }
 
 pub struct ExecCommandHandler {
@@ -66,9 +66,10 @@ impl Default for ExecCommandHandler {
             lifetime: ExecCommandLifetime::Interactive,
             options: ExecCommandHandlerOptions {
                 allow_tty: true,
-                exec_permission_approvals_enabled: false,
-                include_environment_id: false,
                 include_windows_shell_guidance: cfg!(windows),
+                has_powershell: crate::shell::default_user_shell().shell_type
+                    == crate::shell::ShellType::PowerShell,
+                ..Default::default()
             },
         }
     }
@@ -96,13 +97,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        let spec = create_exec_command_tool_with_environment_id(
-            CommandToolOptions {
-                exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
-            },
-            self.options.include_environment_id,
-            self.options.include_windows_shell_guidance,
-        );
+        let spec = create_exec_command_tool(self.options);
         let mut spec = match self.lifetime {
             ExecCommandLifetime::Interactive => spec,
             ExecCommandLifetime::OneShot => one_shot_exec_command_spec(spec),
