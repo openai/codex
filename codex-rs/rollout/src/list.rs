@@ -790,34 +790,15 @@ async fn build_thread_item(
 ) -> Option<ThreadItem> {
     // Read head and detect preview-bearing events; goal previews can appear before
     // the first normal user message.
-    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+    let filters = SummaryFilters {
+        allowed_sources,
+        provider_matcher,
+        cwd_filters,
+        include_attached_threads,
+    };
+    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT, filters)
         .await
-        .unwrap_or_default();
-    if summary.attached_to_thread_id.is_some() && !include_attached_threads {
-        return None;
-    }
-    if !allowed_sources.is_empty()
-        && !summary
-            .source
-            .as_ref()
-            .is_some_and(|source| allowed_sources.contains(source))
-    {
-        return None;
-    }
-    if let Some(matcher) = provider_matcher
-        && !matcher.matches(summary.model_provider.as_deref())
-    {
-        return None;
-    }
-    if let Some(cwd_filters) = cwd_filters
-        && !summary.cwd.as_ref().is_some_and(|cwd| {
-            cwd_filters
-                .iter()
-                .any(|filter| path_utils::paths_match_after_normalization(cwd, filter))
-        })
-    {
-        return None;
-    }
+        .ok()??;
     if summary.saw_session_meta
         && (matches!(preview_filter, PreviewFilter::IncludeEmpty)
             || summary.preview.is_some()
@@ -974,7 +955,40 @@ impl<'a> ProviderMatcher<'a> {
     }
 }
 
-async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
+struct SummaryFilters<'a> {
+    allowed_sources: &'a [SessionSource],
+    provider_matcher: Option<&'a ProviderMatcher<'a>>,
+    cwd_filters: Option<&'a [PathBuf]>,
+    include_attached_threads: bool,
+}
+
+impl SummaryFilters<'_> {
+    /// Filters only the rollout's first session metadata; copied fork metadata cannot override it.
+    fn matches(&self, summary: &HeadTailSummary) -> bool {
+        (self.include_attached_threads || summary.attached_to_thread_id.is_none())
+            && (self.allowed_sources.is_empty()
+                || summary
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| self.allowed_sources.contains(source)))
+            && self
+                .provider_matcher
+                .is_none_or(|matcher| matcher.matches(summary.model_provider.as_deref()))
+            && self.cwd_filters.is_none_or(|filters| {
+                summary.cwd.as_ref().is_some_and(|cwd| {
+                    filters
+                        .iter()
+                        .any(|filter| path_utils::paths_match_after_normalization(cwd, filter))
+                })
+            })
+    }
+}
+
+async fn read_head_summary(
+    path: &Path,
+    head_limit: usize,
+    filters: SummaryFilters<'_>,
+) -> io::Result<Option<HeadTailSummary>> {
     let mut lines = compression::open_rollout_line_reader(path).await?;
     let mut summary = HeadTailSummary::default();
     let mut lines_scanned = 0usize;
@@ -1047,6 +1061,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.cli_version = Some(session_meta_line.meta.cli_version);
                     summary.created_at = Some(session_meta_line.meta.timestamp.clone());
                     summary.saw_session_meta = true;
+                    if !filters.matches(&summary) {
+                        return Ok(None);
+                    }
 
                     if codex_state::is_guardian_review_source(&session_meta_line.meta.source) {
                         // The synthetic prompt is not needed for the thread summary.
@@ -1108,7 +1125,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
     }
 
-    Ok(summary)
+    Ok(Some(summary))
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.

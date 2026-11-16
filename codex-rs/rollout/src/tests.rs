@@ -1929,6 +1929,44 @@ async fn test_source_filter_excludes_non_matching_sessions() {
 }
 
 #[tokio::test]
+async fn test_listing_filters_use_canonical_session_metadata() -> Result<()> {
+    let home = TempDir::new()?;
+    let id = Uuid::from_u128(78);
+    let ts = "2025-08-03T10-00-00";
+    write_session_file(
+        home.path(),
+        ts,
+        id,
+        /*num_records*/ 0,
+        Some(SessionSource::Exec),
+    )?;
+    let path = home
+        .path()
+        .join(format!("sessions/2025/08/03/rollout-{ts}-{id}.jsonl"));
+    let contents = fs::read_to_string(&path)?;
+    let mut lines = contents.lines();
+    let canonical = lines.next().expect("canonical metadata");
+    let user = lines.next().expect("user event");
+    let mut copied: serde_json::Value = serde_json::from_str(canonical)?;
+    copied["payload"]["source"] = serde_json::json!("cli");
+    fs::write(&path, format!("{canonical}\n{copied}\n{user}\n"))?;
+
+    let page = get_threads(
+        home.path(),
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await?;
+    assert_eq!(page.items, Vec::new());
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<()> {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
