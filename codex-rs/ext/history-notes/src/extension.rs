@@ -1,3 +1,5 @@
+//! Installs the HTTP-backed history and notes contributor.
+
 use std::sync::Arc;
 
 use codex_analytics::AnalyticsEventsClient;
@@ -14,18 +16,15 @@ use codex_extension_api::PromptFragment;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
-use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_protocol::AgentPath;
-use codex_protocol::openai_models::HistoryToolMessages;
-use codex_protocol::openai_models::NotesToolMessages;
 use codex_utils_output_truncation::TruncationPolicy;
 use serde_json::json;
 
 use crate::backend::HttpBackend;
 use crate::backend::HttpContext;
+use crate::tools::Executor;
 use crate::tools::history_notes_tools;
 
 // Bound model context even when note paths are unusually long.
@@ -148,53 +147,36 @@ impl ContextContributor for HistoryNotesExtension {
 }
 
 impl ToolContributor for HistoryNotesExtension {
-    fn tools(
-        &self,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        self.tools_with_messages(
-            thread_store,
-            /*history_messages*/ None,
-            /*notes_messages*/ None,
-        )
+    fn tools(&self, _session: &ExtensionData, thread: &ExtensionData) -> Vec<Executor> {
+        history_notes_tools(thread.get::<HttpBackend>().as_deref(), /*step*/ None)
     }
 
     fn tools_for_step(
         &self,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        step_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        let history_messages = step_store.get::<HistoryToolMessages>();
-        let notes_messages = step_store.get::<NotesToolMessages>();
-        self.tools_with_messages(
-            thread_store,
-            history_messages.as_deref(),
-            notes_messages.as_deref(),
-        )
-    }
-}
-
-impl HistoryNotesExtension {
-    fn tools_with_messages(
-        &self,
-        thread_store: &ExtensionData,
-        history_messages: Option<&HistoryToolMessages>,
-        notes_messages: Option<&NotesToolMessages>,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        let Some(backend) = thread_store.get::<HttpBackend>() else {
-            return Vec::new();
-        };
-        history_notes_tools((*backend).clone(), history_messages, notes_messages)
+        _session: &ExtensionData,
+        thread: &ExtensionData,
+        step: &ExtensionData,
+    ) -> Vec<Executor> {
+        history_notes_tools(thread.get::<HttpBackend>().as_deref(), Some(step))
     }
 }
 
 /// Installs the standalone history and notes tools.
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Arc<AuthManager>) {
-    let extension = Arc::new(HistoryNotesExtension { auth_manager });
-    registry.thread_lifecycle_contributor(extension.clone());
-    registry.config_contributor(extension.clone());
-    registry.prompt_contributor(extension.clone());
-    registry.tool_contributor(extension);
+    register(registry, HistoryNotesExtension { auth_manager });
+}
+
+pub(crate) fn register<C>(registry: &mut ExtensionRegistryBuilder<Config>, contributor: C)
+where
+    C: ThreadLifecycleContributor<Config>
+        + ConfigContributor<Config>
+        + ContextContributor
+        + ToolContributor
+        + 'static,
+{
+    let contributor = Arc::new(contributor);
+    registry.thread_lifecycle_contributor(contributor.clone());
+    registry.config_contributor(contributor.clone());
+    registry.prompt_contributor(contributor.clone());
+    registry.tool_contributor(contributor);
 }

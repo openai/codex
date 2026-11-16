@@ -204,7 +204,7 @@ fn bundled_tool_contracts() {
             current_agent_name: "/root".to_owned(),
         }),
     );
-    let specs: Vec<_> = history_notes_tools(backend, /*history*/ None, /*notes*/ None)
+    let specs: Vec<_> = history_notes_tools(Some(&backend), /*step*/ None)
         .iter()
         .map(|tool| tool.spec())
         .collect();
