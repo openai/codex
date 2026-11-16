@@ -554,7 +554,7 @@ async fn start_listener(
                         let mut thread_state = thread_state.lock().await;
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         let terminal = matches!(event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-                            .then(|| thread_state.turn_summary.clone());
+                            .then(|| thread_state.turn_summaries.get(&event.id).cloned().unwrap_or_default());
                         (thread_state.experimental_raw_events, terminal)
                     };
                     if matches!(

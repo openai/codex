@@ -100,26 +100,12 @@ pub(crate) struct PendingNetworkApproval {
     pub(crate) permission_guard: crate::thread_status::ThreadWatchActiveGuard,
 }
 
-/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+/// Metadata accumulated for one turn until its terminal notification.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
-    pub(crate) command_start_times: HashMap<String, i64>,
     pub(crate) last_error: Option<TurnError>,
     pub(crate) last_agent_message: Option<ThreadItem>,
-}
-
-impl TurnSummary {
-    pub(crate) fn record_command_start(&mut self, item_id: String, started_at_ms: i64) -> bool {
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.command_start_times.entry(item_id)
-        {
-            entry.insert(started_at_ms);
-            true
-        } else {
-            false
-        }
-    }
 }
 
 #[derive(Default)]
@@ -127,7 +113,9 @@ pub(crate) struct ThreadState {
     goal_resume_lock: Arc<Mutex<()>>,
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) network_approvals: HashMap<String, PendingNetworkApproval>,
-    pub(crate) turn_summary: TurnSummary,
+    pub(crate) turn_summaries: HashMap<String, TurnSummary>,
+    // A background command can emit events even after its originating turn finishes.
+    pub(crate) command_start_times: HashMap<String, HashMap<String, i64>>,
     /// A terminal event can arrive after the listener has already started the next turn.
     pub(crate) last_started_turn_id: Option<String>,
     pub(crate) last_terminal_turn_id: Option<String>,
@@ -180,6 +168,8 @@ impl ThreadState {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
+        self.turn_summaries.clear();
+        self.command_start_times.clear();
         self.shutdown_drain = Some(shutdown_drain);
         self.listener_generation = self.listener_generation.wrapping_add(1);
         self.last_thread_settings = Some(thread_settings_baseline);
@@ -201,6 +191,8 @@ impl ThreadState {
         self.listener_command_tx = None;
         self.current_turn_history.reset();
         self.last_started_turn_id = None;
+        self.turn_summaries.clear();
+        self.command_start_times.clear();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
     }
@@ -236,13 +228,59 @@ impl ThreadState {
         self.current_turn_history.active_turn_metadata_snapshot()
     }
 
+    pub(crate) fn record_command_start(
+        &mut self,
+        turn_id: &str,
+        item_id: String,
+        started_at_ms: i64,
+    ) -> bool {
+        let starts = self
+            .command_start_times
+            .entry(turn_id.to_owned())
+            .or_default();
+        if let Entry::Vacant(entry) = starts.entry(item_id) {
+            entry.insert(started_at_ms);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn take_command_start(&mut self, turn_id: &str, item_id: &str) -> Option<i64> {
+        let starts = self.command_start_times.get_mut(turn_id)?;
+        let started_at = starts.remove(item_id);
+        if starts.is_empty() {
+            self.command_start_times.remove(turn_id);
+        }
+        started_at
+    }
+
+    pub(crate) fn take_turn_summary(&mut self, turn_id: &str) -> TurnSummary {
+        self.command_start_times.remove(turn_id);
+        self.turn_summaries.remove(turn_id).unwrap_or_default()
+    }
+
+    pub(crate) fn note_turn_started(&mut self, turn_id: &str, started_at: Option<i64>) {
+        self.last_started_turn_id = Some(turn_id.to_owned());
+        self.turn_summaries.insert(
+            turn_id.to_owned(),
+            TurnSummary {
+                started_at,
+                ..Default::default()
+            },
+        );
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
-            self.last_started_turn_id = Some(event_turn_id.to_owned());
-            self.turn_summary = TurnSummary {
-                started_at: payload.started_at,
-                ..Default::default()
-            };
+            self.note_turn_started(event_turn_id, payload.started_at);
+        } else if let EventMsg::ItemStarted(payload) = event
+            && matches!(payload.item, CoreTurnItem::EnteredReviewMode(_))
+        {
+            // Inline reviews can finish before their delegate emits TurnStarted.
+            self.turn_summaries
+                .entry(event_turn_id.to_owned())
+                .or_default();
         }
         if let EventMsg::ItemCompleted(payload) = event
             && let CoreTurnItem::AgentMessage(item) = &payload.item
@@ -250,8 +288,9 @@ impl ThreadState {
             && item.content.iter().any(|content| {
                 matches!(content, CoreAgentMessageContent::Text { text } if !text.trim().is_empty())
             })
+            && let Some(summary) = self.turn_summaries.get_mut(event_turn_id)
         {
-            self.turn_summary.last_agent_message = Some(ThreadItem::from(payload));
+            summary.last_agent_message = Some(ThreadItem::from(payload));
         }
         if self.evict_superseded_agent_text {
             self.current_turn_history.handle_live_paginated_event(event);

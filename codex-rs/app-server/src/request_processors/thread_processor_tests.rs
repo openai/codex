@@ -1319,6 +1319,7 @@ mod thread_processor_behavior_tests {
             .await
             .expect("A must reach its stop hook");
         let second = start("second").await?;
+        let mut command_events = Vec::new();
         let mut next_message = async |stage: &str| loop {
             if let OutgoingEnvelope::ToConnection { message, .. } =
                 tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv())
@@ -1326,6 +1327,21 @@ mod thread_processor_behavior_tests {
                     .expect(stage)
                     .expect("listener closed")
             {
+                if let OutgoingMessage::AppServerNotification(envelope) = &message {
+                    match &envelope.notification {
+                        ServerNotification::ItemStarted(n)
+                            if n.turn_id == second && n.item.id() == "command" =>
+                        {
+                            command_events.push("started");
+                        }
+                        ServerNotification::ItemCompleted(n)
+                            if n.turn_id == second && n.item.id() == "command" =>
+                        {
+                            command_events.push("completed");
+                        }
+                        _ => {}
+                    }
+                }
                 break message;
             }
         };
@@ -1355,6 +1371,7 @@ mod thread_processor_behavior_tests {
                     && let ServerNotification::TurnCompleted(completed) = envelope.notification
                 {
                     assert_eq!(completed.turn.id, expected);
+                    assert!(completed.turn.started_at.is_some());
                     break;
                 }
             }
@@ -1378,6 +1395,7 @@ mod thread_processor_behavior_tests {
             .notify_client_response(connection_id, approval_id, json!({"decision": "accept"}))
             .await;
         wait_for_completion(&second).await;
+        assert_eq!(command_events, ["started", "completed"]);
         let output = model
             .function_call_output_text("command")
             .expect("command output");
