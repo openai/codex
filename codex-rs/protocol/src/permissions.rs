@@ -20,6 +20,7 @@ use strum_macros::Display;
 use tracing::error;
 use ts_rs::TS;
 
+use crate::models::PermissionProfile;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -2422,6 +2423,52 @@ pub(crate) fn default_read_only_subpaths_for_writable_root(
     }
 
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
+}
+
+/// Resolves the compatibility writable roots for a permission profile.
+pub fn compatibility_writable_roots_for_permission_profile(
+    permissions: &PermissionProfile,
+    cwd: &Path,
+) -> Vec<WritableRoot> {
+    compatibility_sandbox_policy_for_permission_profile(permissions, cwd)
+        .get_writable_roots_with_cwd(cwd)
+}
+
+/// Builds a legacy sandbox policy, using the workspace-write fallback for
+/// profiles that cannot be expressed directly.
+pub fn compatibility_sandbox_policy_for_permission_profile(
+    permissions: &PermissionProfile,
+    cwd: &Path,
+) -> SandboxPolicy {
+    if let Ok(policy) = permissions.to_legacy_sandbox_policy(cwd) {
+        return policy;
+    }
+
+    let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
+    let cwd_abs = AbsolutePathBuf::from_absolute_path(cwd).ok();
+    let writable_roots = file_system_policy
+        .get_writable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(|root| root.root)
+        .filter(|root| cwd_abs.as_ref() != Some(root))
+        .collect();
+    let tmpdir_writable = std::env::var_os("TMPDIR")
+        .filter(|tmpdir| !tmpdir.is_empty())
+        .and_then(|tmpdir| AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok())
+        .is_some_and(|tmpdir| {
+            file_system_policy.can_write_local_path_with_cwd(tmpdir.as_path(), cwd)
+        });
+    let slash_tmp = Path::new("/tmp");
+    let slash_tmp_writable = slash_tmp.is_absolute()
+        && slash_tmp.is_dir()
+        && file_system_policy.can_write_local_path_with_cwd(slash_tmp, cwd);
+
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots,
+        network_access: network_policy.is_enabled(),
+        exclude_tmpdir_env_var: !tmpdir_writable,
+        exclude_slash_tmp: !slash_tmp_writable,
+    }
 }
 
 /// Rebuilds the filesystem policy that legacy sandbox runtimes enforce for a

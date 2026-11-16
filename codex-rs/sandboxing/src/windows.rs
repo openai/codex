@@ -7,11 +7,11 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::compatibility_writable_roots_for_permission_profile;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::SandboxType;
-use crate::compatibility_sandbox_policy_for_permission_profile;
 
 /// Resolved filesystem overrides for the Windows sandbox backends.
 ///
@@ -135,11 +135,8 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         );
     }
 
-    let legacy_projection = compatibility_sandbox_policy_for_permission_profile(
-        permission_profile,
-        sandbox_policy_cwd.as_path(),
-    );
-    let legacy_writable_roots = legacy_projection.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let legacy_writable_roots =
+        compatibility_writable_roots_for_permission_profile(permission_profile, sandbox_policy_cwd);
     let split_writable_roots = resolved.writable_roots;
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
@@ -266,11 +263,8 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         })
     });
     let normalize_path = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
-    let legacy_projection = compatibility_sandbox_policy_for_permission_profile(
-        permission_profile,
-        sandbox_policy_cwd.as_path(),
-    );
-    let legacy_writable_roots = legacy_projection.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let legacy_writable_roots =
+        compatibility_writable_roots_for_permission_profile(permission_profile, sandbox_policy_cwd);
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
         .map(|root| normalize_path(root.root.to_path_buf()))

@@ -1453,6 +1453,39 @@ fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
 }
 
 #[test]
+fn compatibility_writable_roots_preserve_the_output_only_fallback() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    let root = AbsolutePathBuf::from_absolute_path(canonicalize_preserving_symlinks(temp.path())?)?;
+    let cwd = root.join("workspace");
+    let output = root.join("output");
+    std::fs::create_dir_all(output.join(".git"))?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        output.clone().into(),
+        FileSystemAccessMode::Write,
+    )]);
+
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+
+    assert_eq!(
+        compatibility_writable_roots_for_permission_profile(&profile, &cwd),
+        [
+            WritableRoot {
+                root: output.clone(),
+                read_only_subpaths: vec![output.join(".git")],
+                protected_metadata_names: Vec::new(),
+            },
+            WritableRoot {
+                root: cwd.clone(),
+                read_only_subpaths: vec![cwd.join(".codex")],
+                protected_metadata_names: Vec::new(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn root_write_with_read_only_child_is_not_full_disk_write() {
     let cwd = TempDir::new().expect("tempdir");
     let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
