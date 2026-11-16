@@ -52,7 +52,7 @@ pub(crate) type Executor = Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>;
 
 // Keep the catalog key, tool name, request type and HTTP route in one registration.
 macro_rules! register_tools {
-    ($( $catalog:ident: $register:ident($messages:ty) => $namespace:ident {
+    ($( $catalog:ident: $messages:ty => $namespace:ident {
         $( $name:ident: $request:ty $( [parallel = $parallel:literal] )? ),+ $(,)?
     } ),+ $(,)?) => {
         $($(impl Request for $request {
@@ -61,22 +61,6 @@ macro_rules! register_tools {
             $(const PARALLEL: bool = $parallel;)?
         })+)+
 
-        $(pub(crate) fn $register<B>(backend: Option<&B>, step: Option<&ExtensionData>) -> Vec<Executor>
-        where
-            $(B: Handle<$request>,)+
-        {
-            let Some(backend) = backend else { return Vec::new() };
-            let $catalog = step.and_then(ExtensionData::get::<$messages>);
-            vec![$(Arc::new(HistoryNotesTool::<$request, B> {
-                request: PhantomData,
-                backend: backend.clone(),
-                spec: tool_spec::<$request, <B as Handle<$request>>::Output>(
-                    $catalog.as_deref().and_then(|messages| messages.namespace_description.as_deref()),
-                    $catalog.as_deref().and_then(|messages| messages.$name.as_ref()),
-                ),
-            }) as Executor,)+]
-        })+
-
         pub(crate) fn history_notes_tools<B>(
             backend: Option<&B>,
             step: Option<&ExtensionData>,
@@ -84,21 +68,28 @@ macro_rules! register_tools {
         where
             $($(B: Handle<$request>,)+)+
         {
-            let mut tools = Vec::new();
-            $(tools.extend($register(backend, step));)+
-            tools
+            let Some(backend) = backend else { return Vec::new() };
+            $(let $catalog = step.and_then(ExtensionData::get::<$messages>);)+
+            vec![$($(Arc::new(HistoryNotesTool::<$request, B> {
+                request: PhantomData,
+                backend: backend.clone(),
+                spec: tool_spec::<$request, <B as Handle<$request>>::Output>(
+                    $catalog.as_deref().and_then(|messages| messages.namespace_description.as_deref()),
+                    $catalog.as_deref().and_then(|messages| messages.$name.as_ref()),
+                ),
+            }) as Executor,)+)+]
         }
     };
 }
 
 register_tools! {
-    history: history_tools(HistoryToolMessages) => HISTORY {
+    history: HistoryToolMessages => HISTORY {
         list_windows: HistoryListWindows,
         list_items: HistoryListItems,
         read_item: HistoryReadItem,
         search_contents: HistorySearchContents,
     },
-    notes: notes_tools(NotesToolMessages) => NOTES {
+    notes: NotesToolMessages => NOTES {
         list_files_by_prefix: NotesListFilesByPrefix,
         read_file: NotesReadFile,
         search_contents: NotesSearchContents,
