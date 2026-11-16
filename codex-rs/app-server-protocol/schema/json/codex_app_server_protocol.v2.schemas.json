@@ -15351,10 +15351,6 @@
         "name": {
           "type": "string"
         },
-        "position": {
-          "format": "int64",
-          "type": "integer"
-        },
         "recencyAt": {
           "description": "Newest non-archived member thread's recency, in Unix seconds; null when none exist.",
           "format": "int64",
@@ -15379,7 +15375,6 @@
         "id",
         "metadata",
         "name",
-        "position",
         "roots",
         "updatedAt"
       ],

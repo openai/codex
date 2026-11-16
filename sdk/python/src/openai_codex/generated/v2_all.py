@@ -9978,7 +9978,6 @@ class Project(BaseModel):
     id: str
     metadata: dict[str, str]
     name: str
-    position: int
     recency_at: Annotated[
         int | None,
         Field(

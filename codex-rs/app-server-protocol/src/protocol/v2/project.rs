@@ -25,8 +25,6 @@ pub struct Project {
     pub roots: Vec<ProjectRoot>,
     pub metadata: BTreeMap<String, String>,
     #[ts(type = "number")]
-    pub position: i64,
-    #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
@@ -52,6 +50,7 @@ pub struct ProjectListParams {
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
     /// Defaults to position. Recency sorting always places empty projects last.
+    /// Use the returned order; numeric positions are not exposed in project responses.
     #[ts(optional = nullable)]
     pub sort_key: Option<ProjectSortKey>,
     /// Requires sortKey. Defaults to asc for position and desc for recencyAt.
@@ -144,6 +143,7 @@ pub struct ProjectUpdateResponse {
 #[ts(export_to = "v2/")]
 pub struct ProjectMoveParams {
     pub project_id: String,
+    /// Place the project before this ID, or append it when omitted or null.
     #[ts(optional = nullable)]
     pub before_project_id: Option<String>,
 }

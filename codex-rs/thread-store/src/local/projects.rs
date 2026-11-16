@@ -184,7 +184,6 @@ fn stored_project(project: codex_state::Project) -> StoredProject {
             .map(|root| StoredProjectRoot { path: root.path })
             .collect(),
         metadata: project.metadata,
-        position: project.position,
         created_at_ms: project.created_at_ms,
         updated_at_ms: project.updated_at_ms,
         recency_at_ms: project.recency_at_ms,

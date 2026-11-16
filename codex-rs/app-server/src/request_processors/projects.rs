@@ -377,7 +377,6 @@ fn api_project(project: StoredProject) -> Result<Project, JSONRPCErrorError> {
             })
             .collect::<Result<_, JSONRPCErrorError>>()?,
         metadata: project.metadata,
-        position: project.position,
         created_at: project.created_at_ms / 1000,
         updated_at: project.updated_at_ms / 1000,
         recency_at: project

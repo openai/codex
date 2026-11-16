@@ -13,7 +13,6 @@ pub struct StoredProject {
     pub name: String,
     pub roots: Vec<StoredProjectRoot>,
     pub metadata: BTreeMap<String, String>,
-    pub position: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub recency_at_ms: Option<i64>,
