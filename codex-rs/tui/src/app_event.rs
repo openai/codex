@@ -543,6 +543,12 @@ pub(crate) enum AppEvent {
         request: uuid::Uuid,
         result: Result<crate::sidebar_image::DocumentContent, String>,
     },
+    SidebarFilesLoaded {
+        backend_id: crate::backend_id::BackendId,
+        parent: ThreadId,
+        request: uuid::Uuid,
+        page: Option<codex_app_server_protocol::ThreadItemsListResponse>,
+    },
     SavedSideChatsLoaded {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,

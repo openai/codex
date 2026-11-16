@@ -84,6 +84,7 @@ mod local_links;
 pub(crate) use local_links::FileLink;
 pub(crate) use local_links::SourceLocation;
 pub(crate) use local_links::is_markdown_file;
+pub(crate) use local_links::sidebar_file_link;
 mod math;
 mod mermaid;
 pub(crate) mod preferences;
@@ -109,6 +110,24 @@ mod list_spacing_tests;
 #[path = "markdown_render/task_list_tests.rs"]
 mod task_list_tests;
 pub(crate) use web_links::hide_web_link_destination;
+
+/// Find file destinations in source order, including Codex file citations.
+pub(crate) fn file_links(input: &str, cwd: Option<&Path>) -> Vec<FileLink> {
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let directives = InlineDirectives::new(input, options);
+    directives
+        .events(
+            Parser::new_ext(&directives.markdown, options).into_offset_iter(),
+            cwd,
+        )
+        .filter_map(|(event, _)| match event {
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+                sidebar_file_link(&dest_url)
+            }
+            _ => None,
+        })
+        .collect()
+}
 
 pub(crate) fn hide_reader_link_destination(destination: &str) -> bool {
     hide_web_link_destination(destination) || local_links::sidebar_file_link(destination).is_some()
@@ -2430,7 +2449,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn push_link_target(&mut self, span: Span<'static>, destination: &str, source: usize) {
         let mut target = HyperlinkLine::default();
-        if let Some(link) = local_links::sidebar_file_link(destination) {
+        if let Some(link) = sidebar_file_link(destination) {
             let width = span_width(&span);
             target.line.push_span(span);
             target

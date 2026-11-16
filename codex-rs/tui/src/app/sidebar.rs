@@ -80,6 +80,8 @@ pub(super) struct SidebarInputState {
 pub(super) struct SidebarPane {
     pub(super) creation: Option<SideCreation>,
     pub(super) close: Option<super::sidebar_close::Confirmation>,
+    pub(super) files: Option<super::sidebar_files::Files>,
+    pub(super) opened_files: Vec<codex_utils_path_uri::PathUri>,
     pub(super) documents: HashMap<uuid::Uuid, super::sidebar_document::Document>,
     pub(super) focus_document_request: Option<uuid::Uuid>,
     content: SidebarContent,
@@ -94,7 +96,7 @@ pub(super) struct SidebarPane {
     // Visit order is independent of the order in which tabs appear.
     visits: Vec<SidebarTab>,
     pub(super) choice: usize,
-    tabs_revision: usize,
+    pub(super) tabs_revision: usize,
     focus: Option<PaneFocus>,
     motion: PaneMotion,
 }
@@ -162,8 +164,17 @@ impl SidebarPane {
         if content != SidebarContent::Chooser || focus == PaneFocus::Main {
             self.opening = None;
         }
+        if content != SidebarContent::Chooser
+            && let Some(files) = &mut self.files
+        {
+            files.scan = None;
+        }
         self.content = content;
         self.focus = Some(focus);
+    }
+
+    pub(super) fn clear_files(&mut self) {
+        self.files = None;
     }
 
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
@@ -372,6 +383,9 @@ impl SidebarPane {
         self.cancel_hidden_document_primary(/*visible*/ false);
         self.focus_document_request = None;
         self.opening = None;
+        if let Some(files) = &mut self.files {
+            files.scan = None;
+        }
         self.focus = None;
     }
 

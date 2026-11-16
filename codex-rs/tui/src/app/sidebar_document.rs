@@ -512,6 +512,9 @@ impl App {
         }
         let request = uuid::Uuid::new_v4();
         let pane = self.sidebar_mut();
+        if !pane.opened_files.contains(&path) {
+            pane.opened_files.push(path.clone());
+        }
         pane.documents.insert(
             request,
             Document {

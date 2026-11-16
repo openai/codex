@@ -419,6 +419,9 @@ impl App {
             for doc in pane.documents.values_mut() {
                 doc.connection_replaced();
             }
+            if let Some(files) = &mut pane.files {
+                files.connection_replaced();
+            }
         }
         // The old timer targets the discarded channel, so a new preview can be scheduled.
         self.config_notification_test_pending = None;

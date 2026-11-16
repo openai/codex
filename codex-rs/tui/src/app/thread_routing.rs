@@ -1143,6 +1143,7 @@ impl App {
             return Ok(());
         }
         self.track_side_chat_title(thread_id, &notification);
+        self.notice_sidebar_file_item(thread_id, &notification);
         if self.current_displayed_thread_id() == Some(thread_id)
             && let ServerNotification::TurnCompleted(notification) = &notification
         {

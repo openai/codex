@@ -202,9 +202,13 @@ impl AppServerSession {
     }
 
     pub(crate) fn has_older_history(&self, thread_id: ThreadId) -> bool {
+        self.older_item_cursor(thread_id).is_some()
+    }
+
+    pub(crate) fn older_item_cursor(&self, thread_id: ThreadId) -> Option<&str> {
         self.history_pagination
             .get(&thread_id)
-            .is_some_and(|page| page.next_item_cursor.is_some())
+            .and_then(|page| page.next_item_cursor.as_deref())
     }
 
     pub(crate) fn begin_older_history_page(&mut self, thread_id: ThreadId) -> Option<String> {

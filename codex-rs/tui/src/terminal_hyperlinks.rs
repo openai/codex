@@ -235,6 +235,15 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn sidebar_destination(&self) -> Option<ReaderLink> {
+        match self.destination_kind {
+            DestinationKind::TrustedFile => None,
+            DestinationKind::Document(_) | DestinationKind::Web => {
+                self.reader_destination(/*documents*/ true)
+            }
+        }
+    }
+
     pub(crate) fn terminal_destination(&self) -> Option<String> {
         match self.destination_kind {
             DestinationKind::Document(_) => None,

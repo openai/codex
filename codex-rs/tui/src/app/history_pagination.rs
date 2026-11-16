@@ -492,7 +492,7 @@ fn split_image_insertion(
 }
 
 /// Classify internal review prompts across page boundaries before rendering any older items.
-fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<(&str, &str)> {
+pub(super) fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<(&str, &str)> {
     let mut hidden = HashSet::new();
     let mut review_mode = false;
     for (index, turn) in turns.iter().enumerate() {

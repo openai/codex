@@ -99,6 +99,7 @@ impl App {
                     | AppEvent::OpenSidebarDocument { .. }
                     | AppEvent::SidebarDocumentResolved { .. }
                     | AppEvent::SidebarDocumentLoaded { .. }
+                    | AppEvent::SidebarFilesLoaded { .. }
                     | AppEvent::SavedSideChatsLoaded { .. }
                     | AppEvent::SideReplayFinished(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
@@ -983,6 +984,9 @@ impl App {
                 self.recap.seed_from_turns(&retained_turns, Instant::now());
                 self.retain_realtime_replay_state_before_replace();
                 self.forget_realtime_replay_thread(thread_id);
+                if let Some(pane) = self.sidebars.get_mut(&Some(thread_id)) {
+                    pane.clear_files();
+                }
                 self.chat_widget.reset_after_prompt_revert(reverted.thread.path, &retained_turns);
                 self.ensure_thread_channel(thread_id).store.lock().await
                     .set_session(session, retained_turns);
@@ -1017,6 +1021,11 @@ impl App {
                 self.begin_initial_history_replay_buffer();
             }
             AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
+                for pane in self.sidebars.values_mut() {
+                    if let Some(files) = &mut pane.files {
+                        files.scan = None;
+                    }
+                }
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::ParkSideCompanion { pair, thread_id, stream, display } => {
@@ -1083,6 +1092,12 @@ impl App {
                             TranscriptHistoryState::Complete
                         };
                     }
+                    tui.frame_requester().schedule_frame();
+                }
+                if finished_current_replay && self.chooser_focus().is_some()
+                    && self.document_preview_available(tui, app_server)
+                {
+                    self.refresh_sidebar_files(app_server, id).await;
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -3618,6 +3633,22 @@ impl App {
                     && doc.backend == backend_id
                 {
                     doc.loaded(result);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            AppEvent::SidebarFilesLoaded { backend_id, parent, request, page } => {
+                if backend_id == app_server.backend_id()
+                    && let Some(pane) = self.sidebars.get_mut(&Some(parent))
+                    && let Some(files) = pane.files.as_mut()
+                    && files.scan.as_ref().is_some_and(|(id, _)| *id == request)
+                {
+                    files.scan = None;
+                    if let Some(page) = page {
+                        if files.apply_page(page) {
+                            pane.tabs_revision += 1;
+                        }
+                        self.start_sidebar_files_scan(app_server, parent);
+                    }
                     tui.frame_requester().schedule_frame();
                 }
             }

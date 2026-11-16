@@ -1565,6 +1565,7 @@ See the Codex keymap documentation for supported actions and examples."
                             AppEvent::SavedSideChatsLoaded { backend_id, .. }
                             | AppEvent::SidebarDocumentResolved { backend_id, .. }
                             | AppEvent::SidebarDocumentLoaded { backend_id, .. }
+                            | AppEvent::SidebarFilesLoaded { backend_id, .. }
                             | AppEvent::StartupThreadStarted { backend_id, .. } => {
                                 backends.slot(*backend_id).unwrap_or(displayed_session)
                             }

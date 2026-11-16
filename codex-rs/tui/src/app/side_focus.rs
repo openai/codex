@@ -61,6 +61,9 @@ impl App {
             && let Some(parent) = parent
         {
             self.refresh_saved_chats(server, parent);
+            if self.document_preview_available(tui, server) {
+                self.refresh_sidebar_files(server, parent).await;
+            }
         }
         tui.frame_requester().schedule_frame();
         Ok(())
@@ -149,14 +152,13 @@ impl App {
                 let active = pane.visible_content() == Some(SidebarContent::Document(id));
                 pane.remove_document(id);
                 if active {
-                    self.zoomed_thread = None;
-                    self.sidebar_mut()
-                        .show(SidebarContent::Chooser, PaneFocus::Sidebar);
-                    if let Some(previous) = self
-                        .sidebar()
-                        .and_then(|pane| pane.recent_tab(/*excluding*/ None))
-                    {
+                    if let Some(previous) = pane.recent_tab(/*excluding*/ None) {
+                        self.zoomed_thread = None;
+                        self.sidebar_mut()
+                            .show(SidebarContent::Chooser, PaneFocus::Sidebar);
                         self.activate_sidebar_tab(tui, server, previous).await?;
+                    } else {
+                        self.open_sidebar_tabs(tui, server).await?;
                     }
                 }
                 tui.frame_requester().schedule_frame();
