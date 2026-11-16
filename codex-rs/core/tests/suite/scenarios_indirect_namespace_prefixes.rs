@@ -46,7 +46,6 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
             .features
             .enable(Feature::MultiAgentV2)
             .expect("enable MAv2");
-        config.multi_agent_v2.non_code_mode_only = false;
         config.multi_agent_v2.root_agent_usage_hint_text = Some("Coordinate sub-agents.".into());
         config
             .mcp_servers
@@ -86,6 +85,7 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
     ] {
         builder = builder.with_model_info_override(slug, move |model| {
             model.tool_mode = Some(tool_mode);
+            model.multi_agent_tools_in_code_mode = Some(true);
             model.supports_search_tool = include_search;
             model.model_messages.as_mut().expect("model messages").tools = Some(
                 serde_json::from_value(json!({

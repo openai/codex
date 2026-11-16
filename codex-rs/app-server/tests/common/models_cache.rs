@@ -78,6 +78,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         tool_mode: None,
         multi_agent_version: preset.multi_agent_version,
         multi_agent_reasoning_effort: None,
+        multi_agent_tools_in_code_mode: None,
     }
 }
 

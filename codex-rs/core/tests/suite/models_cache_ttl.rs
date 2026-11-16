@@ -748,5 +748,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         tool_mode: None,
         multi_agent_version: None,
         multi_agent_reasoning_effort: None,
+        multi_agent_tools_in_code_mode: None,
     }
 }
