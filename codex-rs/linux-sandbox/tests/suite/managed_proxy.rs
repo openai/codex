@@ -339,8 +339,12 @@ async fn namespace_reaper_collects_orphaned_descendants() {
     assert_eq!(output.stdout, b"orphan reaped\n");
 }
 
+#[test_case::test_case("/newroot/proc"; "older bubblewrap")]
+#[test_case::test_case("/proc"; "bubblewrap 0.12")]
 #[tokio::test]
-async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritance() {
+async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritance(
+    destination: &str,
+) {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bubblewrap is unavailable");
         return;
@@ -361,7 +365,7 @@ async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritanc
 for arg in "$@"; do
     [ "$arg" = "--" ] && break
     if [ "$arg" = "--proc" ]; then
-        printf '%s\n' "bwrap: Can't mount proc on /newroot/proc: Operation not permitted" >&2
+        printf '%s\n' "bwrap: Can't mount proc on $CODEX_TEST_PROC_DESTINATION: Operation not permitted" >&2
         exit 1
     fi
 done
@@ -418,6 +422,10 @@ printf 'legacy proc fallback\n'
         env.insert(
             "CODEX_TEST_REAL_BWRAP".to_string(),
             system_bwrap.display().to_string(),
+        );
+        env.insert(
+            "CODEX_TEST_PROC_DESTINATION".to_string(),
+            destination.to_string(),
         );
         env.insert(
             "CODEX_TEST_PID_NAMESPACE".to_string(),

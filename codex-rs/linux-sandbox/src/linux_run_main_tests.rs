@@ -25,28 +25,25 @@ fn read_only_file_system_policy() -> FileSystemSandboxPolicy {
     read_only_permission_profile().file_system_sandbox_policy()
 }
 
-#[test]
-fn detects_proc_mount_invalid_argument_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
-    assert!(is_proc_mount_failure(stderr));
+#[test_case::test_case("/newroot/proc"; "older bubblewrap")]
+#[test_case::test_case("/proc"; "bubblewrap 0.12")]
+fn detects_proc_mount_failures(destination: &str) {
+    for error in [
+        "Invalid argument",
+        "Operation not permitted",
+        "Permission denied",
+    ] {
+        let stderr = format!("bwrap: Can't mount proc on {destination}: {error}\n");
+        assert!(is_proc_mount_failure(&stderr), "{stderr}");
+    }
 }
 
-#[test]
-fn detects_proc_mount_operation_not_permitted_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
-    assert!(is_proc_mount_failure(stderr));
-}
-
-#[test]
-fn detects_proc_mount_permission_denied_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
-    assert!(is_proc_mount_failure(stderr));
-}
-
-#[test]
-fn ignores_non_proc_mount_errors() {
-    let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
-    assert!(!is_proc_mount_failure(stderr));
+#[test_case::test_case("bwrap: Can't bind mount /dev/null: Operation not permitted"; "non proc mount")]
+#[test_case::test_case("bwrap: Can't mount proc on /proc-other: Operation not permitted"; "different destination")]
+#[test_case::test_case("bwrap: Can't mount proc on /proc: Limit exceeded (ENOSPC)"; "unhandled mount error")]
+#[test_case::test_case("bwrap: Can't mount proc on /newroot/proc: Limit exceeded (ENOSPC)\nbwrap: Permission denied"; "unrelated error on a different line")]
+fn ignores_unrelated_mount_errors(stderr: &str) {
+    assert!(!is_proc_mount_failure(stderr), "{stderr}");
 }
 
 #[test]

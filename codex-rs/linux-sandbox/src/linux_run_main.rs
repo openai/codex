@@ -1217,11 +1217,19 @@ fn close_fd_or_panic(fd: libc::c_int, context: &str) {
 }
 
 fn is_proc_mount_failure(stderr: &str) -> bool {
-    stderr.contains("Can't mount proc")
-        && stderr.contains("/newroot/proc")
-        && (stderr.contains("Invalid argument")
-            || stderr.contains("Operation not permitted")
-            || stderr.contains("Permission denied"))
+    stderr.lines().any(|line| {
+        let Some((_, diagnostic)) = line.split_once("Can't mount proc on ") else {
+            return false;
+        };
+        // Bubblewrap 0.12 reports the destination inside the sandbox.
+        matches!(
+            diagnostic.split_once(": "),
+            Some((
+                "/newroot/proc" | "/proc",
+                "Invalid argument" | "Operation not permitted" | "Permission denied"
+            ))
+        )
+    })
 }
 
 struct InnerSeccompCommandArgs<'a> {
