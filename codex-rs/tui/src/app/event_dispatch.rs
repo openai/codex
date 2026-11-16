@@ -1095,7 +1095,6 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 if finished_current_replay && self.chooser_focus().is_some()
-                    && self.document_preview_available(tui, app_server)
                 {
                     self.refresh_sidebar_files(app_server, id).await;
                     tui.frame_requester().schedule_frame();
@@ -3639,12 +3638,17 @@ impl App {
             AppEvent::SidebarFilesLoaded { backend_id, parent, request, page } => {
                 if backend_id == app_server.backend_id()
                     && let Some(pane) = self.sidebars.get_mut(&Some(parent))
-                    && let Some(files) = pane.files.as_mut()
-                    && files.scan.as_ref().is_some_and(|(id, _)| *id == request)
+                    && pane.files.as_ref().and_then(|files| files.scan.as_ref())
+                        .is_some_and(|(id, _)| *id == request)
                 {
+                    let selected = pane.chat_tabs().file(pane.choice).map(|file| file.path.clone());
+                    let Some(files) = pane.files.as_mut() else {
+                        return Ok(AppRunControl::Continue);
+                    };
                     files.scan = None;
                     if let Some(page) = page {
                         if files.apply_page(page) {
+                            pane.restore_file_selection(selected.as_deref());
                             pane.tabs_revision += 1;
                         }
                         self.start_sidebar_files_scan(app_server, parent);

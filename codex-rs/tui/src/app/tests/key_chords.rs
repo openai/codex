@@ -1519,7 +1519,7 @@ prepared.
     assert!(draft.remote_image_urls.is_empty());
     insta::assert_snapshot!(draft.text, @"second prompt
 parent draft!");
-    // A page fits a chat with a subtitle or two title-only chats.
+    // Page navigation uses the whole chooser viewport and clamps at both ends.
     let pane = app.sidebar_mut();
     for _ in 0..4 {
         pane.chat_ready(ThreadId::new());
@@ -1535,10 +1535,10 @@ parent draft!");
     tui.terminal = terminal_at(two_rows);
     super::side_frame(&mut app, &mut tui, two_rows)?;
     for (key, expected) in [
-        (KeyCode::PageDown, 3),
         (KeyCode::PageDown, 5),
-        (KeyCode::PageUp, 3),
-        (KeyCode::PageUp, 2),
+        (KeyCode::PageDown, 5),
+        (KeyCode::PageUp, 0),
+        (KeyCode::PageUp, 0),
     ] {
         Box::pin(press(&mut app, &mut tui, &mut server, key.into())).await?;
         assert_eq!(app.sidebar().unwrap().choice, expected);

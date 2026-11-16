@@ -174,6 +174,33 @@ impl Files {
     }
 }
 
+fn promote_files(
+    pane: &mut super::sidebar::SidebarPane,
+    entries: impl IntoIterator<Item = FileLink>,
+) -> bool {
+    let selected = pane
+        .chat_tabs()
+        .file(pane.choice)
+        .map(|file| file.path.clone());
+    let Some(files) = pane.files.as_mut() else {
+        return false;
+    };
+    if !files.promote(entries) {
+        return false;
+    }
+    pane.restore_file_selection(selected.as_deref());
+    pane.tabs_revision += 1;
+    true
+}
+
+impl super::sidebar::SidebarPane {
+    pub(super) fn restore_file_selection(&mut self, path: Option<&str>) {
+        if let Some(index) = path.and_then(|path| self.files.as_ref()?.by_destination.get(path)) {
+            self.choice = self.chat_tabs().file_start() + index;
+        }
+    }
+}
+
 fn resolve(cwd: Option<&PathUri>, mut link: FileLink) -> Option<FileLink> {
     if link.path.is_empty() || link.path.len() > 4096 || link.path.chars().any(char::is_control) {
         return None;
@@ -267,7 +294,8 @@ impl App {
         parent: ThreadId,
     ) {
         // Until replay finishes, the rendered cells can still belong to the previous thread.
-        if self.pending_thread_switch_resets != 0
+        if server.thread_params_mode() == ThreadParamsMode::Cloud
+            || self.pending_thread_switch_resets != 0
             || self.current_displayed_thread_id() != Some(parent)
         {
             return;
@@ -276,7 +304,7 @@ impl App {
             return;
         };
         let mut entries = Vec::new();
-        let (cwd, inspect_local_paths) = {
+        let (cwd, inspect_local_paths, file_preview_unavailable) = {
             let store = channel.store.lock().await;
             let Some(session) = &store.session else {
                 return;
@@ -321,7 +349,19 @@ impl App {
                 }
                 entries.extend(turn_entries.into_iter().rev());
             }
-            (cwd, inspect_local_paths)
+            let file_preview_unavailable =
+                if session.windows_sandbox_host != WindowsSandboxHost::Local {
+                    Some("Requires workspace on server host")
+                } else if server.app_server_platform_family() == Some("windows")
+                    || (cfg!(windows) && !server.uses_remote_workspace())
+                    || cwd.as_ref().and_then(PathUri::infer_path_convention)
+                        != Some(codex_utils_path_uri::PathConvention::Posix)
+                {
+                    Some("Preview unavailable on Windows")
+                } else {
+                    None
+                };
+            (cwd, inspect_local_paths, file_preview_unavailable)
         };
         let active = self
             .chat_widget
@@ -358,6 +398,7 @@ impl App {
                 resolve(cwd.as_ref(), file)
             });
         let pane = self.sidebars.entry(Some(parent)).or_default();
+        pane.file_preview_unavailable = file_preview_unavailable;
         if pane.files.as_ref().is_some_and(|files| files.cwd != cwd) {
             pane.clear_files();
         }
@@ -380,9 +421,13 @@ impl App {
                 location: None,
             })
             .collect::<Vec<_>>();
-        if files.promote(active_links.rev().chain(entries).chain(visible_links.rev())) {
-            pane.tabs_revision += 1;
-        }
+        promote_files(
+            pane,
+            active_links.rev().chain(entries).chain(visible_links.rev()),
+        );
+        let Some(files) = pane.files.as_mut() else {
+            return;
+        };
         if files.extend(opened) {
             pane.tabs_revision += 1;
         }
@@ -441,12 +486,11 @@ impl App {
                 ThreadItemPayload::FileChange { .. } | ThreadItemPayload::ImageGeneration(_)
             )
             && let Some(pane) = self.sidebars.get_mut(&Some(thread))
-            && let Some(files) = pane.files.as_mut()
+            && let Some(files) = pane.files.as_ref()
         {
             let mut entries = Vec::new();
             newest_item_entries(files.cwd.as_ref(), &item.item.payload, &mut entries);
-            if !entries.is_empty() && files.promote(entries) {
-                pane.tabs_revision += 1;
+            if !entries.is_empty() && promote_files(pane, entries) {
                 self.chat_widget.request_redraw();
             }
         }

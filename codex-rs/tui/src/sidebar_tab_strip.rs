@@ -101,21 +101,15 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         targets
     }
 
-    pub(crate) fn hit(self, area: Rect, point: Position) -> Option<(TabTarget<Id>, Rect)> {
-        self.strip_targets(area)
-            .into_iter()
-            .find(|(_, rect)| rect.contains(point))
-    }
-
     pub(crate) fn render(
         self,
         area: Rect,
         buf: &mut Buffer,
         add_state: TabState,
         selected_state: TabState,
-        hovered_target: Option<TabTarget<Id>>,
+        pointer: Option<Position>,
         paint: impl Fn(Id, Rect, Style, &mut Buffer),
-    ) {
+    ) -> Vec<(TabTarget<Id>, Rect)> {
         let style = |state| match state {
             TabState::Active => crate::style::selection_style().not_underlined(),
             TabState::Inactive => crate::style::quiet_workspace_style(),
@@ -135,8 +129,9 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
             TabState::Inactive => hover.bold(),
             TabState::Absent => rest,
         };
-        for (target, rect) in self.strip_targets(area) {
-            let hovered = Some(target) == hovered_target;
+        let targets = self.strip_targets(area);
+        for &(target, rect) in &targets {
+            let hovered = pointer.is_some_and(|point| rect.contains(point));
             let quiet = if hovered { hover } else { rest };
             match target {
                 TabTarget::Tab(id) => {
@@ -184,5 +179,6 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                 }
             }
         }
+        targets
     }
 }

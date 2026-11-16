@@ -1,11 +1,12 @@
 ---
 source: tui/src/app/tests/saved_chat_loading_tests.rs
+assertion_line: 138
 expression: "format!(\"Waiting\\n{waiting}\\n\\nRetry\\n{retry}\")"
 ---
 Waiting
                                                                   +
  Open in sidebar
-   + New side chat                        Start from the main chat
+   + New side chat                    Start from this conversation
  Side chats  4
    ○ Side chat 1
    ○ Side chat 2
@@ -16,7 +17,7 @@ Waiting
 Retry
                                                                   +
  Open in sidebar
-   + New side chat                        Start from the main chat
+   + New side chat                    Start from this conversation
  Side chats  4
    ○ Side chat 1
    ○ Side chat 2

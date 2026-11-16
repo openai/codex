@@ -183,3 +183,28 @@ async fn pending_windows_sandbox_setup_blocks_thread_replacement() -> Result<()>
     app_server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.agent_navigation.upsert(
+        thread_id,
+        Some("Ghost".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+
+    let is_available =
+        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
+
+    assert!(!is_available);
+    assert_eq!(app.agent_navigation.get(&thread_id), None);
+    assert!(!app.thread_event_channels.contains_key(&thread_id));
+    Ok(())
+}

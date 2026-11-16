@@ -451,7 +451,7 @@ async fn document_preview_scenario() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(preview, @"
-    guide.md       × main.rs        ×                              +
+    guide.md      ×  main.rs       ×                              +
     3 let value = 3;                                               ↑
     ↑/↓ read · f3 find · Tab link · f8 select · Esc clear highlight
     ");
@@ -636,7 +636,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹ fe…eA/g….md× fe…eB/g….md×   +");
+    insta::assert_snapshot!(narrow_labels, @"‹  fe…eA/g…md×  fe…eB/g…md×   +");
     for directory in ["feature-alpha-build", "feature-beta-build"] {
         std::fs::create_dir_all(dir.path().join(directory))?;
         std::fs::write(dir.path().join(directory).join("guide.md"), "# Guide")?;
@@ -659,7 +659,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹ 1:f…ld/g…md× 2:f…ld/g…md×   +");
+    insta::assert_snapshot!(narrow_labels, @"‹  1:f…ld/g…d×  2:f…ld/g…d×   +");
     server.shutdown().await?;
     Ok(())
 }

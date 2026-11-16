@@ -1090,6 +1090,7 @@ See the Codex keymap documentation for supported actions and examples."
             divider_drag: None,
             pane_resize: None,
             passive_link_drag: None,
+            sidebar_press: None,
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,

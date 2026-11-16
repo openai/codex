@@ -7,7 +7,7 @@ expression: "chooser.lines().filter_map(|line|\nline.split_once('│').map(|(_, 
  Open in sidebar
 
    + New side chat
-     Start from the main chat
+     Start from this conversation
 
  Side chats  1
 

@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/tests/key_chords.rs
+assertion_line: 1372
 expression: frame
 ---
                                                                                │                                     +
@@ -7,7 +8,7 @@ expression: frame
                                                                                │ Open in sidebar
                                                                                │
                                                                                │ › + New side chat
-                                                                               │     Start from the main chat
+                                                                               │     Start from this conversation
                                                                                │
                                                                                │
 › parent draft                                                                 │

@@ -12,6 +12,7 @@ use crate::app_server_session::SideChat;
 use crate::app_server_session::SideChatStorage;
 use crate::app_server_session::side_chat_prompt_preview;
 use crate::sidebar_chooser::ChatTabs;
+use crate::sidebar_chooser::ChooserScroll;
 use crate::sidebar_chooser::Discovery;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::tui::Tui;
@@ -67,6 +68,7 @@ pub(super) enum ChooserSelection {
     New,
     Chat(ThreadId),
     Retry,
+    File(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,10 @@ pub(super) struct SidebarInputState {
     pub(super) revision: usize,
     pub(super) selected_tab: Option<SidebarTab>,
     pub(super) choice: ChooserSelection,
+    scroll: ChooserScroll,
+    content: SidebarContent,
+    showing_file_path: bool,
+    file_path_scroll: usize,
 }
 
 #[derive(Default)]
@@ -96,6 +102,10 @@ pub(super) struct SidebarPane {
     // Visit order is independent of the order in which tabs appear.
     visits: Vec<SidebarTab>,
     pub(super) choice: usize,
+    pub(super) chooser_scroll: ChooserScroll,
+    pub(super) showing_file_path: bool,
+    pub(super) file_path_scroll: usize,
+    pub(super) file_preview_unavailable: Option<&'static str>,
     pub(super) tabs_revision: usize,
     focus: Option<PaneFocus>,
     motion: PaneMotion,
@@ -146,12 +156,17 @@ impl SidebarPane {
             self.cancel_hidden_document_primary(/*visible*/ false);
         }
         self.focus_document_request = None;
+        if self.content != content {
+            self.showing_file_path = false;
+        }
         match content {
             SidebarContent::Chat(id) => {
                 self.add_tab(id);
                 self.visit(SidebarTab::Chat(id));
             }
-            SidebarContent::Chooser if self.content != content || self.focus.is_none() => {
+            SidebarContent::Chooser
+                if self.focus.is_none() || matches!(self.content, SidebarContent::Chat(_)) =>
+            {
                 self.reset_choice();
             }
             SidebarContent::Document(id) => {
@@ -174,31 +189,51 @@ impl SidebarPane {
     }
 
     pub(super) fn clear_files(&mut self) {
-        self.files = None;
+        if self.files.take().is_some() {
+            self.showing_file_path = false;
+            self.choice = self.choice.min(self.chat_tabs().choice_count() - 1);
+            self.tabs_revision += 1;
+        }
     }
 
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
         ChatTabs {
             label_style: crate::thread_label::ThreadLabelStyle::Plain,
             discovery: &self.discovery,
+            scroll: self.chooser_scroll,
             opening: self.opening.as_ref(),
             ids: &self.tabs,
             choices: &self.choices,
             latest_prompts: &self.latest_prompts,
             selected: self.visits.last().copied(),
+            files: self
+                .files
+                .as_ref()
+                .map_or(&[], |files| files.entries.as_slice()),
+            files_cwd: self.files.as_ref().and_then(|files| files.cwd.as_ref()),
+            file_preview_unavailable: self.file_preview_unavailable,
+            files_loading: self
+                .files
+                .as_ref()
+                .is_some_and(|files| files.scan.is_some()),
         }
     }
 
     pub(super) fn set_discovery(&mut self, discovery: Discovery) {
+        let file = self.chat_tabs().file_offset(self.choice);
         if matches!(discovery, Discovery::Failed(_)) && self.choices.is_empty() {
             self.choice = 1;
         }
         self.discovery = discovery;
+        if let Some(offset) = file {
+            self.choice = self.chat_tabs().file_start() + offset;
+        }
         self.choice = self.choice.min(self.chat_tabs().choice_count() - 1);
         self.tabs_revision += 1;
     }
 
     pub(super) fn update_saved_chats(&mut self, mut chats: Vec<SideChat>) {
+        let file = self.chat_tabs().file_offset(self.choice);
         let selection = self.chat_tabs().choice(self.choice);
         let keep_new = self.choice == 0 && !self.choices.is_empty();
         for chat in &mut self.choices {
@@ -219,7 +254,9 @@ impl SidebarPane {
         self.choices = chats;
         if reordered {
             self.tabs_revision += 1;
-            if let Some(index) = selection.and_then(|id| self.chat_tabs().choice_index(id)) {
+            if let Some(offset) = file {
+                self.choice = self.chat_tabs().file_start() + offset;
+            } else if let Some(index) = selection.and_then(|id| self.chat_tabs().choice_index(id)) {
                 self.choice = index;
             } else if !keep_new {
                 self.reset_choice();
@@ -228,6 +265,8 @@ impl SidebarPane {
     }
 
     fn reset_choice(&mut self) {
+        self.showing_file_path = false;
+        self.chooser_scroll = ChooserScroll::default();
         self.choice = self
             .selected_chat()
             .and_then(|id| self.chat_tabs().choice_index(id))
@@ -345,6 +384,8 @@ impl SidebarPane {
             ChooserSelection::Chat(id)
         } else if tabs.retry_row(self.choice) {
             ChooserSelection::Retry
+        } else if let Some(offset) = tabs.file_offset(self.choice) {
+            ChooserSelection::File(offset)
         } else {
             ChooserSelection::New
         };
@@ -352,12 +393,19 @@ impl SidebarPane {
             revision: self.tabs_revision,
             selected_tab: tabs.selected,
             choice,
+            scroll: self.chooser_scroll,
+            content: self.content,
+            showing_file_path: self.showing_file_path,
+            file_path_scroll: self.file_path_scroll,
         }
     }
 
     fn add_tab(&mut self, id: ThreadId) {
         if !self.tabs.contains(&SidebarTab::Chat(id)) {
             if self.chat_tabs().choice_index(id).is_none() {
+                if self.chat_tabs().file_offset(self.choice).is_some() {
+                    self.choice += 1;
+                }
                 self.choices.push(id.into());
             }
             self.tabs.push(SidebarTab::Chat(id));
@@ -383,6 +431,7 @@ impl SidebarPane {
         self.cancel_hidden_document_primary(/*visible*/ false);
         self.focus_document_request = None;
         self.opening = None;
+        self.showing_file_path = false;
         if let Some(files) = &mut self.files {
             files.scan = None;
         }
@@ -430,7 +479,13 @@ impl SidebarPane {
             if index < self.choice {
                 self.choice -= 1;
             }
-            self.choice = self.choice.min(self.choices.len());
+            let last = if self.files.is_some() {
+                self.chat_tabs().choice_count() - 1
+            } else {
+                self.choices.len()
+            };
+            self.choice = self.choice.min(last);
+            self.tabs_revision += 1;
         }
     }
 
@@ -440,6 +495,20 @@ impl SidebarPane {
 }
 
 impl App {
+    pub(super) fn chooser_area(&self, tui: &Tui) -> Option<Rect> {
+        self.chooser_focus()?;
+        let screen: Rect = tui.terminal.last_known_screen_size.into();
+        self.conversation_frame.panel_area().or_else(|| {
+            match side_pane::split_layout(self, tui, screen) {
+                Some(SidebarLayout::Panel { sidebar, .. }) => Some(sidebar),
+                _ if screen.width < 100 && self.chooser_focus() == Some(PaneFocus::Sidebar) => {
+                    Some(screen)
+                }
+                _ => None,
+            }
+        })
+    }
+
     pub(super) fn refresh_visible_side_chat_prompts(
         &mut self,
         tui: &Tui,
@@ -447,20 +516,9 @@ impl App {
         parent: ThreadId,
         request: uuid::Uuid,
     ) {
-        let area = if self.sidebar_parent() == Some(parent) && self.chooser_focus().is_some() {
-            let screen: Rect = tui.terminal.last_known_screen_size.into();
-            self.conversation_frame.panel_area().or_else(|| {
-                match side_pane::split_layout(self, tui, screen) {
-                    Some(SidebarLayout::Panel { sidebar, .. }) => Some(sidebar),
-                    _ if screen.width < 100 && self.chooser_focus() == Some(PaneFocus::Sidebar) => {
-                        Some(screen)
-                    }
-                    _ => None,
-                }
-            })
-        } else {
-            None
-        };
+        let area = (self.sidebar_parent() == Some(parent))
+            .then(|| self.chooser_area(tui))
+            .flatten();
         let Some(pane) = self.sidebars.get_mut(&Some(parent)) else {
             return;
         };

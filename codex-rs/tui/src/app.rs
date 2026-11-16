@@ -690,6 +690,7 @@ pub(crate) struct App {
     divider_drag: Option<side_pane::DividerDrag>,
     pane_resize: Option<side_pane::PaneResize>,
     passive_link_drag: Option<(ThreadId, Rect)>,
+    sidebar_press: Option<side_focus::SidebarPress>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
@@ -872,6 +873,22 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        match &event {
+            TuiEvent::Draw
+            | TuiEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Up(_) | MouseEventKind::Moved,
+                ..
+            }) => {}
+            TuiEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Drag(_),
+                ..
+            }) => {
+                if self.sidebar_press.take().is_some() {
+                    return Ok(AppRunControl::Continue);
+                }
+            }
+            _ => self.sidebar_press = None,
+        }
         self.transcript_view.document_links = self.document_preview_available(tui, app_server);
         crate::markdown_render::preferences::set_document_links(
             self.transcript_view.document_links,

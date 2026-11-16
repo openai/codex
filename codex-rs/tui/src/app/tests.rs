@@ -3220,31 +3220,6 @@ fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() ->
 }
 
 #[tokio::test]
-async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Ghost".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
-
-    let is_available =
-        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
-
-    assert!(!is_available);
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
-}
-
-#[tokio::test]
 async fn docked_replay_finishes_while_skills_refresh_is_pending() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let parent = ThreadId::new();
@@ -3622,12 +3597,13 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
     // Only the selected sibling fits. + starts the refresh and the chord joins it.
     side_frame(&mut app, &mut tui, Size::new(size.width, /*height*/ 10))?;
     let strip = app.conversation_frame.sidebar_tab_strip().unwrap();
-    let click = mouse(
+    for kind in [
         MouseEventKind::Down(MouseButton::Left),
-        strip.right() - 3,
-        strip.y,
-    );
-    boxed_future!(app.handle_tui_event(&mut tui, &mut server, click)).await?;
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let click = mouse(kind, strip.right() - 3, strip.y);
+        boxed_future!(app.handle_tui_event(&mut tui, &mut server, click)).await?;
+    }
     let request = app.sidebar().unwrap().discovery.request().unwrap();
     for key in open_chooser {
         boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
@@ -3703,10 +3679,24 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
     app.pending_server_profiles.remove(&parent);
     app.local_settings.tui.keymap = toml::from_str("[list]\naccept = ['f5 g']")?;
     enable_side_retention(&mut app)?;
-    for key in [KeyCode::Char('j'), KeyCode::F(5), KeyCode::Char('g')] {
+    let painted_frame = std::mem::take(&mut app.conversation_frame);
+    let pane = app.sidebar_mut();
+    let child_choice = pane.chat_tabs().choice_index(child).expect("saved child");
+    pane.choice = child_choice - 1;
+    pane.chooser_scroll = Default::default();
+    pane.focus_document_request = Some(uuid::Uuid::new_v4());
+    for key in [KeyCode::Down, KeyCode::F(5), KeyCode::Char('g')] {
         boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into())))
             .await?;
     }
+    assert_eq!(app.sidebar().expect("sidebar").choice, child_choice);
+    assert!(
+        app.sidebar()
+            .expect("sidebar")
+            .focus_document_request
+            .is_none()
+    );
+    app.conversation_frame = painted_frame;
     let opening = side_frame(&mut app, &mut tui, size)?;
     let status = opening
         .lines()
@@ -5328,7 +5318,13 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let [up, enter] = [KeyCode::Char('k'), KeyCode::Enter].map(KeyEvent::from);
     side_frame(&mut app, &mut tui, even)?;
     let sidebar_x = app.conversation_frame.chat_strip.unwrap().x;
-    keys!(prefix, chooser_key, up, enter);
+    keys!(prefix, chooser_key);
+    side_frame(&mut app, &mut tui, even)?;
+    keys!(KeyCode::Home.into());
+    side_frame(&mut app, &mut tui, even)?;
+    assert_eq!(app.chooser_focus(), Some(sidebar::PaneFocus::Sidebar));
+    assert_eq!(app.sidebar().unwrap().choice, 0);
+    keys!(enter);
     app.local_settings.tui.keymap = toml::from_str("[global]\nleader = 'f12'")?;
     enable_side_retention(&mut app)?;
     app.local_settings.tui.animations = false;
@@ -5427,7 +5423,8 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         idle_style
     );
     for (kind, expected) in [
-        (MouseEventKind::Down(MouseButton::Left), side_thread_id),
+        (MouseEventKind::Down(MouseButton::Left), sibling),
+        (MouseEventKind::Up(MouseButton::Left), side_thread_id),
         (MouseEventKind::ScrollDown, sibling),
     ] {
         let event = mouse(kind, arrow_x, strip.y);
@@ -5438,29 +5435,42 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     }
     side_frame(&mut app, &mut tui, even)?;
 
-    keys!(prefix, chooser_key, up, enter);
+    keys!(prefix, chooser_key);
+    side_frame(&mut app, &mut tui, even)?;
+    keys!(up);
+    side_frame(&mut app, &mut tui, even)?;
+    keys!(enter);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), child_draft);
     assert!(side_frame(&mut app, &mut tui, even)?.contains(child_row));
     let strip = app.conversation_frame.chat_strip.unwrap();
     let down = MouseEventKind::Down(MouseButton::Left);
+    let release = MouseEventKind::Up(MouseButton::Left);
     let sibling_tab = app
-        .sidebar()
-        .unwrap()
-        .chat_tabs()
-        .strip()
-        .strip_targets(strip)
-        .into_iter()
+        .conversation_frame
+        .sidebar_targets
+        .iter()
         .find_map(|(target, area)| {
-            (target
-                == crate::sidebar_tab_strip::TabTarget::Tab(
+            (*target
+                == side_focus::SidebarTarget::Tab(crate::sidebar_tab_strip::TabTarget::Tab(
                     crate::sidebar_tab_strip::SidebarTab::Chat(sibling),
-                ))
-            .then_some(area)
+                )))
+            .then_some(*area)
         })
         .expect("sibling tab");
-    let click = mouse(down, sibling_tab.x, strip.y);
-    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, click)).await?;
+    for (kind, x) in [
+        (down, sibling_tab.x),
+        (release, sibling_tab.right()),
+        (down, sibling_tab.x),
+        (release, sibling_tab.x),
+    ] {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, mouse(kind, x, strip.y)))
+            .await?;
+        if x == sibling_tab.right() {
+            assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+            assert!(app.sidebar().unwrap().close.is_none());
+        }
+    }
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     assert_eq!(app.current_displayed_thread_id(), Some(sibling));
     assert!(!tui.has_deferred_thread_switch_clear());
@@ -5544,16 +5554,16 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         side_frame(&mut app, &mut tui, even)?;
         let strip = app.conversation_frame.sidebar_tab_strip().unwrap();
         let add = strip.right() - 3;
-        let tabs = app
-            .sidebar()
-            .unwrap()
-            .chat_tabs()
-            .strip()
-            .strip_targets(strip);
-        let [inactive, selected] = tabs
-            .into_iter()
+        let [inactive, selected] = app
+            .conversation_frame
+            .sidebar_targets
+            .iter()
             .filter_map(|(target, area)| {
-                matches!(target, crate::sidebar_tab_strip::TabTarget::Tab(_)).then_some(area)
+                matches!(
+                    target,
+                    side_focus::SidebarTarget::Tab(crate::sidebar_tab_strip::TabTarget::Tab(_))
+                )
+                .then_some(*area)
             })
             .collect::<Vec<_>>()
             .try_into()
@@ -5656,8 +5666,14 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let close_x = (chooser.x..chooser.right())
         .rfind(|&x| tui.terminal.previous_buffer()[(x, chooser.y)].symbol() == "×")
         .expect("close button on the second tab");
-    let click_close = mouse(down, close_x, chooser.y);
-    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, click_close)).await?;
+    for kind in [down, release] {
+        boxed_future!(app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            mouse(kind, close_x, chooser.y)
+        ))
+        .await?;
+    }
     let frame = side_frame(&mut app, &mut tui, even)?;
     let dialog = frame
         .lines()
@@ -5670,12 +5686,14 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
     assert_eq!(app.chooser_focus(), chooser_focus);
     side_frame(&mut app, &mut tui, even)?;
-    boxed_future!(app.handle_tui_event(
-        &mut tui,
-        &mut app_server,
-        mouse(down, close_x - 1, chooser.y)
-    ))
-    .await?;
+    for kind in [down, release] {
+        boxed_future!(app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            mouse(kind, close_x - 1, chooser.y)
+        ))
+        .await?;
+    }
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
@@ -5694,8 +5712,14 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     ));
     keys!(prefix, chooser_key);
     side_frame(&mut app, &mut tui, even)?;
-    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, mouse(down, close_x, chooser.y)))
+    for kind in [down, release] {
+        boxed_future!(app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            mouse(kind, close_x, chooser.y)
+        ))
         .await?;
+    }
     assert!(side_frame(&mut app, &mut tui, even)?.contains("discard unsent input"));
     keys!(KeyCode::Esc.into());
     app.select_agent_thread(&mut tui, &mut app_server, sibling)
@@ -9247,6 +9271,7 @@ async fn make_test_app() -> Box<App> {
         divider_drag: None,
         pane_resize: None,
         passive_link_drag: None,
+        sidebar_press: None,
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
         active_thread_rx: None,
@@ -9390,6 +9415,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             divider_drag: None,
             pane_resize: None,
             passive_link_drag: None,
+            sidebar_press: None,
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,

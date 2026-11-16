@@ -1,25 +1,26 @@
 ---
 source: tui/src/app/tests.rs
+assertion_line: 3679
 expression: "states.join(\"\\n\\n\")"
 ---
 Loading
 
  Open in sidebar
  ◌ Loading side chats…
- › + New side chat                        Start from the main chat
+ › + New side chat                    Start from this conversation
 
 Empty result
 
  Open in sidebar
 
- › + New side chat                        Start from the main chat
+ › + New side chat                    Start from this conversation
 
 Initial failure
 
  Open in sidebar
  Permission denied by storage
    + New side chat
-     Start from the main chat
+     Start from this conversation
 
 
  ›   Retry loading side chats
@@ -28,7 +29,7 @@ Retry in progress
 
  Open in sidebar
  ◌ Loading side chats…
-   + New side chat                        Start from the main chat
+   + New side chat                    Start from this conversation
 
 
  ›   Retrying…
@@ -37,7 +38,7 @@ Refreshing cached chats
 
  Open in sidebar
  ◌ Refreshing side chats…
-   + New side chat                        Start from the main chat
+   + New side chat                    Start from this conversation
 
  Side chats  2
 
@@ -49,7 +50,7 @@ Cached chats after failure
 
  Open in sidebar
  Refresh failed
-   + New side chat                        Start from the main chat
+   + New side chat                    Start from this conversation
 
  Side chats  2
 
@@ -63,7 +64,7 @@ Refreshed chats
  Open in sidebar
 
    + New side chat
-     Start from the main chat
+     Start from this conversation
 
  Side chats  2
 
@@ -76,11 +77,11 @@ Readable reply
  Open in sidebar
 
    + New side chat
-     Start from the main chat
+     Start from this conversation
 
  Side chats  2
 
  › ○ Named sibling
      > Which branch? Keep ## My r…
    ○ Child-only prompt
-     Child-only prompt
+                                  ↓

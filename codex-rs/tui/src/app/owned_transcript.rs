@@ -7,6 +7,7 @@
 //! geometry unchanged. Turn tips remain outside transcript history; their painted rows are selectable.
 //! Plain Enter returns an empty composer to latest after transcript interactions and prompt editing.
 
+use super::side_focus::SidebarTarget;
 use super::sidebar::PaneFocus;
 use super::sidebar_document::DocumentRenderOptions;
 use super::turn_tips::TipSurface;
@@ -30,6 +31,8 @@ use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
 use crate::turn_tip::TurnTip;
 use crossterm::event::MouseEventKind;
+use ratatui::style::Styled;
+use ratatui::style::Stylize;
 use ratatui::widgets::Widget;
 
 /// Remember the last conversation bounds and neighboring content for input-triggered redraws.
@@ -39,6 +42,7 @@ pub(super) struct ConversationFrame {
     pub(super) sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
     pub(super) sidebar_input: Option<sidebar::SidebarInputState>,
+    pub(super) sidebar_targets: Vec<(SidebarTarget, Rect)>,
     pub(super) close_buttons: [Rect; 2],
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
     behind_dialog: Option<ratatui::buffer::Buffer>,
@@ -312,6 +316,7 @@ impl App {
                     )
             })
         });
+        let mut sidebar_targets = Vec::new();
         let sidebar_parent = self.sidebar_parent();
         let sidebar_image_protocol = self.preview_image_protocol(tui);
         let sidebar_motion =
@@ -421,17 +426,21 @@ impl App {
                                     self.local_settings.tui.animations,
                                 );
                                 let glyph = crate::motion::loading_glyph(*started, mode, &frames);
-                                format!("{glyph} Starting side chat…")
+                                ratatui::text::Text::from(Line::from(vec![
+                                    glyph.set_style(crate::style::accent_style()),
+                                    " ".into(),
+                                    "Starting side chat…".dim(),
+                                ]))
                             }
                             CreationState::Failed { message, .. } => {
-                                if resize_hint.is_some() {
+                                ratatui::text::Text::from(if resize_hint.is_some() {
                                     message.clone()
                                 } else {
                                     crate::sidebar_chooser::creation_failure_text(
                                         message,
                                         &self.keymap,
                                     )
-                                }
+                                })
                             }
                         };
                         ratatui::widgets::Paragraph::new(text)
@@ -442,20 +451,43 @@ impl App {
                             label_style,
                             ..pane.chat_tabs()
                         };
+                        let new_chat = self.chat_widget.side_chat_creation_state();
+                        let full_path = tabs
+                            .file(pane.choice)
+                            .filter(|_| pane.showing_file_path)
+                            .map(|file| file.path.as_str());
                         let footer = if let Some(hint) = resize_hint {
                             let row = crate::sidebar_chooser::body_row(*sidebar, sidebar.y);
                             crate::sidebar_chooser::resize_hint(hint, row.width)
                         } else {
-                            crate::sidebar_chooser::footer(
+                            let (hints, actions) = crate::sidebar_chooser::footer(
                                 &self.keymap,
                                 *sidebar,
                                 pane.choice,
                                 tabs,
-                                self.chat_widget.side_chat_creation_state(),
-                            )
-                            .0
-                            .line
+                                new_chat,
+                                full_path.is_some(),
+                            );
+                            sidebar_targets.extend(
+                                crate::sidebar_chooser::footer_targets(*sidebar, &hints, actions)
+                                    .map(|(action, area)| (SidebarTarget::Footer(action), area)),
+                            );
+                            hints.line
                         };
+                        let mut hovered_choice = None;
+                        if full_path.is_none() && resize_hint.is_none() {
+                            for (index, area) in crate::sidebar_chooser::row_targets(
+                                *sidebar,
+                                tabs,
+                                pane.choice,
+                                new_chat,
+                            ) {
+                                if pointer.is_some_and(|point| area.contains(point)) {
+                                    hovered_choice = Some(index);
+                                }
+                                sidebar_targets.push((SidebarTarget::Row(index), area));
+                            }
+                        }
                         crate::sidebar_chooser::paint(
                             focused,
                             *sidebar,
@@ -464,12 +496,15 @@ impl App {
                             tabs,
                             pane.choice,
                             &crate::sidebar_chooser::SidebarStyle {
-                                new_chat: self.chat_widget.side_chat_creation_state(),
+                                new_chat,
                                 use_theme_colors: self.local_settings.tui.status_line_use_colors,
                                 motion: MotionMode::from_animations_enabled(
                                     self.local_settings.tui.animations,
                                 ),
                                 frames: &frames,
+                                hovered_choice,
+                                full_path,
+                                path_scroll: pane.file_path_scroll,
                             },
                         );
                     }
@@ -495,25 +530,27 @@ impl App {
                             ratatui::widgets::Clear
                                 .render(side_pane::tab_and_body(*sidebar)[0], frame.buffer);
                         }
-                        crate::sidebar_chooser::tab_strip(
-                            *sidebar,
-                            chooser,
-                            if document && focused {
-                                TabState::Active
-                            } else if document {
-                                TabState::Inactive
-                            } else {
-                                TabState::Absent
-                            },
-                            crate::sidebar_chooser::ChatTabs {
-                                label_style,
-                                ..pane.chat_tabs()
-                            },
-                            pointer
-                                .and_then(|point| pane.chat_tabs().strip().hit(*sidebar, point))
-                                .map(|(target, _)| target),
-                            |id, width| pane.document_title(id, width),
-                            frame.buffer,
+                        sidebar_targets.extend(
+                            crate::sidebar_chooser::tab_strip(
+                                *sidebar,
+                                chooser,
+                                if document && focused {
+                                    TabState::Active
+                                } else if document {
+                                    TabState::Inactive
+                                } else {
+                                    TabState::Absent
+                                },
+                                crate::sidebar_chooser::ChatTabs {
+                                    label_style,
+                                    ..pane.chat_tabs()
+                                },
+                                pointer,
+                                |id, width| pane.document_title(id, width),
+                                frame.buffer,
+                            )
+                            .into_iter()
+                            .map(|(target, area)| (SidebarTarget::Tab(target), area)),
                         );
                     }
                 }
@@ -522,21 +559,34 @@ impl App {
             if let Some(strip) = strip
                 && let Some(pane) = self.sidebar()
             {
-                crate::sidebar_chooser::tab_strip(
-                    strip,
-                    TabState::Absent,
-                    chat,
-                    crate::sidebar_chooser::ChatTabs {
-                        label_style,
-                        ..pane.chat_tabs()
-                    },
-                    pointer
-                        .and_then(|point| pane.chat_tabs().strip().hit(strip, point))
-                        .map(|(target, _)| target),
-                    |id, width| pane.document_title(id, width),
-                    frame.buffer,
+                sidebar_targets.extend(
+                    crate::sidebar_chooser::tab_strip(
+                        strip,
+                        TabState::Absent,
+                        chat,
+                        crate::sidebar_chooser::ChatTabs {
+                            label_style,
+                            ..pane.chat_tabs()
+                        },
+                        pointer,
+                        |id, width| pane.document_title(id, width),
+                        frame.buffer,
+                    )
+                    .into_iter()
+                    .map(|(target, area)| (SidebarTarget::Tab(target), area)),
                 );
             }
+            if let Some(point) = pointer {
+                for &(target, area) in &sidebar_targets {
+                    if matches!(target, SidebarTarget::Footer(_)) && area.contains(point) {
+                        frame.buffer.set_style(
+                            area,
+                            crate::style::hover_style(crate::style::quiet_workspace_style()),
+                        );
+                    }
+                }
+            }
+            self.conversation_frame.sidebar_targets = std::mem::take(&mut sidebar_targets);
             if let Some(divider) = divider {
                 side_pane::paint_divider(frame, divider.x, self.divider_drag, highlight_divider);
             }

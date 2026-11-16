@@ -5,16 +5,23 @@ use crate::footer_hint;
 use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
+use crate::line_truncation::filename_label;
+use crate::line_truncation::middle_label;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::live_wrap::take_prefix_by_width;
+use crate::markdown_render::FileLink;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::sidebar_tab_strip::TabState;
 use crate::sidebar_tab_strip::TabStrip;
 use crate::sidebar_tab_strip::TabTarget;
 use crate::thread_label::ThreadLabelStyle;
 use codex_protocol::ThreadId;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -24,7 +31,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 const WIDE_WIDTH: u16 = 58;
-const FIRST_CHOICE_ROW: u16 = 4;
+const FIRST_CHOICE_ROW: usize = 4;
+const CHOOSER_BODY_START: usize = 1;
 
 pub(crate) fn body_row(area: Rect, y: u16) -> Rect {
     Rect::new(area.x + 1, y, area.width.saturating_sub(3), 1)
@@ -39,10 +47,12 @@ pub(crate) fn resize_hint(full: &str, width: u16) -> Line<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChooserAction {
     Open(usize),
     Back,
     Hide,
+    FilePath,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,11 +86,27 @@ pub(crate) fn footer(
     choice: usize,
     tabs: ChatTabs<'_>,
     new_chat: NewChatState,
+    showing_path: bool,
 ) -> (footer_hint::HintLine, Vec<Option<ChooserAction>>) {
     let hint = |action| list_hint(keymap, action);
+    if showing_path {
+        let (hints, actions): (Vec<_>, Vec<_>) = [
+            (hint(ListAction::Cancel), "back", Some(ChooserAction::Back)),
+            (hint(ListAction::MoveDown), "scroll", None),
+        ]
+        .into_iter()
+        .filter_map(|(key, label, action)| Some((footer_hint::shortcut(&key?, label), action)))
+        .unzip();
+        return (
+            footer_hint::HintLine::new(hints, body_row(area, area.y).width),
+            actions,
+        );
+    }
+    let selected_file = tabs.file(choice);
+    let visible = choice_is_visible(area, tabs, choice);
     let movement = [ListAction::MoveUp, ListAction::MoveDown]
         .into_iter()
-        .filter(|_| new_chat == NewChatState::Available)
+        .filter(|_| new_chat == NewChatState::Available || !tabs.files.is_empty())
         .filter_map(hint)
         .collect::<Vec<_>>()
         .join("/");
@@ -89,7 +115,11 @@ pub(crate) fn footer(
         .map(super::key_hint::ShortcutHint::display_label);
     let (hints, actions): (Vec<_>, Vec<_>) = [
         (
-            hint(ListAction::Accept).filter(|_| new_chat == NewChatState::Available),
+            hint(ListAction::Accept)
+                .filter(|_| {
+                    visible && (new_chat == NewChatState::Available || selected_file.is_some())
+                })
+                .filter(|_| selected_file.is_none() || tabs.file_preview_unavailable.is_none()),
             if tabs.retry_row(choice)
                 || tabs.opening.is_some_and(|o| {
                     Some(o.target.child) == tabs.choice(choice)
@@ -114,6 +144,13 @@ pub(crate) fn footer(
             },
             Some(ChooserAction::Back),
         ),
+        (
+            selected_file
+                .filter(|_| visible && file_path_key_available(keymap))
+                .map(|_| "p".to_owned()),
+            "path",
+            Some(ChooserAction::FilePath),
+        ),
         ((!movement.is_empty()).then_some(movement), "move", None),
         (hide, "hide pane", Some(ChooserAction::Hide)),
     ]
@@ -125,8 +162,6 @@ pub(crate) fn footer(
         actions,
     )
 }
-
-const CHAT_TAB: &str = " Side chat ";
 
 #[derive(Default)]
 pub(crate) enum Discovery {
@@ -170,18 +205,37 @@ pub(crate) struct ChatTabs<'a> {
     pub(crate) choices: &'a [SideChat],
     pub(crate) latest_prompts: &'a HashMap<ThreadId, String>,
     pub(crate) selected: Option<SidebarTab>,
+    pub(crate) files: &'a [FileLink],
+    pub(crate) files_loading: bool,
+    pub(crate) files_cwd: Option<&'a PathUri>,
+    pub(crate) file_preview_unavailable: Option<&'static str>,
+    pub(crate) scroll: ChooserScroll,
 }
 
 impl<'a> ChatTabs<'a> {
     pub(crate) fn visible_chat_ids(self, area: Rect, choice: usize) -> Vec<ThreadId> {
-        choice_rows(area, self, choice)
-            .visible_chats(self, choice)
+        ChoiceRows::new(area, self)
+            .visible_choices(self.scroll, choice)
             .filter_map(|(index, _)| self.choice(index))
             .collect()
     }
 
     pub(crate) fn choice_count(self) -> usize {
+        self.file_start() + self.files.len()
+    }
+
+    pub(crate) fn file_start(self) -> usize {
         self.choices.len() + 1 + usize::from(self.retry_row(self.choices.len() + 1))
+    }
+
+    pub(crate) fn file_offset(self, index: usize) -> Option<usize> {
+        index
+            .checked_sub(self.file_start())
+            .filter(|&i| i < self.files.len())
+    }
+
+    pub(crate) fn file(self, index: usize) -> Option<&'a FileLink> {
+        self.files.get(self.file_offset(index)?)
     }
 
     pub(crate) fn retry_row(self, index: usize) -> bool {
@@ -202,32 +256,11 @@ impl<'a> ChatTabs<'a> {
             .filter(|prompt| !prompt.is_empty())
     }
 
-    fn row_height(self, index: usize) -> u16 {
-        1 + u16::from(self.prompt(index).is_some())
-    }
-
-    fn fitting_choices(self, indices: impl Iterator<Item = usize>, height: usize) -> usize {
-        let mut used = 0;
-        indices
-            .take_while(|&index| {
-                used += usize::from(self.row_height(index));
-                used <= height
-            })
-            .count()
-    }
-
     pub(crate) fn choice_index(self, id: ThreadId) -> Option<usize> {
         self.choices
             .iter()
             .position(|choice| choice.id == id)
             .map(|index| index + 1)
-    }
-
-    pub(crate) fn strip(self) -> TabStrip<'a, SidebarTab> {
-        TabStrip {
-            ids: self.ids,
-            selected: self.selected,
-        }
     }
 }
 
@@ -236,38 +269,33 @@ pub(crate) fn tab_strip(
     chooser: TabState,
     chat: TabState,
     tabs: ChatTabs<'_>,
-    hovered_target: Option<TabTarget<SidebarTab>>,
+    pointer: Option<Position>,
     document_title: impl Fn(uuid::Uuid, usize) -> String,
     buf: &mut Buffer,
-) {
-    tabs.strip().render(
-        area,
-        buf,
-        chooser,
-        chat,
-        hovered_target,
-        |id, area, style, buf| {
-            let title = match id {
-                SidebarTab::Document(id) => Line::from(document_title(id, usize::from(area.width))),
-                SidebarTab::Chat(id) => match tabs.choice_index(id) {
+) -> Vec<(TabTarget<SidebarTab>, Rect)> {
+    TabStrip {
+        ids: tabs.ids,
+        selected: tabs.selected,
+    }
+    .render(area, buf, chooser, chat, pointer, |id, area, style, buf| {
+        let width = usize::from(area.width.saturating_sub(1));
+        let mut title = match id {
+            SidebarTab::Document(id) => Line::from(document_title(id, width)),
+            SidebarTab::Chat(id) => {
+                let name = match tabs.choice_index(id) {
                     Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
-                        Some(name) => {
-                            let mut title = tabs.label_style.render(
-                                Line::from(name.to_owned()),
-                                usize::from(area.width.saturating_sub(1)),
-                            );
-                            title.spans.insert(0, " ".into());
-                            title
-                        }
-                        None if tabs.choices.len() > 1 => Line::from(format!(" Side {number} ")),
-                        None => Line::from(CHAT_TAB),
+                        Some(name) => name.to_owned(),
+                        None if tabs.choices.len() > 1 => format!("Side {number}"),
+                        None => "Side chat".to_owned(),
                     },
-                    None => Line::from(CHAT_TAB),
-                },
-            };
-            title.style(style).render(area, buf);
-        },
-    );
+                    None => "Side chat".to_owned(),
+                };
+                tabs.label_style.render(Line::from(name), width)
+            }
+        };
+        title.spans.insert(0, " ".into());
+        title.style(style).render(area, buf);
+    })
 }
 
 pub(crate) fn side_chat_label(chat: &SideChat) -> Option<&str> {
@@ -278,87 +306,259 @@ pub(crate) fn side_chat_label(chat: &SideChat) -> Option<&str> {
         .lines()
         .next()
         .map(str::trim)
+        .filter(|line| !line.is_empty())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ChooserScroll {
+    top: usize,
+    // The wheel can move the viewport away from the keyboard selection.
+    pub(crate) wheel_scrolled: bool,
 }
 
 struct ChoiceRows {
     wide: bool,
-    new_chat: Range<u16>,
-    group: Option<u16>,
-    chats: Range<u16>,
+    height: usize,
+    chats_header: Option<usize>,
+    files_header: Option<usize>,
+    choices: Vec<Range<usize>>,
 }
 
 impl ChoiceRows {
-    /// Title and subtitle occupy one selectable entry, even when the last line is clipped.
-    fn visible_chats(
+    fn new(area: Rect, tabs: ChatTabs<'_>) -> Self {
+        let wide = body_row(area, area.y).width >= WIDE_WIDTH;
+        let height = usize::from(area.height.saturating_sub(3));
+        let mut row = FIRST_CHOICE_ROW;
+        let file_start = tabs.file_start();
+        let mut chats_header = None;
+        let mut files_header = None;
+        let choices = (0..tabs.choice_count())
+            .map(|index| {
+                if index == 1 && !tabs.choices.is_empty() {
+                    chats_header = Some(row + 1);
+                    row += 3;
+                } else if index == 1 && tabs.retry_row(index) {
+                    row += 2;
+                }
+                let file = index >= file_start;
+                if index == file_start {
+                    files_header = Some(row + 1);
+                    row += 3;
+                }
+                let start = row;
+                let subtitle = if index == 0 || file {
+                    !wide
+                } else {
+                    tabs.prompt(index).is_some()
+                };
+                row += 1 + usize::from(subtitle);
+                start..row
+            })
+            .collect();
+        Self {
+            wide,
+            height,
+            chats_header,
+            files_header,
+            choices,
+        }
+    }
+
+    fn max_top(&self) -> usize {
+        self.choices[self.choices.len() - 1]
+            .end
+            .saturating_sub(CHOOSER_BODY_START + self.height)
+    }
+
+    fn top(&self, scroll: ChooserScroll, choice: usize) -> usize {
+        let top = scroll.top.min(self.max_top());
+        if scroll.wheel_scrolled || self.height == 0 {
+            return top;
+        }
+        if choice == 0 && top == 0 {
+            return 0;
+        }
+        let lines = &self.choices[choice];
+        let latest = lines.start - CHOOSER_BODY_START;
+        let earliest = lines.end.saturating_sub(CHOOSER_BODY_START + self.height);
+        top.clamp(earliest.min(latest), latest).min(self.max_top())
+    }
+
+    fn visible_choices(
         &self,
-        tabs: ChatTabs<'_>,
+        scroll: ChooserScroll,
         choice: usize,
-    ) -> impl Iterator<Item = (usize, Range<u16>)> {
-        let mut rows = self.chats.clone();
-        let selected = choice.max(1);
-        let spare = rows
-            .len()
-            .saturating_sub(usize::from(tabs.row_height(selected)));
-        let first = selected - tabs.fitting_choices((1..selected).rev(), spare);
-        (first..tabs.choice_count()).map_while(move |index| {
-            let start = rows.next()?;
-            if tabs.prompt(index).is_some() {
-                rows.next();
-            }
-            Some((index, start..rows.start))
-        })
+    ) -> impl Iterator<Item = (usize, &Range<usize>)> {
+        let start = CHOOSER_BODY_START + self.top(scroll, choice);
+        let end = start + self.height;
+        let first = self.choices.partition_point(|lines| lines.end <= start);
+        self.choices
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take_while(move |(_, lines)| lines.start < end && start < end)
     }
 }
 
-fn choice_rows(area: Rect, tabs: ChatTabs<'_>, choice: usize) -> ChoiceRows {
-    let count = tabs.choice_count();
-    let wide = body_row(area, area.y).width >= WIDE_WIDTH;
-    let new_height = if wide { 1 } else { 2 };
-    let footer = area.height.saturating_sub(1);
-    let new_end = (FIRST_CHOICE_ROW + new_height).min(footer);
-    let after_group = 1 + u16::from(!tabs.choices.is_empty());
-    let group = (count > 1 && footer >= new_end + 1 + after_group + tabs.row_height(choice))
-        .then_some(new_end + 1);
-    // In short panes, let the New row scroll away so the selection remains visible.
-    let new_chat = FIRST_CHOICE_ROW..if choice == 0 || group.is_some() {
-        new_end.max(FIRST_CHOICE_ROW)
-    } else {
-        FIRST_CHOICE_ROW
-    };
-    let chat_start = group.map_or(new_chat.end, |row| row + after_group);
-    ChoiceRows {
-        wide,
-        new_chat,
-        group,
-        chats: chat_start..footer,
+pub(crate) fn wheel_scroll(
+    area: Rect,
+    tabs: ChatTabs<'_>,
+    choice: usize,
+    delta: isize,
+) -> ChooserScroll {
+    let rows = ChoiceRows::new(area, tabs);
+    ChooserScroll {
+        top: rows
+            .top(tabs.scroll, choice)
+            .saturating_add_signed(delta)
+            .min(rows.max_top()),
+        wheel_scrolled: true,
     }
 }
 
-pub(crate) fn page_size(
+pub(crate) fn navigate(
     area: Rect,
     tabs: ChatTabs<'_>,
     choice: usize,
     action: ListAction,
-) -> usize {
-    let rows = choice_rows(area, tabs, choice);
-    let height = rows.chats.len();
-    match action {
-        ListAction::PageUp => tabs.fitting_choices((0..choice).rev(), height),
-        ListAction::PageDown if choice == 0 => rows.visible_chats(tabs, choice).count(),
-        ListAction::PageDown => tabs.fitting_choices(choice..tabs.choice_count(), height),
-        _ => 1,
+) -> (usize, ChooserScroll) {
+    let rows = ChoiceRows::new(area, tabs);
+    let top = rows.top(tabs.scroll, choice);
+    let last = rows.choices.len() - 1;
+    let selected = &rows.choices[choice];
+    let height = rows.height.max(1);
+    let visible = rows.visible_choices(tabs.scroll, choice);
+    let choice = match action {
+        ListAction::JumpTop => return (0, ChooserScroll::default()),
+        ListAction::JumpBottom => last,
+        ListAction::MoveUp | ListAction::PageUp
+            if selected.start >= CHOOSER_BODY_START + top + rows.height =>
+        {
+            visible.last().map_or(choice, |(index, _)| index)
+        }
+        ListAction::MoveDown | ListAction::PageDown if selected.end <= CHOOSER_BODY_START + top => {
+            visible
+                .into_iter()
+                .next()
+                .map_or(choice, |(index, _)| index)
+        }
+        ListAction::MoveUp => choice.saturating_sub(1),
+        ListAction::MoveDown => (choice + 1).min(last),
+        ListAction::PageUp => rows
+            .choices
+            .partition_point(|lines| lines.end <= selected.start.saturating_sub(height))
+            .min(choice.saturating_sub(1)),
+        ListAction::PageDown => rows
+            .choices
+            .partition_point(|lines| lines.start <= selected.start + height)
+            .saturating_sub(1)
+            .max((choice + 1).min(last)),
+        _ => return (choice, tabs.scroll),
+    };
+    if choice == 0 {
+        return (choice, ChooserScroll::default());
     }
-    .max(1)
+    let mut scroll = ChooserScroll {
+        top,
+        wheel_scrolled: false,
+    };
+    scroll.top = rows.top(scroll, choice);
+    (choice, scroll)
 }
 
+pub(crate) fn choice_is_visible(area: Rect, tabs: ChatTabs<'_>, choice: usize) -> bool {
+    ChoiceRows::new(area, tabs)
+        .visible_choices(tabs.scroll, choice)
+        .any(|(index, _)| index == choice)
+}
+
+#[cfg(test)]
 pub(crate) fn choice_at(area: Rect, tabs: ChatTabs<'_>, choice: usize, y: u16) -> Option<usize> {
-    let rows = choice_rows(area, tabs, choice);
-    let offset = y.checked_sub(area.y)?;
-    if rows.new_chat.contains(&offset) {
-        return Some(0);
+    row_targets(area, tabs, choice, NewChatState::Available)
+        .find_map(|(index, row)| row.contains((row.x, y).into()).then_some(index))
+}
+
+pub(crate) fn row_targets(
+    area: Rect,
+    tabs: ChatTabs<'_>,
+    choice: usize,
+    new_chat: NewChatState,
+) -> impl Iterator<Item = (usize, Rect)> + '_ {
+    let rows = ChoiceRows::new(area, tabs);
+    let top = rows.top(tabs.scroll, choice);
+    let start = CHOOSER_BODY_START + top;
+    let end = start + rows.height;
+    rows.choices
+        .into_iter()
+        .enumerate()
+        .filter_map(move |(index, lines)| {
+            let first = lines.start.max(start);
+            let last = lines.end.min(end);
+            (first < last
+                && match tabs.file(index) {
+                    Some(_) => tabs.file_preview_unavailable.is_none(),
+                    None => new_chat == NewChatState::Available,
+                })
+            .then(|| Rect {
+                height: (last - first) as u16,
+                ..body_row(area, area.y + (first - top) as u16)
+            })
+            .map(|rect| (index, rect))
+        })
+}
+
+pub(crate) fn footer_targets(
+    area: Rect,
+    hints: &footer_hint::HintLine,
+    actions: Vec<Option<ChooserAction>>,
+) -> impl Iterator<Item = (ChooserAction, Rect)> + '_ {
+    let row = body_row(area, area.bottom().saturating_sub(1));
+    hints
+        .items
+        .iter()
+        .zip(actions)
+        .filter_map(move |(range, action)| {
+            if area.height < 2 {
+                return None;
+            }
+            Some((
+                action?,
+                Rect::new(row.x + range.start, row.y, range.end - range.start, 1),
+            ))
+        })
+}
+
+pub(crate) fn file_path_key_available(keymap: &RuntimeKeymap) -> bool {
+    keymap
+        .list
+        .action_for(crossterm::event::KeyCode::Char('p').into())
+        .is_none()
+}
+
+pub(crate) fn scroll_file_path(area: Rect, path: &str, top: usize, action: ListAction) -> usize {
+    let (path_rows, height) = file_path_layout(area, path);
+    let limit = path_rows.len().saturating_sub(height);
+    let top = top.min(limit);
+    match action {
+        ListAction::MoveUp => top.saturating_sub(1),
+        ListAction::MoveDown => (top + 1).min(limit),
+        ListAction::PageUp => top.saturating_sub(height),
+        ListAction::PageDown => (top + height).min(limit),
+        ListAction::JumpTop => 0,
+        ListAction::JumpBottom => limit,
+        _ => top,
     }
-    rows.visible_chats(tabs, choice)
-        .find_map(|(index, lines)| lines.contains(&offset).then_some(index))
+}
+
+fn file_path_layout(area: Rect, path: &str) -> (Vec<std::borrow::Cow<'_, str>>, usize) {
+    let body = area
+        .height
+        .saturating_sub(u16::from(area.height > 2) * 2 + 1);
+    let visible = usize::from(body.saturating_sub(u16::from(body > 2) * 2));
+    (
+        textwrap::wrap(path, usize::from(body_row(area, area.y).width.max(1))),
+        visible,
+    )
 }
 
 pub(crate) struct SidebarStyle<'a> {
@@ -366,6 +566,9 @@ pub(crate) struct SidebarStyle<'a> {
     pub(crate) use_theme_colors: bool,
     pub(crate) motion: crate::motion::MotionMode,
     pub(crate) frames: &'a crate::tui::FrameRequester,
+    pub(crate) hovered_choice: Option<usize>,
+    pub(crate) full_path: Option<&'a str>,
+    pub(crate) path_scroll: usize,
 }
 
 pub(crate) fn paint(
@@ -388,14 +591,41 @@ pub(crate) fn paint(
     };
     let row = |y| body_row(area, y);
     let footer_y = area.bottom() - 1;
-    let mut paint = |offset, line: Line<'_>| {
-        let y = area.y.saturating_add(offset);
-        if y < footer_y {
-            line.render(row(y), buf);
+    if let Some(path) = sidebar_style.full_path {
+        let mut body = body_row(area, area.y + u16::from(area.height > 2) * 2);
+        body.height = area
+            .height
+            .saturating_sub(u16::from(area.height > 2) * 2 + 1);
+        let mut lines = Vec::new();
+        if body.height > 2 {
+            lines.extend([Line::from("File path").bold(), Line::default()]);
+        }
+        let (path, visible) = file_path_layout(area, path);
+        let top = sidebar_style
+            .path_scroll
+            .min(path.len().saturating_sub(visible));
+        lines.extend(path.into_iter().skip(top).take(visible).map(Line::from));
+        ratatui::widgets::Paragraph::new(lines).render(body, buf);
+        footer.render(row(footer_y), buf);
+        return;
+    }
+    let rows = ChoiceRows::new(area, tabs);
+    let waiting =
+        sidebar_style.new_chat == NewChatState::WaitingForMainMessage && tabs.files.is_empty();
+    let top = if waiting {
+        0
+    } else {
+        rows.top(tabs.scroll, choice)
+    };
+    let mut paint = |offset: usize, line: Line<'_>| {
+        if let Some(y) = offset.checked_sub(top)
+            && (CHOOSER_BODY_START..CHOOSER_BODY_START + rows.height).contains(&y)
+        {
+            line.render(row(area.y + y as u16), buf);
         }
     };
     paint(2, Line::from("Open in sidebar").bold());
-    if sidebar_style.new_chat == NewChatState::WaitingForMainMessage {
+    if waiting {
         for (offset, text) in (FIRST_CHOICE_ROW..).zip(textwrap::wrap(
             "You can start a side chat after your first message in the main chat.",
             usize::from(row(area.y).width.max(1)),
@@ -414,25 +644,39 @@ pub(crate) fn paint(
             } else {
                 "Refreshing side chats…"
             };
-            paint(3, Line::from(format!("{glyph} {label}").dim()));
+            paint(
+                3,
+                Line::from(vec![
+                    glyph.set_style(crate::style::accent_style()),
+                    " ".into(),
+                    label.dim(),
+                ]),
+            );
         }
         Discovery::Failed(error) => paint(3, Line::from(error.as_str().red())),
+        Discovery::Idle if tabs.files_loading => paint(3, Line::from("Loading older files…").dim()),
         Discovery::Idle => {}
     }
-    let rows = choice_rows(area, tabs, choice);
     let secondary = crate::style::secondary_text_style();
     let row_style = |index| {
         if index == choice {
             ('›', style, style.not_bold())
+        } else if sidebar_style.hovered_choice == Some(index) {
+            let hover = crate::style::hover_style(crate::style::quiet_workspace_style());
+            (' ', hover, hover.not_bold())
         } else {
             (' ', Default::default(), secondary)
         }
     };
-    if !rows.new_chat.is_empty() {
-        let y = rows.new_chat.start;
+    {
+        let y = FIRST_CHOICE_ROW;
         let (marker, fill, subtitle) = row_style(0);
         let title = format!("{marker} + New side chat");
-        let detail = Span::styled("Start from the main chat", subtitle);
+        let detail = match sidebar_style.new_chat {
+            NewChatState::Available => "Start from this conversation",
+            NewChatState::WaitingForMainMessage => "Available after your first message",
+        };
+        let detail = Span::styled(detail, subtitle);
         if rows.wide {
             let pad = usize::from(row(area.y).width - 1) - detail.width();
             paint(
@@ -444,17 +688,33 @@ pub(crate) fn paint(
             paint(y + 1, Line::from(vec!["    ".into(), detail]).style(fill));
         }
     }
-    if let Some(y) = rows.group
-        && !tabs.choices.is_empty()
-    {
+    if let Some(y) = rows.chats_header {
         let total = tabs.choices.len();
         paint(
             y,
             Line::from(format!("Side chats  {total}")).style(secondary),
         );
     }
+    if let Some(y) = rows.files_header
+        && (top + CHOOSER_BODY_START..top + CHOOSER_BODY_START + rows.height).contains(&y)
+    {
+        let total = tabs.files.len();
+        let group = if tabs
+            .files
+            .iter()
+            .all(|entry| crate::markdown_render::is_markdown_file(&entry.path))
+        {
+            "Markdown files"
+        } else {
+            "Files"
+        };
+        paint(y, Line::from(format!("{group}  {total}")).style(secondary));
+    }
     let width = usize::from(row(area.y).width);
-    for (index, lines) in rows.visible_chats(tabs, choice) {
+    for (index, lines) in rows
+        .visible_choices(tabs.scroll, choice)
+        .skip_while(|(index, _)| *index == 0)
+    {
         let (marker, fill, subtitle) = row_style(index);
         if tabs.retry_row(index) {
             let label = if tabs.discovery.request().is_some() {
@@ -466,6 +726,44 @@ pub(crate) fn paint(
                 lines.start,
                 Line::from(format!("{marker}   {label}")).style(fill),
             );
+            continue;
+        }
+        if let Some(link) = tabs.file(index) {
+            let y = lines.start;
+            let relative = tabs.files_cwd.and_then(|cwd| {
+                LegacyAppPathString::from_string(&link.path)
+                    .to_inferred_path_uri()?
+                    .relative_path_from(cwd)
+            });
+            let path = relative.as_deref().unwrap_or(&link.path);
+            let (directory, name) = path
+                .rsplit_once(['/', '\\'])
+                .unwrap_or(("Project root", path));
+            let directory = tabs.file_preview_unavailable.unwrap_or(directory);
+            let width = width.saturating_sub(4);
+            if rows.wide {
+                let name = filename_label(name, width.saturating_sub(5));
+                let directory_width = width.saturating_sub(crate::width::display_width(&name) + 2);
+                let directory = middle_label(directory, directory_width);
+                paint(
+                    y,
+                    Line::from(vec![
+                        format!("{marker} · {name}").into(),
+                        format!("  {directory}").set_style(subtitle),
+                    ])
+                    .style(fill),
+                );
+            } else {
+                let name = filename_label(name, width);
+                paint(y, Line::from(format!("{marker} · {name}")).style(fill));
+                if y + 1 < lines.end {
+                    let directory = middle_label(directory, width);
+                    paint(
+                        y + 1,
+                        Line::from(format!("    {directory}")).style(subtitle),
+                    );
+                }
+            }
             continue;
         }
         let chat = &tabs.choices[index - 1];
@@ -492,7 +790,7 @@ pub(crate) fn paint(
         {
             Span::styled(
                 crate::motion::loading_glyph(*started, sidebar_style.motion, sidebar_style.frames),
-                fill,
+                fill.fg(crate::style::accent_color_on(fill.bg)),
             )
         } else {
             Span::styled("○", if selected { style } else { secondary })
@@ -537,6 +835,17 @@ pub(crate) fn paint(
                 lines.start + 1,
                 truncate_line_with_ellipsis_if_overflow(line, width),
             );
+        }
+    }
+    // Keep these in the right margin, outside the clickable list rows.
+    for (visible, y, glyph) in [
+        (top > 0, area.y + 1, "↑"),
+        (top < rows.max_top(), footer_y.saturating_sub(1), "↓"),
+    ] {
+        if visible && rows.height > 0 && area.width >= 3 {
+            Line::from(glyph)
+                .style(secondary)
+                .render(Rect::new(area.right() - 2, y, 1, 1), buf);
         }
     }
     if footer_y > area.y {
