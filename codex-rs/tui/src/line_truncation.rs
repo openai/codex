@@ -113,12 +113,37 @@ pub(crate) fn truncate_line_with_ellipsis(line: Line<'static>, max_width: usize)
 #[path = "line_truncation_tests.rs"]
 mod tests;
 
+/// Format a document tab from path components ordered from filename toward root.
+/// Keep the distinguishing directory suffix when the tab is too narrow for the path.
+pub(crate) fn document_label(parts: &[&str], width: usize) -> String {
+    let name = parts.iter().rev().copied().collect::<Vec<_>>().join("/");
+    if crate::width::display_width(&name) <= width {
+        return name;
+    }
+    if parts.len() < 2 || width < 4 {
+        return filename_label(&name, width);
+    }
+    let directory = parts[parts.len() - 1];
+    let budget = (width / 2).min(crate::width::display_width(directory));
+    let directory = middle_label(directory, budget);
+    let filename = filename_label(
+        parts[0],
+        width.saturating_sub(crate::width::display_width(&directory) + 1),
+    );
+    format!("{directory}/{filename}")
+}
+
 pub(crate) fn filename_label(name: &str, width: usize) -> String {
     let extension = name
         .rsplit_once('.')
         .filter(|(_, ext)| !ext.contains(['/', '\\']))
         .map_or(0, |(_, ext)| crate::width::display_width(ext) + 1);
     middle_label_with_suffix(name, width, extension)
+}
+
+/// Keep both ends of a label, measuring terminal cells and preserving grapheme boundaries.
+pub(crate) fn middle_label(text: &str, width: usize) -> String {
+    middle_label_with_suffix(text, width, /*suffix_width*/ 0)
 }
 
 fn middle_label_with_suffix(text: &str, width: usize, suffix_width: usize) -> String {

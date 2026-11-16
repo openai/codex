@@ -26,6 +26,12 @@ impl App {
         {
             return None;
         }
+        if let Some(area) = self.conversation_frame.panel_area()
+            && area.contains((mouse.column, mouse.row).into())
+            && let Some(pane) = self.sidebar()
+        {
+            return pane.visible_link_at(mouse.column, mouse.row);
+        }
         let view = if let Some(panes) = self.conversation_frame.side_pane()
             && panes.passive.contains((mouse.column, mouse.row).into())
         {

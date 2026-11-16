@@ -251,7 +251,7 @@ impl App {
                 .and_then(sidebar::SidebarPane::visible_content),
             Some(SidebarContent::Document(_))
         ) {
-            return self.handle_document_input(tui, event);
+            return self.handle_document_input(tui, server, event).await;
         }
         if self.chooser_focus().is_none() {
             return false;
@@ -499,9 +499,14 @@ impl App {
         } else {
             None
         };
+        let document_shortcut = document.is_some_and(|id| {
+            self.sidebar()
+                .and_then(|pane| pane.documents.get(&id))
+                .is_some_and(|doc| doc.allows_tab_shortcut(key))
+        });
         let close = if let Some(id) = document {
             (bindings.close_sidebar_tab.is_pressed(key)
-                || crate::key_hint::plain(KeyCode::Esc).is_press(key))
+                || (document_shortcut && crate::key_hint::plain(KeyCode::Esc).is_press(key)))
             .then_some(SidebarTab::Document(id))
         } else {
             self.current_displayed_thread_id()
@@ -512,11 +517,11 @@ impl App {
         };
         let left = bindings.focus_pane_left.is_pressed(key);
         let tab_step = if bindings.sidebar_up.is_pressed(key)
-            || (document.is_some() && crate::key_hint::plain(KeyCode::Left).is_press(key))
+            || (document_shortcut && crate::key_hint::plain(KeyCode::Left).is_press(key))
         {
             Some(-1)
         } else if bindings.sidebar_down.is_pressed(key)
-            || (document.is_some() && crate::key_hint::plain(KeyCode::Right).is_press(key))
+            || (document_shortcut && crate::key_hint::plain(KeyCode::Right).is_press(key))
         {
             Some(1)
         } else {
@@ -623,6 +628,15 @@ impl App {
                 } else {
                     PaneFocus::Sidebar
                 };
+                if focus == PaneFocus::Main
+                    && matches!(
+                        self.sidebar()
+                            .and_then(sidebar::SidebarPane::visible_content),
+                        Some(SidebarContent::Document(_))
+                    )
+                {
+                    self.zoomed_thread = None;
+                }
                 let pane = self.sidebar_mut();
                 if let Some(content) = pane.visible_content() {
                     pane.show(content, focus);

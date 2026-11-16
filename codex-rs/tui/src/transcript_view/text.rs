@@ -847,6 +847,42 @@ impl TextLayout {
         }
     }
 
+    pub(super) fn document_links(&self) -> Vec<(Range<usize>, String)> {
+        let mut stops: Vec<(Range<usize>, String)> = Vec::new();
+        let mut previous_source = None;
+        for (index, row) in self.rows.iter().enumerate() {
+            let inset = row.first_column - row.prefix_columns;
+            for link in &row.line.hyperlinks {
+                let Some(destination) = link.reader_destination(/*documents*/ true) else {
+                    continue;
+                };
+                let offset = |column: usize| {
+                    self.position_at(index, (inset + column).min(usize::from(u16::MAX)) as u16)
+                };
+                let range = offset(link.columns.start)..offset(link.columns.end);
+                if range.is_empty() {
+                    continue;
+                }
+                if let Some((previous, previous_destination)) = stops.last_mut()
+                    && *previous_destination == destination
+                    && previous_source == link.markdown_source
+                    && (previous.end == range.start
+                        || (previous_source.is_some()
+                            && self
+                                .text
+                                .get(previous.end..range.start)
+                                .is_some_and(|gap| gap.chars().all(char::is_whitespace))))
+                {
+                    previous.end = range.end;
+                } else {
+                    previous_source = link.markdown_source;
+                    stops.push((range, destination));
+                }
+            }
+        }
+        stops
+    }
+
     /// Resolve an OSC-8 destination or a document target when the workspace enables previews.
     pub(super) fn link_at(&self, row: usize, column: u16, documents: bool) -> Option<String> {
         let row = self.rows.get(row)?;

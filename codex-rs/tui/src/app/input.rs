@@ -107,10 +107,21 @@ impl App {
                 && self.overlay.is_none()
                 && !self.focused_sidebar_chooser(tui)
                 && self.chat_widget.no_modal_or_popup_active()
-                && self.transcript_view.owns_interaction_key(key_event)
-                && (self.transcript_view.has_active_interaction()
-                    || self.backtrack.overlay_preview_active
-                    || crate::transcript_view::JumpTarget::from_key(key_event).is_none())))
+                && self.focused_document().map_or_else(
+                    || {
+                        self.transcript_view.owns_interaction_key(key_event)
+                            && (self.transcript_view.has_active_interaction()
+                                || self.backtrack.overlay_preview_active
+                                || crate::transcript_view::JumpTarget::from_key(key_event)
+                                    .is_none())
+                    },
+                    |document| {
+                        document.owns_interaction_key(key_event)
+                            && (!document.allows_tab_shortcut(key_event)
+                                || crate::transcript_view::JumpTarget::from_key(key_event)
+                                    .is_none())
+                    },
+                )))
             && !select_mode_chord
         {
             let close = tui.is_owned_screen()
@@ -287,15 +298,15 @@ impl App {
             };
             return contexts.with_voice_toggle(&self.keymap);
         }
-        if self.panel_focus() == Some(super::sidebar::PaneFocus::Sidebar)
-            && self.chat_widget.no_modal_or_popup_active()
-            && matches!(
-                self.sidebar()
-                    .and_then(sidebar::SidebarPane::visible_content),
-                Some(sidebar::SidebarContent::Document(_))
-            )
+        if self.chat_widget.no_modal_or_popup_active()
+            && let Some(doc) = self.focused_document()
         {
-            return KeymapContextSet::new(KeymapContext::Pager).with_voice_toggle(&self.keymap);
+            return if doc.is_search_editing() {
+                KeymapContextSet::new(KeymapContext::Editor)
+            } else {
+                KeymapContextSet::transcript()
+            }
+            .with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);

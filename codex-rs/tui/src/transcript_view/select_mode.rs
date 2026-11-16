@@ -439,7 +439,7 @@ impl TranscriptView {
                 /*width*/ 1,
                 /*height*/ 1,
             );
-            buf.set_style(area, crate::style::selection_style().underlined());
+            buf.set_style(area, crate::style::selection_style().not_underlined());
         }
     }
 

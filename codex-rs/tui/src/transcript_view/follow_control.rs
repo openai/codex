@@ -50,7 +50,8 @@ impl TranscriptView {
     }
 
     pub(super) fn follow_control_label(&self, width: u16) -> Option<&'static str> {
-        if self.area.is_empty()
+        if !self.show_follow_control
+            || self.area.is_empty()
             || self.tail_visible
             || self.highlight.is_some()
             || self.selection.is_some()

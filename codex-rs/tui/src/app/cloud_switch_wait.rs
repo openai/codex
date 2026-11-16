@@ -48,12 +48,18 @@ fn handle_cloud_switch_event(
     };
     // Clipboard text is delivered on Draw after ordinary input invalidation and target checks.
     app.invalidate_right_click_paste(&event);
+    if matches!(event, tui::TuiEvent::FocusLost | tui::TuiEvent::Resume) {
+        for pane in app.sidebars.values_mut() {
+            pane.cancel_hidden_document_primary(/*visible*/ false);
+        }
+    }
     // Polling retains copy feedback for the ordinary event loop.
     tui.clipboard.poll();
     let event = app.finish_right_click_paste(tui, event);
     if app.pending_right_click_paste.is_some() {
         if matches!(event, tui::TuiEvent::Draw) {
             // A PRIMARY read may be waiting for an earlier copy or publication.
+            app.cancel_hidden_sidebar_primary(tui);
             tui.clipboard.advance(tui.frame_requester());
         } else if matches!(event, tui::TuiEvent::Resize(_)) {
             // A size change can consume the worker's completion frame.

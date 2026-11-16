@@ -237,7 +237,7 @@ pub(crate) fn tab_strip(
     chat: TabState,
     tabs: ChatTabs<'_>,
     hovered_target: Option<TabTarget<SidebarTab>>,
-    document_title: impl Fn(uuid::Uuid) -> String,
+    document_title: impl Fn(uuid::Uuid, usize) -> String,
     buf: &mut Buffer,
 ) {
     tabs.strip().render(
@@ -248,10 +248,7 @@ pub(crate) fn tab_strip(
         hovered_target,
         |id, area, style, buf| {
             let title = match id {
-                SidebarTab::Document(id) => Line::from(crate::line_truncation::filename_label(
-                    &document_title(id),
-                    usize::from(area.width),
-                )),
+                SidebarTab::Document(id) => Line::from(document_title(id, usize::from(area.width))),
                 SidebarTab::Chat(id) => match tabs.choice_index(id) {
                     Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
                         Some(name) => {

@@ -455,3 +455,23 @@ fn rendered_markdown_file_targets_are_only_interactive_in_the_workspace() {
         ["./guide.md".to_owned(), "./notes.md".to_owned()].into()
     );
 }
+
+#[test]
+fn document_link_navigation_preserves_occurrences_across_wraps() {
+    let markdown = "[first **link** wraps](./guide.md) [second link](./guide.md)";
+    for width in [10_u16, 17, 100] {
+        let lines = crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
+            markdown,
+            Some(usize::from(width)),
+            /*cwd*/ None,
+            &crate::markdown_render::hide_reader_link_destination,
+        );
+        let layout = TextLayout::new(lines, width);
+        let links = layout
+            .document_links()
+            .into_iter()
+            .map(|(range, _)| &layout.text()[range])
+            .collect::<Vec<_>>();
+        assert_eq!(links, ["first link wraps", "second link"]);
+    }
+}

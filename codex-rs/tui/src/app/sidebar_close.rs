@@ -128,7 +128,9 @@ pub(super) async fn request(
         Action::CloseTab => "Close",
         Action::Archive => "Archive",
     };
-    app.sidebar_mut().close = Some(Confirmation {
+    let pane = app.sidebar_mut();
+    pane.cancel_hidden_document_primary(/*visible*/ false);
+    pane.close = Some(Confirmation {
         target,
         action,
         message: format!(

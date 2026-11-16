@@ -864,7 +864,7 @@ fn keyboard_table_mark_selects_cells_and_swaps_rectangle_corners() {
             row.iter()
                 .map(|cell| {
                     use ratatui::style::Modifier;
-                    if cell.modifier.contains(Modifier::UNDERLINED) {
+                    if cell.modifier.contains(Modifier::BOLD | Modifier::REVERSED) {
                         "@"
                     } else if cell.modifier.contains(Modifier::REVERSED) {
                         cell.symbol()

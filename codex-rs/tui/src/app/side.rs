@@ -315,6 +315,14 @@ impl App {
     /// Zoom follows the displayed conversation even when its peer cannot be selected offline.
     pub(super) fn open_pane_focus(&self) -> Option<ThreadId> {
         let focused = self.current_displayed_thread_id()?;
+        if self.panel_focus() == Some(sidebar::PaneFocus::Sidebar)
+            && matches!(
+                self.sidebar()?.visible_content(),
+                Some(sidebar::SidebarContent::Document(_))
+            )
+        {
+            return Some(focused);
+        }
         let child = self.side_pair_key(focused)?;
         (self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
             .then_some(focused)

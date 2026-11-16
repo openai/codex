@@ -12,10 +12,25 @@ use codex_config::types::KeybindingsSpec;
 use crossterm::event::MouseEvent;
 use pretty_assertions::assert_eq;
 use ratatui::layout::Size;
+use ratatui::style::Modifier;
 use unicode_width::UnicodeWidthStr;
 
-#[tokio::test]
-async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> Result<()> {
+#[test]
+fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> Result<()> {
+    // The reader and embedded app server load full configurations on this thread.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(Box::pin(document_preview_scenario()))
+        })?
+        .join()
+        .expect("document preview test thread panicked")
+}
+
+async fn document_preview_scenario() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
     app.config.features.disable(Feature::TuiWorkspace)?;
@@ -67,6 +82,8 @@ async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> 
 
     app.local_settings.tui.keymap.pager.jump_bottom =
         Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x end".into())));
+    app.local_settings.tui.keymap.global.select_transcript =
+        Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x [".into())));
     enable_side_retention(&mut app)?;
     let enabled = side_frame(&mut app, &mut tui, size)?;
     assert_eq!(
@@ -150,6 +167,143 @@ async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> 
     # Guide
     First section.
     ");
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    assert!(!screen.contains("Back to bottom"), "{screen}");
+    let gap = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 2);
+    let hints = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
+    insta::assert_snapshot!(format!("{gap:?}\n{hints}"), @r#"
+    ""
+    ↑/↓ read · f3 find · Tab link · ⌃x [ select · Esc close
+    "#);
+    let original_scroll = app.keymap.pager.scroll_down.clone();
+    for key in [
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL),
+    ] {
+        app.keymap.pager.scroll_down = vec![KeyBinding::from_event(key)];
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+        let scrolled = side_frame(&mut app, &mut tui, size)?;
+        assert!(!scrolled.contains("# Guide"), "{scrolled}");
+        assert!(!scrolled.contains("Back to bottom"), "{scrolled}");
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Home.into())))
+            .await?;
+        side_frame(&mut app, &mut tui, size)?;
+    }
+    app.keymap.pager.scroll_down = original_scroll;
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Down.into())))
+        .await?;
+    let before_jump = side_frame(&mut app, &mut tui, size)?;
+    let jump_top = std::mem::take(&mut app.keymap.pager.jump_top);
+    let jump_bottom = std::mem::take(&mut app.keymap.pager.jump_bottom);
+    for key in [
+        KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL),
+    ] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+        assert_eq!(side_frame(&mut app, &mut tui, size)?, before_jump);
+    }
+    app.keymap.pager.jump_top = jump_top;
+    app.keymap.pager.jump_bottom = jump_bottom;
+    for key in [
+        KeyCode::F(3),
+        KeyCode::Char('e'),
+        KeyCode::Char('g'),
+        KeyCode::Char('g'),
+    ] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+    }
+    let find = side_frame(&mut app, &mut tui, size)?;
+    let footer = find
+        .lines()
+        .find_map(|line| line.find("Find: ").map(|start| line[start..].trim_end()))
+        .expect("document Find editor");
+    insta::assert_snapshot!(footer, @"Find: egg");
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
+        .await?;
+    let select = crossterm::event::KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
+    app.local_settings.tui.keymap.global.select_transcript =
+        Some(KeybindingsSpec::One(KeybindingSpec("f8".into())));
+    enable_side_retention(&mut app)?;
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(select))).await?;
+    side_frame(&mut app, &mut tui, size)?;
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    let footer = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
+    insta::assert_snapshot!(footer, @"v mark · enter/q close");
+    for key in [KeyCode::Char('v'), KeyCode::Right] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+    }
+    app.reconnect.offline = true;
+    let copy = crossterm::event::KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert!(matches!(
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(copy))).await?,
+        AppRunControl::Continue
+    ));
+    assert!(tui.clipboard.is_busy());
+    let pane = app.sidebar_mut();
+    let document = match pane.visible_content().unwrap() {
+        sidebar::SidebarContent::Document(id) => id,
+        _ => unreachable!(),
+    };
+    pane.documents
+        .get_mut(&document)
+        .unwrap()
+        .reader()
+        .unwrap()
+        .0
+        .publish_primary(&mut tui, "visible preview");
+    pane.show(
+        sidebar::SidebarContent::Document(document),
+        sidebar::PaneFocus::Main,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if tui.clipboard.poll().is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("active copy completes");
+    tui.clipboard.advance(tui.frame_requester());
+    assert!(tui.clipboard.is_busy(), "visible preview publishes PRIMARY");
+    let pane = app.sidebar_mut();
+    pane.documents
+        .get_mut(&document)
+        .unwrap()
+        .reader()
+        .unwrap()
+        .0
+        .publish_primary(&mut tui, "hidden preview");
+    pane.show(
+        sidebar::SidebarContent::Chooser,
+        sidebar::PaneFocus::Sidebar,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while tui.clipboard.is_busy() {
+            tui.clipboard.poll();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("PRIMARY publication completes");
+    tui.clipboard.advance(tui.frame_requester());
+    assert!(
+        !tui.clipboard.is_busy(),
+        "hidden preview must not publish PRIMARY"
+    );
+    app.sidebar_mut().show(
+        sidebar::SidebarContent::Document(document),
+        sidebar::PaneFocus::Sidebar,
+    );
+    app.reconnect.offline = false;
+    Box::pin(app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Char('q').into()),
+    ))
+    .await?;
+    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
     for key in [
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         KeyCode::End.into(),
@@ -160,14 +314,34 @@ async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> 
     assert!(end.contains("Last section."), "{end}");
 
     std::fs::write(dir.path().join("notes.md"), "# Notes")?;
-    app.open_document(
-        &mut tui,
-        &mut server,
-        parent,
-        AppServerPath::from_app_server("notes.md"),
-    )
-    .await?;
-    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Tab.into())))
+        .await?;
+    side_frame(&mut app, &mut tui, size)?;
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    let buffer = tui.terminal.previous_buffer();
+    let highlighted = (sidebar.y + 1..sidebar.bottom() - 1)
+        .flat_map(|y| (sidebar.x..sidebar.right()).map(move |x| &buffer[(x, y)]))
+        .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    insta::assert_snapshot!(highlighted, @"Next");
+    for key in [KeyCode::Home, KeyCode::Enter] {
+        assert!(
+            app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(key.into()))
+                .await
+        );
+    }
+    assert_eq!(app.sidebar().unwrap().documents.len(), 1);
+    let document = app.sidebar_mut().active_document().unwrap();
+    let (view, _) = document.reader().unwrap();
+    view.jump_to_latest();
+    side_frame(&mut app, &mut tui, size)?;
+    assert!(
+        app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(KeyCode::Tab.into()))
+            .await
+    );
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into())))
+        .await?;
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
     let two = side_frame(&mut app, &mut tui, size)?;
     assert!(
@@ -211,6 +385,16 @@ async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> 
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
     Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
         .await?;
+    Box::pin(app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )),
+    ))
+    .await?;
     Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
     assert_eq!(app.sidebar().unwrap().documents.len(), 1);
     app.open_document(
@@ -245,6 +429,77 @@ async fn focused_markdown_link_opens_read_only_preview_only_with_workspace() -> 
     ))
     .await?;
     assert!(!app.side_companions[&parent].view.document_links);
+    for directory in ["featureA", "featureB"] {
+        std::fs::create_dir_all(dir.path().join(directory).join("shared"))?;
+        std::fs::write(
+            dir.path().join(directory).join("shared/guide.md"),
+            "# Guide",
+        )?;
+        Box::pin(app.open_document(
+            &mut tui,
+            &mut server,
+            parent,
+            AppServerPath::from_app_server(format!("{directory}/shared/guide.md")),
+        ))
+        .await?;
+        Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+        Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
+    }
+    let _ = side_frame(&mut app, &mut tui, Size::new(76, 12))?;
+    let strip = app
+        .conversation_frame
+        .sidebar_tab_strip()
+        .expect("tab strip");
+    let buffer = tui.terminal.previous_buffer();
+    let labels = (strip.x..strip.right())
+        .map(|x| buffer[(x, strip.y)].symbol())
+        .collect::<String>();
+    let duplicate_labels = labels
+        .split('×')
+        .map(|label| label.trim_start_matches('‹').trim())
+        .filter(|label| label.starts_with("featureA/") || label.starts_with("featureB/"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(duplicate_labels, @"
+    featureA/guide.md
+    featureB/guide.md
+    ");
+    side_frame(&mut app, &mut tui, Size::new(/*width*/ 33, /*height*/ 12))?;
+    let strip = app
+        .conversation_frame
+        .sidebar_tab_strip()
+        .expect("tab strip");
+    let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
+    insta::assert_snapshot!(narrow_labels, @"‹ fe…eA/g….md× fe…eB/g….md×   +");
+    for directory in ["feature-alpha-build", "feature-beta-build"] {
+        std::fs::create_dir_all(dir.path().join(directory))?;
+        std::fs::write(dir.path().join(directory).join("guide.md"), "# Guide")?;
+        Box::pin(app.open_document(
+            &mut tui,
+            &mut server,
+            parent,
+            AppServerPath::from_app_server(format!("{directory}/guide.md")),
+        ))
+        .await?;
+        Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+        Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(false).await)).await?;
+    }
+    side_frame(&mut app, &mut tui, Size::new(/*width*/ 33, /*height*/ 12))?;
+    let strip = app
+        .conversation_frame
+        .sidebar_tab_strip()
+        .expect("tab strip");
+    let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
+    insta::assert_snapshot!(narrow_labels, @"‹ 1:f…ld/g…md× 2:f…ld/g…md×   +");
     server.shutdown().await?;
     Ok(())
+}
+
+fn visible_sidebar_row(tui: &crate::tui::Tui, sidebar: Rect, row: u16) -> String {
+    let buffer = tui.terminal.previous_buffer();
+    (sidebar.x..sidebar.right())
+        .map(|column| buffer[(column, row)].symbol())
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }

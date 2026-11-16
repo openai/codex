@@ -121,6 +121,72 @@ impl TranscriptView {
             .link_at(visible.row, column - self.area.x, self.document_links)
     }
 
+    pub(crate) fn cycle_document_link(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        selected: Option<usize>,
+        forward: bool,
+    ) -> Option<usize> {
+        let layout = self.layout(cells, /*index*/ 0)?;
+        let links = layout.document_links();
+        let count = links.len();
+        if count == 0 {
+            return None;
+        }
+        let index = match selected {
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+            None if forward => 0,
+            None => count - 1,
+        };
+        let offset = links[index].0.start;
+        let row = layout.row_for_offset(offset);
+        if !self
+            .visible
+            .iter()
+            .any(|visible| visible.index == 0 && visible.row == row)
+        {
+            self.jump_to_offset(cells, offset);
+        }
+        Some(index)
+    }
+
+    pub(crate) fn document_link(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        index: usize,
+    ) -> Option<String> {
+        self.layout(cells, /*index*/ 0)?
+            .document_links()
+            .into_iter()
+            .nth(index)
+            .map(|(_, link)| link)
+    }
+
+    pub(crate) fn paint_document_link(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        index: usize,
+        buf: &mut ratatui::buffer::Buffer,
+    ) {
+        let Some(layout) = self.layout(cells, /*index*/ 0) else {
+            return;
+        };
+        let Some((range, _)) = layout.document_links().into_iter().nth(index) else {
+            return;
+        };
+        for (row, visible) in self.visible.iter().enumerate() {
+            if visible.index == 0 {
+                visible.layout.highlight(
+                    range.clone(),
+                    Rect::new(self.area.x, self.area.y + row as u16, self.area.width, 1),
+                    buf,
+                    visible.row,
+                );
+            }
+        }
+    }
+
     pub(crate) fn navigate_pager(
         &mut self,
         key: KeyEvent,

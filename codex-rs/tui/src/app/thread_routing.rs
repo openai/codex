@@ -147,6 +147,7 @@ impl App {
         };
         if let Some(pane) = self.sidebars.get_mut(&Some(active_id)) {
             pane.opening = None;
+            pane.cancel_hidden_document_primary(/*visible*/ false);
         }
         let input_state = self.chat_widget.capture_thread_input_state();
         let recap_progress = self.recap.progress();

@@ -366,7 +366,17 @@ impl App {
                         .and_then(|pane| pane.active_document())
                     {
                         let [_, body] = side_pane::tab_and_body(*sidebar);
-                        doc.paint(body, frame.buffer, sidebar_motion, &frames, resize_hint);
+                        if let Some(cursor) = doc.paint(
+                            body,
+                            frame.buffer,
+                            sidebar_motion,
+                            &frames,
+                            &self.keymap,
+                            resize_hint,
+                        ) && focused
+                        {
+                            frame.cursor_position = Some(cursor);
+                        }
                     } else if let Some(creation) =
                         self.sidebar().and_then(|pane| pane.creation.as_ref())
                     {
@@ -481,7 +491,7 @@ impl App {
                             pointer
                                 .and_then(|point| pane.chat_tabs().strip().hit(*sidebar, point))
                                 .map(|(target, _)| target),
-                            |id| pane.document_title(id),
+                            |id, width| pane.document_title(id, width),
                             frame.buffer,
                         );
                     }
@@ -505,7 +515,7 @@ impl App {
                     pointer
                         .and_then(|point| pane.chat_tabs().strip().hit(strip, point))
                         .map(|(target, _)| target),
-                    |id| pane.document_title(id),
+                    |id, width| pane.document_title(id, width),
                     frame.buffer,
                 );
             }

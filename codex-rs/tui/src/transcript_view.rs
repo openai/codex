@@ -99,6 +99,7 @@ pub(crate) struct TranscriptView {
     pub(crate) primary_selection: bool,
     position: Position,
     follow_control: follow_control::FollowControl,
+    pub(crate) show_follow_control: bool,
     copy_feedback: Option<composer_gap::CopyFeedback>,
     composer_tip: Option<(Rect, HyperlinkLine)>,
     turn_tip_key: Option<EntryKey>,
@@ -141,6 +142,7 @@ impl Default for TranscriptView {
             primary_selection: false,
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),
+            show_follow_control: true,
             copy_feedback: None,
             composer_tip: None,
             turn_tip_key: None,
@@ -341,6 +343,28 @@ impl TranscriptView {
             self.scroll(current_cells, /*rows*/ 0);
         }
         self.render_search(buf);
+    }
+
+    pub(crate) fn paint_document_scroll_indicators(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        cells: &[Arc<dyn HistoryCell>],
+    ) {
+        if area.height < 2 || area.width < 3 {
+            return;
+        }
+        let start = self.start(cells);
+        for (visible, row, arrow) in [
+            (start > (0, 0), area.top(), "↑"),
+            (start < self.bottom_start(cells), area.bottom() - 1, "↓"),
+        ] {
+            if visible {
+                buf[(area.right() - 1, row)]
+                    .set_symbol(arrow)
+                    .set_style(crate::style::secondary_text_style());
+            }
+        }
     }
 
     /// Persist the clamped reading position after the last paint at the final viewport height.
@@ -568,6 +592,15 @@ impl TranscriptView {
         } else {
             self.jump_to_entry(cells, /*index*/ 0);
         }
+    }
+
+    pub(crate) fn jump_to_offset(&mut self, cells: &[Arc<dyn HistoryCell>], offset: usize) {
+        self.position = Position::Reading(Anchor {
+            key: self.entry_key(cells, /*index*/ 0),
+            index: 0,
+            offset,
+            row_bias: 0,
+        });
     }
 
     pub(crate) fn jump_to_latest(&mut self) {

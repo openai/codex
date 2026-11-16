@@ -20,7 +20,10 @@ impl App {
             Some(Overlay::Transcript(overlay)) if overlay.is_select_mode()
         ) || (tui.is_owned_screen()
             && self.overlay.is_none()
-            && self.transcript_view.is_select_mode());
+            && (self.focused_document().map_or_else(
+                || self.transcript_view.is_select_mode(),
+                super::super::sidebar_document::Document::is_select_mode,
+            )));
         if !select_mode {
             return false;
         }
@@ -29,7 +32,10 @@ impl App {
             &self.overlay,
             Some(Overlay::Transcript(overlay)) if overlay.is_search_editing()
         ) || (self.overlay.is_none()
-            && self.transcript_view.is_search_editing());
+            && self.focused_document().map_or_else(
+                || self.transcript_view.is_search_editing(),
+                super::super::sidebar_document::Document::is_search_editing,
+            ));
         let (code, modifiers) =
             crate::key_hint::normalize_key_parts(key_event.code, key_event.modifiers);
         let fixed_search_control = search_editing

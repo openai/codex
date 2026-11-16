@@ -100,7 +100,49 @@ pub(super) struct SidebarPane {
 }
 
 impl SidebarPane {
+    pub(super) fn visible_link_at(&self, column: u16, row: u16) -> Option<String> {
+        let SidebarContent::Document(id) = self.visible_content()? else {
+            return None;
+        };
+        self.documents.get(&id)?.link_at(column, row)
+    }
+
+    pub(super) fn finish_document_copy(
+        &mut self,
+        completion: &(u64, crate::clipboard_copy::worker::CopyResult),
+        visible: bool,
+    ) {
+        let selected = self.visible_content();
+        let visible = visible && self.close.is_none();
+        for (&id, doc) in &mut self.documents {
+            if let Some((view, cells)) = doc.reader()
+                && view.finish_copy(
+                    cells,
+                    completion,
+                    visible && selected == Some(SidebarContent::Document(id)),
+                ) == Some(true)
+            {
+                view.jump_to_latest();
+            }
+        }
+    }
+
+    pub(super) fn cancel_hidden_document_primary(&mut self, visible: bool) {
+        let selected = self.visible_content();
+        let visible = visible && self.close.is_none();
+        for (&id, doc) in &mut self.documents {
+            if (!visible || selected != Some(SidebarContent::Document(id)))
+                && let Some((view, _)) = doc.reader()
+            {
+                view.cancel_primary();
+            }
+        }
+    }
+
     pub(super) fn show(&mut self, content: SidebarContent, focus: PaneFocus) {
+        if self.content != content {
+            self.cancel_hidden_document_primary(/*visible*/ false);
+        }
         self.focus_document_request = None;
         match content {
             SidebarContent::Chat(id) => {
@@ -221,12 +263,53 @@ impl SidebarPane {
         self.documents.get_mut(&id)
     }
 
-    pub(super) fn document_title(&self, id: uuid::Uuid) -> String {
+    pub(super) fn document_title(&self, id: uuid::Uuid, width: usize) -> String {
         let Some(document) = self.documents.get(&id) else {
             return String::new();
         };
         let path = document.path.inferred_native_path_string();
-        path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned()
+        let parts: Vec<_> = path.rsplit(['/', '\\']).collect();
+        let depth = self
+            .documents
+            .values()
+            .filter(|other| other.path != document.path)
+            .map(|other| {
+                parts
+                    .iter()
+                    .copied()
+                    .zip(other.path.inferred_native_path_string().rsplit(['/', '\\']))
+                    .take_while(|(left, right)| left == right)
+                    .count()
+                    + 1
+            })
+            .max()
+            .unwrap_or(1)
+            .min(parts.len());
+        let label = crate::line_truncation::document_label(&parts[..depth], width);
+        let mut index = 1;
+        let mut collision = false;
+        for (&other_id, other) in &self.documents {
+            if other_id == id {
+                continue;
+            }
+            let other_path = other.path.inferred_native_path_string();
+            let other_parts: Vec<_> = other_path.rsplit(['/', '\\']).take(depth).collect();
+            if crate::line_truncation::document_label(&other_parts, width) == label {
+                collision = true;
+                index += usize::from(other_path < path);
+            }
+        }
+        if !collision {
+            return label;
+        }
+        let prefix = format!("{index}:");
+        if prefix.len() > width {
+            return label;
+        }
+        format!(
+            "{prefix}{}",
+            crate::line_truncation::document_label(&parts[..depth], width - prefix.len())
+        )
     }
 
     pub(super) fn add_document_tab(&mut self, id: uuid::Uuid) {
@@ -286,6 +369,7 @@ impl SidebarPane {
     }
 
     pub(super) fn hide(&mut self) {
+        self.cancel_hidden_document_primary(/*visible*/ false);
         self.focus_document_request = None;
         self.opening = None;
         self.focus = None;
@@ -511,8 +595,15 @@ impl SidebarLayout {
 pub(super) fn paint_layout(app: &mut App, tui: &Tui, area: Rect) -> Option<SidebarLayout> {
     let zoomed =
         app.zoomed_thread.is_some() && app.zoomed_thread == app.current_displayed_thread_id();
-    let allowed =
-        !zoomed && app.side_retention_enabled(tui) && !app.conversation_frame.has_caller_inset();
+    let zoomed_document = zoomed
+        && app.panel_focus() == Some(PaneFocus::Sidebar)
+        && matches!(
+            app.sidebar().and_then(SidebarPane::visible_content),
+            Some(SidebarContent::Document(_))
+        );
+    let allowed = (!zoomed || zoomed_document)
+        && app.side_retention_enabled(tui)
+        && !app.conversation_frame.has_caller_inset();
     let animate = allowed
         && area.width >= 100
         && app.local_settings.tui.animations
@@ -529,7 +620,7 @@ pub(super) fn paint_layout(app: &mut App, tui: &Tui, area: Rect) -> Option<Sideb
     }
     let content = pane.content;
     let focus = pane.focus.unwrap_or(PaneFocus::Main);
-    let [main, sidebar] = if area.width < 100 {
+    let [main, sidebar] = if zoomed_document || area.width < 100 {
         if focus == PaneFocus::Main {
             return None;
         }
