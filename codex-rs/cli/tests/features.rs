@@ -92,6 +92,12 @@ fn interactive_validates_config_before_requiring_terminal() -> Result<()> {
             "unknown configuration field",
         ),
         (
+            &["--strict-config", "-c", "tui.status_line_provider=42"],
+            "config.toml",
+            "",
+            "Invalid `tui.status_line_provider` in session-flags",
+        ),
+        (
             &["--profile", "work"],
             "work.config.toml",
             "model = [",

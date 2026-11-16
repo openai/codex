@@ -328,14 +328,28 @@ async fn malformed_status_line_provider_uses_project_and_user_validation_rules()
         .expect_err("malformed project preference");
     assert_error_at(error, &project_file, 3);
 
-    std::fs::write(&user_config, malformed)?;
-    for strict in [false, true] {
-        assert_error_at(
-            build(strict).await.expect_err("malformed user preference"),
-            &user_config,
-            2,
-        );
-    }
+    std::fs::write(
+        &user_config,
+        "[tui]\nstatus_line_provider = { plugin = 'old', server = 'local', tool = 'usage' }\n",
+    )?;
+    let config = build(/*strict*/ false).await?;
+    assert_eq!(
+        config.tui_status_line_provider.as_deref(),
+        Some(&StatusLineSelection::Builtin(BuiltinStatusLine::Default))
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("tui.status_line_provider"))
+    );
+    assert_error_at(
+        build(/*strict*/ true)
+            .await
+            .expect_err("malformed user preference"),
+        &user_config,
+        2,
+    );
     Ok(())
 }
 
@@ -353,7 +367,7 @@ async fn status_line_provider_requires_a_complete_identity_in_the_selected_profi
             &profile,
             format!("[tui]\nstatus_line_provider = {{ {partial} }}\n"),
         )?;
-        let result = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .loader_overrides(LoaderOverrides {
                 user_config_path: Some(profile.clone()),
@@ -361,10 +375,10 @@ async fn status_line_provider_requires_a_complete_identity_in_the_selected_profi
                 ..LoaderOverrides::without_managed_config_for_tests()
             })
             .build()
-            .await;
-        assert!(
-            result.is_err(),
-            "accepted an incomplete provider: {partial}"
+            .await?;
+        assert_eq!(
+            config.tui_status_line_provider.as_deref(),
+            Some(&StatusLineSelection::Builtin(BuiltinStatusLine::Default))
         );
     }
     Ok(())
