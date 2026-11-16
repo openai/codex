@@ -75,6 +75,14 @@ impl PreparedGuardianContext {
 }
 
 impl PreparedGuardianContext {
+    /// Start with no parent user, thread or project instructions and skip repository discovery.
+    pub fn without_parent_instructions(mut self) -> Self {
+        self.key.user_instructions = None;
+        self.key.thread_instructions = None;
+        self.key.project_instructions = Some(Arc::default());
+        self
+    }
+
     pub fn reuse_key(
         &self,
         previous: Option<&GuardianReviewSession>,

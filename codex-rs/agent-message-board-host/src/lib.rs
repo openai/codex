@@ -124,6 +124,17 @@ pub async fn delete_agent_message_boards(
         })
 }
 
+/// Host membership and clock for a local board in this existing agent tree.
+pub fn local_board_host(manager: Weak<ThreadManager>, root: ThreadId) -> Arc<dyn MessageBoardHost> {
+    Arc::new(LocalBoardHost {
+        manager,
+        tree: root.into(),
+        caller: root,
+        remote_notifications: false,
+        connection: None,
+    })
+}
+
 #[derive(Clone)]
 struct LocalBoardHost {
     manager: Weak<ThreadManager>,

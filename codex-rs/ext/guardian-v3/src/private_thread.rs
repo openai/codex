@@ -27,7 +27,9 @@ impl PrivateThread {
         owner: &ReviewerTasks,
         instructions: &str,
     ) -> anyhow::Result<Self> {
-        let prepared = prepare_review_prewarm(parent).await?;
+        let prepared = prepare_review_prewarm(parent)
+            .await?
+            .without_parent_instructions();
         let key = prepared.reuse_key(/*previous*/ None);
         let (mut options, state) = prepared
             .thread_options(GuardianReviewSessionKind::TrunkNew, /*snapshot*/ None)

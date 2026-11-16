@@ -807,3 +807,132 @@ async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Re
     app.shutdown_gracefully().await?;
     Ok(())
 }
+
+#[test_case(None; "new_root")]
+#[test_case(Some("This instruction predates the resume."); "resumed_root")]
+#[tokio::test]
+async fn v3_routes_the_first_live_message_while_the_actor_is_still_sampling(
+    prior_message: Option<&str>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    // Neither model can finish a turn or issue a tool call before both requests arrive.
+    let (first, first_gate) = oneshot::channel();
+    let (second, second_gate) = oneshot::channel();
+    let response = assistant_response(
+        r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
+    )?;
+    let (server, _) = start_streaming_sse_server(
+        [first_gate, second_gate]
+            .into_iter()
+            .map(|gate| {
+                vec![StreamingSseChunk {
+                    gate: Some(gate),
+                    body: response.clone(),
+                }]
+            })
+            .collect(),
+    )
+    .await;
+    let home = TempDir::new()?;
+    sync_config(server.uri())
+        .with_extra_config("[features.guardianv3]\nenabled = true")
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized_with_timeout(TIMEOUT)
+        .await?;
+    let project_rule = "Write release notes in French.";
+    let env = app.auto_env()?;
+    env.environment()
+        .get_filesystem()
+        .write_file(
+            &env.selection().cwd.join("AGENTS.md")?,
+            project_rule.as_bytes().to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let thread = if let Some(prior_message) = prior_message {
+        let thread_id = app_test_support::create_fake_paginated_rollout(
+            home.path(),
+            "2025-01-01T00-01-00",
+            "2025-01-01T00:01:00Z",
+            prior_message,
+            Some("mock_provider"),
+            /*git_info*/ None,
+        )?;
+        let resumed: ThreadResumeResponse = app
+            .request(|request_id| ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id,
+                    // A thread override cannot disable the server's housekeeper.
+                    config: Some([("features.guardianv3.enabled".into(), json!(false))].into()),
+                    exclude_turns: true,
+                    ..Default::default()
+                },
+            })
+            .await?;
+        resumed.thread
+    } else {
+        app.start_thread(ThreadStartParams {
+            history_mode: Some(codex_app_server_protocol::ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?
+        .thread
+    };
+    let instruction = "Hold the release until Friday.";
+    let environment = app.auto_env_params()?;
+    let _: TurnStartResponse = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id,
+                environments: Some(vec![environment]),
+                input: vec![UserInput::Text {
+                    text: instruction.to_owned(),
+                    text_elements: vec![],
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    timeout(TIMEOUT, server.wait_for_request_count(/*count*/ 2)).await?;
+    let requests = server.requests().await;
+    let mut routed = false;
+    for request in requests {
+        let body: Value = serde_json::from_slice(&request)?;
+        let items = body["input"].as_array().expect("request input");
+        let routing_input = items
+            .iter()
+            .find(|item| item["name"] == "guardian_housekeeper_input");
+        let has_project_rule = items.iter().any(|item| {
+            item["type"] == "message" && item["content"].to_string().contains(project_rule)
+        });
+        assert_eq!(
+            has_project_rule,
+            routing_input.is_none(),
+            "only the actor receives AGENTS.md"
+        );
+        if let Some(input) = routing_input {
+            let output = input["output"].as_str().expect("housekeeper input text");
+            routed = output.contains(instruction);
+            if let Some(prior_message) = prior_message {
+                assert!(
+                    !output.contains(prior_message),
+                    "resume must skip existing history"
+                );
+            }
+        }
+    }
+    assert!(
+        routed,
+        "the background request must include the first original"
+    );
+    let _ = first.send(());
+    let _ = second.send(());
+    app.shutdown_gracefully().await?;
+    server.shutdown().await;
+    Ok(())
+}

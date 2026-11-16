@@ -383,15 +383,20 @@ async fn thread_delete_removes_persisted_boards_even_with_agent_feature_disabled
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::AgentMessageBoard)
         .enable_feature(Feature::MultiAgentV2)
-        .with_extra_config(&format!(
-            "[features.guardianv3]\nenabled = {guardian_v3_enabled}"
-        ))
+        .with_extra_config("[features.guardianv3]\nenabled = false")
         .write(home.path())?;
     let mut app = TestAppServer::builder()
         .with_codex_home(home.path())
         .build_initialized()
         .await?;
-    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            history_mode: Some(codex_app_server_protocol::ThreadHistoryMode::Paginated),
+            config: Some([("features.guardianv3.enabled".into(), json!(true))].into()),
+            ..Default::default()
+        })
+        .await?
+        .thread;
     let completed = app
         .start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -413,6 +418,13 @@ async fn thread_delete_removes_persisted_boards_even_with_agent_feature_disabled
         .await?;
     assert_eq!(board_counts(&pool).await?, (1, 1, 2));
     let guardian_options = guardian_board_options();
+    // A thread override cannot create a Guardian board on a server with GV3 disabled.
+    assert!(
+        !sqlite
+            .home()
+            .join("message_board_guardian_1.sqlite")
+            .exists()
+    );
     let retained_id = create_delete_test_rollout(home.path(), /*minute*/ 1, "Keep me")?;
     for owner in [&thread.id, &retained_id] {
         configure_local_board(
