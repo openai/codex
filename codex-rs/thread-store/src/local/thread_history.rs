@@ -10,6 +10,7 @@ use super::LocalThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+mod page_segments;
 mod read;
 mod realtime;
 mod realtime_stream;

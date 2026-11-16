@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -12,8 +10,11 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::RolloutItem;
 
 mod ancestor_reads;
+mod walk;
+
 pub(super) use ancestor_reads::AncestorReads;
 use ancestor_reads::FailedAncestor;
+pub(super) use walk::LineageWalk;
 
 use super::LocalThreadStore;
 use super::thread_rollout_resolver;
@@ -30,10 +31,7 @@ pub(super) struct RolloutLineageSegment {
     hides_parent: bool,
 }
 
-/// Ordered rollout ranges contributing to one forked history.
-///
-/// This is the only local abstraction that follows SessionMeta.history_base pointers. Readers
-/// consume its bounded rollout segments without resolving or mutating fork pointers themselves.
+/// The resolved ranges of a forked history, ordered from oldest to newest.
 #[derive(Clone, Debug)]
 pub(super) struct RolloutLineage {
     pub(super) segments: Vec<RolloutLineageSegment>,
@@ -48,12 +46,14 @@ impl LocalThreadStore {
         requested_thread_id: ThreadId,
         initial_path: Option<PathBuf>,
     ) -> ThreadStoreResult<RolloutLineage> {
-        self.resolve_rollout_lineage_with_mode(
+        LineageWalk::new(
+            self,
             requested_thread_id,
             LineageResolutionMode::Existing,
             initial_path,
-            &HashMap::new(),
+            /*excluded*/ None,
         )
+        .finish()
         .await
     }
 
@@ -61,154 +61,24 @@ impl LocalThreadStore {
         &self,
         requested_thread_id: ThreadId,
     ) -> ThreadStoreResult<RolloutLineage> {
-        self.resolve_rollout_lineage_with_mode(
-            requested_thread_id,
-            LineageResolutionMode::HistoryPage,
-            /*initial_path*/ None,
-            &HashMap::new(),
-        )
-        .await
+        LineageWalk::for_history_page(self, requested_thread_id)
+            .finish()
+            .await
     }
 
     pub(super) async fn resolve_rollout_lineage_for_reference(
         &self,
         requested_thread_id: ThreadId,
     ) -> ThreadStoreResult<RolloutLineage> {
-        self.resolve_rollout_lineage_with_mode(
+        LineageWalk::new(
+            self,
             requested_thread_id,
             LineageResolutionMode::PlainForReference,
             /*initial_path*/ None,
-            &HashMap::new(),
+            /*excluded*/ None,
         )
+        .finish()
         .await
-    }
-
-    async fn resolve_rollout_lineage_with_mode(
-        &self,
-        requested_thread_id: ThreadId,
-        mode: LineageResolutionMode,
-        mut initial_path: Option<PathBuf>,
-        excluded: &HashMap<ThreadId, FailedAncestor>,
-    ) -> ThreadStoreResult<RolloutLineage> {
-        let mut segments = Vec::new();
-        let mut seen = HashSet::new();
-        let mut end: Option<HistoryPosition> = None;
-        let mut prefetched_paths = HashMap::new();
-        let mut ancestor_paths = HashMap::new();
-
-        loop {
-            let coordination_id = end.map_or(requested_thread_id, |end| end.thread_id);
-            let _writer_guard = match mode {
-                LineageResolutionMode::Existing | LineageResolutionMode::HistoryPage => None,
-                LineageResolutionMode::PlainForReference => {
-                    Some(self.live_writer_locks.lock(coordination_id).await)
-                }
-            };
-            let (rollout_id, (rollout_path, bounds)) = if let Some(end) = end {
-                let ancestor = resolve_ancestor_rollout(
-                    self,
-                    requested_thread_id,
-                    end,
-                    mode,
-                    prefetched_paths.remove(&end.thread_id),
-                    excluded.get(&end.thread_id),
-                )
-                .await?;
-                (end.thread_id, ancestor)
-            } else {
-                let (rollout_id, path) = match initial_path.take() {
-                    Some(path) => {
-                        let id = thread_rollout_resolver::rollout_id_from_path_or_legacy_thread_id(
-                            &path,
-                            requested_thread_id,
-                            ThreadHistoryMode::Paginated,
-                        )?;
-                        (id, path)
-                    }
-                    None => {
-                        let resolved = thread_rollout_resolver::resolve_current_including_archived(
-                            self,
-                            requested_thread_id,
-                        )
-                        .await?
-                        .ok_or_else(|| {
-                            malformed_lineage(requested_thread_id, "missing source rollout")
-                        })?;
-                        (resolved.rollout_id, resolved.path)
-                    }
-                };
-                let (path, mut bounds) = mode
-                    .read_rollout(self, path, requested_thread_id, Some(requested_thread_id))
-                    .await?;
-                if matches!(mode, LineageResolutionMode::HistoryPage) {
-                    bounds
-                        .read_history_page_bounds(&path, requested_thread_id)
-                        .await?;
-                }
-                (rollout_id, (path, bounds))
-            };
-            if !seen.insert(rollout_id) {
-                return Err(malformed_lineage(requested_thread_id, "cycle detected"));
-            }
-            let rollout_path = match mode {
-                LineageResolutionMode::Existing | LineageResolutionMode::HistoryPage => {
-                    rollout_path
-                }
-                LineageResolutionMode::PlainForReference
-                    if end.is_none() && bounds.parent.is_none() =>
-                {
-                    // A newly shared standalone source must remain readable by older binaries.
-                    codex_rollout::materialize_rollout_for_reference(rollout_path.as_path())
-                        .await
-                        .map_err(|err| ThreadStoreError::Internal {
-                            message: format!(
-                                "failed to materialize referenced rollout {}: {err}",
-                                rollout_path.display()
-                            ),
-                        })?
-                }
-                // Already-shared compressed history requires a compatible reader regardless of
-                // new forks. Read it without publishing decoded copies into ancestors' folders;
-                // their owners may concurrently archive or unarchive those immutable files.
-                LineageResolutionMode::PlainForReference => rollout_path,
-            };
-            if let Some(end) = end
-                && !matches!(mode, LineageResolutionMode::HistoryPage)
-            {
-                ancestor_paths.insert(rollout_path.clone(), (end, bounds.owner));
-            }
-            segments.push(RolloutLineageSegment {
-                rollout_id,
-                rollout_path,
-                start_ordinal: bounds.start_ordinal,
-                end,
-                hides_parent: bounds.hides_parent,
-            });
-
-            let Some(base) = bounds.parent else {
-                break;
-            };
-            if matches!(mode, LineageResolutionMode::HistoryPage)
-                && let [child] = segments.as_slice()
-            {
-                prefetched_paths = codex_rollout::prefetch_sibling_rollout_paths(
-                    &self.config.codex_home,
-                    &child.rollout_path,
-                    base.thread_id,
-                )
-                .await
-                .unwrap_or_default();
-            }
-            end = Some(base);
-        }
-
-        segments.reverse();
-        Ok(RolloutLineage {
-            segments,
-            reads: AncestorReads::new(ancestor_paths),
-            requested_thread_id,
-            mode,
-        })
     }
 }
 
@@ -533,12 +403,9 @@ impl RolloutLineage {
     }
 
     pub(super) fn segment_index_for_ordinal(&self, ordinal: u64) -> Option<usize> {
-        self.segments.iter().position(|segment| {
-            ordinal >= segment.start_ordinal()
-                && segment
-                    .end_ordinal()
-                    .is_none_or(|end_ordinal| ordinal < end_ordinal)
-        })
+        self.segments
+            .iter()
+            .position(|segment| segment.contains(ordinal))
     }
 
     pub(super) async fn truncate_at(
@@ -585,6 +452,10 @@ impl RolloutLineage {
 }
 
 impl RolloutLineageSegment {
+    pub(super) fn contains(&self, ordinal: u64) -> bool {
+        ordinal >= self.start_ordinal && self.end_ordinal().is_none_or(|end| ordinal < end)
+    }
+
     pub(super) fn rollout_id(&self) -> ThreadId {
         self.rollout_id
     }

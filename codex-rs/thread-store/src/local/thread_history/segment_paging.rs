@@ -3,15 +3,15 @@ use sqlx::FromRow;
 use sqlx::QueryBuilder;
 use sqlx::Sqlite;
 
-use super::super::rollout_lineage::RolloutLineage;
+use super::super::rollout_lineage::LineageWalk;
 use super::super::rollout_lineage::RolloutLineageSegment;
+use super::page_segments::PageSegments;
 use super::read::CursorScope;
 use super::read::HistoryCursor;
 use super::read::RolloutHistoryPosition;
 use super::read::StoredSummaryColumns;
 use super::read::StoredThreadItemRow;
 use super::read::StoredTurnRow;
-use super::read::invalid_cursor;
 use super::read::parse_cursor;
 use super::read::serialize_cursor;
 use super::read::stored_thread_item_row;
@@ -85,7 +85,7 @@ pub(super) fn validate_page_size(page_size: usize) -> ThreadStoreResult<()> {
 pub(super) async fn page_turn_rows(
     pool: &sqlx::SqlitePool,
     requested_thread_id: ThreadId,
-    lineage: &RolloutLineage,
+    lineage: &mut LineageWalk<'_>,
     cursor: Option<&str>,
     page_size: usize,
     direction: SortDirection,
@@ -94,13 +94,13 @@ pub(super) async fn page_turn_rows(
     let cursor = parse_cursor(cursor, requested_thread_id, CursorScope::Turns)?;
     let ordinal_column = HistoryOrdinalColumn::Rollout;
     let mut rows = Vec::new();
-    for (segment_index, segment, segment_cursor) in
-        segments_from_cursor(lineage, direction, cursor.as_ref())?
-    {
-        let remaining = remaining_limit(page_size, rows.len())?;
-        if remaining == 0 {
+    let mut segments = PageSegments::from_cursor(lineage, direction, cursor).await?;
+    while rows.len() <= page_size {
+        let Some(range) = segments.next().await? else {
             break;
-        }
+        };
+        let segment = range.segment;
+        let remaining = remaining_limit(page_size, rows.len())?;
         let mut query = QueryBuilder::<Sqlite>::new("");
         if matches!(items_view, StoredTurnItemsView::Summary) {
             query.push("WITH page_turns AS (");
@@ -123,7 +123,7 @@ WHERE thread_id =
         );
         query.push_bind(segment.rollout_id().to_string());
         push_segment_range(&mut query, segment, ordinal_column)?;
-        for newer_segment in &lineage.segments()[segment_index + 1..] {
+        for newer_segment in range.newer {
             query
                 .push(" AND NOT EXISTS (SELECT 1 FROM thread_turns AS newer_turn WHERE newer_turn.thread_id = ")
                 .push_bind(newer_segment.rollout_id().to_string())
@@ -136,7 +136,7 @@ WHERE thread_id =
             }
             query.push(")");
         }
-        push_cursor_clause(&mut query, direction, segment_cursor, ordinal_column)?;
+        push_cursor_clause(&mut query, direction, range.cursor.as_ref(), ordinal_column)?;
         push_order_and_limit(&mut query, direction, remaining, ordinal_column);
         if matches!(items_view, StoredTurnItemsView::Summary) {
             query.push(
@@ -234,7 +234,7 @@ fn push_summary_item_join(
 
 pub(super) async fn page_item_rows(
     pool: &sqlx::SqlitePool,
-    lineage: &RolloutLineage,
+    lineage: &mut LineageWalk<'_>,
     params: &ListItemsParams,
 ) -> ThreadStoreResult<SegmentPage<StoredThreadItemRow>> {
     let (cursor, anchor_item_id) = match params.position.as_ref() {
@@ -255,6 +255,10 @@ pub(super) async fn page_item_rows(
         (None, Some(ordinal)) => Some(UpdateOrdinalBoundary::Before(ordinal)),
         (None, None) => None,
     };
+    // Keep update replay eager, including when its rows are sorted by creation time.
+    if update_boundary.is_some() {
+        lineage.resolve_all().await?;
+    }
     if anchor_item_id.is_some()
         && (params.sort_key != ItemSortKey::CreatedAtOrdinal || update_boundary.is_some())
     {
@@ -283,7 +287,7 @@ pub(super) async fn page_item_rows(
             return Err(invalid_item_anchor());
         }
         let mut anchor = None;
-        for segment in lineage.segments() {
+        for segment in lineage.resolve_all().await?.iter().rev() {
             let mut query = QueryBuilder::<Sqlite>::new(
                 "SELECT rollout_ordinal FROM thread_items WHERE thread_id = ",
             );
@@ -317,13 +321,13 @@ pub(super) async fn page_item_rows(
     };
     let ordinal_column = HistoryOrdinalColumn::Rollout;
     let mut rows = Vec::new();
-    for (_, segment, segment_cursor) in
-        segments_from_cursor(lineage, params.sort_direction, cursor.as_ref())?
-    {
-        let remaining = remaining_limit(params.page_size, rows.len())?;
-        if remaining == 0 {
+    let mut segments = PageSegments::from_cursor(lineage, params.sort_direction, cursor).await?;
+    while rows.len() <= params.page_size {
+        let Some(range) = segments.next().await? else {
             break;
-        }
+        };
+        let segment = range.segment;
+        let remaining = remaining_limit(params.page_size, rows.len())?;
         let mut query = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, started_at_ms, completed_at_ms, item_json
@@ -358,7 +362,7 @@ FROM thread_items"#,
         push_cursor_clause(
             &mut query,
             params.sort_direction,
-            segment_cursor,
+            range.cursor.as_ref(),
             ordinal_column,
         )?;
         push_order_and_limit(&mut query, params.sort_direction, remaining, ordinal_column);
@@ -383,7 +387,7 @@ FROM thread_items"#,
 
 async fn page_updated_item_rows(
     pool: &sqlx::SqlitePool,
-    lineage: &RolloutLineage,
+    lineage: &mut LineageWalk<'_>,
     params: &ListItemsParams,
     cursor: Option<&str>,
     update_boundary: UpdateOrdinalBoundary,
@@ -395,13 +399,13 @@ async fn page_updated_item_rows(
     )?;
     let ordinal_column = HistoryOrdinalColumn::UpdatedAt;
     let mut rows = Vec::new();
-    for (_, segment, segment_cursor) in
-        segments_from_cursor(lineage, params.sort_direction, cursor.as_ref())?
-    {
-        let remaining = remaining_limit(params.page_size, rows.len())?;
-        if remaining == 0 {
+    let mut segments = PageSegments::from_cursor(lineage, params.sort_direction, cursor).await?;
+    while rows.len() <= params.page_size {
+        let Some(range) = segments.next().await? else {
             break;
-        }
+        };
+        let segment = range.segment;
+        let remaining = remaining_limit(params.page_size, rows.len())?;
         let mut query = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT turn_id, item_id, updated_at_ordinal AS rollout_ordinal, updated_at_ordinal, created_at_ms, started_at_ms, completed_at_ms, item_json
@@ -418,7 +422,7 @@ WHERE thread_id =
         push_cursor_clause(
             &mut query,
             params.sort_direction,
-            segment_cursor,
+            range.cursor.as_ref(),
             ordinal_column,
         )?;
         push_order_and_limit(&mut query, params.sort_direction, remaining, ordinal_column);
@@ -439,39 +443,6 @@ WHERE thread_id =
         rows,
         params.page_size,
     )
-}
-
-fn segments_from_cursor<'a>(
-    lineage: &'a RolloutLineage,
-    direction: SortDirection,
-    cursor: Option<&'a HistoryCursor>,
-) -> ThreadStoreResult<Vec<(usize, &'a RolloutLineageSegment, Option<&'a HistoryCursor>)>> {
-    let segments = lineage.segments();
-    let cursor_index = cursor
-        .map(|cursor| {
-            lineage
-                .segment_index_for_ordinal(cursor.rollout_ordinal)
-                .ok_or_else(|| invalid_cursor("position outside thread lineage"))
-        })
-        .transpose()?;
-    let indexes: Vec<usize> = match direction {
-        SortDirection::Asc => (cursor_index.unwrap_or(0)..segments.len()).collect(),
-        SortDirection::Desc => {
-            let end = cursor_index.unwrap_or_else(|| segments.len().saturating_sub(1));
-            (0..=end).rev().collect()
-        }
-    };
-    Ok(indexes
-        .into_iter()
-        .map(|index| {
-            let segment_cursor = if Some(index) == cursor_index {
-                cursor
-            } else {
-                None
-            };
-            (index, &segments[index], segment_cursor)
-        })
-        .collect())
 }
 
 fn push_segment_range(

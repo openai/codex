@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
 
+use super::LineageWalk;
 use super::LocalThreadStore;
 use super::RolloutLineage;
 use crate::ThreadStoreError;
@@ -133,15 +134,16 @@ impl RolloutLineage {
                     error: error.clone(),
                 },
             );
-            lineage = store
-                .resolve_rollout_lineage_with_mode(
-                    requested_thread_id,
-                    mode,
-                    leaf.clone(),
-                    &excluded,
-                )
-                .await
-                .map_err(|_| error)?;
+            lineage = LineageWalk::new(
+                store,
+                requested_thread_id,
+                mode,
+                leaf.clone(),
+                Some(&excluded),
+            )
+            .finish()
+            .await
+            .map_err(|_| error)?;
         }
     }
 }

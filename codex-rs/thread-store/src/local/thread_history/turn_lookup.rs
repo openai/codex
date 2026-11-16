@@ -85,7 +85,7 @@ pub(in crate::local) async fn find_visible_turn(
     find_turn(pool, lineage.segments().iter().rev(), turn_id).await
 }
 
-async fn find_turn<'a>(
+pub(super) async fn find_turn<'a>(
     pool: &sqlx::SqlitePool,
     segments: impl Iterator<Item = &'a RolloutLineageSegment>,
     turn_id: &str,
