@@ -176,6 +176,7 @@ fn fuzzy_matches_preserve_graphemes_when_truncated() {
         display_name: path.to_string(),
         description: None,
         mention_type: MentionType::File,
+        label_style: ThreadLabelStyle::Plain,
         selection: Selection::File(path.into()),
         match_indices: Some(vec![0, 1]),
         score: 0,
