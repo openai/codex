@@ -55,7 +55,7 @@ Scenario: A parent with no configured environment delegates an API migration, qu
     Run send_message for the API migration.
 -- request 4 (turn) --
 10:function_call/collaboration.send_message:{"message":"Use the new API for the migration.","target":"worker"}
-11:function_call_output:
+11:function_call_output:Message accepted. If the recipient is idle and should act now, use followup_task to ask it to act on the message.
 12:agent_message
 -- request 5 (turn) --
 13:message/user:
