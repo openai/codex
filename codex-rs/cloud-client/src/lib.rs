@@ -49,6 +49,7 @@ pub use history::HistoryQuery;
 pub use history::HistoryTurn;
 pub use history::ListItemsRequest;
 pub use history::ListTurnsRequest;
+pub use items::AgentMessagePhase;
 pub use items::AgentQuestion;
 pub use items::CommandAction;
 pub use items::CommandExecutionSource;

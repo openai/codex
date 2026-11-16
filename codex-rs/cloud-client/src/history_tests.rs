@@ -77,6 +77,7 @@ async fn item_history_paginates_with_explicit_filters_and_preserves_rows() {
             &Some(ItemSummary::AgentMessage {
                 id: "i".into(),
                 text: "d".into(),
+                phase: None,
                 questions: Some(vec![AgentQuestion {
                     title: "Q".into(),
                     options: None

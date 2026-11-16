@@ -76,10 +76,26 @@ pub(super) enum Value {
 pub(super) struct AgentMessage {
     #[prost(string, optional, tag = "2")]
     pub id: Option<String>,
+    #[prost(message, optional, tag = "4")]
+    pub phase: Option<MessagePhase>,
     #[prost(message, optional, tag = "5")]
     pub questions: Option<AgentQuestionList>,
     #[prost(string, optional, tag = "6")]
     pub text: Option<String>,
+}
+#[derive(Clone, Message)]
+pub(super) struct MessagePhase {
+    #[prost(oneof = "MessagePhaseValue", tags = "1, 2, 3")]
+    pub value: Option<MessagePhaseValue>,
+}
+#[derive(Clone, prost::Oneof)]
+pub(super) enum MessagePhaseValue {
+    #[prost(int32, tag = "1")]
+    Commentary(i32),
+    #[prost(int32, tag = "2")]
+    FinalAnswer(i32),
+    #[prost(int32, tag = "3")]
+    PartialAnswer(i32),
 }
 #[derive(Clone, Message)]
 pub(super) struct AgentQuestionList {

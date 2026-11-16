@@ -3,7 +3,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 use prost::Message;
 
-const AGENT: &[u8] = b"\x1a\x06\x12\x01i\x32\x01d";
+const AGENT: &[u8] = b"\x1a\x0a\x12\x01i\x22\x02\x10\x01\x32\x01d";
 
 const COMMAND: &[u8] =
     b"\x0a\x00\x12\x01c\x1a\x07\x0a\x05\x22\x03\x0a\x01c\x22\x01w\x28\x00\x30\x00\x3a\x01i\x60\x03";
@@ -53,6 +53,7 @@ async fn item_lifecycle_keeps_identity_and_timestamps() {
         item: ItemSummary::AgentMessage {
             id: "i".into(),
             text: "d".into(),
+            phase: Some(AgentMessagePhase::FinalAnswer),
             questions: None,
         },
     };
@@ -297,6 +298,7 @@ fn agent_messages_keep_questions_with_empty_text() {
             Some(ItemSummary::AgentMessage {
                 id: "i".into(),
                 text: String::new(),
+                phase: None,
                 questions: Some(expected),
             })
         );
@@ -388,6 +390,7 @@ fn item_summaries_redact_sensitive_fields() {
         questions: None,
         id: "secret".into(),
         text: "secret".into(),
+        phase: None,
     };
     let text = format!("{item:?}");
     assert_eq!(text, "ItemSummary([redacted])");

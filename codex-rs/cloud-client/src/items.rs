@@ -33,6 +33,7 @@ pub enum ItemSummary {
     AgentMessage {
         id: String,
         text: String,
+        phase: Option<AgentMessagePhase>,
         questions: Option<Vec<AgentQuestion>>,
     },
     Reasoning {
@@ -47,6 +48,15 @@ pub enum ItemSummary {
         status: ItemStatus,
     },
 }
+
+/// Phase explicitly supplied in a native agent message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentMessagePhase {
+    Commentary,
+    FinalAnswer,
+    PartialAnswer,
+}
+
 /// A structured question attached to an agent message.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AgentQuestion {
@@ -234,6 +244,16 @@ pub(crate) fn summary(item: wire::Item) -> Result<Option<ItemSummary>, DecodeFai
         Some(wire::Value::AgentMessage(value)) => ItemSummary::AgentMessage {
             id: required(value.id)?,
             text: required(value.text)?,
+            phase: match value.phase.and_then(|phase| phase.value) {
+                Some(wire::MessagePhaseValue::Commentary(1)) => Some(AgentMessagePhase::Commentary),
+                Some(wire::MessagePhaseValue::FinalAnswer(1)) => {
+                    Some(AgentMessagePhase::FinalAnswer)
+                }
+                Some(wire::MessagePhaseValue::PartialAnswer(1)) => {
+                    Some(AgentMessagePhase::PartialAnswer)
+                }
+                Some(_) | None => None,
+            },
             questions: value
                 .questions
                 .map(|questions| {
