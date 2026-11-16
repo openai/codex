@@ -542,6 +542,7 @@ impl<'a> SandboxAttempt<'a> {
         let exec_server_permissions =
             effective_permission_profile(self.exec_server_permissions, additional_permissions);
         let request = SandboxExecRequest {
+            native_program: None,
             command: argv,
             cwd,
             env,

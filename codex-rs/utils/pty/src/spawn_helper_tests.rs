@@ -575,11 +575,11 @@ async fn pty_helper_establishes_a_controlling_terminal_without_forking() -> anyh
         "/bin/sh",
         &[
             "-c".to_owned(),
-            "test -t 0 && test -t 1 && test -t 2 && printf ready >/dev/tty".to_owned(),
+            r#"test -t 0 && test -t 1 && test -t 2 && printf '%s' "$0" >/dev/tty"#.to_owned(),
         ],
         std::path::Path::new("."),
         &std::env::vars().collect(),
-        /*arg0*/ &None,
+        &Some("pty-dispatch".to_owned()),
         crate::TerminalSize::default(),
         crate::ChildFds::Inherited(&[]),
     )
@@ -588,7 +588,10 @@ async fn pty_helper_establishes_a_controlling_terminal_without_forking() -> anyh
     while let Some(chunk) = spawned.stdout_rx.recv().await {
         output.extend(chunk);
     }
-    assert_eq!((spawned.exit_rx.await?, output), (0, b"ready".to_vec()));
+    assert_eq!(
+        (spawned.exit_rx.await?, output),
+        (0, b"pty-dispatch".to_vec())
+    );
     if native_helper_available().await? {
         assert_eq!(FORKS.with(Cell::get), 0);
     }

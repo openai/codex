@@ -210,6 +210,7 @@ pub(crate) async fn execute_user_shell_command(
 
     let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
+        native_program: None,
         command: exec_command.clone(),
         cwd: cwd.clone().into(),
         env: exec_env_map,

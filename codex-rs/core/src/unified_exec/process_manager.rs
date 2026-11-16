@@ -1415,9 +1415,9 @@ impl UnifiedExecProcessManager {
                 path: request.cwd.clone(),
             })?;
 
-        if request.command.is_empty() {
-            return Err(UnifiedExecError::MissingCommandLine);
-        }
+        let (program, args) = request
+            .program_and_args()
+            .ok_or(UnifiedExecError::MissingCommandLine)?;
         let network_proxy_restricting_sid = {
             #[cfg(target_os = "windows")]
             {
@@ -1462,7 +1462,8 @@ impl UnifiedExecProcessManager {
                 None
             };
         let spawn_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
-            command: &request.command,
+            program,
+            args,
             cwd: native_cwd.as_path(),
             env: &request.env,
             arg0: &request.arg0,

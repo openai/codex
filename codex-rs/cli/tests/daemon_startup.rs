@@ -416,7 +416,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             codex.clone()
         };
         let spawned = codex_utils_pty::spawn_pty_process(
-            &program.to_string_lossy(),
+            program.as_os_str(),
             &args,
             &workspace_path,
             &env,

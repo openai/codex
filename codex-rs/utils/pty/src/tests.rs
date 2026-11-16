@@ -1277,6 +1277,53 @@ fn pty_terminate_reaps_child_when_waiter_is_queued() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn pty_with_dispatch_name_uses_child_home_and_path() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    std::fs::create_dir_all(home.path().join("bin/tools"))?;
+    std::os::unix::fs::symlink("/bin/sh", home.path().join("bin/tools/sh"))?;
+    let missing_cwd = home.path().join("missing");
+    let env = HashMap::from([(
+        "HOME".to_owned(),
+        home.path().to_str().expect("temp path").to_owned(),
+    )]);
+    let mut search_env = env.clone();
+    search_env.insert("PATH".to_owned(), "bin".to_owned());
+    let arg0 = Some("pty-dispatch".to_owned());
+    let args = [
+        "-c".to_owned(),
+        r#"test -x bin/tools/sh && printf '%s' "$0""#.to_owned(),
+    ];
+    let spawn = |program, env| {
+        spawn_pty_process(
+            program,
+            &args,
+            &missing_cwd,
+            env,
+            &arg0,
+            TerminalSize::default(),
+            crate::ChildFds::Inherited(&[]),
+        )
+    };
+    assert!(
+        spawn("sh", &env).await.is_err(),
+        "PTY searched outside its environment"
+    );
+    for (program, env) in [("./bin/tools/sh", &env), ("tools/sh", &search_env)] {
+        let mut child = spawn(program, env).await?;
+        let mut output = Vec::new();
+        while let Some(chunk) = child.stdout_rx.recv().await {
+            output.extend(chunk);
+        }
+        assert_eq!(
+            (child.exit_rx.await?, output),
+            (0, b"pty-dispatch".to_vec())
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn pty_attachments_preserve_shell_environment_and_signal_status() -> anyhow::Result<()> {
     use std::os::fd::AsRawFd;
     let reader = std::fs::File::open("/dev/null")?;

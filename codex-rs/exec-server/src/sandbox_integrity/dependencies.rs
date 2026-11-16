@@ -33,7 +33,7 @@ pub(super) fn codex_and_launcher_dependencies(
     request: &codex_sandboxing::SandboxExecRequest,
 ) -> Vec<Dependency> {
     let mut dependencies = vec![codex_executable()];
-    if let Some(exe) = request.command.first() {
+    if let Some((exe, _)) = request.program_and_args() {
         dependencies.push(("sandbox_launcher", Ok(PathBuf::from(exe))));
     }
     dependencies

@@ -51,6 +51,7 @@ pub(super) fn sandbox_request(
     policy: &FileSystemSandboxPolicy,
 ) -> SandboxExecRequest {
     SandboxExecRequest {
+        native_program: None,
         sandbox_override: SandboxOverride::NoOverride,
         command: vec![cwd.join("not-executed").to_string_lossy().into_owned()],
         cwd: PathUri::from_abs_path(cwd),

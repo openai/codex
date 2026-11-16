@@ -235,6 +235,7 @@ fn powershell_command(script: &str, path: &Path) -> anyhow::Result<SandboxExecRe
     let cwd = PathUri::from_host_native_path(std::env::current_dir()?)?;
 
     Ok(SandboxExecRequest {
+        native_program: None,
         sandbox_override: SandboxOverride::NoOverride,
         command: vec![
             powershell.to_string_lossy().into_owned(),

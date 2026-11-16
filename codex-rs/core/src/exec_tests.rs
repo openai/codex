@@ -287,6 +287,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
             justification: None,
             arg0: None,
         },
+        /*native_program*/ None,
         NetworkSandboxPolicy::Enabled,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
@@ -323,6 +324,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                 justification: None,
                 arg0: None,
             },
+            /*native_program*/ None,
             NetworkSandboxPolicy::Enabled,
             /*stdout_stream*/ None,
             /*after_spawn*/ None,
@@ -1311,6 +1313,7 @@ fn command_runs_after_integrity_check_failure(time_out: bool) -> anyhow::Result<
     // This boundary receives prepared argv. Exercise a real child without requiring
     // a native sandbox installation to test the checker's failure isolation.
     let request = SandboxExecRequest {
+        native_program: None,
         command: if cfg!(windows) {
             vec![
                 "cmd.exe".into(),
@@ -1429,6 +1432,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
 
     let output = exec(
         params,
+        /*native_program*/ None,
         NetworkSandboxPolicy::Restricted,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,

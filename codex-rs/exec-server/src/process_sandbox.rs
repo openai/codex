@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -46,6 +48,7 @@ const CREDENTIAL_MASKING_FAILURE_MODE: CredentialMaskingFailureMode =
 
 pub(crate) struct PreparedExecRequest {
     pub(crate) command: Vec<String>,
+    native_program: Option<OsString>,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) env: HashMap<String, String>,
     pub(crate) arg0: Option<String>,
@@ -65,6 +68,16 @@ struct PreparedWindowsSandboxRequest {
 }
 
 impl PreparedExecRequest {
+    pub(crate) fn program_and_args(&self) -> Option<(&OsStr, &[String])> {
+        let (program, args) = self.command.split_first()?;
+        Some((
+            self.native_program
+                .as_deref()
+                .unwrap_or_else(|| OsStr::new(program)),
+            args,
+        ))
+    }
+
     #[cfg(unix)]
     pub(crate) fn credential_snapshot_proxy(&self, params: &ExecParams) -> Option<&NetworkProxy> {
         let launch = params.network_proxy.as_ref()?;
@@ -151,6 +164,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     let Some(sandbox_context) = params.sandbox.as_ref() else {
         return Ok(PreparedExecRequest {
             command: params.argv.clone(),
+            native_program: None,
             cwd: native_path(&params.cwd, "cwd")?,
             env,
             arg0: params.arg0.clone(),
@@ -300,6 +314,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     };
     Ok(PreparedExecRequest {
         command: request.command,
+        native_program: request.native_program,
         cwd: native_path(&request.cwd, "cwd")?,
         env: request.env,
         arg0: request.arg0,

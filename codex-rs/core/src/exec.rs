@@ -2,6 +2,7 @@
 use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 #[cfg(target_os = "windows")]
 use std::path::Path;
@@ -454,6 +455,7 @@ pub(crate) async fn execute_exec_request(
 ) -> Result<ExecToolCallOutput> {
     let ExecRequest {
         command,
+        native_program,
         cwd,
         env,
         exec_server_env_config: _,
@@ -502,6 +504,7 @@ pub(crate) async fn execute_exec_request(
     let start = Instant::now();
     let raw_output_result = get_raw_output_result(
         params,
+        native_program,
         network_sandbox_policy,
         stdout_stream,
         after_spawn,
@@ -519,6 +522,7 @@ pub(crate) async fn execute_exec_request(
 #[allow(clippy::too_many_arguments)]
 async fn get_raw_output_result(
     params: ExecParams,
+    native_program: Option<OsString>,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
@@ -543,7 +547,14 @@ async fn get_raw_output_result(
         .await;
     }
 
-    exec(params, network_sandbox_policy, stdout_stream, after_spawn).await
+    exec(
+        params,
+        native_program,
+        network_sandbox_policy,
+        stdout_stream,
+        after_spawn,
+    )
+    .await
 }
 
 #[cfg(target_os = "windows")]
@@ -925,6 +936,7 @@ fn aggregate_output(
 /// wrapper args, as appropriate.
 async fn exec(
     params: ExecParams,
+    native_program: Option<OsString>,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
@@ -962,7 +974,7 @@ async fn exec(
     })?;
     let arg0_ref = arg0.as_deref();
     let child = spawn_child_async(SpawnChildRequest {
-        program: PathBuf::from(program),
+        program: native_program.map_or_else(|| PathBuf::from(program), PathBuf::from),
         args: args.into(),
         arg0: arg0_ref,
         cwd,

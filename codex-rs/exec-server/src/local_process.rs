@@ -400,9 +400,9 @@ impl LocalProcess {
                 &self.inner.credential_brokers,
             )
             .await?;
-        if prepared.command.is_empty() {
-            return Err(invalid_params("argv must not be empty".to_string()));
-        }
+        let (program, args) = prepared
+            .program_and_args()
+            .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
         let sandbox_type = match prepared.sandbox {
             SandboxType::None => Some(ProcessSandboxType::None),
             SandboxType::MacosSeatbelt => Some(ProcessSandboxType::MacosSeatbelt),
@@ -433,7 +433,8 @@ impl LocalProcess {
         #[cfg(not(unix))]
         let inherited_fds = Vec::new();
         let spawned_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
-            command: &prepared.command,
+            program,
+            args,
             cwd: prepared.cwd.as_path(),
             env: &prepared.env,
             arg0: &prepared.arg0,

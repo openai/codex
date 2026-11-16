@@ -30,6 +30,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_string::truncate_middle_with_token_budget;
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 
 #[derive(Debug)]
 pub(crate) struct ExecOptions {
@@ -46,6 +48,7 @@ pub(crate) struct ExecServerEnvConfig {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
+    pub(crate) native_program: Option<OsString>,
     pub cwd: PathUri,
     pub env: HashMap<String, String>,
     pub(crate) exec_server_env_config: Option<ExecServerEnvConfig>,
@@ -70,6 +73,17 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
+    /// Borrow the host executable and arguments for a local launch.
+    pub fn program_and_args(&self) -> Option<(&OsStr, &[String])> {
+        let (program, args) = self.command.split_first()?;
+        Some((
+            self.native_program
+                .as_deref()
+                .unwrap_or_else(|| OsStr::new(program)),
+            args,
+        ))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         command: Vec<String>,
@@ -89,6 +103,7 @@ impl ExecRequest {
         let windows_sandbox_policy_cwd = cwd.clone();
         Self {
             command,
+            native_program: None,
             cwd,
             env,
             exec_server_env_config: None,
@@ -119,6 +134,7 @@ impl ExecRequest {
         codex_exec_server::run_integrity_checks(&request).await;
         let SandboxExecRequest {
             command,
+            native_program,
             cwd,
             sandbox_policy_cwd: windows_sandbox_policy_cwd,
             mut env,
@@ -167,6 +183,7 @@ impl ExecRequest {
         }
         Ok(Self {
             command,
+            native_program,
             cwd,
             env,
             exec_server_env_config: None,

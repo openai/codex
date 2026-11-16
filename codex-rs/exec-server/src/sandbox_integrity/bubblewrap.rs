@@ -34,7 +34,7 @@ pub(super) fn critical_dependencies(
         .transpose()
         .map_err(io::Error::other)?;
     let mut dependencies = codex_and_launcher_dependencies(request);
-    if let Some(exe) = request.command.first()
+    if let Some((exe, _)) = request.program_and_args()
         && let Some(bwrap) = codex_linux_sandbox::find_bundled_bwrap_for_exe(
             &command_cwd.as_path().join(exe),
             command_cwd.as_path(),

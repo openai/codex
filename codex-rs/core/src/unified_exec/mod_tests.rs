@@ -790,17 +790,57 @@ async fn terminating_during_stdin_poll_returns_exited_response(
     Ok(())
 }
 
+#[test_case::test_case(false; "pipe")]
+#[cfg_attr(target_os = "linux", test_case::test_case(true; "PTY with non-UTF-8 sandbox launcher"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
+async fn completed_local_commands_preserve_exit_code(tty: bool) -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     #[allow(deprecated)]
     let cwd = turn.cwd.clone();
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "exit 17".to_string()],
-        cwd,
+        cwd.clone(),
         shell_env(),
     );
+    #[cfg(target_os = "linux")]
+    let dir = tempfile::tempdir()?;
+    #[cfg(target_os = "linux")]
+    let request = if tty {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+        // The probe stands in for the configured helper. The lossy spelling names a different executable.
+        let helper = dir.path().join(OsStr::from_bytes(b"helper-\xff"));
+        std::fs::write(&helper, "#!/bin/sh\nexit 17\n")?;
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))?;
+        std::os::unix::fs::symlink("/bin/false", helper.to_string_lossy().as_ref())?;
+        crate::exec::build_exec_request(
+            crate::exec::ExecParams {
+                command: vec!["/bin/false".to_owned()],
+                cwd: cwd.clone(),
+                expiration: request.expiration,
+                capture_policy: request.capture_policy,
+                env: request.env,
+                network: None,
+                network_environment_id: None,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                windows_sandbox_level: turn.windows_sandbox_level,
+                justification: None,
+                arg0: None,
+            },
+            &codex_protocol::models::PermissionProfile::read_only(),
+            &cwd,
+            &[],
+            &Some(helper),
+            /*codex_self_exe*/ &None,
+            SandboxType::None,
+            /*use_legacy_landlock*/ false,
+        )
+        .await?
+    } else {
+        request
+    };
 
     let environment = codex_exec_server::Environment::default_for_tests();
     let process = UnifiedExecProcessManager::default()
@@ -810,7 +850,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
             /*tool_ctx*/ None,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*network_policy_decider*/ None,
-            /*tty*/ false,
+            tty,
             &environment,
         )
         .await?;

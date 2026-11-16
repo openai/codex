@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 #[cfg(unix)]
 use std::fs::File;
 use std::io::ErrorKind;
@@ -11,6 +12,8 @@ use std::os::fd::RawFd;
 #[cfg(all(unix, not(target_os = "linux")))]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 #[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Command as StdCommand;
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -145,7 +148,7 @@ fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
 /// Spawn a process attached to a PTY, preserving selected inherited file
 /// descriptors across exec on Unix.
 pub async fn spawn_process(
-    program: &str,
+    program: impl AsRef<OsStr>,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
@@ -153,12 +156,19 @@ pub async fn spawn_process(
     size: TerminalSize,
     inherited_fds: ChildFds<'_>,
 ) -> Result<SpawnedProcess> {
+    let program = program.as_ref();
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
     }
 
     #[cfg(not(unix))]
-    let _ = inherited_fds;
+    let program = {
+        let _ = inherited_fds;
+        arg0.as_deref().map(OsStr::new).unwrap_or(program)
+    };
+
+    #[cfg(unix)]
+    let arg0 = arg0.as_deref().filter(|arg0| OsStr::new(arg0) != program);
 
     #[cfg(target_os = "linux")]
     if crate::spawn_helper::is_available()
@@ -167,26 +177,26 @@ pub async fn spawn_process(
         && arg0.is_none()
         && cwd.is_dir()
     {
-        // Keep portable-pty's PATH, argv0, and missing-cwd behavior for requests
-        // whose launch settings require its command builder.
+        // Keep portable-pty's PATH and missing-cwd behavior for ordinary launches.
         return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
             .await;
     }
     #[cfg(unix)]
-    if !inherited_fds.as_slice().is_empty() {
+    if arg0.is_some() || !inherited_fds.as_slice().is_empty() {
+        // portable-pty resolves argv[0] as the executable. Only a native spawn
+        // can pass a dispatch name while executing the configured program.
         return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
             .await;
     }
 
-    spawn_process_portable(program, args, cwd, env, arg0, size).await
+    spawn_process_portable(program, args, cwd, env, size).await
 }
 
 async fn spawn_process_portable(
-    program: &str,
+    program: &OsStr,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
-    arg0: &Option<String>,
     size: TerminalSize,
 ) -> Result<SpawnedProcess> {
     let pty_system = platform_native_pty_system();
@@ -198,7 +208,7 @@ async fn spawn_process_portable(
             .ok_or_else(|| anyhow::anyhow!("PTY master has no file descriptor"))?,
     )?;
 
-    let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
+    let mut command_builder = CommandBuilder::new(program);
     command_builder.cwd(cwd);
     command_builder.env_clear();
     for arg in args {
@@ -319,15 +329,66 @@ async fn spawn_process_portable(
 }
 
 #[cfg(unix)]
+fn portable_launch_paths(
+    program: &OsStr,
+    cwd: &Path,
+    env: &HashMap<String, String>,
+) -> Result<(PathBuf, PathBuf)> {
+    use anyhow::Context;
+    use nix::unistd::AccessFlags;
+    use nix::unistd::User;
+    use nix::unistd::access;
+    use nix::unistd::getuid;
+    use std::path::Component;
+
+    let cwd = if cwd.is_dir() {
+        cwd.to_owned()
+    } else if let Some(home) = env.get("HOME") {
+        PathBuf::from(home)
+    } else if let Ok(Some(user)) = User::from_uid(getuid()) {
+        PathBuf::from(user.dir.to_str().context("failed to resolve home dir")?)
+    } else {
+        PathBuf::from("/")
+    };
+    let program = Path::new(program);
+    // portable-pty searches even names containing slashes unless they start with /, ./, or ../.
+    let program = if matches!(program.components().next(), Some(Component::Normal(_))) {
+        let path = env.get("PATH").context("Unable to resolve the PATH")?;
+        let base = std::path::absolute(&cwd)?;
+        std::env::split_paths(path)
+            .map(|dir| base.join(dir).join(program))
+            .find(|candidate| !candidate.is_dir() && access(candidate, AccessFlags::X_OK).is_ok())
+            .with_context(|| {
+                format!(
+                    "Unable to find executable {} in PTY PATH",
+                    program.display()
+                )
+            })?
+    } else {
+        program.to_owned()
+    };
+    Ok((program, cwd))
+}
+
+#[cfg(unix)]
 async fn spawn_process_preserving_fds(
-    program: &str,
+    program: &OsStr,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
-    arg0: &Option<String>,
+    arg0: Option<&str>,
     size: TerminalSize,
     descriptors: ChildFds<'_>,
 ) -> Result<SpawnedProcess> {
+    // A distinct argv[0] needs a native spawn. Keep the lookup behavior that
+    // portable-pty supplies for launches without extra descriptors.
+    let resolved;
+    let (program, cwd) = if arg0.is_some() && descriptors.as_slice().is_empty() {
+        resolved = portable_launch_paths(program, cwd, env)?;
+        (resolved.0.as_os_str(), resolved.1.as_path())
+    } else {
+        (program, cwd)
+    };
     let (master, slave) = open_unix_pty(size)?;
     let io = crate::unix_io::PtyIo::new(master.as_raw_fd())?;
     let uses_portable_status = match descriptors {
@@ -367,17 +428,16 @@ async fn spawn_process_preserving_fds(
         command.stderr_file = Some(slave.try_clone()?.into());
         match crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pty).await? {
             Some(child) => child,
-            None if inherited_fds.is_empty() => {
+            None if inherited_fds.is_empty() && arg0.is_none() => {
                 // Free the first PTY before allocating its portable replacement.
                 drop(command);
                 drop(io);
                 drop(slave);
                 drop(master);
-                return spawn_process_portable(program, args, cwd, env, arg0, size).await;
+                return spawn_process_portable(program, args, cwd, env, size).await;
             }
             None => {
-                // Explicit descriptors select the shared fallback on Linux. Keep
-                // terminal setup there when this executable cannot run the helper.
+                // Keep both the descriptor policy and argv[0] when the helper is unavailable.
                 unsafe {
                     command.inner.pre_exec(configure_child_terminal);
                 }

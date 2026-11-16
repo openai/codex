@@ -2,8 +2,6 @@
 
 use crate::SandboxExecRequest;
 use crate::SandboxType;
-use std::ffi::OsStr;
-use std::ffi::OsString;
 use std::io;
 use std::process::Command;
 
@@ -29,12 +27,10 @@ use codex_utils_path_uri::PathUri;
 #[must_use]
 pub struct WrappedSandboxCommand {
     pub(super) request: SandboxExecRequest,
-    // UTF-8 argv cannot represent every native executable path.
-    pub(super) native_program: Option<OsString>,
 }
 
 impl WrappedSandboxCommand {
-    /// Return the request with UTF-8 argv for callers that spawn the command themselves.
+    /// Return the request for a caller that supplies its own process launcher.
     pub fn into_command_request(self) -> SandboxExecRequest {
         self.request
     }
@@ -48,16 +44,12 @@ impl WrappedSandboxCommand {
                 "a native Windows sandbox requires its session launcher",
             ));
         }
-        let (program, args) = request.command.split_first().ok_or_else(|| {
+        let (program, args) = request.program_and_args().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "sandbox command is empty")
         })?;
-        let mut command = Command::new(
-            self.native_program
-                .as_deref()
-                .unwrap_or_else(|| OsStr::new(program)),
-        );
+        let mut command = Command::new(program);
         #[cfg(unix)]
-        if let Some(arg0) = request.arg0 {
+        if let Some(arg0) = &request.arg0 {
             use std::os::unix::process::CommandExt;
             command.arg0(arg0);
         }

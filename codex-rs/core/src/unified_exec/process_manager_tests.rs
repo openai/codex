@@ -189,6 +189,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         ..Default::default()
     };
     let mut request = ExecRequest {
+        native_program: None,
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
         cwd: cwd.clone().into(),
         env: HashMap::from([

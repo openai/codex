@@ -557,8 +557,8 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
 }
 
 #[cfg(unix)]
-#[test]
-fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_name()
+#[tokio::test]
+async fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_name()
 -> anyhow::Result<()> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -581,12 +581,43 @@ fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_name()
         let mut wrapped =
             transform_linux_seccomp_request(&helper, SandboxManager::for_inherited_terminal(&[]));
         // Run a shell probe with the executable and argv[0] produced by the Linux backend.
+        let probe = ["-c", r#"printf '%s' "$0""#];
         wrapped.request.command.truncate(1);
         let mut child = wrapped.into_direct_command()?;
         assert_eq!(child.get_program(), helper.as_os_str());
-        let output = child.args(["-c", r#"printf '%s' "$0""#]).output()?;
+        let output = child.args(probe).output()?;
         assert!(output.status.success(), "{output:?}");
         assert_eq!(output.stdout, expected_arg0.as_bytes());
+
+        let mut wrapped = transform_linux_seccomp_request(&helper, SandboxManager::new());
+        wrapped
+            .request
+            .command
+            .splice(1.., probe.map(str::to_owned));
+        let request = wrapped.into_command_request();
+        let (program, args) = request.program_and_args().expect("prepared command");
+        let cwd = request.cwd.to_abs_path()?;
+        let mut child = crate::spawn_process(crate::SpawnRequest {
+            program,
+            args,
+            cwd: cwd.as_path(),
+            env: &request.env,
+            arg0: &request.arg0,
+            sandbox: request.sandbox,
+            windows_sandbox: None,
+            tty: true,
+            stdin_open: true,
+            inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
+        })
+        .await?;
+        let mut output = Vec::new();
+        while let Some(bytes) = child.stdout_rx.recv().await {
+            output.extend(bytes);
+        }
+        assert_eq!(
+            (child.exit_rx.await?, output),
+            (0, expected_arg0.as_bytes().to_vec())
+        );
     }
     Ok(())
 }
@@ -838,6 +869,7 @@ fn windows_file_system_wrapper_materializes_inner_helper() {
     )
     .expect("resolve helper policy");
     let mut exec_request = super::SandboxExecRequest {
+        native_program: None,
         sandbox_override: super::SandboxOverride::NoOverride,
         command: vec![
             configured_helper.display().to_string(),

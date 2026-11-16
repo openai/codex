@@ -448,9 +448,7 @@ done
         format!("printf '\\0%s\\0%s\\0' '{SOURCE_MARKER}' 0\n{script}")
     };
     let shell_start = prepared.command.len() - params.argv.len();
-    let mut argv = prepared.command.clone();
-    argv[shell_start + 2] = script;
-    let (program, args) = argv.split_first().ok_or_else(|| {
+    let (program, args) = prepared.program_and_args().ok_or_else(|| {
         (
             "missing_command",
             internal_error("missing shell snapshot command".to_string()),
@@ -459,7 +457,9 @@ done
 
     let mut command = Command::new(program);
     command
-        .args(args)
+        .args(&args[..shell_start + 1])
+        .arg(script)
+        .args(&args[shell_start + 2..])
         .current_dir(prepared.cwd.as_path())
         .env_clear()
         .envs(&prepared.env)

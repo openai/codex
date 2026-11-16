@@ -81,7 +81,7 @@ async fn rejected_start(
     expected: &str,
 ) -> anyhow::Result<String> {
     let spawned = codex_utils_pty::spawn_pty_process(
-        &program.to_string_lossy(),
+        program.as_os_str(),
         args,
         cwd,
         env,
@@ -443,7 +443,7 @@ trust_level = "trusted"
             assert!(!home.join("worktrees").exists());
         }
         let spawned = codex_utils_pty::spawn_pty_process(
-            &program.to_string_lossy(),
+            program.as_os_str(),
             &args,
             &launcher,
             &env,

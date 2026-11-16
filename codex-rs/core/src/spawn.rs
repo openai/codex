@@ -82,7 +82,9 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
         StdioPolicy::Inherit => Command::new(&program),
     };
     #[cfg(unix)]
-    cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
+    if let Some(arg0) = arg0 {
+        cmd.arg0(arg0);
+    }
     cmd.args(args);
     cmd.current_dir(cwd);
     if let Some(network) = network {

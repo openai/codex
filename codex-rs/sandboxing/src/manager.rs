@@ -102,6 +102,8 @@ pub struct SandboxExecRequest {
     /// Controller-selected override, retained for observations without altering the sandbox command.
     pub sandbox_override: SandboxOverride,
     pub command: Vec<String>,
+    /// Exact host executable when its native path cannot be represented in `command`.
+    pub native_program: Option<OsString>,
     pub cwd: PathUri,
     pub sandbox_policy_cwd: PathUri,
     pub env: HashMap<String, String>,
@@ -113,6 +115,19 @@ pub struct SandboxExecRequest {
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub permission_profile: PermissionProfile,
     pub arg0: Option<String>,
+}
+
+impl SandboxExecRequest {
+    /// Borrow the executable and arguments to pass to a host process launcher.
+    pub fn program_and_args(&self) -> Option<(&OsStr, &[String])> {
+        let (program, args) = self.command.split_first()?;
+        Some((
+            self.native_program
+                .as_deref()
+                .unwrap_or_else(|| OsStr::new(program)),
+            args,
+        ))
+    }
 }
 
 /// How the execution host selects a backend for this launch.
@@ -440,10 +455,6 @@ impl SandboxManager {
         }
         .filter(|path| path.to_str().is_none())
         .map(OsStr::to_owned);
-        let wrapped = |request| WrappedSandboxCommand {
-            request,
-            native_program,
-        };
         let managed_network = command
             .managed_network
             .filter(|_| request.enforce_managed_network || backend == SandboxType::MacosSeatbelt);
@@ -456,6 +467,7 @@ impl SandboxManager {
         let mut exec = SandboxExecRequest {
             sandbox_override: SandboxOverride::NoOverride,
             command: argv,
+            native_program,
             cwd: command.cwd,
             sandbox_policy_cwd: request.sandbox_policy_cwd.clone(),
             env: command.env,
@@ -467,7 +479,7 @@ impl SandboxManager {
             arg0: None,
         };
         if backend == SandboxType::None {
-            return Ok(wrapped(exec));
+            return Ok(WrappedSandboxCommand { request: exec });
         }
         let pending = PendingSandboxedExecRequest::new(
             &exec.cwd,
@@ -638,7 +650,7 @@ impl SandboxManager {
                 }
             }
         }
-        Ok(wrapped(exec))
+        Ok(WrappedSandboxCommand { request: exec })
     }
 
     fn wrap_linux(

@@ -68,10 +68,10 @@ async fn driver_backed_terminal_queries_are_answered() -> anyhow::Result<()> {
 async fn direct_terminal_queries_are_answered() -> anyhow::Result<()> {
     let script =
         "stty -echo -icanon; printf 'alpha\\033[6n'; dd bs=1 count=6 2>/dev/null; printf '\\nok'";
-    let command = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
     let env = std::env::vars().collect();
     let spawned = spawn_process(SpawnRequest {
-        command: &command,
+        program: "/bin/sh".as_ref(),
+        args: &["-c".to_string(), script.to_string()],
         cwd: Path::new("."),
         env: &env,
         arg0: &None,
