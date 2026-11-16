@@ -1005,7 +1005,8 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
 }
 
 #[tokio::test]
-async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_path() -> Result<()> {
+async fn thread_read_loaded_reads_stored_title_and_requested_history_without_rollout_path()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let store_id = Uuid::new_v4().to_string();
     MockResponsesConfig::new("http://127.0.0.1:1")
@@ -1079,15 +1080,31 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
             thread_id,
             patch: ThreadMetadataPatch {
                 daybreak_enabled: Some(false),
+                name: Some(Some("  Stored title  ".to_string())),
                 ..Default::default()
             },
             include_archived: false,
         })
         .await?;
 
-    let result = client
+    let reads_before = store.calls().await.read_thread;
+    let metadata = client
         .request(ClientRequest::ThreadRead {
             request_id: RequestId::Integer(2),
+            params: ThreadReadParams {
+                thread_id: thread.id.clone(),
+                include_turns: false,
+            },
+        })
+        .await?
+        .expect("metadata-only thread/read should succeed");
+    let metadata: ThreadReadResponse = serde_json::from_value(metadata)?;
+    assert_eq!(metadata.thread.name.as_deref(), Some("Stored title"));
+    assert_eq!(store.calls().await.read_thread - reads_before, 1);
+
+    let result = client
+        .request(ClientRequest::ThreadRead {
+            request_id: RequestId::Integer(3),
             params: ThreadReadParams {
                 thread_id: thread.id,
                 include_turns: true,

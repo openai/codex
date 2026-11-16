@@ -3147,56 +3147,15 @@ impl ThreadRequestProcessor {
                     ))
                 })?;
         let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let mut thread = if include_turns {
-            if let Some(loaded_thread) = loaded_thread.as_ref() {
-                // Loaded thread with turns: use persisted metadata when it exists,
-                // but reconstruct turns from the live ThreadStore history.
-                let persisted_thread = self
-                    .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
-                    .await?;
-                self.load_live_thread_view(
-                    thread_id,
-                    include_turns,
-                    loaded_thread,
-                    persisted_thread,
-                )
+        let mut thread = if let Some(loaded_thread) = loaded_thread.as_ref() {
+            self.load_live_thread_view(thread_id, include_turns, loaded_thread)
                 .await?
-            } else if let Some(thread) = self
-                .load_persisted_thread_for_read(thread_id, include_turns)
-                .await?
-            {
-                // Unloaded thread with turns: load metadata and history together
-                // from the ThreadStore.
-                thread
-            } else {
-                return Err(ThreadReadViewError::InvalidRequest(format!(
-                    "thread not loaded: {thread_id}"
-                )));
-            }
-        } else if let Some(thread) = self
-            .load_persisted_thread_for_read(thread_id, include_turns)
-            .await?
-        {
-            if let Some(loaded_thread) = loaded_thread.as_ref() {
-                self.load_live_thread_view(thread_id, include_turns, loaded_thread, Some(thread))
-                    .await?
-            } else {
-                thread
-            }
-        } else if let Some(loaded_thread) = loaded_thread.as_ref() {
-            // Loaded metadata-only read before persistence is materialized: build
-            // the response from the live thread snapshot.
-            self.load_live_thread_view(
-                thread_id,
-                include_turns,
-                loaded_thread,
-                /*persisted_thread*/ None,
-            )
-            .await?
         } else {
-            return Err(ThreadReadViewError::InvalidRequest(format!(
-                "thread not loaded: {thread_id}"
-            )));
+            self.load_persisted_thread_for_read(thread_id, include_turns)
+                .await?
+                .ok_or_else(|| {
+                    ThreadReadViewError::InvalidRequest(format!("thread not loaded: {thread_id}"))
+                })?
         };
 
         thread.daybreak_enabled = pending_preference.resolve(thread.daybreak_enabled);
@@ -3285,71 +3244,70 @@ impl ThreadRequestProcessor {
         }
     }
 
-    /// Builds a `thread/read` view from a loaded thread plus optional persisted metadata.
+    /// Overlays live settings on persisted metadata, loading history only when turns are requested.
     async fn load_live_thread_view(
         &self,
         thread_id: ThreadId,
         include_turns: bool,
         loaded_thread: &CodexThread,
-        persisted_thread: Option<Thread>,
     ) -> Result<Thread, ThreadReadViewError> {
+        let persisted = self
+            .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
+            .await?;
         let config_snapshot = loaded_thread.config_snapshot().await;
         if include_turns && config_snapshot.ephemeral {
             return Err(ThreadReadViewError::InvalidRequest(
                 "ephemeral threads do not support includeTurns".to_string(),
             ));
         }
-        let fallback_thread =
-            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, loaded_thread);
-        let mut thread = if let Some(mut thread) = persisted_thread {
+
+        let mut thread = if let Some(mut thread) = persisted {
             if thread.path.is_none() {
-                thread.path = fallback_thread.path.clone();
+                thread.path = loaded_thread.rollout_path();
             }
-            thread.session_id.clone_from(&fallback_thread.session_id);
-            thread.ephemeral = fallback_thread.ephemeral;
-            thread.can_accept_direct_input = fallback_thread.can_accept_direct_input;
+            thread.session_id = loaded_thread.startup_metadata().session_id.to_string();
+            thread.ephemeral = config_snapshot.ephemeral;
+            thread.can_accept_direct_input = Some(can_accept_direct_input(
+                loaded_thread.multi_agent_version(),
+                &config_snapshot.session_source,
+            ));
+            apply_live_thread_settings(&mut thread, &config_snapshot);
+            if !include_turns {
+                if let Some(title) = display_thread_title(
+                    thread.history_mode,
+                    &thread.preview,
+                    thread.name.as_deref(),
+                ) {
+                    thread.name = Some(title.to_owned());
+                }
+                return Ok(thread);
+            }
             thread
         } else {
-            fallback_thread
+            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, loaded_thread)
         };
-        apply_live_thread_settings(&mut thread, &config_snapshot);
-        self.apply_thread_read_store_fields(thread_id, &mut thread, include_turns, loaded_thread)
-            .await?;
-        Ok(thread)
-    }
-
-    async fn apply_thread_read_store_fields(
-        &self,
-        thread_id: ThreadId,
-        thread: &mut Thread,
-        include_turns: bool,
-        loaded_thread: &CodexThread,
-    ) -> Result<(), ThreadReadViewError> {
-        self.attach_thread_name(thread_id, thread).await;
-
+        self.attach_thread_name(thread_id, &mut thread).await;
         if include_turns {
-            if matches!(
-                thread.history_mode,
-                codex_app_server_protocol::ThreadHistoryMode::Paginated
-            ) {
-                self.thread_store
-                    .persist_thread(thread_id, PersistContext::Standard)
-                    .await
-                    .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-                thread.turns = self
-                    .paginated_thread_full_turns(thread_id)
-                    .await
-                    .map_err(ThreadReadViewError::JsonRpc)?;
-                return Ok(());
-            }
-            let history = loaded_thread
-                .load_history(/*include_archived*/ true)
-                .await
-                .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_legacy_api_turns_from_rollout_items(&history.items);
+            thread.turns = match thread.history_mode {
+                ApiThreadHistoryMode::Paginated => {
+                    self.thread_store
+                        .persist_thread(thread_id, PersistContext::Standard)
+                        .await
+                        .map_err(|err| thread_read_history_load_error(thread_id, err))?;
+                    self.paginated_thread_full_turns(thread_id)
+                        .await
+                        .map_err(ThreadReadViewError::JsonRpc)?
+                }
+                ApiThreadHistoryMode::Legacy => {
+                    let history = loaded_thread
+                        .load_history(/*include_archived*/ true)
+                        .await
+                        .map_err(|err| thread_read_history_load_error(thread_id, err))?;
+                    build_legacy_api_turns_from_rollout_items(&history.items)
+                }
+            };
         }
-
-        Ok(())
+        Ok(thread)
     }
 
     async fn thread_turns_list_response_inner(
@@ -5283,14 +5241,13 @@ impl ThreadRequestProcessor {
                 include_history: false,
             })
             .await
-            && let Some(title) = stored_thread.name.as_deref().map(str::trim)
-            && !title.is_empty()
+            && let Some(title) = display_thread_title(
+                stored_thread.history_mode.into(),
+                &thread.preview,
+                stored_thread.name.as_deref(),
+            )
         {
-            if stored_thread.history_mode == ThreadHistoryMode::Paginated {
-                thread.name = Some(title.to_string());
-            } else {
-                set_thread_name_from_title(thread, title.to_string());
-            }
+            thread.name = Some(title.to_owned());
         }
     }
 
@@ -6730,6 +6687,17 @@ fn thread_store_mutation_error(operation: &str, err: ThreadStoreError) -> JSONRP
         } => unsupported_thread_store_operation(unsupported_operation),
         err => internal_error(format!("failed to {operation} session: {err}")),
     }
+}
+
+/// Legacy threads can use their preview as a fallback title; don't promote it to an explicit name.
+fn display_thread_title<'a>(
+    mode: ApiThreadHistoryMode,
+    preview: &str,
+    stored: Option<&'a str>,
+) -> Option<&'a str> {
+    stored.map(str::trim).filter(|title| {
+        !title.is_empty() && (mode == ApiThreadHistoryMode::Paginated || *title != preview.trim())
+    })
 }
 
 fn set_thread_name_from_title(thread: &mut Thread, title: String) {
