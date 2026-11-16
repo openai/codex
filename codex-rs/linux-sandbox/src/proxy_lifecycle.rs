@@ -1,4 +1,4 @@
-//! Manage privileged bridge processes and transfer their loopback TCP listeners.
+//! Isolate host proxy descriptors and transfer loopback listeners from the sandbox.
 //!
 //! Received descriptors are CLOEXEC and owned even when validation rejects them.
 //! Shape validation does not authenticate the sender: the caller must retain exclusive
@@ -26,9 +26,53 @@ use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
+use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 
 const LISTENER_MESSAGE: u8 = 1;
+
+/// Give one route its own descriptor budget. Its relay threads inherit this table.
+///
+/// # Safety
+/// Call only on a fresh bridge thread with no owned descriptors. The supervisor must
+/// keep the bootstrap socket open at `control` until the caller signals readiness.
+pub(crate) unsafe fn private_bridge_control(control: RawFd) -> io::Result<UnixStream> {
+    // SAFETY: UNSHARE copies the calling thread's table before closing the upper range.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            control as u32 + 1,
+            u32::MAX,
+            libc::CLOSE_RANGE_UNSHARE,
+        )
+    } == 0
+    {
+        for fd in 3..control {
+            let _ = close_fd(fd);
+        }
+    } else {
+        // Older kernels support CLONE_FILES without close_range.
+        // SAFETY: unshare takes only flags and changes this thread's table.
+        if unsafe { libc::unshare(libc::CLONE_FILES) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut inherited = Vec::new();
+        for entry in std::fs::read_dir("/proc/thread-self/fd")? {
+            if let Ok(fd) = entry?.file_name().to_string_lossy().parse::<RawFd>()
+                && fd > libc::STDERR_FILENO
+                && fd != control
+            {
+                inherited.push(fd);
+            }
+        }
+        // The directory handle has dropped. No other thread can reuse these numbers.
+        for fd in inherited {
+            let _ = close_fd(fd);
+        }
+    }
+    // SAFETY: this thread owns the private copy of the supervisor's live socket.
+    Ok(unsafe { UnixStream::from_raw_fd(control) })
+}
 
 pub(crate) fn send_listener(channel: &UnixStream, listener: &TcpListener) -> io::Result<()> {
     let descriptors = [listener.as_fd()];
@@ -113,24 +157,7 @@ pub(crate) fn receive_listener(channel: &UnixStream) -> io::Result<TcpListener> 
     Ok(listener)
 }
 
-pub(crate) fn harden_bridge_process(expected_parent_pid: libc::pid_t) -> io::Result<()> {
-    detach_bridge_stdio()?;
-    set_parent_death_signal(expected_parent_pid)?;
-    codex_process_hardening::disable_process_dumping()
-}
-
-fn set_parent_death_signal(expected_parent_pid: libc::pid_t) -> io::Result<()> {
-    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
-    if res != 0 {
-        Err(io::Error::last_os_error())
-    } else if unsafe { libc::getppid() } != expected_parent_pid {
-        Err(io::Error::other("parent process already exited"))
-    } else {
-        Ok(())
-    }
-}
-
-fn detach_bridge_stdio() -> io::Result<()> {
+pub(crate) fn detach_bridge_stdio() -> io::Result<()> {
     let null_read_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
     if null_read_fd < 0 {
         let err = io::Error::last_os_error();

@@ -23,8 +23,10 @@ use crate::launcher::exec_bwrap;
 use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::managed_tcp::Relay;
+use crate::proxy_routing::HostProxyBridge;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use crate::proxy_routing::start_host_proxy_bridges;
 use crate::seccomp::ProxyRouting;
 use crate::seccomp::apply_sandbox_policies_to_current_thread;
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -142,6 +144,8 @@ pub struct LinuxSandboxCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
+    let caller_pid = unsafe { libc::getppid() };
+    crate::tcp_net_setup::dispatch();
     let LinuxSandboxCommand {
         sandbox_policy_cwd,
         command_cwd,
@@ -290,21 +294,25 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let (proxy_route_spec, proxy_controls) = if let Some(context) = managed_network.as_ref() {
+        let (proxy_route_spec, proxy_bridges) = if let Some(context) = managed_network.as_ref() {
             // Older explicit-proxy callers may omit ports. The new transparent
             // switch always requires the executor's trusted ingress port list.
             let ports = (transparent_tcp || !context.loopback_ports.is_empty())
                 .then_some(context.loopback_ports.as_slice());
-            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec(ports, routing)
+            let (proxy_route_spec, bridges) = prepare_host_proxy_route_spec(ports, routing)
                 .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
-            (Some(proxy_route_spec), controls)
+            (Some(proxy_route_spec), bridges)
         } else {
             (None, Vec::new())
         };
         let options = BwrapOptions {
             mount_proc: !no_proc && !inherit_pid_namespace,
             inherit_pid_namespace,
-            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            network_mode: if transparent_tcp {
+                BwrapNetworkMode::PreparedProxy
+            } else {
+                bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy)
+            },
             mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
                 && Path::new(WSL_INTEROP_DIR).is_dir(),
             mask_wslg_distro: (!file_system_sandbox_policy.has_full_disk_write_access()
@@ -336,13 +344,13 @@ pub fn run_main() -> ! {
             command,
         });
         run_bwrap_with_proc_fallback(
+            caller_pid,
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
             options,
             inner,
-            proxy_controls,
-            transparent_tcp,
+            proxy_bridges,
         );
     }
 
@@ -419,15 +427,25 @@ fn ensure_legacy_landlock_mode_supports_policy(
 }
 
 fn run_bwrap_with_proc_fallback(
+    caller_pid: libc::pid_t,
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     mut options: BwrapOptions,
     inner: Vec<String>,
-    proxy_controls: Vec<File>,
-    transparent_tcp: bool,
+    proxy_bridges: Vec<HostProxyBridge>,
 ) -> ! {
+    let transparent_tcp = options.network_mode == BwrapNetworkMode::PreparedProxy;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
+
+    // An inherited SIG_IGN would auto-reap bubblewrap before we can collect
+    // its exit status. The preflight also waits for its own bubblewrap child.
+    if unsafe { libc::signal(libc::SIGCHLD, libc::SIG_DFL) } == libc::SIG_ERR {
+        panic!(
+            "failed to reset SIGCHLD: {}",
+            std::io::Error::last_os_error()
+        );
+    }
 
     // Select before the preflight, whose synthetic policy omits writable roots.
     initialize_bwrap_launcher(
@@ -448,13 +466,7 @@ fn run_bwrap_with_proc_fallback(
         options.mount_proc = false;
     }
 
-    let tcp_files = transparent_tcp.then(|| {
-        let files = crate::tcp_namespace::create()
-            .unwrap_or_else(|err| panic!("failed to create private TCP namespace: {err}"));
-        options.network_mode = BwrapNetworkMode::PreparedProxy;
-        files
-    });
-    let mut bwrap_args = build_bwrap_argv(
+    let bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -462,18 +474,24 @@ fn run_bwrap_with_proc_fallback(
         options,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
-    if let Some(files) = tcp_files {
-        crate::tcp_net_setup::prepare(
-            files,
+    if !proxy_bridges.is_empty() && bwrap_args.synthetic_mount_targets.is_empty() {
+        // This launcher would otherwise exec bubblewrap directly. Preserve
+        // --die-with-parent now that it stays alive to serve the proxy.
+        kill_on_parent_death(caller_pid);
+    }
+    // Host bridge threads must stay in the host network namespace. Only the
+    // bubblewrap child enters the private namespace and receives its TUN and resolver.
+    let mut bwrap_args = start_bwrap_supervisors(bwrap_args, proxy_bridges);
+    if transparent_tcp {
+        crate::tcp_net_setup::mount_resolver(
             &mut bwrap_args,
             file_system_sandbox_policy,
             sandbox_policy_cwd,
         )
         .unwrap_or_else(|err| panic!("failed to prepare transparent TCP namespace: {err}"));
     }
-    bwrap_args.preserved_files.extend(proxy_controls);
     apply_inner_command_argv0(&mut bwrap_args.args);
-    run_or_exec_bwrap(bwrap_args);
+    exec_bwrap(bwrap_args.args, bwrap_args.preserved_files, transparent_tcp);
 }
 
 fn bwrap_network_mode(
@@ -596,47 +614,81 @@ fn resolve_true_command() -> String {
     "true".to_string()
 }
 
-fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
-    if bwrap_args.synthetic_mount_targets.is_empty() {
-        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+/// With both supervisors, the launcher runs `proxy supervisor -> mount cleanup supervisor -> bubblewrap`.
+/// Each optional supervisor waits for its child. Separate descriptor tables
+/// let mount cleanup proceed even when proxy connections exhaust theirs.
+/// Returns only in the process that will exec bubblewrap.
+fn start_bwrap_supervisors(
+    mut bwrap_args: crate::bwrap::BwrapArgs,
+    proxy_bridges: Vec<HostProxyBridge>,
+) -> crate::bwrap::BwrapArgs {
+    if bwrap_args.synthetic_mount_targets.is_empty() && proxy_bridges.is_empty() {
+        return bwrap_args;
     }
-    run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args);
+
+    let setup_signal_mask = ForwardedSignalMask::block();
+    // Register before either fork so markers name the PID the caller will reap.
+    let registrations = register_synthetic_mount_targets(&bwrap_args.synthetic_mount_targets);
+
+    if !proxy_bridges.is_empty() {
+        let child_pid = fork_supervised_child();
+        if child_pid > 0 {
+            drop(bwrap_args.preserved_files);
+            // Bridge threads inherit the blocked signals. The supervising thread
+            // receives cancellation and forwards it to the child.
+            start_host_proxy_bridges(proxy_bridges);
+            supervise_child(child_pid, &setup_signal_mask, || {});
+        }
+        bwrap_args.preserved_files.extend(
+            proxy_bridges
+                .into_iter()
+                .map(HostProxyBridge::into_sandbox_control),
+        );
+    }
+
+    if !registrations.is_empty() {
+        let child_pid = fork_supervised_child();
+        if child_pid > 0 {
+            drop(bwrap_args.preserved_files);
+            supervise_child(child_pid, &setup_signal_mask, || {
+                cleanup_synthetic_mount_targets(&registrations);
+            });
+        }
+    }
+    setup_signal_mask.restore();
+    bwrap_args
 }
 
-fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
-    let crate::bwrap::BwrapArgs {
-        args,
-        preserved_files,
-        synthetic_mount_targets,
-    } = bwrap_args;
-    let setup_signal_mask = ForwardedSignalMask::block();
-    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+fn fork_supervised_child() -> libc::pid_t {
     let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
         panic!("failed to fork for bubblewrap: {err}");
     }
-
     if pid == 0 {
         reset_forwarded_signal_handlers_to_default();
-        setup_signal_mask.restore();
         let setpgid_res = unsafe { libc::setpgid(0, 0) };
         if setpgid_res < 0 {
             let err = std::io::Error::last_os_error();
             panic!("failed to place bubblewrap child in its own process group: {err}");
         }
-        terminate_with_parent(parent_pid);
-        exec_bwrap(args, preserved_files);
+        kill_on_parent_death(parent_pid);
     }
+    pid
+}
 
-    drop(preserved_files);
+fn supervise_child(
+    pid: libc::pid_t,
+    setup_signal_mask: &ForwardedSignalMask,
+    cleanup: impl FnOnce(),
+) -> ! {
     let signal_forwarders = install_bwrap_signal_forwarders(pid);
     setup_signal_mask.restore();
     let status = wait_for_bwrap_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
-    cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
+    cleanup();
     signal_forwarders.restore();
     cleanup_signal_mask.restore();
     exit_with_wait_status(status);
@@ -681,15 +733,17 @@ impl ForwardedSignalMask {
     }
 }
 
-fn terminate_with_parent(parent_pid: libc::pid_t) {
-    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+fn kill_on_parent_death(parent_pid: libc::pid_t) {
+    // Match bubblewrap's --die-with-parent even while the child has TERM blocked
+    // for mount registration or cleanup.
+    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
-        panic!("failed to set bubblewrap child parent-death signal: {err}");
+        panic!("failed to set sandbox parent-death signal: {err}");
     }
     if unsafe { libc::getppid() } != parent_pid {
         unsafe {
-            libc::raise(libc::SIGTERM);
+            libc::raise(libc::SIGKILL);
         }
     }
 }
@@ -780,6 +834,9 @@ fn wait_for_bwrap_child(pid: libc::pid_t) -> libc::c_int {
 fn register_synthetic_mount_targets(
     targets: &[crate::bwrap::SyntheticMountTarget],
 ) -> Vec<SyntheticMountTargetRegistration> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
     with_synthetic_mount_registry_lock(|| {
         targets
             .iter()
@@ -1117,7 +1174,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        exec_bwrap(args, preserved_files);
+        exec_bwrap(args, preserved_files, /*transparent_tcp*/ false);
     }
 
     let signal_forwarders = install_bwrap_signal_forwarders(pid);

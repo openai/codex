@@ -37,6 +37,8 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use url::Url;
 
+#[path = "managed_proxy_bridge_lifecycle_tests.rs"]
+mod bridge_lifecycle;
 #[path = "managed_tcp.rs"]
 mod managed_tcp;
 #[path = "managed_proxy_unix_sockets_tests.rs"]
@@ -189,32 +191,34 @@ fn linux_sandbox_command_with_options(
     options: &[&str],
 ) -> Command {
     let cwd = std::env::current_dir().expect("current directory should exist");
-    let permission_profile_json =
-        serde_json::to_string(permission_profile).expect("permission profile should serialize");
+    let mut cmd = linux_sandbox_launcher(&cwd, permission_profile, managed_network, env);
+    cmd.args(options).arg("--").args(command);
+    cmd
+}
 
-    let mut args = vec![
-        "--sandbox-policy-cwd".to_string(),
-        cwd.to_string_lossy().to_string(),
-        "--permission-profile".to_string(),
-        permission_profile_json,
-    ];
-    if let Some(context) = managed_network {
-        args.push("--managed-network".to_string());
-        args.push(context.to_string());
-    }
-    args.extend(options.iter().map(|arg| (*arg).to_string()));
-    args.push("--".to_string());
-    args.extend(command.iter().map(|entry| (*entry).to_string()));
-
+fn linux_sandbox_launcher(
+    cwd: &Path,
+    permission_profile: &PermissionProfile,
+    managed_network: Option<&str>,
+    env: HashMap<String, String>,
+) -> Command {
     let mut cmd =
         Command::new(cargo_bin("codex-linux-sandbox").expect("sandbox helper should exist"));
-    cmd.args(args)
+    cmd.arg("--sandbox-policy-cwd")
+        .arg(cwd)
+        .arg("--permission-profile")
+        .arg(
+            serde_json::to_string(permission_profile).expect("permission profile should serialize"),
+        )
         .current_dir(cwd)
         .env_clear()
         .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(context) = managed_network {
+        cmd.args(["--managed-network", context]);
+    }
     cmd
 }
 
@@ -1137,81 +1141,5 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
     }
     for server in servers {
         server.join().expect("proxy responder should succeed");
-    }
-}
-
-#[tokio::test]
-async fn cancelling_sandbox_closes_active_proxy_connection() {
-    if let Some(reason) = managed_proxy_skip_reason().await {
-        eprintln!("skipping managed proxy test: {reason}");
-        return;
-    }
-
-    for profile in [
-        PermissionProfile::workspace_write(),
-        PermissionProfile::Disabled,
-    ] {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("local proxy listener");
-        listener
-            .set_nonblocking(/*nonblocking*/ true)
-            .expect("bounded accept");
-        let mut env = create_env_from_core_vars();
-        strip_proxy_env(&mut env);
-        env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
-        env.insert(
-            "HTTP_PROXY".to_string(),
-            format!("http://{}", listener.local_addr().expect("proxy endpoint")),
-        );
-        let mut command = linux_sandbox_command(
-            &[
-                "bash",
-                "-c",
-                concat!(
-                    "set -eu; proxy=${HTTP_PROXY#*://}; ",
-                    "exec 3<>/dev/tcp/${proxy%:*}/${proxy##*:}; ",
-                    "printf ready >&3; IFS= read -r response <&3",
-                ),
-            ],
-            &profile,
-            /*allow_network_for_proxy*/ true,
-            env,
-        );
-        command.kill_on_drop(true);
-        let mut child = command.spawn().expect("launch sandbox");
-        let (mut upstream, _) = tokio::time::timeout(OPERATION_TIMEOUT, async {
-            loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
-                    }
-                    Err(error) => panic!("accept proxy connection: {error}"),
-                }
-            }
-        })
-        .await
-        .expect("sandbox should establish its proxy connection");
-        upstream
-            .set_read_timeout(Some(OPERATION_TIMEOUT))
-            .expect("bounded read");
-        let mut ready = [0; 5];
-        upstream
-            .read_exact(&mut ready)
-            .expect("read client readiness");
-        assert_eq!(ready, *b"ready");
-
-        child.start_kill().expect("cancel sandbox");
-        let output = tokio::time::timeout(OPERATION_TIMEOUT, child.wait_with_output())
-            .await
-            .expect("cancelled sandbox should release output")
-            .expect("wait for cancelled sandbox");
-        assert_eq!(output.status.success(), false);
-        assert_eq!(
-            upstream
-                .read(&mut [0])
-                .expect("host bridge should close its active connection"),
-            0,
-            "cancelling the sandbox must stop its host bridge"
-        );
     }
 }
