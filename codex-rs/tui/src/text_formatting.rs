@@ -1,6 +1,14 @@
+use unicode_bidi::BidiClass;
+use unicode_bidi::bidi_class;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::width::display_width;
+
+/// Returns whether the text contains a strong RTL character or an Arabic number.
+pub(crate) fn contains_rtl_or_arabic_number(text: &str) -> bool {
+    text.chars()
+        .any(|c| matches!(bidi_class(c), BidiClass::R | BidiClass::AL | BidiClass::AN))
+}
 
 pub(crate) fn capitalize_first(input: &str) -> String {
     let mut chars = input.chars();

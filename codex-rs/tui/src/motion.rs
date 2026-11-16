@@ -6,6 +6,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::text_formatting::contains_rtl_or_arabic_number;
 use crate::tui::FrameRequester;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
@@ -85,6 +86,7 @@ pub(crate) fn activity_indicator(
 
 pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'static>> {
     match motion_mode {
+        MotionMode::Animated if contains_rtl_or_arabic_number(text) => vec![text.to_owned().dim()],
         MotionMode::Animated => shimmer_spans(text),
         MotionMode::Reduced => {
             if text.is_empty() {

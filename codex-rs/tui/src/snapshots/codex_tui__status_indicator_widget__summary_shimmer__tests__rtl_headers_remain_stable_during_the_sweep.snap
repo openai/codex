@@ -1,0 +1,18 @@
+---
+source: tui/src/summary_shimmer_tests.rs
+expression: headers
+---
+[
+    [
+        Span::from("שלום עולם").dim(),
+    ],
+    [
+        Span::from("Checking ש\u{5b8}\u{5c1}לו\u{5b9}ם (test.rs) 123").dim(),
+    ],
+    [
+        Span::from("Checking lines ١٢-٣٤").dim(),
+    ],
+    [
+        Span::from("مرحبا").dim(),
+    ],
+]

@@ -5,6 +5,39 @@ use crate::terminal_palette::with_test_default_colors;
 use crate::terminal_probe::DefaultColors;
 
 #[test]
+fn rtl_headers_remain_stable_during_the_sweep() {
+    with_test_default_colors(
+        DefaultColors {
+            fg: (240, 240, 240),
+            bg: (16, 16, 16),
+        },
+        || {
+            let mut headers = Vec::new();
+            for text in [
+                "שלום עולם",
+                "Checking שָׁלוֹם (test.rs) 123",
+                "Checking lines ١٢-٣٤",
+                "مرحبا",
+            ] {
+                let initial = summary_shimmer(text, Duration::ZERO, MotionMode::Animated);
+                let sweep = summary_shimmer(
+                    text,
+                    Duration::from_millis(/*millis*/ 1100),
+                    MotionMode::Animated,
+                );
+                assert_eq!(initial, sweep);
+                assert_eq!(
+                    initial,
+                    crate::motion::shimmer_text(text, MotionMode::Animated)
+                );
+                headers.push(initial);
+            }
+            insta::assert_debug_snapshot!(headers);
+        },
+    );
+}
+
+#[test]
 fn short_and_long_labels_sweep_smoothly_in_both_themes() {
     let mut frames = Vec::new();
     for (theme, colors) in [

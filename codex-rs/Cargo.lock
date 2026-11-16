@@ -5350,6 +5350,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "two-face",
+ "unicode-bidi",
  "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width 0.2.1",

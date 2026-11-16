@@ -31,6 +31,7 @@ use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::capitalize_first;
+use crate::text_formatting::contains_rtl_or_arabic_number;
 use crate::tui::FrameRequester;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
@@ -303,7 +304,9 @@ impl Renderable for StatusIndicator<'_> {
         }
         if self.row.animations_enabled || self.timer.display_started_at.is_some() {
             let interval_ms = if self.row.animations_enabled
-                && (self.row.effects.progress || self.row.effects.shimmer)
+                && (self.row.effects.progress
+                    || (self.row.effects.shimmer
+                        && !contains_rtl_or_arabic_number(&self.row.header)))
             {
                 32
             } else {
@@ -343,6 +346,39 @@ mod tests {
         assert_eq!(row.header_started_at, previous);
         row.update_header("Mapping the app structure".to_owned());
         assert!(row.header_started_at > previous);
+    }
+
+    #[test]
+    fn static_bidi_headers_only_schedule_clock_ticks_without_progress() {
+        for (header, progress, expected_ms) in [
+            ("שלום עולם", false, 1_000),
+            ("Checking lines ١٢-٣٤", false, 1_000),
+            ("Working", false, 32),
+            ("שלום עולם", true, 32),
+        ] {
+            let (tx, _rx) = unbounded_channel();
+            let (requester, mut requests) = FrameRequester::test_channel();
+            let mut row = StatusIndicatorWidget::new(
+                AppEventSender::new(tx),
+                requester,
+                /*animations_enabled*/ true,
+                codex_config::types::TuiEffects {
+                    progress,
+                    shimmer: true,
+                    ..Default::default()
+                },
+            );
+            row.update_header(header.to_owned());
+            let timer = StatusTimer::default();
+            let area = Rect::new(0, 0, 80, 1);
+            let before = Instant::now();
+            row.with_timer(&timer)
+                .render(area, &mut Buffer::empty(area));
+            let after = Instant::now();
+            let requested = requests.try_recv().expect("scheduled frame");
+            let interval = Duration::from_millis(expected_ms);
+            assert!((before + interval..=after + interval).contains(&requested));
+        }
     }
 
     #[test]
