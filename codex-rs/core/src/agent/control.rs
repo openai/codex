@@ -334,17 +334,14 @@ impl LocalAgentControl {
     }
 
     /// Interrupt the current task for an existing agent thread.
-    pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+    pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId, op: Op) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         self.handle_thread_request_result(
             agent_id,
             &state,
             state
                 .send_op(
-                    agent_id,
-                    Op::Interrupt,
-                    /*parent_turn_id*/ None,
-                    /*root_turn_id*/ None,
+                    agent_id, op, /*parent_turn_id*/ None, /*root_turn_id*/ None,
                     /*message_delivery*/ None,
                 )
                 .await,

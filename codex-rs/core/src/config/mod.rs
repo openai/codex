@@ -1457,6 +1457,7 @@ pub struct MultiAgentV2Config {
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub wait_agent_enabled: bool,
+    pub interrupt_at_item_boundary: bool,
     pub disable_native_tools: bool,
     pub disable_direct_message: bool,
     pub message_board_in_memory: bool,
@@ -1481,6 +1482,7 @@ impl MultiAgentV2Config {
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
+            interrupt_at_item_boundary: false,
             disable_native_tools: false,
             disable_direct_message: false,
             message_board_in_memory: false,
@@ -2968,6 +2970,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let wait_agent_enabled = base
         .and_then(|config| config.wait_agent_enabled)
         .unwrap_or(default.wait_agent_enabled);
+    let interrupt_at_item_boundary = base
+        .and_then(|config| config.interrupt_at_item_boundary)
+        .unwrap_or(default.interrupt_at_item_boundary);
     let disable_native_tools = base
         .and_then(|config| config.disable_native_tools)
         .unwrap_or(default.disable_native_tools);
@@ -3010,6 +3015,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
         wait_agent_enabled,
+        interrupt_at_item_boundary,
         disable_native_tools,
         disable_direct_message,
         message_board_in_memory,

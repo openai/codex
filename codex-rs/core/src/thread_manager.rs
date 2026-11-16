@@ -158,6 +158,7 @@ type AgentControlFactory =
 fn capture_test_op(op: &Op) -> Option<Op> {
     match op {
         Op::Interrupt => Some(Op::Interrupt),
+        Op::InterruptAgent => Some(Op::InterruptAgent),
         Op::InterAgentCommunication {
             communication,
             start_options,

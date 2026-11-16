@@ -281,6 +281,8 @@ mod retained_context;
 mod review;
 mod rollout_budget;
 mod rollout_reconstruction;
+mod sampling_interrupt;
+pub(crate) use sampling_interrupt::SamplingInterrupt;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod startup_prewarm;
@@ -6041,15 +6043,6 @@ impl Session {
             return;
         };
         turn_state.lock().await.has_memory_citation = true;
-    }
-
-    pub async fn interrupt_task(self: &Arc<Self>) {
-        info!("interrupt received: abort current task, if any");
-        let had_active_turn = self.active_turn.lock().await.is_some();
-        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        if !had_active_turn {
-            self.cancel_mcp_startup();
-        }
     }
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {

@@ -1,4 +1,5 @@
 use super::Submission;
+use super::sampling_interrupt::SamplingInterrupt;
 use crate::McpRefreshReason;
 use crate::WithTurnExtensionData;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
@@ -60,7 +61,7 @@ use tracing::info;
 use tracing::warn;
 
 pub async fn interrupt(sess: &Arc<Session>) {
-    sess.interrupt_task().await;
+    sess.interrupt_task(sess.active_turn.lock().await).await;
 }
 
 pub async fn clean_background_terminals(sess: &Arc<Session>) {
@@ -613,6 +614,10 @@ pub(super) async fn submission_loop(
             match sub.op {
                 Op::Interrupt => {
                     interrupt(&sess).await;
+                    false
+                }
+                Op::InterruptAgent => {
+                    SamplingInterrupt::request(&sess).await;
                     false
                 }
                 Op::InterruptIfNoPendingInput { turn_id, reply } => {

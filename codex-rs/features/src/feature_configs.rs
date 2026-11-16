@@ -371,6 +371,9 @@ pub struct MultiAgentV2ConfigToml {
     /// Expose the multi-agent v2 `wait_agent` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_agent_enabled: Option<bool>,
+    /// Let a subagent finish its current output item while cancelling tools immediately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interrupt_at_item_boundary: Option<bool>,
     /// Hide native multi-agent tools while retaining the V2 runtime for host-provided tools.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_native_tools: Option<bool>,

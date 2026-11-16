@@ -26,6 +26,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::ThreadTraceContext;
@@ -211,7 +212,7 @@ impl AgentControl for LocalAgentControl {
             match version {
                 MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
                     let snapshot = self.inspect_agent(target).await?;
-                    self.interrupt_agent(target).await?;
+                    self.interrupt_agent(target, Op::Interrupt).await?;
                     Ok(snapshot)
                 }
                 MultiAgentVersion::V2 => self.interrupt_spawned_agent(caller, target).await,

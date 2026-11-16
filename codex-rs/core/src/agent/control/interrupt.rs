@@ -10,6 +10,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::Op;
 
 impl LocalAgentControl {
     /// Interrupts a spawned agent's current task, preserving the status observed before dispatch.
@@ -38,7 +39,7 @@ impl LocalAgentControl {
             CodexErr::UnsupportedOperation("target agent is missing an agent_path".to_string())
         })?;
         let snapshot = self.inspect_agent(target).await?;
-        match self.interrupt_agent(target).await {
+        match self.interrupt_agent(target, Op::InterruptAgent).await {
             Ok(_) => {}
             Err(err)
                 if matches!(

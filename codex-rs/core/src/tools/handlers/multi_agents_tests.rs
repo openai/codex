@@ -3950,14 +3950,14 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     let ops = manager.captured_ops();
     assert!(
         ops.iter()
-            .any(|(thread_id, op)| *thread_id == agent_id && matches!(op, Op::Interrupt))
+            .any(|(thread_id, op)| *thread_id == agent_id && matches!(op, Op::InterruptAgent))
     );
     assert!(!ops.iter().any(|(thread_id, op)| {
         (*thread_id == agent_id || *thread_id == child_id) && matches!(op, Op::Shutdown)
     }));
     assert!(
         !ops.iter()
-            .any(|(thread_id, op)| *thread_id == child_id && matches!(op, Op::Interrupt))
+            .any(|(thread_id, op)| *thread_id == child_id && matches!(op, Op::InterruptAgent))
     );
 }
 

@@ -3420,6 +3420,10 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
+        "interrupt_at_item_boundary": {
+          "description": "Let a subagent finish its current output item while cancelling tools immediately.",
+          "type": "boolean"
+        },
         "max_concurrent_threads_per_session": {
           "format": "uint",
           "minimum": 1.0,

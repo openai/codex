@@ -1039,10 +1039,15 @@ async fn review_guardian_mcp_elicitation(
     session: Arc<Session>,
     request: ElicitationReviewRequest,
 ) -> anyhow::Result<Option<ElicitationResponse>> {
-    let Some((turn_context, cancellation_token)) =
-        session.active_turn_context_and_cancellation_token().await
-    else {
-        return Ok(None);
+    let (turn_context, cancellation_token) = {
+        let active = session.active_turn.lock().await;
+        let Some(task) = active.as_ref().and_then(|turn| turn.task.as_ref()) else {
+            return Ok(None);
+        };
+        (
+            Arc::clone(&task.turn_context),
+            task.mcp_elicitation_cancellation.child_token(),
+        )
     };
 
     let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
