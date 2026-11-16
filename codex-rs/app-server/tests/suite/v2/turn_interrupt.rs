@@ -7,12 +7,16 @@ use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::write_models_cache_with_models;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -23,6 +27,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
+use codex_models_manager::model_info::model_info_from_slug;
+use core_test_support::responses;
 use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -356,5 +363,98 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     );
     assert!(call.execution.ended_at_unix_ms >= Some(call.execution.started_at_unix_ms));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_interrupt_closes_late_command_approval_from_completed_turn() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.4")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
+        .with_root_config(r#"approvals_reviewer = "user""#)
+        .enable_feature(Feature::CodeMode)
+        .write(codex_home.path())?;
+    let mut model = model_info_from_slug("gpt-5.4");
+    model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+    write_models_cache_with_models(codex_home.path(), vec![model]).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    // Release the first turn's cell from the second turn, then hold the second turn open.
+    let release = r#"{"barrier":{"id":"release-cell","participants":2,"timeout_ms":60000}}"#;
+    let hold = r#"{"barrier":{"id":"hold-until-interrupt","participants":2,"timeout_ms":60000}}"#;
+    let cell = format!(
+        r#"yield_control();
+await tools.test_sync_tool({release});
+await tools.exec_command({{cmd: "echo late", sandbox_permissions: "require_escalated", justification: "test approval"}});"#
+    );
+    responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_custom_tool_call("cell", "exec", &cell),
+                responses::ev_completed("yield"),
+            ]),
+            responses::sse_completed("first-turn-done"),
+            responses::sse(vec![
+                responses::ev_function_call("release", "test_sync_tool", release),
+                responses::ev_function_call("hold", "test_sync_tool", hold),
+                responses::ev_completed("second-turn"),
+            ]),
+        ],
+    )
+    .await;
+    let input = |text: &str| TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![V2UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let first = app
+        .start_turn_and_wait_for_completion(input("start background cell"))
+        .await?
+        .turn;
+    assert_eq!(first.status, TurnStatus::Completed);
+    let TurnStartResponse { turn: second } = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: input("release cell"),
+        })
+        .await?;
+    let ServerRequest::CommandExecutionRequestApproval { params, .. } = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_request_message(),
+    )
+    .await??
+    else {
+        anyhow::bail!("expected command approval");
+    };
+    assert_eq!(params.turn_id, first.id);
+
+    app.interrupt_turn_and_wait_for_aborted(thread.id, second.id, DEFAULT_READ_TIMEOUT)
+        .await?;
+    let completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let event: ItemCompletedNotification = app.read_notification("item/completed").await?;
+            if event.item.id() == params.item_id {
+                return anyhow::Ok(event);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(completed.turn_id, first.id);
+    assert_eq!(completed.item.started_at_ms, Some(params.started_at_ms));
+    let ThreadItemPayload::CommandExecution { status, .. } = completed.item.payload else {
+        anyhow::bail!("expected command execution");
+    };
+    assert_eq!(status, CommandExecutionStatus::Declined);
     Ok(())
 }

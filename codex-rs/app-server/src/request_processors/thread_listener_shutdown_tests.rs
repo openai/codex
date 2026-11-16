@@ -93,6 +93,82 @@ async fn test_processor(
     Ok((processor, outgoing_rx))
 }
 
+#[tokio::test]
+async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.thread_id;
+    let (processor, mut messages) = test_processor(&test).await?;
+    let thread_state_manager = &processor.thread_state_manager;
+    let original = ConnectionId(1);
+    let resumed = ConnectionId(2);
+    for client in [original, resumed] {
+        processor
+            .connection_initialized(client, ConnectionCapabilities::default())
+            .await;
+    }
+    processor
+        .try_attach_thread_listener(thread_id, test.codex.clone(), vec![original])
+        .await;
+    let outgoing = ThreadScopedOutgoingMessageSender::new(
+        processor.outgoing.clone(),
+        vec![original],
+        thread_id,
+    );
+    let approval = serde_json::from_value(serde_json::json!({
+        "turn_id": "finished-turn",
+        "call_id": "late-command",
+        "started_at_ms": 42,
+        "command": ["echo", "late"],
+        "parsed_cmd": [],
+        "cwd": test.config.cwd,
+    }))?;
+    apply_bespoke_event_handling(
+        codex_protocol::protocol::Event {
+            id: "finished-turn".into(),
+            msg: EventMsg::ExecApprovalRequest(approval),
+        },
+        thread_id,
+        test.codex.clone(),
+        test.thread_manager.clone(),
+        outgoing.clone(),
+        thread_state_manager.thread_state(thread_id).await,
+        processor.thread_watch_manager.clone(),
+    )
+    .await;
+
+    assert!(
+        thread_state_manager
+            .try_add_connection_to_thread(thread_id, resumed)
+            .await
+    );
+    assert!(
+        thread_state_manager
+            .unsubscribe_connection_from_thread(thread_id, original)
+            .await
+    );
+    outgoing.abort_pending_server_requests().await;
+
+    let recipient = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        while let Some(message) = messages.recv().await {
+            if let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(notification),
+                ..
+            } = message
+                && let ServerNotification::ItemCompleted(event) = notification.notification
+                && event.item.id() == "late-command"
+            {
+                return Ok(connection_id);
+            }
+        }
+        anyhow::bail!("missing late command completion")
+    })
+    .await??;
+    assert_eq!(recipient, resumed);
+    Ok(())
+}
+
 #[test_case(true; "listener attached before shutdown")]
 #[test_case(false; "listener attached after shutdown")]
 #[tokio::test]

@@ -1,3 +1,4 @@
+use crate::bespoke_event_handling::CommandExecutionCompletionItem;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
@@ -85,6 +86,11 @@ pub(crate) enum ThreadListenerCommand {
     // EmitThreadGoalSnapshot is used to read and emit the latest goal state in the listener order.
     EmitThreadGoalSnapshot {
         state_db: StateDbHandle,
+    },
+    CompleteLateCommandApproval {
+        turn_id: String,
+        item_id: String,
+        completion_item: Box<CommandExecutionCompletionItem>,
     },
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.

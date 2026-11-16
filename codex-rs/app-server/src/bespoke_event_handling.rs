@@ -4,6 +4,7 @@ use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::thread_settings_from_config_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::PendingNetworkApproval;
+use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
@@ -135,7 +136,7 @@ enum CommandExecutionApprovalPresentation {
 }
 
 #[derive(Debug, PartialEq)]
-struct CommandExecutionCompletionItem {
+pub(crate) struct CommandExecutionCompletionItem {
     model_context: Option<ModelInvocationContext>,
     plugin_id: Option<String>,
     script_path: Option<String>,
@@ -778,7 +779,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .then_some(completion_item),
                     ),
                 };
-            if approval_starts_command && let Some(completion_item) = completion_item.as_ref() {
+            let opened_command_item = if approval_starts_command
+                && let Some(completion_item) = completion_item.as_ref()
+            {
                 start_command_execution_item(
                     &conversation_id,
                     event_turn_id.clone(),
@@ -788,8 +791,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &outgoing,
                     &thread_state,
                 )
-                .await;
-            }
+                .await
+            } else {
+                false
+            };
             let proposed_execpolicy_amendment_v2 =
                 proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
             let proposed_network_policy_amendments_v2 =
@@ -845,6 +850,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     approval_id,
                     call_id,
                     completion_item,
+                    opened_command_item,
                     pending_request_id,
                     rx,
                     conversation,
@@ -1536,7 +1542,7 @@ async fn start_command_execution_item(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn complete_command_execution_item(
+pub(crate) async fn complete_command_execution_item(
     conversation_id: &ThreadId,
     turn_id: String,
     item_id: String,
@@ -2074,6 +2080,7 @@ async fn on_command_execution_request_approval_response(
     approval_id: Option<String>,
     item_id: String,
     completion_item: Option<CommandExecutionCompletionItem>,
+    opened_command_item: bool,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2145,7 +2152,25 @@ async fn on_command_execution_request_approval_response(
                 }
             }
         }
-        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => {
+            // A late approval can open an item after its turn has already cleaned up.
+            if opened_command_item && let Some(completion_item) = completion_item {
+                let state = thread_state.lock().await;
+                if !state.turn_summaries.contains_key(&event_turn_id)
+                    && let Some(sender) = state.listener_command_tx()
+                    && sender
+                        .send(ThreadListenerCommand::CompleteLateCommandApproval {
+                            turn_id: event_turn_id,
+                            item_id,
+                            completion_item: Box::new(completion_item),
+                        })
+                        .is_err()
+                {
+                    error!("failed to complete late command approval: thread listener closed");
+                }
+            }
+            return;
+        }
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             (
