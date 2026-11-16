@@ -5,7 +5,7 @@ expression: "tab_styles.join(\"\\n\")"
 sidebar rest  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 sidebar hover  inactive Rgb(224, 224, 224)/Rgb(72, 72, 72)/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 sidebar fallback  inactive Reset/Reset/UNDERLINED  selected Reset/Reset/BOLD | REVERSED  add Reset/Reset/NONE
-sidebar selected  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
+sidebar selected  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(0, 0, 46)/Rgb(133, 187, 248)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 sidebar leave  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 sidebar light rest  inactive Rgb(102, 103, 117)/Rgb(228, 231, 236)/NONE  selected Rgb(0, 0, 46)/Rgb(164, 205, 251)/BOLD  add Rgb(108, 109, 123)/Reset/NONE
 sidebar light hover  inactive Rgb(80, 80, 106)/Rgb(218, 221, 226)/NONE  selected Rgb(0, 0, 46)/Rgb(164, 205, 251)/BOLD  add Rgb(108, 109, 123)/Reset/NONE
@@ -15,7 +15,7 @@ sidebar add fallback  inactive Reset/Reset/NONE  selected Reset/Reset/BOLD | REV
 main rest  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(224, 224, 224)/Rgb(72, 72, 72)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 main hover  inactive Rgb(224, 224, 224)/Rgb(72, 72, 72)/NONE  selected Rgb(224, 224, 224)/Rgb(72, 72, 72)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 main fallback  inactive Reset/Reset/UNDERLINED  selected Reset/Reset/BOLD | UNDERLINED  add Reset/Reset/NONE
-main selected  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(224, 224, 224)/Rgb(72, 72, 72)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
+main selected  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(244, 244, 244)/Rgb(112, 112, 112)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 main leave  inactive Rgb(151, 151, 151)/Rgb(48, 48, 48)/NONE  selected Rgb(224, 224, 224)/Rgb(72, 72, 72)/BOLD  add Rgb(142, 142, 142)/Reset/NONE
 main light rest  inactive Rgb(102, 103, 117)/Rgb(228, 231, 236)/NONE  selected Rgb(80, 80, 106)/Rgb(218, 221, 226)/BOLD  add Rgb(108, 109, 123)/Reset/NONE
 main light hover  inactive Rgb(80, 80, 106)/Rgb(218, 221, 226)/NONE  selected Rgb(80, 80, 106)/Rgb(218, 221, 226)/BOLD  add Rgb(108, 109, 123)/Reset/NONE

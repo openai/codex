@@ -13,6 +13,7 @@ use crate::app_server_session::SideChatStorage;
 use crate::app_server_session::side_chat_prompt_preview;
 use crate::sidebar_chooser::ChatTabs;
 use crate::sidebar_chooser::Discovery;
+use crate::sidebar_tab_strip::SidebarTab;
 use crate::tui::Tui;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -26,6 +27,7 @@ pub(super) enum SidebarContent {
     #[default]
     Chooser,
     Chat(ThreadId),
+    Document(uuid::Uuid),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +72,7 @@ pub(super) enum ChooserSelection {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct SidebarInputState {
     pub(super) revision: usize,
-    pub(super) selected_chat: Option<ThreadId>,
+    pub(super) selected_tab: Option<SidebarTab>,
     pub(super) choice: ChooserSelection,
 }
 
@@ -78,8 +80,10 @@ pub(super) struct SidebarInputState {
 pub(super) struct SidebarPane {
     pub(super) creation: Option<SideCreation>,
     pub(super) close: Option<super::sidebar_close::Confirmation>,
+    pub(super) documents: HashMap<uuid::Uuid, super::sidebar_document::Document>,
+    pub(super) focus_document_request: Option<uuid::Uuid>,
     content: SidebarContent,
-    tabs: Vec<ThreadId>,
+    tabs: Vec<SidebarTab>,
     // The chooser keeps the same order when an attached chat becomes a live tab.
     choices: Vec<SideChat>,
     // A snapshot of the visible rows at the last explicit chooser refresh.
@@ -88,7 +92,7 @@ pub(super) struct SidebarPane {
     pub(super) discovery: Discovery,
     pub(super) closing_chats: HashMap<ThreadId, JoinHandle<()>>,
     // Visit order is independent of the order in which tabs appear.
-    visits: Vec<ThreadId>,
+    visits: Vec<SidebarTab>,
     pub(super) choice: usize,
     tabs_revision: usize,
     focus: Option<PaneFocus>,
@@ -97,14 +101,19 @@ pub(super) struct SidebarPane {
 
 impl SidebarPane {
     pub(super) fn show(&mut self, content: SidebarContent, focus: PaneFocus) {
+        self.focus_document_request = None;
         match content {
             SidebarContent::Chat(id) => {
                 self.add_tab(id);
-                self.visits.retain(|visited| *visited != id);
-                self.visits.push(id);
+                self.visit(SidebarTab::Chat(id));
             }
             SidebarContent::Chooser if self.content != content || self.focus.is_none() => {
                 self.reset_choice();
+            }
+            SidebarContent::Document(id) => {
+                let tab = SidebarTab::Document(id);
+                self.add_document_tab(id);
+                self.visit(tab);
             }
             SidebarContent::Chooser => {}
         }
@@ -123,7 +132,7 @@ impl SidebarPane {
             ids: &self.tabs,
             choices: &self.choices,
             latest_prompts: &self.latest_prompts,
-            selected: self.selected_chat(),
+            selected: self.visits.last().copied(),
         }
     }
 
@@ -140,7 +149,7 @@ impl SidebarPane {
         let selection = self.chat_tabs().choice(self.choice);
         let keep_new = self.choice == 0 && !self.choices.is_empty();
         for chat in &mut self.choices {
-            if !self.tabs.contains(&chat.id) {
+            if !self.tabs.contains(&SidebarTab::Chat(chat.id)) {
                 continue;
             }
             if let Some(saved) = chats.iter_mut().find(|saved| saved.id == chat.id) {
@@ -172,19 +181,68 @@ impl SidebarPane {
             .unwrap_or(usize::from(!self.choices.is_empty()));
     }
 
-    pub(super) fn previous_chat(&self, target: ThreadId) -> Option<ThreadId> {
-        self.visits.iter().rev().copied().find(|id| *id != target)
+    fn visit(&mut self, tab: SidebarTab) {
+        self.visits.retain(|visited| *visited != tab);
+        self.visits.push(tab);
     }
 
-    pub(super) fn adjacent_chat(&self, step: isize) -> Option<ThreadId> {
-        let selected = self.selected_chat()?;
+    pub(super) fn recent_tab(&self, excluding: Option<SidebarTab>) -> Option<SidebarTab> {
+        self.visits
+            .iter()
+            .rev()
+            .copied()
+            .find(|tab| Some(*tab) != excluding)
+    }
+
+    pub(super) fn adjacent_tab(&self, step: isize) -> Option<SidebarTab> {
+        let Some(selected) = self.recent_tab(/*excluding*/ None) else {
+            return if step < 0 {
+                self.tabs.last().copied()
+            } else {
+                self.tabs.first().copied()
+            };
+        };
         let index = self.tabs.iter().position(|id| *id == selected)?;
         let next = (index as isize + step).rem_euclid(self.tabs.len() as isize);
         Some(self.tabs[next as usize])
     }
 
     pub(super) fn selected_chat(&self) -> Option<ThreadId> {
-        self.visits.last().copied()
+        self.visits.iter().rev().find_map(|tab| match *tab {
+            SidebarTab::Chat(id) => Some(id),
+            SidebarTab::Document(_) => None,
+        })
+    }
+
+    pub(super) fn active_document(&mut self) -> Option<&mut super::sidebar_document::Document> {
+        let SidebarContent::Document(id) = self.content else {
+            return None;
+        };
+        self.documents.get_mut(&id)
+    }
+
+    pub(super) fn document_title(&self, id: uuid::Uuid) -> String {
+        let Some(document) = self.documents.get(&id) else {
+            return String::new();
+        };
+        let path = document.path.inferred_native_path_string();
+        path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned()
+    }
+
+    pub(super) fn add_document_tab(&mut self, id: uuid::Uuid) {
+        let tab = SidebarTab::Document(id);
+        if !self.tabs.contains(&tab) {
+            self.tabs.push(tab);
+            self.tabs_revision += 1;
+        }
+    }
+
+    pub(super) fn remove_document(&mut self, id: uuid::Uuid) {
+        self.documents.remove(&id);
+        let tab = SidebarTab::Document(id);
+        self.tabs.retain(|other| *other != tab);
+        self.visits.retain(|other| *other != tab);
+        self.tabs_revision += 1;
     }
 
     pub(super) fn input_state(&self) -> SidebarInputState {
@@ -198,27 +256,27 @@ impl SidebarPane {
         };
         SidebarInputState {
             revision: self.tabs_revision,
-            selected_chat: tabs.selected,
+            selected_tab: tabs.selected,
             choice,
         }
     }
 
     fn add_tab(&mut self, id: ThreadId) {
-        if !self.tabs.contains(&id) {
+        if !self.tabs.contains(&SidebarTab::Chat(id)) {
             if self.chat_tabs().choice_index(id).is_none() {
                 self.choices.push(id.into());
             }
-            self.tabs.push(id);
+            self.tabs.push(SidebarTab::Chat(id));
             self.tabs_revision += 1;
         }
     }
 
     pub(super) fn chat_ready(&mut self, child: ThreadId) {
         self.creation = None;
-        if !self.tabs.contains(&child) {
+        if !self.tabs.contains(&SidebarTab::Chat(child)) {
             self.add_tab(child);
             // A completed background fork must not replace the user's selection.
-            self.visits.insert(0, child);
+            self.visits.insert(0, SidebarTab::Chat(child));
         }
         if self.content == SidebarContent::Chooser
             && let Some(selected) = self.selected_chat()
@@ -228,18 +286,24 @@ impl SidebarPane {
     }
 
     pub(super) fn hide(&mut self) {
+        self.focus_document_request = None;
         self.opening = None;
         self.focus = None;
     }
 
     pub(super) fn remove_chat(&mut self, id: ThreadId, storage: SideChatStorage) {
-        let Some(index) = self.tabs.iter().position(|tab| *tab == id) else {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| *tab == SidebarTab::Chat(id))
+        else {
             return;
         };
         self.close.take_if(|close| close.target == id);
         self.tabs.remove(index);
         self.tabs_revision += 1;
-        self.visits.retain(|visited| *visited != id);
+        self.visits
+            .retain(|visited| *visited != SidebarTab::Chat(id));
         if storage == SideChatStorage::Temporary {
             self.remove_choice(id);
         }
@@ -412,7 +476,7 @@ impl App {
     pub(super) fn panel_focus(&self) -> Option<PaneFocus> {
         let pane = self.sidebar()?;
         match pane.content {
-            SidebarContent::Chooser => pane.focus,
+            SidebarContent::Chooser | SidebarContent::Document(_) => pane.focus,
             SidebarContent::Chat(_) => None,
         }
     }
@@ -483,7 +547,7 @@ pub(super) fn content_layout(
     [main, sidebar]: [Rect; 2],
 ) -> Option<SidebarLayout> {
     match content {
-        SidebarContent::Chooser => (app.sidebar_chooser_available()
+        SidebarContent::Chooser | SidebarContent::Document(_) => (app.sidebar_chooser_available()
             && (focus == PaneFocus::Main || app.chat_widget.completion_can_yield_focus()))
         .then_some(SidebarLayout::Panel {
             main,

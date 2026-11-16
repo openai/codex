@@ -96,6 +96,9 @@ impl App {
                     | AppEvent::SideChatArchived { .. }
                     | AppEvent::SavedChatPrepared { .. } | AppEvent::SavedChatReleased { .. }
                     | AppEvent::StartQueuedSavedChat
+                    | AppEvent::OpenSidebarDocument { .. }
+                    | AppEvent::SidebarDocumentResolved { .. }
+                    | AppEvent::SidebarDocumentLoaded { .. }
                     | AppEvent::SavedSideChatsLoaded { .. }
                     | AppEvent::SideReplayFinished(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
@@ -1036,6 +1039,7 @@ impl App {
                         self.transcript_view.replace_group(cells, range.clone(), &replacement);
                         cells.splice(range, [replacement]);
                     }
+                    self.transcript_view.document_links = false;
                     self.side_companions.insert(thread_id, SideCompanion {
                         display,
                         parked_tail: self.transcript_cells.len(),
@@ -3577,6 +3581,42 @@ impl App {
                     && self.wants_saved_chat(target)
                 {
                     Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
+                }
+            }
+            AppEvent::OpenSidebarDocument { backend_id, source, path } => {
+                if app_server.backend_id() == backend_id
+                    && self.current_displayed_thread_id() == Some(source)
+                    && self.document_preview_available(tui, app_server)
+                {
+                    Box::pin(self.open_document(tui, app_server, source, path)).await?;
+                }
+            }
+            AppEvent::SidebarDocumentResolved { backend_id, parent, source, request, original_path, path, } => {
+                if backend_id == app_server.backend_id()
+                    && self.sidebar_parent() == Some(parent)
+                    && let Some(pane) = self.sidebars.get_mut(&Some(parent))
+                {
+                    // Late opens can add their tabs without taking back the user's focus.
+                    let requested = pane.focus_document_request == Some(request);
+                    if requested {
+                        pane.focus_document_request = None;
+                    }
+                    let focus = requested
+                        && self.current_displayed_thread_id() == Some(source)
+                        && self.document_preview_available(tui, app_server);
+                    match path {
+                        Ok(path) => Box::pin(self.open_resolved_document(tui, app_server, source, original_path, path, focus)).await?,
+                        Err(error) if focus => self.chat_widget.add_error_message(format!("Could not open file: {error}")),
+                        Err(_) => {}
+                    }
+                }
+            }
+            AppEvent::SidebarDocumentLoaded { backend_id, parent, request, result } => {
+                if let Some(doc) = self.sidebars.get_mut(&Some(parent)).and_then(|pane| pane.documents.get_mut(&request))
+                    && doc.backend == backend_id
+                {
+                    doc.loaded(result);
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::SavedSideChatsLoaded { backend_id, parent, request, result } => {

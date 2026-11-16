@@ -287,6 +287,16 @@ impl App {
             };
             return contexts.with_voice_toggle(&self.keymap);
         }
+        if self.panel_focus() == Some(super::sidebar::PaneFocus::Sidebar)
+            && self.chat_widget.no_modal_or_popup_active()
+            && matches!(
+                self.sidebar()
+                    .and_then(sidebar::SidebarPane::visible_content),
+                Some(sidebar::SidebarContent::Document(_))
+            )
+        {
+            return KeymapContextSet::new(KeymapContext::Pager).with_voice_toggle(&self.keymap);
+        }
         if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
         }

@@ -28,10 +28,6 @@ use serde_json::json;
 use uuid::Uuid;
 
 impl AppServerSession {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the sidebar viewer in the next change")
-    )]
     pub(crate) async fn resolve_thread_file(
         &self,
         source: ThreadId,
@@ -76,10 +72,6 @@ impl AppServerSession {
             })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the sidebar viewer in the next change")
-    )]
     pub(crate) async fn read_document(
         &self,
         source: ThreadId,

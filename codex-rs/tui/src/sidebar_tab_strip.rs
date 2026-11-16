@@ -10,8 +10,16 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidebarTab {
+    Chat(codex_protocol::ThreadId),
+    Document(uuid::Uuid),
+}
+
 /// Adjacent tabs have one unpainted, noninteractive terminal column between them.
 const TAB_GAP: u16 = 1;
+const MIN_TAB_WIDTH: u16 = 12;
+const MAX_TAB_WIDTH: u16 = 22;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabState {
@@ -24,12 +32,12 @@ pub(crate) enum TabState {
 pub(crate) struct TabStrip<'a, Id> {
     pub(crate) ids: &'a [Id],
     pub(crate) selected: Option<Id>,
-    pub(crate) tab_width: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabTarget<Id> {
     Tab(Id),
+    Close(Id),
     Overflow { tab: Id, glyph: &'static str },
     Add,
 }
@@ -39,48 +47,63 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         self.ids.iter().position(|id| Some(*id) == self.selected)
     }
 
-    pub(crate) fn strip_targets(
-        self,
-        area: Rect,
-    ) -> impl Iterator<Item = (TabTarget<Id>, Rect)> + 'a {
+    pub(crate) fn strip_targets(self, area: Rect) -> Vec<(TabTarget<Id>, Rect)> {
         let width = area.width.saturating_sub(1);
         let plus = width.min(3);
         let available = width - plus;
         let height = area.height.min(1);
-        let stride = self.tab_width.saturating_add(TAB_GAP);
-        let overflow = self.ids.len() > usize::from(((available + TAB_GAP) / stride).max(1));
-        // Reserve both arrow gutters so the tabs stay in place while switching.
-        let gutter = if overflow && available >= 7 { 2 } else { 0 };
-        let space = available - 2 * gutter;
-        let tab_width = space.min(self.tab_width);
-        let count = if tab_width == 0 {
-            0
-        } else {
-            usize::from((space + TAB_GAP) / (tab_width + TAB_GAP))
-        };
-        let first = self
-            .selected_index()
-            .map_or(0, |index| (index + 1).saturating_sub(count));
-        let end = (first + count).min(self.ids.len());
-        let rect = move |offset, width| Rect::new(area.x + offset, area.y, width, height);
-        let arrow = |chat, glyph, x| (TabTarget::Overflow { tab: chat, glyph }, rect(x, 1));
-        let left = (gutter > 0 && first > 0).then(|| arrow(self.ids[first - 1], "‹", 0));
-        let right =
-            (gutter > 0 && end < self.ids.len()).then(|| arrow(self.ids[end], "›", available - 1));
-        let tabs = self.ids[first..end].iter().enumerate().map(move |(i, id)| {
-            (
-                TabTarget::Tab(*id),
-                rect(gutter + i as u16 * (tab_width + TAB_GAP), tab_width),
-            )
-        });
-        left.into_iter()
-            .chain(tabs)
-            .chain(right)
-            .chain([(TabTarget::Add, rect(available, plus))])
+        let rect = |offset, width| Rect::new(area.x + offset, area.y, width, height);
+        let mut targets = Vec::new();
+        if available > 0 && !self.ids.is_empty() {
+            let preferred = (area.width / 4).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
+            let stride = preferred + TAB_GAP;
+            let overflow = self.ids.len() > usize::from(((available + TAB_GAP) / stride).max(1));
+            // Tiny strips spend their space on the title.
+            let gutter = if overflow && available >= 7 { 2 } else { 0 };
+            let space = available - 2 * gutter;
+            let width = space.min(preferred);
+            let count = usize::from((space + TAB_GAP) / (width + TAB_GAP)).min(self.ids.len());
+            let start = self
+                .selected_index()
+                .map_or(0, |index| (index + 1).saturating_sub(count));
+            let end = start + count;
+
+            if gutter > 0 && start > 0 {
+                targets.push((
+                    TabTarget::Overflow {
+                        tab: self.ids[start - 1],
+                        glyph: "‹",
+                    },
+                    rect(0, 1),
+                ));
+            }
+            let mut x = gutter;
+            for &id in &self.ids[start..end] {
+                let close = u16::from(width >= 3);
+                let label = width - close;
+                targets.push((TabTarget::Tab(id), rect(x, label)));
+                if close > 0 {
+                    targets.push((TabTarget::Close(id), rect(x + label, close)));
+                }
+                x += width + TAB_GAP;
+            }
+            if gutter > 0 && end < self.ids.len() {
+                targets.push((
+                    TabTarget::Overflow {
+                        tab: self.ids[end],
+                        glyph: "›",
+                    },
+                    rect(available - 1, 1),
+                ));
+            }
+        }
+        targets.push((TabTarget::Add, rect(available, plus)));
+        targets
     }
 
     pub(crate) fn hit(self, area: Rect, point: Position) -> Option<(TabTarget<Id>, Rect)> {
         self.strip_targets(area)
+            .into_iter()
             .find(|(_, rect)| rect.contains(point))
     }
 
@@ -119,14 +142,35 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                 TabTarget::Tab(id) => {
                     let tab_style =
                         if Some(id) == self.selected && selected_state != TabState::Absent {
-                            selected_style
+                            if hovered {
+                                crate::style::hover_style(selected_style)
+                            } else {
+                                selected_style
+                            }
                         } else {
                             quiet
                         };
                     paint(id, rect, tab_style, buf);
                 }
+                TabTarget::Close(id) => {
+                    let close = if Some(id) == self.selected && selected_state != TabState::Absent {
+                        if hovered {
+                            crate::style::hover_style(selected_style)
+                        } else {
+                            selected_style
+                        }
+                    } else {
+                        quiet
+                    };
+                    Line::from("×").style(close).render(rect, buf);
+                }
                 TabTarget::Overflow { glyph, .. } => {
-                    Line::from(glyph).style(quiet).render(rect, buf)
+                    let arrow = if hovered {
+                        hover
+                    } else {
+                        style(TabState::Absent)
+                    };
+                    Line::from(glyph).style(arrow).render(rect, buf)
                 }
                 TabTarget::Add => {
                     let add = match (hovered, add_state) {

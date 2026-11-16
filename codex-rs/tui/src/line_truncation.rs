@@ -112,3 +112,41 @@ pub(crate) fn truncate_line_with_ellipsis(line: Line<'static>, max_width: usize)
 #[cfg(test)]
 #[path = "line_truncation_tests.rs"]
 mod tests;
+
+pub(crate) fn filename_label(name: &str, width: usize) -> String {
+    let extension = name
+        .rsplit_once('.')
+        .filter(|(_, ext)| !ext.contains(['/', '\\']))
+        .map_or(0, |(_, ext)| crate::width::display_width(ext) + 1);
+    middle_label_with_suffix(name, width, extension)
+}
+
+fn middle_label_with_suffix(text: &str, width: usize, suffix_width: usize) -> String {
+    use crate::width::display_width;
+    use unicode_segmentation::UnicodeSegmentation;
+
+    if width == 0 {
+        return String::new();
+    }
+    if display_width(text) <= width {
+        return text.to_owned();
+    }
+    let mut prefix = (width - 1) / 2;
+    if suffix_width < width - 1 {
+        prefix = prefix.min(width - 1 - suffix_width);
+    }
+    let (mut label, rest, prefix_width) = crate::live_wrap::take_prefix_by_width(text, prefix);
+    let mut remaining = width - prefix_width - 1;
+    let mut suffix = rest.len();
+    for (index, grapheme) in rest.grapheme_indices(true).rev() {
+        let cells = display_width(grapheme);
+        if cells > remaining {
+            break;
+        }
+        remaining -= cells;
+        suffix = index;
+    }
+    label.push('…');
+    label.push_str(&rest[suffix..]);
+    label
+}

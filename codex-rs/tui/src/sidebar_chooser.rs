@@ -7,6 +7,7 @@ use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::live_wrap::take_prefix_by_width;
+use crate::sidebar_tab_strip::SidebarTab;
 use crate::sidebar_tab_strip::TabState;
 use crate::sidebar_tab_strip::TabStrip;
 use crate::sidebar_tab_strip::TabTarget;
@@ -127,15 +128,6 @@ pub(crate) fn footer(
 
 const CHAT_TAB: &str = " Side chat ";
 
-pub(crate) fn close_cell(tab: Rect) -> Rect {
-    Rect::new(
-        tab.right().saturating_sub(1),
-        tab.y,
-        u16::from(tab.width >= 3),
-        tab.height,
-    )
-}
-
 #[derive(Default)]
 pub(crate) enum Discovery {
     #[default]
@@ -173,11 +165,11 @@ pub(crate) struct ChatTabs<'a> {
     pub(crate) label_style: ThreadLabelStyle,
     pub(crate) discovery: &'a Discovery,
     pub(crate) opening: Option<&'a Opening>,
-    pub(crate) ids: &'a [ThreadId],
+    pub(crate) ids: &'a [SidebarTab],
     // Chooser index zero is reserved for New side chat.
     pub(crate) choices: &'a [SideChat],
     pub(crate) latest_prompts: &'a HashMap<ThreadId, String>,
-    pub(crate) selected: Option<ThreadId>,
+    pub(crate) selected: Option<SidebarTab>,
 }
 
 impl<'a> ChatTabs<'a> {
@@ -231,11 +223,10 @@ impl<'a> ChatTabs<'a> {
             .map(|index| index + 1)
     }
 
-    pub(crate) fn strip(self) -> TabStrip<'a, ThreadId> {
+    pub(crate) fn strip(self) -> TabStrip<'a, SidebarTab> {
         TabStrip {
             ids: self.ids,
             selected: self.selected,
-            tab_width: CHAT_TAB.len() as u16,
         }
     }
 }
@@ -245,7 +236,8 @@ pub(crate) fn tab_strip(
     chooser: TabState,
     chat: TabState,
     tabs: ChatTabs<'_>,
-    hovered_target: Option<TabTarget<ThreadId>>,
+    hovered_target: Option<TabTarget<SidebarTab>>,
+    document_title: impl Fn(uuid::Uuid) -> String,
     buf: &mut Buffer,
 ) {
     tabs.strip().render(
@@ -255,25 +247,28 @@ pub(crate) fn tab_strip(
         chat,
         hovered_target,
         |id, area, style, buf| {
-            let close = close_cell(area);
-            let label = Rect::new(area.x, area.y, area.width - close.width, area.height);
-            let title = match tabs.choice_index(id) {
-                Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
-                    Some(name) => {
-                        let mut title = tabs.label_style.render(
-                            Line::from(name.to_owned()),
-                            usize::from(label.width.saturating_sub(1)),
-                        );
-                        title.spans.insert(0, " ".into());
-                        title
-                    }
-                    None if tabs.choices.len() > 1 => Line::from(format!(" Side {number} ")),
+            let title = match id {
+                SidebarTab::Document(id) => Line::from(crate::line_truncation::filename_label(
+                    &document_title(id),
+                    usize::from(area.width),
+                )),
+                SidebarTab::Chat(id) => match tabs.choice_index(id) {
+                    Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
+                        Some(name) => {
+                            let mut title = tabs.label_style.render(
+                                Line::from(name.to_owned()),
+                                usize::from(area.width.saturating_sub(1)),
+                            );
+                            title.spans.insert(0, " ".into());
+                            title
+                        }
+                        None if tabs.choices.len() > 1 => Line::from(format!(" Side {number} ")),
+                        None => Line::from(CHAT_TAB),
+                    },
                     None => Line::from(CHAT_TAB),
                 },
-                None => Line::from(CHAT_TAB),
             };
-            title.style(style).render(label, buf);
-            Line::from("×").style(style).render(close, buf);
+            title.style(style).render(area, buf);
         },
     );
 }

@@ -285,6 +285,7 @@ mod side_focus;
 mod side_pane;
 mod sidebar;
 mod sidebar_close;
+mod sidebar_document;
 pub(crate) mod sidebar_loading;
 mod startup;
 pub(crate) mod startup_bootstrap;
@@ -870,6 +871,7 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        self.transcript_view.document_links = self.document_preview_available(tui, app_server);
         self.transcript_view
             .sync_patch_approval(self.chat_widget.current_patch_approval());
         // A chooser action must never decide a modal that has not been painted yet.

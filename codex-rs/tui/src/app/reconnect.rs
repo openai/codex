@@ -414,6 +414,12 @@ impl App {
         self.app_event_tx = AppEventSender::new(tx);
         self.app_server_backend_id = Some(session.backend_id());
         *app_event_rx = rx;
+        for pane in self.sidebars.values_mut() {
+            pane.focus_document_request = None;
+            for doc in pane.documents.values_mut() {
+                doc.connection_replaced();
+            }
+        }
         // The old timer targets the discarded channel, so a new preview can be scheduled.
         self.config_notification_test_pending = None;
         {

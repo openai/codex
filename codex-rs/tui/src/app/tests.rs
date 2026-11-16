@@ -4970,7 +4970,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             ))
             .await?;
         } else {
-            assert!(columns.iter().all(|x| *x == divider - 2));
+            assert!(columns.iter().all(|x| *x == divider - 1));
             // A fresh transcript press cancels a drag whose release was lost.
             for kind in [MouseEventKind::Down(left), MouseEventKind::Up(left)] {
                 boxed_future!(app.handle_tui_event(
@@ -4986,9 +4986,9 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         }
     }
     // Text preview, graphics guide, and the divider on the protected image row.
-    insta::assert_snapshot!(format!("{previews:?}"), @"[197, 197, 199]");
+    insta::assert_snapshot!(format!("{previews:?}"), @"[198, 198, 199]");
     side_frame(&mut app, &mut tui, wide)?;
-    assert_eq!(divider_at(&tui, 0), 197);
+    assert_eq!(divider_at(&tui, 0), 198);
     let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
     assert_eq!(saved["tui"]["sidebar_width_percent"].as_integer(), Some(34));
 
@@ -5384,12 +5384,13 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
     insta::assert_snapshot!(
         header.split_inclusive('×').take(2).collect::<String>(),
-        @" ☁︎ Invest…×  ☁︎ Fix ca…×"
+        @" ☁︎ Investigate …×  ☁︎ Fix cache    ×"
     );
     keys!(prefix, chooser_key);
     let frame = side_frame(&mut app, &mut tui, even)?;
     let labels = frame
         .lines()
+        .skip(1)
         .filter_map(|line| line.split_once('│').map(|(_, pane)| pane))
         .filter(|pane| pane.contains("Investigate rendering") || pane.contains("Fix cache"))
         .map(|pane| pane.trim().trim_start_matches(['›', '○', ' ']))
@@ -5410,16 +5411,26 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let narrow_frame = side_frame(&mut app, &mut tui, narrow)?;
     let header = narrow_frame.lines().next().unwrap();
     insta::assert_snapshot!("side_chat_tab_overflow", header.trim_end());
-    let arrow = header.chars().position(|c| c == '‹').expect("previous tab");
+    let strip = app.conversation_frame.chat_strip.unwrap();
+    let arrow_x = header.chars().position(|c| c == '‹').expect("previous tab") as u16;
+    let buffer = tui.terminal.previous_buffer();
+    let arrow_cell = &buffer[(arrow_x, strip.y)];
+    let add_cell = &buffer[(strip.right() - 3, strip.y)];
+    let idle_style = arrow_cell.style();
+    assert_eq!(idle_style, add_cell.style());
+
+    let hover = mouse(MouseEventKind::Moved, arrow_x, strip.y);
+    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, hover)).await?;
+    side_frame(&mut app, &mut tui, narrow)?;
+    assert_ne!(
+        tui.terminal.previous_buffer()[(arrow_x, strip.y)].style(),
+        idle_style
+    );
     for (kind, expected) in [
         (MouseEventKind::Down(MouseButton::Left), side_thread_id),
         (MouseEventKind::ScrollDown, sibling),
     ] {
-        let event = mouse(
-            kind,
-            arrow as u16,
-            app.conversation_frame.chat_strip.unwrap().y,
-        );
+        let event = mouse(kind, arrow_x, strip.y);
         boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
         drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
         assert_eq!(app.current_displayed_thread_id(), Some(expected));
@@ -5433,7 +5444,22 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert!(side_frame(&mut app, &mut tui, even)?.contains(child_row));
     let strip = app.conversation_frame.chat_strip.unwrap();
     let down = MouseEventKind::Down(MouseButton::Left);
-    let click = mouse(down, strip.x + 12, strip.y);
+    let sibling_tab = app
+        .sidebar()
+        .unwrap()
+        .chat_tabs()
+        .strip()
+        .strip_targets(strip)
+        .into_iter()
+        .find_map(|(target, area)| {
+            (target
+                == crate::sidebar_tab_strip::TabTarget::Tab(
+                    crate::sidebar_tab_strip::SidebarTab::Chat(sibling),
+                ))
+            .then_some(area)
+        })
+        .expect("sibling tab");
+    let click = mouse(down, sibling_tab.x, strip.y);
     boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, click)).await?;
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     assert_eq!(app.current_displayed_thread_id(), Some(sibling));
@@ -5517,7 +5543,6 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         assert_eq!(app.chooser_focus(), expected_focus, "{focus}");
         side_frame(&mut app, &mut tui, even)?;
         let strip = app.conversation_frame.sidebar_tab_strip().unwrap();
-        let chooser = app.conversation_frame.chat_strip.is_none();
         let add = strip.right() - 3;
         let tabs = app
             .sidebar()
@@ -5526,20 +5551,22 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .strip()
             .strip_targets(strip);
         let [inactive, selected] = tabs
+            .into_iter()
             .filter_map(|(target, area)| {
                 matches!(target, crate::sidebar_tab_strip::TabTarget::Tab(_)).then_some(area)
             })
             .collect::<Vec<_>>()
             .try_into()
             .expect("both side-chat tabs are visible");
-        assert_eq!(selected.x, inactive.right() + 1);
+        assert_eq!(selected.x, inactive.right() + 2);
+        assert_eq!(inactive.width, selected.width);
         let [inactive, selected] = [inactive, selected].map(|area| area.x + 1);
         for (state, column, row, palette, redraw) in [
             ("rest", selected, strip.y + 1, Some(colors), None),
             ("hover", inactive, strip.y, Some(colors), Some(true)),
             ("fallback", inactive + 1, strip.y, None, Some(false)),
             ("selected", selected, strip.y, Some(colors), Some(true)),
-            ("leave", selected, strip.y + 1, Some(colors), Some(chooser)),
+            ("leave", selected, strip.y + 1, Some(colors), Some(true)),
             ("light rest", selected, strip.y + 1, Some(light), None),
             ("light hover", inactive, strip.y, Some(light), Some(true)),
             ("light add", add, strip.y, Some(light), Some(true)),

@@ -297,7 +297,14 @@ impl App {
         }
         let highlight_divider =
             self.pane_resize.is_some() || tui.link_hover.shape == tui::PointerShape::Resize;
-        let hovered_target = self.hovered_sidebar_target(tui.link_hover.position());
+        let pointer = tui
+            .link_hover
+            .mouse
+            .filter(|mouse| self.pane_resize.is_none() && !tui.shortcut_hud_contains(*mouse))
+            .map(|mouse| (mouse.column, mouse.row).into());
+        let sidebar_parent = self.sidebar_parent();
+        let sidebar_motion =
+            MotionMode::from_animations_enabled(self.local_settings.tui.animations);
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
         let backdrop = caller_inset.map(|_| {
@@ -349,8 +356,20 @@ impl App {
                 }
                 Some(sidebar::SidebarLayout::Panel { sidebar, focus, .. }) => {
                     let focused = *focus == PaneFocus::Sidebar;
+                    if focused {
+                        frame.cursor_position = None;
+                    }
                     let resize_hint = self.pane_resize.map(|_| side_pane::RESIZE_HINT);
-                    if let Some(creation) = self.sidebar().and_then(|pane| pane.creation.as_ref()) {
+                    if let Some(doc) = self
+                        .sidebars
+                        .get_mut(&sidebar_parent)
+                        .and_then(|pane| pane.active_document())
+                    {
+                        let [_, body] = side_pane::tab_and_body(*sidebar);
+                        doc.paint(body, frame.buffer, sidebar_motion, &frames, resize_hint);
+                    } else if let Some(creation) =
+                        self.sidebar().and_then(|pane| pane.creation.as_ref())
+                    {
                         use sidebar::CreationState;
                         ratatui::widgets::Clear.render(*sidebar, frame.buffer);
                         let mut body = sidebar.inner(ratatui::layout::Margin::new(1, 1));
@@ -422,26 +441,53 @@ impl App {
                                 frames: &frames,
                             },
                         );
-                        let chooser = if focused {
+                    }
+                    if let Some(pane) = self.sidebar()
+                        && (pane.creation.is_none()
+                            || matches!(
+                                pane.visible_content(),
+                                Some(sidebar::SidebarContent::Document(_))
+                            ))
+                    {
+                        let document = matches!(
+                            pane.visible_content(),
+                            Some(sidebar::SidebarContent::Document(_))
+                        );
+                        let chooser = if document {
+                            TabState::Absent
+                        } else if focused {
                             TabState::Active
                         } else {
                             TabState::Inactive
                         };
+                        if document {
+                            ratatui::widgets::Clear
+                                .render(side_pane::tab_and_body(*sidebar)[0], frame.buffer);
+                        }
                         crate::sidebar_chooser::tab_strip(
                             *sidebar,
                             chooser,
-                            TabState::Absent,
-                            tabs,
-                            hovered_target,
+                            if document && focused {
+                                TabState::Active
+                            } else if document {
+                                TabState::Inactive
+                            } else {
+                                TabState::Absent
+                            },
+                            crate::sidebar_chooser::ChatTabs {
+                                label_style,
+                                ..pane.chat_tabs()
+                            },
+                            pointer
+                                .and_then(|point| pane.chat_tabs().strip().hit(*sidebar, point))
+                                .map(|(target, _)| target),
+                            |id| pane.document_title(id),
                             frame.buffer,
                         );
                     }
                     frame
                         .image_placements
                         .retain(|image| !sidebar.intersects(image.area));
-                    if focused {
-                        frame.cursor_position = None;
-                    }
                 }
                 None => {}
             }
@@ -456,7 +502,10 @@ impl App {
                         label_style,
                         ..pane.chat_tabs()
                     },
-                    hovered_target,
+                    pointer
+                        .and_then(|point| pane.chat_tabs().strip().hit(strip, point))
+                        .map(|(target, _)| target),
+                    |id| pane.document_title(id),
                     frame.buffer,
                 );
             }
@@ -1193,7 +1242,19 @@ impl App {
                     }
                 }
             } else if let ViewAction::OpenLink(url) = action {
-                self.open_url_in_browser(url);
+                if url.starts_with("file://")
+                    || crate::terminal_hyperlinks::web_destination(&url).is_some()
+                {
+                    self.open_url_in_browser(url);
+                } else if self.transcript_view.document_links
+                    && let Some(source) = self.current_displayed_thread_id()
+                {
+                    self.app_event_tx.send(AppEvent::OpenSidebarDocument {
+                        backend_id: app_server.backend_id(),
+                        source,
+                        path: codex_app_server_client::AppServerPath::from_app_server(url),
+                    });
+                }
             }
         }
         if was_select_mode && !self.transcript_view.is_select_mode() {
