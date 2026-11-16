@@ -785,6 +785,26 @@ impl PluginsManager {
         Arc::clone(&self.auth_manager)
     }
 
+    /// Return the version of the materialized remote package matching its catalog identity.
+    pub fn local_remote_plugin_version(
+        &self,
+        plugin_key: &str,
+        remote_plugin_id: &str,
+    ) -> Option<String> {
+        let plugin_id = PluginId::parse(plugin_key).ok()?;
+        let installation = self.store.active_plugin_installation(&plugin_id)?;
+        if installation.persisted_remote_plugin_id().ok()?.as_deref() != Some(remote_plugin_id) {
+            return None;
+        }
+        codex_utils_plugins::find_plugin_manifest_path(installation.root.as_path())?;
+        installation
+            .root
+            .as_path()
+            .file_name()?
+            .to_str()
+            .map(str::to_owned)
+    }
+
     pub fn runtime_auth_slot(&self) -> RuntimeAuthSlot {
         Arc::clone(&self.runtime_auth)
     }

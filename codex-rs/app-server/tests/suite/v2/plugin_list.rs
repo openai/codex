@@ -291,6 +291,12 @@ async fn plugin_installed_prefers_remote_curated_conflicts_when_remote_plugin_en
     write_openai_curated_marketplace(codex_home.path(), &["linear", "calendar"])?;
     write_installed_plugin(&codex_home, "openai-curated", "linear")?;
     write_installed_plugin(&codex_home, "openai-curated", "calendar")?;
+    write_installed_plugin_with_version(&codex_home, "openai-curated-remote", "linear", "1.2.2")?;
+    codex_core_plugins::store::PluginStore::new(codex_home.path().to_path_buf())
+        .write_remote_plugin_id(
+            &codex_plugin::PluginId::new("linear".into(), "openai-curated-remote".into())?,
+            "plugins~Plugin_00000000000000000000000000000000",
+        )?;
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -378,6 +384,8 @@ enabled = true
             .map(|plugin| {
                 (
                     plugin.id.clone(),
+                    plugin.version.clone(),
+                    plugin.local_version.clone(),
                     plugin.enabled,
                     plugin.install_policy_source,
                     plugin.must_show_installation_interstitial,
@@ -387,12 +395,16 @@ enabled = true
         vec![
             (
                 "linear@openai-curated-remote".to_string(),
+                Some("1.2.3".to_string()),
+                Some("1.2.2".to_string()),
                 expected_remote_enabled,
                 Some(PluginInstallPolicySource::WorkspaceSetting),
                 Some(false),
             ),
             (
                 "remote-only@openai-curated-remote".to_string(),
+                Some("1.2.3".to_string()),
+                None,
                 expected_remote_enabled,
                 Some(PluginInstallPolicySource::WorkspaceSetting),
                 Some(false),
@@ -2183,7 +2195,12 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled(
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
-    write_installed_plugin_with_version(&codex_home, "openai-curated-remote", "linear", "1.2.3")?;
+    write_installed_plugin_with_version(&codex_home, "openai-curated-remote", "linear", "1.2.2")?;
+    codex_core_plugins::store::PluginStore::new(codex_home.path().to_path_buf())
+        .write_remote_plugin_id(
+            &codex_plugin::PluginId::new("linear".into(), "openai-curated-remote".into())?,
+            "plugins~Plugin_00000000000000000000000000000000",
+        )?;
 
     let repo = TempDir::new()?;
     let cwds = if project_configuration != ProjectPluginConfiguration::None {
@@ -2398,7 +2415,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled(
     );
     assert_eq!(
         remote_marketplace.plugins[0].local_version.as_deref(),
-        Some("1.2.3")
+        Some("1.2.2")
     );
     assert_eq!(remote_marketplace.plugins[0].installed, true);
     assert_eq!(

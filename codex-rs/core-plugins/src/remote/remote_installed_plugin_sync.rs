@@ -236,18 +236,30 @@ pub(crate) async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
         if let Some(release_version) = release_version
             && store.active_plugin_version(&plugin_id).as_deref() == Some(release_version)
         {
-            if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
-                warn!(
-                    remote_plugin_id = %plugin.id,
-                    plugin = %plugin.name,
-                    marketplace = %marketplace_name,
-                    error = %err,
-                    "failed to persist identity for cached remote installed plugin"
-                );
-                failed_remote_plugin_ids.insert(plugin.id);
+            match store.remote_plugin_id(&plugin_id) {
+                Ok(Some(id)) if id == plugin.id => {
+                    installed_plugins.push(cached_plugin);
+                    continue;
+                }
+                // Preserve migration of older caches that predate remote install receipts.
+                Ok(None) => {
+                    if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
+                        warn!(
+                            remote_plugin_id = %plugin.id,
+                            plugin = %plugin.name,
+                            marketplace = %marketplace_name,
+                            error = %err,
+                            "failed to persist identity for cached remote installed plugin"
+                        );
+                        failed_remote_plugin_ids.insert(plugin.id);
+                    }
+                    installed_plugins.push(cached_plugin);
+                    continue;
+                }
+                // A conflicting or unreadable receipt cannot establish ownership, even if
+                // the catalog advertises the same name and version. Install the package instead.
+                Ok(Some(_)) | Err(_) => {}
             }
-            installed_plugins.push(cached_plugin);
-            continue;
         }
 
         let bundle = match crate::remote_bundle::validate_remote_plugin_bundle(
@@ -622,6 +634,88 @@ mod tests {
                 .join("missing-version")
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn sync_same_version_conflicting_identity_preserves_receipt_after_download_failure() {
+        let server = MockServer::start().await;
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let plugin_id = PluginId::new(
+            "linear".to_string(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+        )
+        .expect("valid plugin id");
+        let store = PluginStore::new(codex_home.path().to_path_buf());
+        let manifest = store
+            .plugin_root(&plugin_id, "1.2.3")
+            .join(".codex-plugin/plugin.json");
+        std::fs::create_dir_all(manifest.as_path().parent().expect("manifest parent"))
+            .expect("create cached plugin directory");
+        std::fs::write(manifest.as_path(), r#"{"name":"linear","version":"1.2.3"}"#)
+            .expect("write cached plugin manifest");
+        store
+            .write_remote_plugin_id(&plugin_id, "plugins~Plugin_original")
+            .expect("persist original identity");
+
+        // This HTTP mock cannot complete a TLS handshake, so the valid HTTPS bundle URL fails
+        // during download without contacting any external service.
+        let bundle_url = format!(
+            "{}/bundle.tar.gz",
+            server.uri().replacen("http://", "https://", 1)
+        );
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param_is_missing("scope"))
+            .and(query_param("limit", "200"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": [{
+                    "id": "plugins~Plugin_replacement",
+                    "name": "linear",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "1.2.3",
+                        "display_name": "Linear",
+                        "description": "Track work",
+                        "interface": {},
+                        "bundle_download_url": bundle_url,
+                    },
+                    "enabled": true,
+                }],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = RemotePluginServiceConfig::new(
+            format!("{}/backend-api", server.uri()),
+            crate::test_support::test_http_client_factory(),
+            /*product_sku*/ None,
+        );
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let outcome = sync_remote_installed_plugin_bundles_once(
+            codex_home.path().to_path_buf(),
+            &config,
+            Some(&auth),
+        )
+        .await
+        .expect("sync remote catalog");
+
+        assert_eq!(
+            outcome.failed_materialization_remote_plugin_ids,
+            vec!["plugins~Plugin_replacement".to_string()]
+        );
+        assert_eq!(
+            store
+                .remote_plugin_id(&plugin_id)
+                .expect("read original receipt"),
+            Some("plugins~Plugin_original".to_string())
+        );
+        assert!(manifest.as_path().is_file());
     }
 
     #[tokio::test]

@@ -133,6 +133,30 @@ fn plugins_config_input_with_requirements(
     )
 }
 
+#[test]
+fn local_remote_plugin_version_requires_a_materialized_package_and_matching_identity() {
+    let home = TempDir::new().unwrap();
+    let manager = test_plugins_manager(home.path().to_path_buf());
+    let key = "sample@openai-curated-remote";
+    let id = PluginId::parse(key).unwrap();
+    let root = manager.store.plugin_root(&id, "1.0.0");
+    let manifest = root.join(".codex-plugin/plugin.json");
+    write_file(&manifest, r#"{"name":"sample","version":"1.0.0"}"#);
+
+    assert_eq!(manager.local_remote_plugin_version(key, "owner"), None);
+    manager.store.write_remote_plugin_id(&id, "owner").unwrap();
+    assert_eq!(
+        manager.local_remote_plugin_version(key, "owner"),
+        Some("1.0.0".to_string())
+    );
+    assert_eq!(
+        manager.local_remote_plugin_version(key, "different-owner"),
+        None
+    );
+    fs::remove_file(manifest.as_path()).unwrap();
+    assert_eq!(manager.local_remote_plugin_version(key, "owner"), None);
+}
+
 #[tokio::test]
 async fn plugins_manager_reads_auth_mode_from_auth_manager() {
     let tmp = TempDir::new().unwrap();
