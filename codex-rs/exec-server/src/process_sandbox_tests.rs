@@ -6,7 +6,7 @@ use std::time::Duration;
 use codex_exec_server_protocol::JSONRPCErrorError;
 #[cfg(unix)]
 use codex_file_system::WindowsSandboxSelection;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
@@ -245,7 +245,7 @@ async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
     assert_eq!(prepared.arg0, None);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn managed_network_sandbox_request() -> (ExecParams, ExecServerRuntimeOptions) {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
@@ -278,6 +278,70 @@ fn managed_network_sandbox_request() -> (ExecParams, ExecServerRuntimeOptions) {
     (params, runtime_paths)
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn proxy_config_selects_transparent_tcp_without_executor_switch() {
+    let (mut params, runtime_paths) = managed_network_sandbox_request();
+    params.enforce_managed_network = false;
+    let prepare = async |params: &ExecParams| {
+        prepare_exec_request(
+            params,
+            HashMap::new(),
+            Some(&runtime_paths),
+            /*network_policy_decider*/ None,
+            /*network_policy_audit_observer*/ None,
+        )
+        .await
+    };
+    for (toml, expected) in [
+        ("enabled = true", false),
+        ("enabled = true\ntransparent_tcp = true", true),
+    ] {
+        let network: codex_config::permissions_toml::NetworkToml = toml::from_str(toml).unwrap();
+        params.network_proxy = Some(RemoteNetworkProxyLaunchConfig::new(
+            RemoteNetworkProxyConfig::from_effective_config(&network.to_network_proxy_config())
+                .unwrap(),
+        ));
+        let prepared = prepare(&params).await.unwrap();
+        assert_eq!(
+            prepared
+                .command
+                .iter()
+                .any(|arg| arg == "--transparent-tcp"),
+            expected,
+            "{toml}"
+        );
+        prepared
+            .network_proxy_handle
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+    }
+    params.network_proxy = None;
+    params.managed_network = Some(ManagedNetworkSandboxContext {
+        transparent_tcp: true,
+        ..Default::default()
+    });
+    let local = prepare(&params).await.unwrap();
+    assert!(local.command.iter().any(|arg| arg == "--transparent-tcp"));
+    let remote = crate::local_process::LocalProcess::default()
+        .exec(params.clone(), ProcessTelemetry::default())
+        .await
+        .unwrap_err();
+    assert!(
+        remote
+            .message
+            .contains("requires an executor-local managed proxy")
+    );
+    params.sandbox = None;
+    let err = prepare(&params)
+        .await
+        .err()
+        .expect("cannot honor capture on a native launch");
+    assert!(err.message.contains("requires a managed Linux sandbox"));
+}
+
 #[cfg(target_os = "macos")]
 fn seatbelt_policy_arg(command: &[String]) -> &str {
     command
@@ -299,6 +363,7 @@ async fn sandbox_request_preserves_prepared_managed_network_policy() {
         .to_string_lossy()
         .into_owned();
     params.managed_network = Some(ManagedNetworkSandboxContext {
+        transparent_tcp: false,
         loopback_ports: vec![43123],
         allow_local_binding: false,
         allow_unix_sockets: vec![allowed_socket.clone()],

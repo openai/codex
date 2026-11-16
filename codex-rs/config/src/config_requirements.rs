@@ -451,6 +451,8 @@ pub struct NetworkRequirementsToml {
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    pub transparent_tcp: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
@@ -532,6 +534,7 @@ struct RawNetworkRequirementsToml {
     http_port: Option<u16>,
     socks_port: Option<u16>,
     allow_upstream_proxy: Option<bool>,
+    transparent_tcp: Option<bool>,
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_all_unix_sockets: Option<bool>,
     domains: Option<NetworkDomainPermissionsToml>,
@@ -561,6 +564,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -591,6 +595,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains: domains
@@ -644,6 +649,8 @@ pub struct NetworkConstraints {
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    pub transparent_tcp: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
@@ -673,6 +680,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -687,6 +695,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -5080,6 +5089,7 @@ command = "python3 /enterprise/hooks/pre.py"
             [permissions.network]
             enabled = true
             allow_upstream_proxy = false
+            transparent_tcp = true
             dangerously_allow_all_unix_sockets = true
             managed_allowed_domains_only = true
             allow_local_binding = false
@@ -5114,6 +5124,7 @@ command = "python3 /enterprise/hooks/pre.py"
 
         assert_eq!(sourced_network.source, source);
         assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.transparent_tcp, Some(true));
         assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
         assert_eq!(
             sourced_network.value.dangerously_allow_all_unix_sockets,

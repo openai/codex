@@ -669,7 +669,9 @@ impl SandboxManager {
         if self.linux_sandbox_pid_namespace == LinuxSandboxPidNamespace::Inherit {
             args.insert(0, "--inherit-pid-namespace".to_owned());
         }
-        if self.linux_sandbox_transparent_tcp && managed_network.is_some() {
+        if managed_network
+            .is_some_and(|ctx| ctx.transparent_tcp || self.linux_sandbox_transparent_tcp)
+        {
             args.insert(0, "--transparent-tcp".to_owned());
         }
         exec.command = std::iter::once(program).chain(args).collect();

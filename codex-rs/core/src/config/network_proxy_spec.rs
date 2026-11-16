@@ -112,6 +112,10 @@ impl NetworkProxySpec {
         host_and_port_from_network_addr(&self.config.proxy_url, /*default_port*/ 3128)
     }
 
+    pub fn transparent_tcp(&self) -> bool {
+        self.config.transparent_tcp
+    }
+
     pub fn socks_enabled(&self) -> bool {
         self.config.enable_socks5
     }
@@ -545,6 +549,9 @@ impl NetworkProxySpec {
         }
         if let Some(socks_port) = requirements.socks_port {
             config.socks_url = format!("http://127.0.0.1:{socks_port}");
+        }
+        if let Some(transparent_tcp) = requirements.transparent_tcp {
+            config.transparent_tcp = transparent_tcp;
         }
         if let Some(allow_upstream_proxy) = requirements.allow_upstream_proxy {
             config.allow_upstream_proxy = allow_upstream_proxy;

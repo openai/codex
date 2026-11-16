@@ -307,12 +307,19 @@ async fn run_command_under_sandbox(
         config.effective_local_windows_sandbox_type()
     };
 
-    let transparent_tcp = matches!(
-        sandbox_type,
-        SandboxType::Landlock {
-            transparent_tcp: true
+    let transparent_tcp = match sandbox_type {
+        SandboxType::Landlock { transparent_tcp } => {
+            transparent_tcp
+                || config
+                    .permissions
+                    .network
+                    .as_ref()
+                    .is_some_and(codex_core::config::NetworkProxySpec::transparent_tcp)
         }
-    );
+        #[cfg(target_os = "macos")]
+        SandboxType::Seatbelt => false,
+        SandboxType::Windows => false,
+    };
     let sandbox = match permission_profile.enforcement() {
         SandboxEnforcement::Disabled | SandboxEnforcement::External if transparent_tcp => {
             anyhow::bail!("--transparent-tcp requires a managed Linux sandbox");

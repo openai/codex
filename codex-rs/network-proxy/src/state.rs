@@ -78,6 +78,10 @@ pub fn build_config_state(
     if brokerage_created_default_allowlist {
         config.set_allowed_domains(vec!["*".to_string()]);
     }
+    anyhow::ensure!(
+        !config.transparent_tcp || (config.enabled && config.enable_socks5),
+        "transparent_tcp requires an enabled managed SOCKS5 proxy"
+    );
     crate::config::validate_unix_socket_allowlist_paths(&config, executor_os)?;
     anyhow::ensure!(
         !config.credential_broker || config.mitm,

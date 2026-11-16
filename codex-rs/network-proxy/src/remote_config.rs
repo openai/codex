@@ -179,6 +179,9 @@ pub struct RemoteNetworkProxyConfig {
     )]
     credential_masking: CredentialMaskingConfig,
     pub enable_socks5: bool,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transparent_tcp: bool,
     pub enable_socks5_udp: bool,
     pub allow_upstream_proxy: bool,
     pub dangerously_allow_all_unix_sockets: bool,
@@ -206,6 +209,7 @@ impl RemoteNetworkProxyConfig {
             enabled: config.enabled,
             credential_masking: CredentialMaskingConfig::default(),
             enable_socks5: config.enable_socks5,
+            transparent_tcp: config.transparent_tcp,
             enable_socks5_udp: config.enable_socks5_udp,
             allow_upstream_proxy: config.allow_upstream_proxy,
             dangerously_allow_all_unix_sockets: config
@@ -239,6 +243,7 @@ impl RemoteNetworkProxyConfig {
         let mut config = NetworkProxyConfig {
             enabled: self.enabled,
             enable_socks5: self.enable_socks5,
+            transparent_tcp: self.transparent_tcp,
             enable_socks5_udp: self.enable_socks5_udp,
             allow_upstream_proxy: self.allow_upstream_proxy,
             dangerously_allow_all_unix_sockets: Some(self.dangerously_allow_all_unix_sockets),

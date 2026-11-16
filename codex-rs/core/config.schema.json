@@ -3709,6 +3709,10 @@
         "socks_url": {
           "type": "string"
         },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
+        },
         "unix_sockets": {
           "additionalProperties": {
             "$ref": "#/definitions/NetworkProxyUnixSocketPermissionToml"
@@ -3778,6 +3782,10 @@
         },
         "socks_url": {
           "type": "string"
+        },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
         },
         "unix_sockets": {
           "$ref": "#/definitions/NetworkUnixSocketPermissionsToml"

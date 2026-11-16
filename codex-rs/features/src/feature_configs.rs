@@ -579,6 +579,9 @@ pub struct NetworkProxyConfigToml {
     pub proxy_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_socks5: Option<bool>,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparent_tcp: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub socks_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

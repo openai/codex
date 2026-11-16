@@ -23,7 +23,7 @@ The Rust sandbox helper includes the TCP stack. Codex starts it automatically.
 The Linux host needs distro `bwrap` on `PATH`, user and network namespaces, IPv6,
 and read/write access to `/dev/net/tun`.
 Use full managed SOCKS5 mode for native database ports and an isolated PID namespace.
-For executor-wide capture and HTTP CONNECT routing, see the [exec-server setup](../exec-server/README.md#transparent-tcp).
+For proxy configuration, executor-wide capture and HTTP CONNECT routing, see the [exec-server setup](../exec-server/README.md#transparent-tcp).
 
 The private DNS stub maps up to 8,192 names to stable addresses in `198.18.0.0/15`
 and `fdc0:de00::/96`. The relay sends the original name and port to the attributed proxy;

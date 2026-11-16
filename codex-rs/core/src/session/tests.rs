@@ -1331,6 +1331,46 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
 }
 
 #[tokio::test]
+async fn switching_profiles_updates_live_transparent_tcp() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    std::fs::write(
+        home.path().join(codex_config::CONFIG_TOML_FILE),
+        r#"
+default_permissions = "explicit"
+features.network_proxy = true
+[permissions.explicit]
+extends = ":workspace"
+network.enabled = true
+[permissions.capture]
+extends = "explicit"
+network.transparent_tcp = true
+"#,
+    )?;
+    let config = build_test_config(home.path()).await;
+    let permissions = config.permissions.permission_profile().clone();
+    let session = make_session_with_config(|current| *current = config).await?;
+    let proxy = session
+        .services
+        .network_proxy
+        .load_full()
+        .expect("live proxy");
+    for (profile, capture) in [("capture", true), ("explicit", false)] {
+        session
+            .update_settings(SessionSettingsUpdate {
+                permission_profile: Some(permissions.clone()),
+                active_permission_profile: Some(ActivePermissionProfile::new(profile)),
+                ..Default::default()
+            })
+            .await?;
+        let prepared = proxy
+            .proxy()
+            .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
+        assert_eq!(prepared.sandbox_context.transparent_tcp, capture);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn refresh_clears_disabled_managed_network_proxy() -> anyhow::Result<()> {
     let permission_profile = PermissionProfile::workspace_write();
     let enabled_spec = crate::config::NetworkProxySpec::from_config_and_constraints(

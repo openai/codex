@@ -442,6 +442,7 @@ fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NetworkProxyRuntimeSettings {
+    transparent_tcp: bool,
     allow_local_binding: bool,
     allow_unix_sockets: Arc<[String]>,
     dangerously_allow_all_unix_sockets: bool,
@@ -463,6 +464,7 @@ impl NetworkProxyRuntimeSettings {
             None
         };
         Ok(Self {
+            transparent_tcp: config.transparent_tcp,
             allow_local_binding: config.allow_local_binding(),
             allow_unix_sockets: if cfg!(target_os = "windows") {
                 Arc::default()
@@ -486,6 +488,9 @@ struct EnvironmentProxyAddrs {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedNetworkSandboxContext {
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transparent_tcp: bool,
     /// Loopback proxy ports that sandboxed commands may connect to.
     #[serde(default)]
     pub loopback_ports: Vec<u16>,
@@ -1272,6 +1277,7 @@ impl NetworkProxy {
             env,
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
+                transparent_tcp: runtime_settings.transparent_tcp,
                 allow_local_binding: runtime_settings.allow_local_binding,
                 allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
                 dangerously_allow_all_unix_sockets: runtime_settings
@@ -2383,6 +2389,7 @@ mod tests {
             assert_eq!(
                 prepared.sandbox_context,
                 ManagedNetworkSandboxContext {
+                    transparent_tcp: false,
                     loopback_ports: vec![43128, 48081],
                     allow_local_binding: true,
                     allow_unix_sockets: if cfg!(target_os = "windows") {

@@ -158,6 +158,9 @@ pub struct EnvironmentCapabilities {
     /// Whether executor proxies enforce managed review domains before ordinary allows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub network_proxy_review_domains: bool,
+    /// Whether the executor can capture TCP for a managed Linux sandbox launch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_proxy_transparent_tcp: bool,
     /// Whether the selected shell can mask executor environment credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     credential_masking: bool,
@@ -323,6 +326,7 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 network_proxy_review_domains: true,
+                network_proxy_transparent_tcp: cfg!(target_os = "linux"),
                 credential_masking,
                 credential_masking_custom_providers: credential_masking,
                 capability_discovery_sandbox: true,
@@ -411,6 +415,18 @@ pub struct ExecParams {
     /// Optional instructions for starting an executor-local managed-network proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
+}
+
+impl ExecParams {
+    pub fn requests_transparent_tcp(&self) -> bool {
+        self.network_proxy
+            .as_ref()
+            .is_some_and(|launch| launch.proxy.transparent_tcp)
+            || self
+                .managed_network
+                .as_ref()
+                .is_some_and(|ctx| ctx.transparent_tcp)
+    }
 }
 
 /// Executor ingress for process requests from clients that may omit the sandbox policy cwd.
@@ -1408,6 +1424,7 @@ mod tests {
             sandbox: None,
             enforce_managed_network: true,
             managed_network: Some(ManagedNetworkSandboxContext {
+                transparent_tcp: false,
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
                 allow_unix_sockets: vec!["/tmp/allowed.sock".to_string()],
@@ -1540,6 +1557,7 @@ mod tests {
                 sandbox: None,
                 enforce_managed_network: true,
                 managed_network: Some(ManagedNetworkSandboxContext {
+                    transparent_tcp: false,
                     loopback_ports: vec![43123],
                     allow_local_binding: true,
                     allow_unix_sockets: Vec::new(),
@@ -1590,6 +1608,7 @@ mod tests {
             EnvironmentCapabilities {
                 network_proxy_launch: true,
                 network_proxy_review_domains: false,
+                network_proxy_transparent_tcp: false,
                 credential_masking: false,
                 credential_masking_custom_providers: false,
                 capability_discovery_sandbox: true,

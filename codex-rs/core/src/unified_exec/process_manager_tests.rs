@@ -4,6 +4,9 @@ use crate::tools::handlers::unified_exec::preparation::ParsedExecCommand;
 use crate::unified_exec::clamp_yield_time;
 use codex_exec_server::ExecOutputStream;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
@@ -182,6 +185,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
         allow_local_binding: false,
+        transparent_tcp: true,
         ..Default::default()
     };
     let mut request = ExecRequest {
@@ -261,7 +265,13 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     assert_eq!(params.metadata, None);
     assert_eq!(params.cwd, request.cwd);
     assert!(params.enforce_managed_network);
-    assert_eq!(params.managed_network, Some(managed_network));
+    assert_eq!(
+        params.managed_network,
+        Some(ManagedNetworkSandboxContext {
+            transparent_tcp: false,
+            ..managed_network
+        })
+    );
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -285,8 +295,6 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     let mut snapshot_env = params.env;
     snapshot_env.remove("PATH");
     assert_eq!(params_for_request(&request).env, snapshot_env);
-    request.exec_server_shell_snapshot = None;
-
     request.exec_server_sandbox = Some(
         codex_exec_server::FileSystemSandboxContext::from_permission_profile(
             permission_profile,
@@ -295,6 +303,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     );
     let first = params_for_request(&request);
     let second = params_for_request(&request);
+    assert_eq!(first.requests_transparent_tcp(), cfg!(target_os = "linux"));
     assert_eq!(
         first
             .sandbox
@@ -305,6 +314,22 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     assert!(first.process_id.as_str().starts_with("123-"));
     assert!(second.process_id.as_str().starts_with("123-"));
     assert_ne!(first.process_id, second.process_id);
+
+    request.exec_server_shell_snapshot = None;
+    request.exec_server_managed_network = None;
+    request.exec_server_network_proxy = Some(RemoteNetworkProxyLaunchConfig::new(
+        RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+            enabled: true,
+            transparent_tcp: true,
+            ..Default::default()
+        })
+        .unwrap(),
+    ));
+    assert!(params_for_request(&request).requests_transparent_tcp());
+    request.exec_server_sandbox = None;
+    let proxy = params_for_request(&request).network_proxy.unwrap().proxy;
+    assert!(proxy.enabled);
+    assert!(!proxy.transparent_tcp);
 }
 
 #[cfg(windows)]

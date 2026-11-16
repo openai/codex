@@ -16,6 +16,9 @@ pub struct EnvironmentNetworkPolicy {
     /// False or omission leaves activation to the controller and command permissions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_proxy: bool,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transparent_tcp: bool,
     pub domains: Option<NetworkDomainPermissions>,
     /// Managed host selectors inherited by every execution in this environment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -33,6 +36,7 @@ impl EnvironmentNetworkPolicy {
     pub fn from_config(config: &NetworkProxyConfig, managed_allowed_domains_only: bool) -> Self {
         Self {
             requires_proxy: config.enabled,
+            transparent_tcp: config.transparent_tcp,
             domains: config.domains.clone(),
             review_domains: config.review_domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
@@ -47,6 +51,7 @@ impl EnvironmentNetworkPolicy {
 
     /// Applies attachment-owned traffic settings while preserving inherited denials and proxy setup.
     pub fn apply_to(&self, config: &mut NetworkProxyConfig) {
+        config.transparent_tcp |= self.transparent_tcp;
         // Neither owner nor controller may remove the other's review selectors.
         for pattern in &self.review_domains {
             if !config

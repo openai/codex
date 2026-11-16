@@ -551,6 +551,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         enabled,
         http_port,
         socks_port,
+        transparent_tcp,
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
@@ -570,6 +571,9 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     }
     if let Some(socks_port) = socks_port {
         parts.push(format!("socks_port={socks_port}"));
+    }
+    if let Some(transparent_tcp) = transparent_tcp {
+        parts.push(format!("transparent_tcp={transparent_tcp}"));
     }
     if let Some(allow_upstream_proxy) = allow_upstream_proxy {
         parts.push(format!("allow_upstream_proxy={allow_upstream_proxy}"));
@@ -903,6 +907,7 @@ interrupt_message = false
             network: Some(Sourced::new(
                 NetworkConstraints {
                     enabled: Some(true),
+                    transparent_tcp: Some(true),
                     domains: Some(NetworkDomainPermissionsToml {
                         entries: BTreeMap::from([(
                             "example.com".to_string(),
@@ -1053,7 +1058,7 @@ interrupt_message = false
             "enforce_residency: us (source: {requirements_source})"
         )));
         assert!(rendered.contains(&format!(
-            "network_proxy: enabled=true, domains={{example.com=allow}}, review_domains={{api.example.com}}, header_injections=1 hosts={{api.example.com}} (source: {requirements_source})"
+            "network_proxy: enabled=true, transparent_tcp=true, domains={{example.com=allow}}, review_domains={{api.example.com}}, header_injections=1 hosts={{api.example.com}} (source: {requirements_source})"
         )));
         assert!(!rendered.contains("secret-looking-value"));
         assert!(

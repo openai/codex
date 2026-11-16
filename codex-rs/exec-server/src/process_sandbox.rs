@@ -115,6 +115,12 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     credential_brokers: &RemoteCredentialBrokerCache,
     telemetry: &ProcessTelemetry,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
+    let transparent_tcp = params.requests_transparent_tcp();
+    if transparent_tcp && (!cfg!(target_os = "linux") || params.sandbox.is_none()) {
+        return Err(invalid_params(
+            "transparent TCP requires a managed Linux sandbox".into(),
+        ));
+    }
     if let Some(sandbox) = params.sandbox.as_ref()
         && sandbox.windows_sandbox_selection == WindowsSandboxSelection::Mxc
     {
@@ -187,6 +193,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     #[cfg(target_os = "macos")]
     let sandbox_manager = sandbox_manager
         .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone());
+    let enforce_managed_network = params.enforce_managed_network || transparent_tcp;
     let (selection, windows_sandbox_level) = sandbox_selection(sandbox_context);
     let (program, args) = params
         .argv
@@ -240,7 +247,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             workspace_roots: Some(&sandbox_context.workspace_roots),
             runtime_readable_paths: &runtime_readable_paths,
             selection,
-            enforce_managed_network: params.enforce_managed_network,
+            enforce_managed_network,
             environment_id: None,
             network: None,
             sandbox_policy_cwd: &sandbox_context.cwd,
@@ -270,7 +277,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             .map(|root| native_path(root, "sandbox workspace root"))
             .collect::<Result<_, _>>()?;
         request.arg0 = params.arg0.clone();
-        let proxy_enforced = params.enforce_managed_network;
+        let proxy_enforced = enforce_managed_network;
         let filesystem_overrides = WindowsSandboxFilesystemOverrides::resolve(
             request.sandbox,
             &permissions,

@@ -568,6 +568,18 @@ impl LocalProcess {
         params: ExecParams,
         telemetry: ProcessTelemetry,
     ) -> Result<ExecResponse, JSONRPCErrorError> {
+        // RPC callers must obtain capture from a proxy started by this executor.
+        // In-process launches can reuse the controller's own managed listener.
+        if params.requests_transparent_tcp()
+            && !params
+                .network_proxy
+                .as_ref()
+                .is_some_and(|launch| launch.proxy.transparent_tcp)
+        {
+            return Err(invalid_params(
+                "transparent TCP requires an executor-local managed proxy".into(),
+            ));
+        }
         self.start_process(params, telemetry)
             .await
             .map(|(response, _, _)| response)

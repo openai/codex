@@ -525,6 +525,11 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
     const REQUEST_GH_TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const VENDOR_TOKEN: &str = "vendor_abcdefgh";
     const CUSTOM_HOST: &str = "chatgpt.com";
+    // Sanitizing the 256 profile aliases can take longer on emulated executors.
+    let startup_timeout = match credential_startup {
+        CredentialStartup::Profile => Duration::from_secs(90),
+        _ => Duration::from_secs(30),
+    };
     let configured_provider = shell_name == "bash" && shell_args.first() == Some(&"-c");
     let shell_path = format!("/bin/{shell_name}");
     if shell_name == "zsh" && !std::path::Path::new(&shell_path).exists() {
@@ -802,7 +807,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             command
         };
         let started = timeout(
-            Duration::from_secs(30),
+            startup_timeout,
             backend.start(ExecParams {
                 metadata: Default::default(),
                 process_id: ProcessId::from(format!("managed-snapshot-{attempt}")),
@@ -836,7 +841,8 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 ),
             }),
         )
-        .await??;
+        .await
+        .context("timed out starting shell snapshot process")??;
         let (stdout, stderr, status, closed) =
             collect_process_output_from_events(started.process).await?;
         let expected_stderr = if expect_snapshot_fallback {

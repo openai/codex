@@ -230,7 +230,7 @@ fn exec_server_params_for_request(
     // Threads sharing an executor and sandbox retries can reuse a public handle
     // while the executor still retains its previous process.
     let exec_server_process_id = format!("{process_id}-{}", Uuid::new_v4());
-    codex_exec_server::ExecParams {
+    let mut params = codex_exec_server::ExecParams {
         process_id: exec_server_process_id.into(),
         metadata: tool_ctx.map(|ctx| codex_exec_server::ExecMetadata {
             thread_id: Some(ctx.session.thread_id()),
@@ -248,7 +248,16 @@ fn exec_server_params_for_request(
         enforce_managed_network: request.exec_server_enforce_managed_network,
         managed_network: request.exec_server_managed_network.clone(),
         network_proxy: request.exec_server_network_proxy.clone(),
+    };
+    let sandboxed = params.sandbox.is_some();
+    // A prepared context uses the local sandbox. A remote proxy uses the executor's OS.
+    if let Some(local) = &mut params.managed_network {
+        local.transparent_tcp &= sandboxed && cfg!(target_os = "linux");
     }
+    if let Some(remote) = &mut params.network_proxy {
+        remote.proxy.transparent_tcp &= sandboxed;
+    }
+    params
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.

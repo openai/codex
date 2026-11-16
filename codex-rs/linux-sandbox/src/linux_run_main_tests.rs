@@ -506,6 +506,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
     for managed_network in [
         ManagedNetworkSandboxContext::default(),
         ManagedNetworkSandboxContext {
+            transparent_tcp: false,
             loopback_ports: vec![8080, 9090],
             allow_local_binding: true,
             allow_unix_sockets: vec!["/tmp/daemon.sock".to_string()],
