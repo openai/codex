@@ -12,11 +12,8 @@ mod delivery;
 mod evidence;
 mod host;
 mod housekeeper;
-#[allow(dead_code, reason = "Wired into the housekeeper in the next PR.")]
 mod housekeeper_sampler;
-#[allow(dead_code, reason = "Wired into the housekeeper in the next PR.")]
 mod housekeeper_transport;
-mod private_thread;
 pub use host::install;
 mod retrieval_tools;
 mod sampling;
@@ -32,7 +29,6 @@ pub use housekeeper::HOUSEKEEPER_INSTRUCTIONS;
 pub use housekeeper::Housekeeper;
 pub use retrieval_tools::RetrievalBinding;
 pub use retrieval_tools::install_retrieval_tools;
-pub use sampling::HousekeeperResult;
 pub use sampling::OperationResult;
 pub use selection::CHANNEL_SELECTION_INSTRUCTIONS;
 pub use selection::ReviewerSubscriptions;

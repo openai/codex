@@ -25,10 +25,8 @@ use codex_thread_store::ThreadStoreError;
 use tokio::sync::mpsc;
 
 use crate::EvidenceCursor;
-use crate::HOUSEKEEPER_INSTRUCTIONS;
 use crate::Housekeeper;
 use crate::local_board;
-use crate::private_thread::PrivateThread;
 
 pub fn install(
     registry: &mut ExtensionRegistryBuilder<Config>,
@@ -91,13 +89,12 @@ impl Host {
                     requests.recv().await.context("Guardian worker closed")?;
                     let manager = manager.upgrade().context("Guardian host stopped")?;
                     let parent = manager.get_thread(root).await?;
-                    PrivateThread::start(&manager, &parent, &scope, HOUSEKEEPER_INSTRUCTIONS).await
+                    Housekeeper::new(Arc::new(board), cursor, &parent, &manager).await
                 };
-                let Some(model) = cancellation.run_until_cancelled(startup).await else {
+                let Some(housekeeper) = cancellation.run_until_cancelled(startup).await else {
                     return Ok(());
                 };
-                let model = model?;
-                let mut housekeeper = Housekeeper::new(Arc::new(board), cursor, model.policy)?;
+                let mut housekeeper = housekeeper?;
                 loop {
                     let Some(flushed) = cancellation.run_until_cancelled(history.flush_thread(root)).await else {
                         break;
@@ -111,9 +108,8 @@ impl Host {
                         Ok(snapshot) => {
                             awaiting_first_write = false;
                             while housekeeper
-                                .route_next(&snapshot, &model.runtime, cancellation)
-                                .await
-                                .result? != 0
+                                .route_next(&snapshot, cancellation)
+                                .await? != 0
                             {}
                         }
                         // A wake can precede the first durable record. Keep the cursor until the next wake.

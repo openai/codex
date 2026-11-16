@@ -3,7 +3,6 @@
 
 use crate::GUARDIAN_BOARD_NAMESPACE;
 use crate::OperationResult;
-use crate::sampling::GuardianOperation;
 use crate::sampling::sample;
 use anyhow::ensure;
 use codex_guardian_reviewer::ReviewDeadline;
@@ -148,16 +147,9 @@ impl ReviewerSubscriptions {
                 "properties":{"channels":{"type":"array", "uniqueItems":true,
                     "items":{"type":"string"}}}
             });
-            let selection = sample::<SelectionOutput>(
-                runtime,
-                GuardianOperation::ChannelSelection,
-                &input,
-                policy,
-                schema,
-                deadline,
-                cancellation,
-            )
-            .await;
+            let selection =
+                sample::<SelectionOutput>(runtime, &input, policy, schema, deadline, cancellation)
+                    .await;
             disposition = selection.disposition;
             let selection = selection.result?;
             sampled = true;
