@@ -1,6 +1,7 @@
 //! Render the live mention frame at full, clipped and narrow dimensions.
 
 use super::*;
+use crate::thread_label::ThreadLabelStyle;
 use pretty_assertions::assert_eq;
 
 fn rows() -> Vec<SearchResult> {
@@ -9,6 +10,7 @@ fn rows() -> Vec<SearchResult> {
             display_name: format!("Plugin {index:02}"),
             description: Some("Tools and workflows".to_string()),
             mention_type: MentionType::Plugin,
+            label_style: ThreadLabelStyle::Plain,
             selection: Selection::Tool {
                 insert_text: format!("plugin-{index}"),
                 path: None,
@@ -22,6 +24,7 @@ fn rows() -> Vec<SearchResult> {
             display_name: name.to_string(),
             description: None,
             mention_type: MentionType::File,
+            label_style: ThreadLabelStyle::Plain,
             selection: Selection::File(name.into()),
             match_indices: None,
             score: 0,
@@ -211,6 +214,7 @@ fn long_mentions_leave_room_for_distinguishing_parent_paths() {
             display_name: name.to_string(),
             description: None,
             mention_type: MentionType::File,
+            label_style: ThreadLabelStyle::Plain,
             selection: Selection::File(name.into()),
             match_indices: None,
             score: 0,

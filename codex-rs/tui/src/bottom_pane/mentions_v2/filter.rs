@@ -2,6 +2,8 @@ use codex_file_search::FileMatch;
 use codex_file_search::MatchType;
 use codex_utils_fuzzy_match::fuzzy_match;
 
+use crate::thread_label::ThreadLabelStyle;
+
 use super::candidate::Candidate;
 use super::candidate::MentionType;
 use super::candidate::SearchResult;
@@ -101,6 +103,7 @@ fn file_match_to_row(file_match: &FileMatch) -> SearchResult {
         display_name: file_match.path.to_string_lossy().to_string(),
         description: None,
         mention_type,
+        label_style: ThreadLabelStyle::Plain,
         selection: Selection::File(file_match.path.clone()),
         match_indices: file_match
             .indices

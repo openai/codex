@@ -4,6 +4,8 @@ use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::text::Span;
 
+use crate::thread_label::ThreadLabelStyle;
+
 const TAG_WIDTH: usize = "Plugin".len();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +59,7 @@ pub(crate) struct Candidate {
     pub(super) description: Option<String>,
     pub(super) search_terms: Vec<String>,
     pub(super) mention_type: MentionType,
+    pub(super) label_style: ThreadLabelStyle,
     pub(super) selection: Selection,
 }
 
@@ -65,6 +68,7 @@ pub(super) struct SearchResult {
     pub(super) display_name: String,
     pub(super) description: Option<String>,
     pub(super) mention_type: MentionType,
+    pub(super) label_style: ThreadLabelStyle,
     pub(super) selection: Selection,
     pub(super) match_indices: Option<Vec<usize>>,
     pub(super) score: i32,
@@ -76,6 +80,7 @@ impl Candidate {
             display_name: self.display_name.clone(),
             description: self.description.clone(),
             mention_type: self.mention_type,
+            label_style: self.label_style,
             selection: self.selection.clone(),
             match_indices,
             score,

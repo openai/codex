@@ -330,6 +330,11 @@ impl App {
                 }
             }
             painted = self.paint_conversation(frame, &prepared);
+            let label_style = parent
+                .and_then(|id| self.backend_registry.owner(id))
+                .or(self.app_server_backend_id)
+                .map(|owner| self.backend_registry.thread_label_style(owner))
+                .unwrap_or_default();
             match &self.conversation_frame.sidebar {
                 Some(sidebar::SidebarLayout::Chat(panes)) => {
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
@@ -383,6 +388,10 @@ impl App {
                             .wrap(ratatui::widgets::Wrap { trim: false })
                             .render(body, frame.buffer);
                     } else if let Some(pane) = self.sidebar() {
+                        let tabs = crate::sidebar_chooser::ChatTabs {
+                            label_style,
+                            ..pane.chat_tabs()
+                        };
                         let footer = if let Some(hint) = resize_hint {
                             let row = crate::sidebar_chooser::body_row(*sidebar, sidebar.y);
                             crate::sidebar_chooser::resize_hint(hint, row.width)
@@ -391,7 +400,7 @@ impl App {
                                 &self.keymap,
                                 *sidebar,
                                 pane.choice,
-                                pane.chat_tabs(),
+                                tabs,
                                 self.chat_widget.side_chat_creation_state(),
                             )
                             .0
@@ -402,7 +411,7 @@ impl App {
                             *sidebar,
                             frame.buffer,
                             footer,
-                            pane.chat_tabs(),
+                            tabs,
                             pane.choice,
                             &crate::sidebar_chooser::SidebarStyle {
                                 new_chat: self.chat_widget.side_chat_creation_state(),
@@ -422,7 +431,7 @@ impl App {
                             *sidebar,
                             chooser,
                             TabState::Absent,
-                            pane.chat_tabs(),
+                            tabs,
                             hovered_target,
                             frame.buffer,
                         );
@@ -443,7 +452,10 @@ impl App {
                     strip,
                     TabState::Absent,
                     chat,
-                    pane.chat_tabs(),
+                    crate::sidebar_chooser::ChatTabs {
+                        label_style,
+                        ..pane.chat_tabs()
+                    },
                     hovered_target,
                     frame.buffer,
                 );

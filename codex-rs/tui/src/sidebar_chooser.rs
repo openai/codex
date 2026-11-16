@@ -10,6 +10,7 @@ use crate::live_wrap::take_prefix_by_width;
 use crate::sidebar_tab_strip::TabState;
 use crate::sidebar_tab_strip::TabStrip;
 use crate::sidebar_tab_strip::TabTarget;
+use crate::thread_label::ThreadLabelStyle;
 use codex_protocol::ThreadId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -169,6 +170,7 @@ pub(crate) enum OpenState {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChatTabs<'a> {
+    pub(crate) label_style: ThreadLabelStyle,
     pub(crate) discovery: &'a Discovery,
     pub(crate) opening: Option<&'a Opening>,
     pub(crate) ids: &'a [ThreadId],
@@ -257,10 +259,14 @@ pub(crate) fn tab_strip(
             let label = Rect::new(area.x, area.y, area.width - close.width, area.height);
             let title = match tabs.choice_index(id) {
                 Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
-                    Some(name) => truncate_line_with_ellipsis_if_overflow(
-                        Line::from(format!(" {name}")),
-                        usize::from(label.width),
-                    ),
+                    Some(name) => {
+                        let mut title = tabs.label_style.render(
+                            Line::from(name.to_owned()),
+                            usize::from(label.width.saturating_sub(1)),
+                        );
+                        title.spans.insert(0, " ".into());
+                        title
+                    }
                     None if tabs.choices.len() > 1 => Line::from(format!(" Side {number} ")),
                     None => Line::from(CHAT_TAB),
                 },
@@ -472,7 +478,8 @@ pub(crate) fn paint(
         }
         let chat = &tabs.choices[index - 1];
         let selected = index == choice && focused;
-        let title = if let Some(label) = side_chat_label(chat) {
+        let label = side_chat_label(chat);
+        let title = if let Some(label) = label {
             label.to_owned()
         } else if tabs.choices.len() == 1 {
             "Side chat".to_string()
@@ -499,6 +506,7 @@ pub(crate) fn paint(
             Span::styled("○", if selected { style } else { secondary })
         };
         let mut spans = vec![format!("{marker} ").into(), symbol, " ".into()];
+        let label_style = label.map_or(ThreadLabelStyle::Plain, |_| tabs.label_style);
         if let Some(opening) = opening {
             let status = match &opening.state {
                 OpenState::Waiting => "Waiting to open…".dim(),
@@ -506,14 +514,18 @@ pub(crate) fn paint(
                 OpenState::Failed(error) => format!("Retry · {error}").red(),
             };
             let width = usize::from(row(area.y).width.saturating_sub(6));
-            let title = truncate_line_with_ellipsis_if_overflow(
+            let title = label_style.render(
                 Line::from(title),
                 width.saturating_sub(status.width()).max(width / 3),
             );
             spans.extend(title.spans);
             spans.extend(["  ".into(), status]);
         } else {
-            spans.push(title);
+            spans.extend(
+                label_style
+                    .render(Line::from(title), width.saturating_sub(4))
+                    .spans,
+            );
         }
         let line = Line::from(spans).style(fill);
         paint(

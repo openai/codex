@@ -592,11 +592,15 @@ impl App {
             if self.agents_overview.hidden_threads.contains(&thread_id) {
                 continue;
             }
+            let backend_id = self
+                .backend_registry
+                .owner(thread_id)
+                .or(self.app_server_backend_id);
             rows.push(AgentsOverviewRow {
-                backend_id: self
-                    .backend_registry
-                    .owner(thread_id)
-                    .or(self.app_server_backend_id),
+                backend_id,
+                label_style: backend_id
+                    .map(|owner| self.backend_registry.thread_label_style(owner))
+                    .unwrap_or_default(),
                 search_id: self
                     .agents_overview
                     .search_matches

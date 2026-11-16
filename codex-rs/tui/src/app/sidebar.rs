@@ -117,6 +117,7 @@ impl SidebarPane {
 
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
         ChatTabs {
+            label_style: crate::thread_label::ThreadLabelStyle::Plain,
             discovery: &self.discovery,
             opening: self.opening.as_ref(),
             ids: &self.tabs,

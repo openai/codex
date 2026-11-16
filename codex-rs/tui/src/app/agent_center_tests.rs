@@ -295,6 +295,17 @@ async fn live_center_columns() {
     let mut app = make_test_app().await;
     let current = ThreadId::from_u128(/*value*/ 42);
     app.primary_thread_id = Some(current);
+    let cloud = crate::backend_id::BackendId::new();
+    app.backend_registry = crate::app::backend_registry::BackendRegistry::new([cloud].into());
+    assert!(app.backend_registry.observe(cloud, current));
+    assert!(
+        app.backend_registry
+            .observe(cloud, ThreadId::from_u128(/*value*/ 43))
+    );
+    assert!(
+        app.backend_registry
+            .observe(cloud, ThreadId::from_u128(/*value*/ 47))
+    );
     let now = chrono::Utc::now().timestamp();
     let fixtures = [
         ("Current task", ThreadStatus::Idle, -3600),
@@ -351,7 +362,13 @@ async fn live_center_columns() {
         .unread
         .insert(ThreadId::from_u128(/*value*/ 47));
     let mut view = app.agents_overview_view(threads, Some(current));
-    assert!(screen(&view, /*width*/ 50, /*height*/ 24).contains("● Error: Failed task"));
+    let narrow = screen(&view, /*width*/ 50, /*height*/ 24);
+    assert!(narrow.contains("● Error: ☁︎ Failed task"));
+    assert!(
+        narrow
+            .lines()
+            .any(|line| { line.contains("☁︎ A longer task title") && line.contains('…') })
+    );
     insta::assert_snapshot!(screen(&view, /*width*/ 160, /*height*/ 22));
     view.pinned_thread_ranks = None;
     let mut selected_status_styles = Vec::new();

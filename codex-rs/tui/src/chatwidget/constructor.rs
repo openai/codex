@@ -149,7 +149,7 @@ impl ChatWidget {
             status_account_display,
             remote_connection: None,
             snapshot_local_images: false,
-            thread_settings_owner: crate::app_server_session::ThreadSettingsOwner::Client,
+            thread_params_mode: crate::app_server_session::ThreadParamsMode::Embedded,
             pending_image_submission: None,
             local_worktree_operations: true,
             windows_sandbox_local_server: false,

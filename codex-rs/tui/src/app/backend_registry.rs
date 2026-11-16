@@ -1,5 +1,5 @@
-//! Tracks conversation ownership and the live request handle for each backend.
-//! A thread ID keeps its first observed owner across connection replacement.
+//! Tracks thread ownership, backend identity, and live request handles.
+//! Disconnecting a backend drops its handle, not the identity used to label its threads.
 
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
@@ -7,14 +7,30 @@ use crate::backend_id::BackendId;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_protocol::ThreadId;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 #[derive(Default)]
 pub(super) struct BackendRegistry {
     owners: HashMap<ThreadId, BackendId>,
+    cloud_backends: HashSet<BackendId>,
     connections: HashMap<BackendId, AppServerRequestHandle>,
 }
 
 impl BackendRegistry {
+    pub(super) fn new(cloud_backends: HashSet<BackendId>) -> Self {
+        Self {
+            cloud_backends,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn thread_label_style(
+        &self,
+        owner: BackendId,
+    ) -> crate::thread_label::ThreadLabelStyle {
+        crate::thread_label::ThreadLabelStyle::from_is_cloud(self.cloud_backends.contains(&owner))
+    }
+
     pub(super) fn owner(&self, thread: ThreadId) -> Option<BackendId> {
         self.owners.get(&thread).copied()
     }

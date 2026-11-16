@@ -53,7 +53,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn toggle_service_tier_from_ui(&mut self, command: ServiceTierCommand) {
-        if self.thread_settings_owner == ThreadSettingsOwner::Server {
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Server {
             if let Some(thread_id) = self.thread_id {
                 self.app_event_tx.send(AppEvent::ToggleCloudServiceTier {
                     thread_id,
@@ -144,7 +144,7 @@ impl ChatWidget {
     }
 
     pub(super) fn refresh_effective_service_tier(&mut self) {
-        if self.thread_settings_owner == ThreadSettingsOwner::Server {
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Server {
             self.effective_service_tier
                 .clone_from(&self.config.service_tier);
             return;

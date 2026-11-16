@@ -3,12 +3,27 @@ source: tui/src/chatwidget/tests/terminal_title.rs
 assertion_line: 320
 expression: "rendered.join(\"\\n\\n\")"
 ---
-name=None
+Embedded name=None
 status:  | 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-446655440000
 title:  | 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-44665...
 default title: project
 
-name=Some("Fix login timeout")
+Embedded name=Some("Fix login timeout")
 status: Fix login timeout | Fix login timeout | 550e8400-e29b-41d4-a716-446655440000
 title: Fix login timeout | Fix login timeout | 550e8400-e29b-41d4-a716-44665...
 default title: Fix login timeout | project
+
+Cloud name=None
+status:  | ☁︎ 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-446655440000
+title:  | ☁︎ 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-44665...
+default title: project
+
+Cloud name=Some("Fix login timeout")
+status: ☁︎ Fix login timeout | ☁︎ Fix login timeout | 550e8400-e29b-41d4-a716-446655440000
+title: ☁︎ Fix login timeout | ☁︎ Fix login timeout | 550e8400-e29b-41d4-a716-44665...
+default title: ☁︎ Fix login timeout | project
+
+Cloud name=Some("A long thread name that must leave room for the cloud icon")
+status: ☁︎ A long thread name that must leave room for the cloud icon | ☁︎ A long thread name that must leave room for the cloud icon | 550e8400-e29b-41d4-a716-446655440000
+title: ☁︎ A long thread name that must leave room for... | ☁︎ A long thread name that must leave room for... | 550e8400-e29b-41d4-a716-44665...
+default title: ☁︎ A long thread name that must leave room for... | project

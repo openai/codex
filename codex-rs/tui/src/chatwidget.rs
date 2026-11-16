@@ -576,7 +576,7 @@ pub(crate) struct ChatWidget {
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     /// Remote app servers cannot read image paths on the TUI host.
     pub(crate) snapshot_local_images: bool,
-    pub(crate) thread_settings_owner: crate::app_server_session::ThreadSettingsOwner,
+    pub(crate) thread_params_mode: crate::app_server_session::ThreadParamsMode,
     pending_image_submission: Option<image_submission::PendingImageSubmission>,
     pub(crate) local_worktree_operations: bool,
     pub(crate) windows_sandbox_local_server: bool,

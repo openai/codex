@@ -288,7 +288,17 @@ async fn thread_identity_renders_names_and_fallbacks_on_both_surfaces() {
     chat.thread_id = Some(ThreadId::from_string("550e8400-e29b-41d4-a716-446655440000").unwrap());
     chat.local_settings.tui.animations = false;
     let mut rendered = Vec::new();
-    for name in [None, Some("Fix login timeout")] {
+    for (mode, name) in [
+        (crate::ThreadParamsMode::Embedded, None),
+        (crate::ThreadParamsMode::Embedded, Some("Fix login timeout")),
+        (crate::ThreadParamsMode::Cloud, None),
+        (crate::ThreadParamsMode::Cloud, Some("Fix login timeout")),
+        (
+            crate::ThreadParamsMode::Cloud,
+            Some("A long thread name that must leave room for the cloud icon"),
+        ),
+    ] {
+        chat.thread_params_mode = mode;
         chat.thread_name = name.map(str::to_owned);
         chat.refresh_status_surfaces();
         let status = [
@@ -313,7 +323,7 @@ async fn thread_identity_renders_names_and_fallbacks_on_both_surfaces() {
         .collect::<Vec<_>>()
         .join(" | ");
         rendered.push(format!(
-            "name={name:?}\nstatus: {status}\ntitle: {title}\ndefault title: {}",
+            "{mode:?} name={name:?}\nstatus: {status}\ntitle: {title}\ndefault title: {}",
             chat.last_terminal_title.as_deref().unwrap()
         ));
     }

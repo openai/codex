@@ -216,7 +216,13 @@ fn build_line(
     let primary_column_width =
         primary_column_width.min(content_width.saturating_sub(/*rhs*/ 2) / 2);
     let content = truncate_line_with_ellipsis_if_overflow(
-        content_line(row, base_style, dim_style, primary_column_width),
+        content_line(
+            row,
+            base_style,
+            dim_style,
+            primary_column_width,
+            content_width,
+        ),
         content_width,
     );
     let rendered_content_width = content.width();
@@ -249,10 +255,11 @@ fn content_line(
     base_style: Style,
     dim_style: Style,
     primary_column_width: usize,
+    content_width: usize,
 ) -> Line<'static> {
     let primary = Line::from(primary_spans(row, base_style));
     if let Some(secondary) = secondary_line(row, base_style, dim_style) {
-        let primary = truncate_line_with_ellipsis_if_overflow(primary, primary_column_width);
+        let primary = row.label_style.render(primary, primary_column_width);
         let padding = primary_column_width
             .saturating_sub(primary.width())
             .saturating_add(/*rhs*/ 2);
@@ -261,7 +268,7 @@ fn content_line(
         spans.extend(secondary.spans);
         Line::from(spans)
     } else {
-        primary
+        row.label_style.render(primary, content_width)
     }
 }
 
@@ -377,9 +384,10 @@ fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
 }
 
 fn primary_text_width(row: &SearchResult) -> usize {
-    file_name(row)
+    let width = file_name(row)
         .map(UnicodeWidthStr::width)
-        .unwrap_or_else(|| UnicodeWidthStr::width(row.display_name.as_str()))
+        .unwrap_or_else(|| UnicodeWidthStr::width(row.display_name.as_str()));
+    width + row.label_style.prefix_width()
 }
 
 fn file_name(row: &SearchResult) -> Option<&str> {

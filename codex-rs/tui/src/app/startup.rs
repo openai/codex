@@ -936,7 +936,7 @@ impl App {
         }
         chat_widget.remote_connection = remote_connection;
         chat_widget.snapshot_local_images = app_server_target.uses_remote_workspace();
-        chat_widget.thread_settings_owner = app_server.thread_params_mode().settings_owner();
+        chat_widget.thread_params_mode = app_server.thread_params_mode();
         chat_widget.pending_cloud_turn_settings = app_server.pending_cloud_turn_settings();
         chat_widget.set_local_worktree_operations(!crate::uses_remote_workspace_or_environment(
             &app_server_target,
@@ -1071,7 +1071,15 @@ See the Codex keymap documentation for supported actions and examples."
             pending_thread_titles: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
-            backend_registry: Default::default(),
+            backend_registry: super::backend_registry::BackendRegistry::new(
+                std::iter::once(&app_server)
+                    .chain(&other_backends)
+                    .filter(|backend| {
+                        backend.thread_params_mode() == crate::ThreadParamsMode::Cloud
+                    })
+                    .map(AppServerSession::backend_id)
+                    .collect(),
+            ),
             agents_overview,
             side_threads: HashMap::new(),
             saved_openings: Default::default(),

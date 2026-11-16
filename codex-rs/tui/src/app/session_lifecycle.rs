@@ -584,7 +584,7 @@ impl App {
         chat_widget.config_panel_tui = self.chat_widget.config_panel_tui.clone();
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
-        chat_widget.thread_settings_owner = self.chat_widget.thread_settings_owner;
+        chat_widget.thread_params_mode = self.chat_widget.thread_params_mode;
         chat_widget.pending_cloud_turn_settings =
             self.chat_widget.pending_cloud_turn_settings.clone();
         chat_widget.set_local_worktree_operations(self.chat_widget.local_worktree_operations);

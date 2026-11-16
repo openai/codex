@@ -5372,6 +5372,37 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let frame = side_frame(&mut app, &mut tui, even)?;
     let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
     assert_app_snapshot!("side_chat_tabs", header.trim_end());
+    let owner = app
+        .app_server_backend_id
+        .unwrap_or_else(crate::backend_id::BackendId::new);
+    let local_registry = std::mem::replace(
+        &mut app.backend_registry,
+        crate::app::backend_registry::BackendRegistry::new([owner].into()),
+    );
+    assert!(app.backend_registry.observe(owner, parent_thread_id));
+    let frame = side_frame(&mut app, &mut tui, even)?;
+    let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
+    insta::assert_snapshot!(
+        header.split_inclusive('×').take(2).collect::<String>(),
+        @" ☁︎ Invest…×  ☁︎ Fix ca…×"
+    );
+    keys!(prefix, chooser_key);
+    let frame = side_frame(&mut app, &mut tui, even)?;
+    let labels = frame
+        .lines()
+        .filter_map(|line| line.split_once('│').map(|(_, pane)| pane))
+        .filter(|pane| pane.contains("Investigate rendering") || pane.contains("Fix cache"))
+        .map(|pane| pane.trim().trim_start_matches(['›', '○', ' ']))
+        .filter(|pane| pane.starts_with("☁︎"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(labels, @"
+    ☁︎ Investigate rendering
+    ☁︎ Fix cache
+    ");
+    keys!(KeyCode::Enter.into());
+    app.backend_registry = local_registry;
+    side_frame(&mut app, &mut tui, even)?;
     assert_eq!(app.conversation_frame.chat_strip.unwrap().x, sidebar_x);
 
     // At this width only one tab fits. Use the arrow to go back and the wheel to return.

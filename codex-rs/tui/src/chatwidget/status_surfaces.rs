@@ -14,6 +14,7 @@ use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
 use crate::terminal_program_status::ProgramStatus;
+use crate::thread_label::ThreadLabelStyle;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
 use codex_config::os_host_name;
@@ -851,13 +852,11 @@ impl ChatWidget {
             ),
             StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
             StatusLineItem::ThreadName => {
-                self.thread_name.as_deref().and_then(normalize_thread_name)
+                self.status_surface_thread_label(/*fallback*/ None, /*max_chars*/ None)
             }
-            StatusLineItem::ThreadTitle => self
-                .thread_name
-                .as_deref()
-                .and_then(normalize_thread_name)
-                .or_else(|| self.thread_id.map(|id| id.to_string())),
+            StatusLineItem::ThreadTitle => {
+                self.status_surface_thread_label(self.thread_id, /*max_chars*/ None)
+            }
             StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
@@ -931,14 +930,9 @@ impl ChatWidget {
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
-            TerminalTitleItem::Thread | TerminalTitleItem::ThreadName => {
-                let item = if item == TerminalTitleItem::ThreadName {
-                    StatusLineItem::ThreadName
-                } else {
-                    StatusLineItem::ThreadTitle
-                };
-                self.status_line_value_for_item(item)
-                    .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48))
+            TerminalTitleItem::Thread => self.status_surface_thread_label(self.thread_id, Some(48)),
+            TerminalTitleItem::ThreadName => {
+                self.status_surface_thread_label(/*fallback*/ None, Some(48))
             }
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
@@ -1135,6 +1129,23 @@ impl ChatWidget {
             return None;
         }
         Some(format!("Tasks {completed}/{total}"))
+    }
+
+    fn status_surface_thread_label(
+        &self,
+        fallback: Option<ThreadId>,
+        max_chars: Option<usize>,
+    ) -> Option<String> {
+        let name = self.thread_name.as_deref().and_then(normalize_thread_name);
+        let label = name.or_else(|| fallback.map(|id| id.to_string()))?;
+        let style = ThreadLabelStyle::from_is_cloud(
+            self.thread_params_mode == crate::ThreadParamsMode::Cloud,
+        );
+        let label = style.decorate(label);
+        Some(match max_chars {
+            Some(limit) => Self::truncate_terminal_title_part(label, limit),
+            None => label,
+        })
     }
 
     /// Truncates a title segment by grapheme cluster and appends `...` when needed.
