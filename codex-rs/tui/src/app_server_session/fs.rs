@@ -16,7 +16,11 @@ use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
+use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde::de::DeserializeOwned;
@@ -24,11 +28,117 @@ use serde_json::json;
 use uuid::Uuid;
 
 impl AppServerSession {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the sidebar viewer in the next change")
+    )]
+    pub(crate) async fn resolve_thread_file(
+        &self,
+        source: ThreadId,
+        path: &AppServerPath,
+    ) -> Result<PathUri> {
+        let cwd = self.preview_workspace(source).await?;
+        resolve_preview_path(path, &cwd)
+    }
+
+    async fn preview_workspace(&self, source: ThreadId) -> Result<PathUri> {
+        // Read only the environment metadata. Other paths in thread/read may be native
+        // to a different operating system from the TUI.
+        #[derive(serde::Deserialize)]
+        struct Workspace {
+            environments: Option<Vec<codex_app_server_protocol::ThreadEnvironment>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Response {
+            thread: Workspace,
+        }
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response: Response = self
+            .request_handle()
+            .request_typed(ClientRequest::ThreadRead {
+                request_id,
+                params: codex_app_server_protocol::ThreadReadParams {
+                    thread_id: source.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await?;
+        let environments = response.thread.environments.as_deref();
+        environments
+            .filter(|_| {
+                crate::windows_sandbox::host_from_environments(environments)
+                    == crate::app::WindowsSandboxHost::Local
+            })
+            .and_then(|envs| envs.first())
+            .and_then(|primary| primary.cwd.to_inferred_path_uri())
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("File previews require a workspace on the app-server host")
+            })
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the sidebar viewer in the next change")
+    )]
+    pub(crate) async fn read_document(
+        &self,
+        source: ThreadId,
+        original_path: &AppServerPath,
+        resolved_path: &PathUri,
+    ) -> Result<String> {
+        let bytes = self
+            .read_preview_file(source, original_path, resolved_path)
+            .await?;
+        let text = String::from_utf8(bytes).wrap_err("Not a UTF-8 text file")?;
+        color_eyre::eyre::ensure!(
+            !text
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r')),
+            "Not a text file"
+        );
+        Ok(text)
+    }
+
+    pub(crate) async fn read_preview_file(
+        &self,
+        source: ThreadId,
+        original_path: &AppServerPath,
+        resolved_path: &PathUri,
+    ) -> Result<Vec<u8>> {
+        color_eyre::eyre::ensure!(
+            resolved_path.infer_path_convention() == Some(PathConvention::Posix),
+            "File previews on Windows hosts are unavailable"
+        );
+        let workspace = self.preview_workspace(source).await?;
+        color_eyre::eyre::ensure!(
+            resolve_preview_path(original_path, &workspace)? == *resolved_path,
+            "Workspace changed. Reopen the file to try again."
+        );
+        // fs/readFile follows symlinks. Only a server-side open can enforce no-follow.
+        let path = AppServerPath::from_app_server(resolved_path.inferred_native_path_string());
+        let bytes = self.file_system().fs_read_file_path(&path).await?;
+        color_eyre::eyre::ensure!(
+            self.preview_workspace(source).await? == workspace,
+            "Workspace changed. Reopen the file to try again."
+        );
+        Ok(bytes)
+    }
+
     pub(crate) fn file_system(&self) -> AppServerFileSystem {
         AppServerFileSystem {
             request_handle: self.request_handle(),
         }
     }
+}
+
+fn resolve_preview_path(path: &AppServerPath, cwd: &PathUri) -> Result<PathUri> {
+    let path = LegacyAppPathString::from_string(path.as_str())
+        .resolve_against(cwd, /*user_home_dir*/ None)?;
+    color_eyre::eyre::ensure!(
+        !path.to_url().has_host(),
+        "File previews require a path on the app-server host"
+    );
+    Ok(path)
 }
 
 pub(crate) struct AppServerFileSystem {
@@ -148,3 +258,7 @@ impl AppServerFileSystem {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fs_preview_tests.rs"]
+mod preview_tests;
