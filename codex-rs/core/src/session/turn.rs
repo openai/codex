@@ -911,6 +911,11 @@ pub(crate) async fn run_turn(
                             if matches!(err.details(), CodexErrorDetails::Interrupted)
                                 || crate::tasks::ends_turn_as_interrupted(&err)
                             {
+                                // The answer preceded this optional compaction. Deliver it while
+                                // the interrupt state keeps follow-ups in the next turn.
+                                if SamplingInterrupt::is_requested_for(&sess, &turn_context).await {
+                                    return Ok(last_agent_message);
+                                }
                                 return Err(err);
                             }
                             let error = err.to_codex_protocol_error();

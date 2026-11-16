@@ -802,7 +802,11 @@ impl Session {
             if !Arc::ptr_eq(&active_turn.task.as_ref()?.turn_context, &turn_context) {
                 return None;
             }
-            if can_continue {
+            let sampling_interrupted = active_turn
+                .sampling_interrupt
+                .as_ref()
+                .is_some_and(SamplingInterrupt::is_requested);
+            if can_continue && !sampling_interrupted {
                 let state = active_turn.turn_state.lock().await;
                 if state.accepts_mailbox_delivery_for_current_turn()
                     && !state.pending_input.is_empty()
@@ -819,10 +823,7 @@ impl Session {
                     .then_some(task.task),
                 task.pending_initial_input.unwrap_or_default(),
                 task.outcome_handoff,
-                active_turn
-                    .sampling_interrupt
-                    .as_ref()
-                    .is_some_and(SamplingInterrupt::is_requested),
+                sampling_interrupted,
             )
         };
         turn_context

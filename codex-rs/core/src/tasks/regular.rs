@@ -10,6 +10,7 @@ use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
 use crate::client::ModelClientSession;
+use crate::session::SamplingInterrupt;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::startup_prewarm::SessionStartupPrewarmResolution;
@@ -160,10 +161,11 @@ impl RegularTask {
                 ))
                 .instrument(run_turn_span.clone())
                 .await?;
-                // Terminal errors are already reported. Let task completion preserve pending
-                // input instead of restarting the failed turn for that same input.
+                // Preserve pending input for the next turn after an error, exhausted budget,
+                // or interrupt instead of reopening this turn.
                 if ctx.terminal_error.lock().await.is_some()
                     || sess.work_budget().is_exhausted()
+                    || SamplingInterrupt::is_requested_for(&sess, &ctx).await
                     || !sess.input_queue.has_pending_input(&sess.active_turn).await
                 {
                     return Ok(Some(RegularTaskOutput {

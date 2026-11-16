@@ -1,4 +1,4 @@
-//! Lets an opted-in child finish the sampled item while its tools are cancelled.
+//! Cancels an opted-in child's tools while it retains its sampled item or installs its summary.
 
 use super::session::Session;
 use super::turn_context::TurnContext;
@@ -30,7 +30,7 @@ impl SamplingInterrupt {
             && turn.parent_thread_id.is_some()
     }
 
-    pub(super) async fn register(
+    pub(crate) async fn register(
         session: &Session,
         turn: &TurnContext,
         tools: &CancellationToken,
@@ -47,20 +47,32 @@ impl SamplingInterrupt {
         Ok(())
     }
 
-    pub(super) async fn unregister(session: &Session, turn: &TurnContext) {
+    /// Releases an uninterrupted attempt; returns whether a stop is pending instead.
+    pub(crate) async fn unregister(session: &Session, turn: &TurnContext) -> bool {
         let mut active = session.active_turn.lock().await;
-        if let Some(active) = matching_turn(&mut active, turn)
-            && !active
-                .sampling_interrupt
-                .as_ref()
-                .is_some_and(Self::is_requested)
+        let Some(active) = matching_turn(&mut active, turn) else {
+            return false;
+        };
+        if active
+            .sampling_interrupt
+            .as_ref()
+            .is_some_and(Self::is_requested)
         {
-            active.sampling_interrupt = None;
+            return true;
         }
+        active.sampling_interrupt = None;
+        false
     }
 
     pub(crate) fn is_requested(&self) -> bool {
         self.tools.is_cancelled()
+    }
+
+    pub(crate) async fn is_requested_for(session: &Session, turn: &TurnContext) -> bool {
+        let mut active = session.active_turn.lock().await;
+        matching_turn(&mut active, turn)
+            .and_then(|active| active.sampling_interrupt.as_ref())
+            .is_some_and(Self::is_requested)
     }
 
     pub(super) async fn request(session: &Arc<Session>) {
