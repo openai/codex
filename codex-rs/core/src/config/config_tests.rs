@@ -6499,7 +6499,16 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 
     let overrides = ConfigOverrides {
         cwd: Some(frontend),
-        sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+        // Preserve Windows coverage of the default read-only fallback.
+        sandbox_mode: cfg!(target_os = "windows").then_some(SandboxMode::WorkspaceWrite),
+        permission_profile: (!cfg!(target_os = "windows")).then_some(
+            PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ),
+        ),
         additional_writable_roots: vec![PathBuf::from("../backend"), backend.clone()],
         ..Default::default()
     };
@@ -6737,6 +6746,7 @@ async fn memory_tool_makes_memories_root_readable_without_creating_or_widening_w
             &PermissionProfile::read_only()
         );
     } else {
+        assert!(file_system_policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()));
         let writable_roots = config.permissions.user_visible_workspace_roots();
         assert!(!writable_roots.contains(&memories_root_abs));
     }
