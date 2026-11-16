@@ -47,10 +47,12 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
 }
 
 fn tracker_with_root(root: &Path) -> TurnDiffTracker {
-    TurnDiffTracker::with_environment_display_roots([(
+    let mut tracker = TurnDiffTracker::new();
+    tracker.update_environment_display_roots([(
         "".to_string(),
         PathUri::from_host_native_path(root).expect("absolute display root"),
-    )])
+    )]);
+    tracker
 }
 
 #[tokio::test]
@@ -113,18 +115,12 @@ async fn tracks_same_absolute_path_across_multiple_environments() {
     )
     .await;
 
-    let mut tracker = TurnDiffTracker::with_environment_display_roots([
-        (
-            "local".to_string(),
-            PathUri::from_host_native_path(dir.path()).expect("absolute local display root"),
-        ),
-        (
-            "remote".to_string(),
-            PathUri::from_host_native_path(dir.path()).expect("absolute remote display root"),
-        ),
-    ]);
-    tracker.track_delta("remote", &add);
+    let mut tracker = TurnDiffTracker::new();
+    let root = PathUri::from_host_native_path(dir.path()).expect("absolute display root");
+    tracker.update_environment_display_roots([("local".to_string(), root.clone())]);
     tracker.track_delta("local", &add);
+    tracker.update_environment_display_roots([("remote".to_string(), root)]);
+    tracker.track_delta("remote", &add);
 
     let right_oid = git_blob_sha1_hex("content\n");
     let expected = format!(
@@ -149,7 +145,8 @@ index {ZERO_OID}..{right_oid}
 
 #[test]
 fn displays_foreign_paths_relative_to_their_environment_root() {
-    let tracker = TurnDiffTracker::with_environment_display_roots([(
+    let mut tracker = TurnDiffTracker::new();
+    tracker.update_environment_display_roots([(
         "windows".to_string(),
         PathUri::parse("file:///C:/workspace/project").expect("valid Windows display root"),
     )]);

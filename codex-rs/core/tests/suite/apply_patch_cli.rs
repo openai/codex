@@ -2455,26 +2455,34 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
         ev_apply_patch_custom_tool_call(call2, patch2),
         ev_completed("resp-2"),
     ]);
-    let s3 = sse(vec![
+    let mut continue_sampling = ev_completed("resp-3");
+    continue_sampling["response"]["end_turn"] = json!(false);
+    let s3 = sse(vec![ev_response_created("resp-3"), continue_sampling]);
+    let s4 = sse(vec![
         ev_assistant_message("msg-1", "ok"),
-        ev_completed("resp-3"),
+        ev_completed("resp-4"),
     ]);
-    mount_sse_sequence(harness.server(), vec![s1, s2, s3]).await;
+    mount_sse_sequence(harness.server(), vec![s1, s2, s3, s4]).await;
 
     submit_without_wait(&harness, "aggregate diffs").await?;
 
-    let mut last_diff: Option<String> = None;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::TurnDiff(ev) => {
-            last_diff = Some(ev.unified_diff.clone());
-            false
+    let mut saw_final_answer = false;
+    let mut diffs = Vec::new();
+    wait_for_event(&codex, |event| {
+        match event {
+            EventMsg::TurnDiff(ev) => diffs.push((saw_final_answer, ev.unified_diff.clone())),
+            EventMsg::AgentMessage(message) if message.message == "ok" => saw_final_answer = true,
+            _ => {}
         }
-        EventMsg::TurnComplete(_) => true,
-        _ => false,
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
-    let diff = last_diff.expect("expected TurnDiff after two patches");
+    let [(false, first), (false, diff), (true, final_diff)] = diffs.as_slice() else {
+        anyhow::bail!("expected both patch updates and one final snapshot, got {diffs:?}");
+    };
+    assert!(first.contains("+v1\n"));
+    assert_eq!(final_diff, diff);
     assert!(diff.contains("agg/a.txt"), "diff missing agg/a.txt: {diff}");
     assert!(diff.contains("agg/b.txt"), "diff missing agg/b.txt: {diff}");
     // Final content reflects v2 for a.txt

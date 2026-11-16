@@ -16,10 +16,15 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnSettingsUpdate;
+use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
@@ -363,26 +368,43 @@ async fn steered_input_checkpoint_controls_next_request(
     Ok(())
 }
 
+#[test_case(false; "read_only_steer")]
+#[test_case(true; "steer_with_patch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> anyhow::Result<()> {
+async fn steer_during_final_flush_reaches_the_model_before_turn_completion(
+    patch_after_steer: bool,
+) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let responses = responses::mount_sse_sequence(
-        &server,
-        [
-            ("first", "original answer"),
-            ("second", "answer to the steer"),
-        ]
-        .into_iter()
-        .map(|(id, answer)| {
-            responses::sse(vec![
-                responses::ev_response_created(id),
-                responses::ev_assistant_message(id, answer),
-                responses::ev_completed(id),
-            ])
-        })
-        .collect(),
-    )
-    .await;
+    let patch_response = |id, patch| {
+        responses::sse(vec![
+            responses::ev_response_created(id),
+            responses::ev_apply_patch_custom_tool_call(id, patch),
+            responses::ev_completed(id),
+        ])
+    };
+    let answer_response = |id, answer| {
+        responses::sse(vec![
+            responses::ev_response_created(id),
+            responses::ev_assistant_message(id, answer),
+            responses::ev_completed(id),
+        ])
+    };
+    let mut sequence = vec![
+        patch_response(
+            "patch-first",
+            "*** Begin Patch\n*** Add File: before.txt\n+root\n*** Add File: nested/before.txt\n+nested\n*** End Patch",
+        ),
+        answer_response("first", "original answer"),
+    ];
+    if patch_after_steer {
+        sequence.push(patch_response(
+            "patch-second",
+            "*** Begin Patch\n*** Add File: later.txt\n+ok\n*** End Patch",
+        ));
+    }
+    sequence.push(answer_response("second", "answer to the steer"));
+    let expected_requests = sequence.len();
+    let responses = responses::mount_sse_sequence(&server, sequence).await;
     let (checkpoints, _checkpoint_requests) = mpsc::unbounded_channel();
     let store = Arc::new(GatedCheckpointStore {
         inner: InMemoryThreadStore::default(),
@@ -394,6 +416,12 @@ async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> 
         next_flush: Mutex::default(),
     });
     let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CwdRelativeTurnDiffs)
+                .expect("enable cwd-relative turn diffs");
+        })
         .with_thread_store(store.clone())
         .with_history_mode(ThreadHistoryMode::Legacy)
         .build_with_auto_env(&server)
@@ -414,7 +442,13 @@ async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> 
         root_turn_id,
     } = test
         .codex
-        .start_or_steer_turn(user_message("first prompt", None))
+        .start_or_steer_turn(user_message("first prompt", None).with_thread_settings(
+            ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            },
+        ))
         .await?
     else {
         panic!("expected a new turn");
@@ -422,7 +456,22 @@ async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> 
 
     // The regular task returned its first answer and is flushing before it completes the turn.
     timeout(Duration::from_secs(10), flush.wait()).await?;
-    assert_eq!(responses.requests().len(), 1);
+    assert_eq!(responses.requests().len(), 2);
+    let mut environment = test.executor_environment().request();
+    environment.cwd = environment.cwd.join("nested")?;
+    environment.workspace_roots = vec![environment.cwd.clone()];
+    let (reply, outcome) = oneshot::channel();
+    test.codex
+        .submit(Op::TurnSettings {
+            turn_id: turn_id.clone(),
+            update: TurnSettingsUpdate {
+                environments: Some(vec![environment]),
+                ..Default::default()
+            },
+            reply,
+        })
+        .await?;
+    assert_eq!(outcome.await?, TurnSettingsUpdateOutcome::Applied);
     let steer = timeout(
         Duration::from_secs(10),
         test.codex
@@ -438,11 +487,19 @@ async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> 
         }
     );
 
+    let mut saw_steered_answer = false;
+    let mut final_diff = String::new();
     let mut starts = 0;
     let mut client_ids = Vec::new();
     let EventMsg::TurnComplete(completed) = wait_for_event(&test.codex, |event| {
         match event {
             EventMsg::TurnStarted(_) => starts += 1,
+            EventMsg::AgentMessage(message) if message.message == "answer to the steer" => {
+                saw_steered_answer = true;
+            }
+            EventMsg::TurnDiff(event) if saw_steered_answer => {
+                final_diff.clone_from(&event.unified_diff);
+            }
             EventMsg::UserMessage(message) if message.message == "late steer" => {
                 client_ids.push(message.client_id.clone());
             }
@@ -459,12 +516,26 @@ async fn steer_during_final_flush_reaches_the_model_before_turn_completion() -> 
         completed.last_agent_message.as_deref(),
         Some("answer to the steer")
     );
+    let mut expected_headers = vec![
+        "diff --git a/before.txt b/before.txt",
+        "diff --git a/nested/before.txt b/nested/before.txt",
+    ];
+    if patch_after_steer {
+        expected_headers.push("diff --git a/nested/later.txt b/nested/later.txt");
+    }
+    assert_eq!(
+        final_diff
+            .lines()
+            .filter(|line| line.starts_with("diff --git"))
+            .collect::<Vec<_>>(),
+        expected_headers,
+    );
     assert_eq!(starts, 1);
     assert_eq!(client_ids, [Some("steer-id".to_string())]);
     let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), expected_requests);
     assert_eq!(
-        requests[1]
+        requests[2]
             .message_input_texts("user")
             .iter()
             .filter(|text| *text == "late steer")

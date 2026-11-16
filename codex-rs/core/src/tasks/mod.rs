@@ -42,6 +42,7 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use crate::state::TurnState;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_analytics::TurnProfileFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_context_fragments::RenderedFragment;
@@ -61,6 +62,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::TurnInputSubmission;
@@ -1015,6 +1017,7 @@ impl Session {
         };
         let saved_guardian_completion =
             matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
+        self.finish_turn_diff(&turn_context, &event).await;
         if !saved_guardian_completion {
             self.send_event(turn_context.as_ref(), event.clone()).await;
         }
@@ -1048,6 +1051,18 @@ impl Session {
             self.maybe_start_turn_for_pending_work().await;
         }
         None
+    }
+
+    async fn finish_turn_diff(&self, turn: &TurnContext, terminal_event: &EventMsg) {
+        let tracker = turn.extension_data.remove::<Mutex<TurnDiffTracker>>();
+        let (EventMsg::TurnComplete(_), Some(tracker)) = (terminal_event, tracker) else {
+            return;
+        };
+        let unified_diff = tracker.lock().await.get_unified_diff();
+        if let Some(unified_diff) = unified_diff {
+            self.send_event(turn, EventMsg::TurnDiff(TurnDiffEvent { unified_diff }))
+                .await;
+        }
     }
 
     async fn take_active_turn(&self, reason: &TurnAbortReason) -> Option<ActiveTurn> {
@@ -1223,6 +1238,7 @@ impl Session {
             completed_at,
             duration_ms,
         });
+        self.finish_turn_diff(&task.turn_context, &event).await;
         self.send_event(task.turn_context.as_ref(), event).await;
         // Regular items were flushed before this terminal event was appended; buffering
         // thread writers may not flush it without another explicit barrier.
