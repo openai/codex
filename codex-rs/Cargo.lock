@@ -3859,6 +3859,7 @@ dependencies = [
  "test-case",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

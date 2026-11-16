@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-analytics = { workspace = true }
+codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-guardian-reviewer = { workspace = true }
 codex-history = { workspace = true }
@@ -27,16 +28,12 @@ serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { workspace = true, features = ["time"] }
 tokio-util = { workspace = true }
-
-[package.metadata.cargo-shear]
-# Used by the shared test fixture at ../../message-board/tests/common/mod.rs.
-ignored = ["chrono", "futures"]
+tracing = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 codex-attachment-store = { workspace = true }
 codex-context-fragments = { workspace = true }
-codex-core = { workspace = true }
 core_test_support = { workspace = true }
 futures = { workspace = true }
 insta = { workspace = true }

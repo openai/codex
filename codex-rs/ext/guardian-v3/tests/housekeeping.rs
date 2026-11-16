@@ -2,15 +2,15 @@
 
 #![allow(clippy::expect_used)]
 
+use chrono::DateTime;
+use chrono::Utc;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_core::guardian_review::prepare_review_prewarm;
 use codex_extension_api::SessionIsolation;
 use codex_extension_api::ToolPolicy;
-use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_v3::EvidenceCursor;
 use codex_guardian_v3::HOUSEKEEPER_INSTRUCTIONS;
-use codex_guardian_v3::HOUSEKEEPER_TIMEOUT;
 use codex_guardian_v3::Housekeeper;
 use codex_guardian_v3::local_board;
 use codex_history::CodexHarnessMetadata;
@@ -18,13 +18,18 @@ use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::ChannelQuery;
+use codex_message_board::MessageBoardHost;
+use codex_message_board::NotificationDelivery;
 use codex_message_board::PageRequest;
+use codex_message_board::PostPreview;
 use codex_message_board::PostQuery;
 use codex_message_board::ReadPostRequest;
 use codex_message_board::SortDirection;
 use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
@@ -36,6 +41,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::*;
 use core_test_support::test_codex::test_codex;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::num::NonZeroU32;
@@ -45,7 +51,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use tokio::time::Instant;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[path = "../../../message-board/tests/common/mod.rs"]
@@ -56,13 +62,17 @@ enum RoutingCase {
     WriteFailure,
     MissingNewDescription,
     UnroutedDescription,
+    UpsertDeadline,
+    InvalidResponse,
 }
 
 #[test_case::test_case(RoutingCase::Success; "successful_writes")]
 #[test_case::test_case(RoutingCase::WriteFailure; "write_failure")]
 #[test_case::test_case(RoutingCase::MissingNewDescription; "new_destination_needs_description")]
 #[test_case::test_case(RoutingCase::UnroutedDescription; "only_routed_channels_can_be_edited")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case::test_case(RoutingCase::UpsertDeadline; "stalled_channel_creation")]
+#[test_case::test_case(RoutingCase::InvalidResponse; "redacted_model_error")]
+#[tokio::test]
 async fn routes_captured_originals_and_updates_descriptions(
     case: RoutingCase,
 ) -> anyhow::Result<()> {
@@ -137,13 +147,19 @@ async fn routes_captured_originals_and_updates_descriptions(
         fail_notifications: AtomicBool::new(false),
         notifications: Mutex::default(),
     });
+    let gated_host = Arc::new(PausedClockHost {
+        inner: host.clone(),
+        pause_next: AtomicBool::new(false),
+        started: Notify::new(),
+        release: Notify::new(),
+    });
     let board = Arc::new(
         local_board(
             SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?),
             owner.into(),
         )
         .read_write()
-        .open(host.clone())
+        .open(gated_host.clone())
         .await?,
     );
     board
@@ -177,14 +193,15 @@ async fn routes_captured_originals_and_updates_descriptions(
         .bind_thread(&spawned.thread, key, state, cancellation.clone())
         .await;
     let reply = match case {
-        RoutingCase::Success | RoutingCase::WriteFailure => {
-            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy","_audit":""}}"#
-        }
         RoutingCase::MissingNewDescription => {
             r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy"}}"#
         }
         RoutingCase::UnroutedDescription => {
             r#"{"routes":[["_audit"]],"descriptions":{"_audit":"","release":"Unrelated edit"}}"#
+        }
+        RoutingCase::InvalidResponse => r#"{"private-evidence-canary":true}"#,
+        RoutingCase::Success | RoutingCase::WriteFailure | RoutingCase::UpsertDeadline => {
+            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy","_audit":""}}"#
         }
     };
     let response = mount_sse_once(
@@ -195,31 +212,25 @@ async fn routes_captured_originals_and_updates_descriptions(
         ]),
     )
     .await;
-    let deadline = ReviewDeadline::At(Instant::now() + HOUSEKEEPER_TIMEOUT);
+    let calls_before = host.agent_path_calls.load(Ordering::SeqCst);
     host.fail_clock
         .store(matches!(case, RoutingCase::WriteFailure), Ordering::SeqCst);
-    let calls_before = host.agent_path_calls.load(Ordering::SeqCst);
-    let routed = housekeeper
-        .route_next(&snapshot, &runtime, deadline, &cancellation)
-        .await;
-    if !matches!(case, RoutingCase::Success) {
-        if matches!(case, RoutingCase::WriteFailure) {
-            assert_eq!(routed.disposition, SessionDisposition::Reusable);
-        } else {
-            assert_eq!(routed.disposition, SessionDisposition::Rollback);
-            // Invalid output stops after the catalog read, before any board writes.
-            assert_eq!(
-                host.agent_path_calls.load(Ordering::SeqCst) - calls_before,
-                1
-            );
+    let route = housekeeper.route_next(&snapshot, &runtime, &cancellation);
+    let routed = if matches!(case, RoutingCase::UpsertDeadline) {
+        gated_host.pause_next.store(true, Ordering::SeqCst);
+        tokio::pin!(route);
+        tokio::select! {
+            () = gated_host.started.notified() => {}
+            _ = &mut route => anyhow::bail!("routing ended before creating the channel"),
         }
-        assert!(routed.result.is_err());
-        assert_eq!(housekeeper.cursor(), &initial_cursor);
-        assert_eq!(housekeeper.cursor().pending(&snapshot)?.len(), 1);
-        spawned.thread.shutdown_and_wait().await?;
-        test.codex.shutdown_and_wait().await?;
-        return Ok(());
-    }
+        // The catalog read and model call finished; only the new channel's timestamp is blocked.
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(90)).await;
+        tokio::time::resume();
+        tokio::time::timeout(std::time::Duration::from_secs(5), route).await?
+    } else {
+        route.await
+    };
     insta::assert_snapshot!(
         "guardian_housekeeping_originals",
         context_snapshot::format_request_history_snapshot(
@@ -228,11 +239,39 @@ async fn routes_captured_originals_and_updates_descriptions(
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
+    if !matches!(case, RoutingCase::Success) {
+        let error = routed.result.expect_err("routing should fail");
+        if matches!(case, RoutingCase::InvalidResponse) {
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("Data at line 1 column"));
+            assert!(!diagnostic.contains("private-evidence-canary"));
+        } else if matches!(
+            case,
+            RoutingCase::MissingNewDescription | RoutingCase::UnroutedDescription
+        ) {
+            assert_eq!(routed.disposition, SessionDisposition::Rollback);
+            // Invalid routes stop after the catalog read, before any board writes.
+            assert_eq!(
+                host.agent_path_calls.load(Ordering::SeqCst) - calls_before,
+                1
+            );
+        } else {
+            assert_eq!(routed.disposition, SessionDisposition::Reusable);
+            if matches!(case, RoutingCase::UpsertDeadline) {
+                assert!(error.to_string().contains("TimedOut"));
+            }
+        }
+        assert_eq!(housekeeper.cursor(), &initial_cursor);
+        assert_eq!(housekeeper.cursor().pending(&snapshot)?.len(), 1);
+        spawned.thread.shutdown_and_wait().await?;
+        test.codex.shutdown_and_wait().await?;
+        return Ok(());
+    }
     assert_eq!(routed.disposition, SessionDisposition::Reusable);
     assert_eq!(routed.result?, 1);
     assert_eq!(
         housekeeper
-            .route_next(&snapshot, &runtime, deadline, &cancellation)
+            .route_next(&snapshot, &runtime, &cancellation)
             .await
             .result?,
         0
@@ -338,9 +377,7 @@ async fn routes_captured_originals_and_updates_descriptions(
         )
         .await;
         let calls_before = host.agent_path_calls.load(Ordering::SeqCst);
-        let routed = housekeeper
-            .route_next(&next, &runtime, deadline, &cancellation)
-            .await;
+        let routed = housekeeper.route_next(&next, &runtime, &cancellation).await;
         assert_eq!(routed.disposition, SessionDisposition::Reusable);
         assert_eq!(routed.result?, 1);
         // An unchanged description needs only the catalog read and the evidence append.
@@ -379,6 +416,209 @@ async fn routes_captured_originals_and_updates_descriptions(
             .is_empty()
     );
     spawned.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+struct PausedClockHost {
+    inner: Arc<board_host::Host>,
+    pause_next: AtomicBool,
+    started: Notify,
+    release: Notify,
+}
+
+impl MessageBoardHost for PausedClockHost {
+    fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, CodexResult<AgentPath>> {
+        self.inner.agent_path(caller)
+    }
+
+    fn resolve_agent(&self, path: AgentPath) -> BoxFuture<'_, CodexResult<ThreadId>> {
+        self.inner.resolve_agent(path)
+    }
+
+    fn current_time(&self, caller: ThreadId) -> BoxFuture<'_, CodexResult<DateTime<Utc>>> {
+        Box::pin(async move {
+            if self.pause_next.swap(false, Ordering::SeqCst) {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            self.inner.current_time(caller).await
+        })
+    }
+
+    fn notify(
+        &self,
+        recipient: ThreadId,
+        post: PostPreview,
+    ) -> BoxFuture<'_, CodexResult<NotificationDelivery>> {
+        self.inner.notify(recipient, post)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn root_shutdown_waits_for_the_accepted_evidence_append() -> anyhow::Result<()> {
+    use codex_extension_api::ExtensionData;
+    use codex_extension_api::ExtensionRegistryBuilder;
+    use codex_extension_api::ThreadReadyInput;
+    use codex_extension_api::ThreadStopInput;
+    use codex_extension_api::TurnAbortInput;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::TurnAbortReason;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let root = test.session_configured.thread_id;
+    let host = Arc::new(board_host::Host {
+        clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
+        agent_path_calls: AtomicUsize::default(),
+        members: [(root, AgentPath::root())].into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    let board = local_board(test.config.sqlite_config().clone(), root.into())
+        .read_write()
+        .open(host.clone())
+        .await?;
+    board
+        .upsert_channel(
+            root,
+            UpsertChannelRequest {
+                channel_name: "release".to_owned(),
+                description: "Release policy".to_owned().try_into()?,
+            },
+        )
+        .await?;
+    let host = Arc::new(PausedClockHost {
+        inner: host,
+        pause_next: AtomicBool::new(true),
+        started: Notify::new(),
+        release: Notify::new(),
+    });
+    let mut registry = ExtensionRegistryBuilder::default();
+    codex_guardian_v3::install(
+        &mut registry,
+        Arc::downgrade(&test.thread_manager),
+        test.config.sqlite_config().clone(),
+        {
+            let host = host.clone();
+            move |_| host.clone()
+        },
+    );
+    let registry = registry.build();
+    let session = ExtensionData::new(root.to_string());
+    let thread = test.codex.thread_extension_data();
+    let lifecycle = &registry.thread_lifecycle_contributors()[0];
+    lifecycle
+        .on_thread_ready(ThreadReadyInput {
+            config: &test.config,
+            session_source: &SessionSource::Exec,
+            history_initialization: codex_history::HistoryInitialization::New,
+            history_mode: ThreadHistoryMode::Paginated,
+            session_store: &session,
+            thread_store: thread,
+        })
+        .await;
+    assert!(!tokio::fs::try_exists(test.codex.rollout_path().expect("persistent root")).await?);
+    let data = ResponseItemEnvelope {
+        item: serde_json::from_value(
+            json!({"type":"message","role":"user","content":[{"type":"input_text","text":"Stop the release."}]}),
+        )?,
+        metadata: Some(CodexHarnessMetadata {
+            user_input_order: Some(1),
+            ..Default::default()
+        }),
+    };
+    test.thread_store
+        .append_items(AppendThreadItemsParams {
+            thread_id: root,
+            items: vec![RolloutItem::ResponseItem(data)],
+        })
+        .await?;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message(
+                "route",
+                r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
+            ),
+            ev_completed("route"),
+        ]),
+    )
+    .await;
+    registry.turn_lifecycle_contributors()[0]
+        .on_turn_abort(TurnAbortInput {
+            reason: TurnAbortReason::Interrupted,
+            session_store: &session,
+            thread_store: thread,
+            turn_store: &ExtensionData::new("turn"),
+        })
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(15), host.started.notified()).await?;
+    let housekeeper_id: ThreadId = serde_json::from_value(
+        response.single_request().body_json()["client_metadata"]["thread_id"].take(),
+    )?;
+    let model = test
+        .thread_manager
+        .get_thread_with_extension::<SessionIsolation>(housekeeper_id, |isolation| {
+            *isolation == SessionIsolation::Isolated
+        })
+        .await?;
+    let shutdown = lifecycle.on_thread_stop(ThreadStopInput {
+        thread_store: thread,
+        session_store: &session,
+    });
+    tokio::pin!(shutdown);
+    // The private model can stop while the accepted board write is still blocked.
+    tokio::select! {
+        biased;
+        () = &mut shutdown => panic!("root shutdown returned before the append was released"),
+        () = model.wait_until_terminated() => {},
+    }
+    // Allow shutdown to finish all other tracked tasks while the write stays gated.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), shutdown.as_mut())
+            .await
+            .is_err(),
+        "root shutdown returned while the accepted append was blocked"
+    );
+    host.release.notify_one();
+    shutdown.await;
+    let channels = board
+        .list_channels(
+            root,
+            ChannelQuery {
+                query: None,
+                direction: SortDirection::OldestFirst,
+                page: PageRequest::default(),
+            },
+        )
+        .await?;
+    assert!(
+        channels
+            .channels
+            .results
+            .iter()
+            .any(|row| row.channel_name == "release" && row.message_count == 1)
+    );
+    assert_eq!(
+        codex_core::find_thread_path_by_id_str(
+            test.home.path(),
+            &housekeeper_id.to_string(),
+            /*state_db_ctx*/ None
+        )
+        .await?,
+        None,
+        "the housekeeper must not leave a private copy of the routed evidence"
+    );
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

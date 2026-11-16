@@ -10,7 +10,10 @@ use codex_state::SqliteConfig;
 
 mod delivery;
 mod evidence;
+mod host;
 mod housekeeper;
+mod private_thread;
+pub use host::install;
 mod retrieval_tools;
 mod sampling;
 mod selection;
@@ -22,7 +25,6 @@ pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;
 pub use evidence::OriginalEvidence;
 pub use housekeeper::HOUSEKEEPER_INSTRUCTIONS;
-pub use housekeeper::HOUSEKEEPER_TIMEOUT;
 pub use housekeeper::Housekeeper;
 pub use retrieval_tools::RetrievalBinding;
 pub use retrieval_tools::install_retrieval_tools;

@@ -112,7 +112,15 @@ pub(crate) async fn sample<T: DeserializeOwned>(
     let mut disposition = turn.disposition;
     let result = match turn.outcome {
         GuardianReviewSessionOutcome::Completed(Ok(Some(response))) => {
-            serde_json::from_str(response.raw()).map_err(anyhow::Error::from)
+            serde_json::from_str(response.raw()).map_err(|error| {
+                // Serde's error text can quote private evidence from the model response.
+                anyhow::anyhow!(
+                    "{label} returned invalid JSON ({:?} at line {} column {})",
+                    error.classify(),
+                    error.line(),
+                    error.column(),
+                )
+            })
         }
         GuardianReviewSessionOutcome::Completed(_) => {
             Err(anyhow::anyhow!("{label} returned an invalid response"))

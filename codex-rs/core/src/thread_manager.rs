@@ -1029,6 +1029,10 @@ impl ThreadManager {
         Arc::clone(&self.state.image_store)
     }
 
+    pub fn thread_store(&self) -> Arc<dyn ThreadStore> {
+        Arc::clone(&self.state.thread_store)
+    }
+
     /// Starts the local rollout migration path after a runtime feature enablement.
     ///
     /// Startup config handles the initial launch in [`crate::ThreadStoreBuilder::build`]. This covers
