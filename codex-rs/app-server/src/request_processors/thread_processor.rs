@@ -2446,13 +2446,7 @@ impl ThreadRequestProcessor {
             };
             match retirement {
                 Ok(true) => {
-                    super::thread_read_state::notify(
-                        db,
-                        &self.thread_state_manager,
-                        &self.outgoing,
-                        thread_id,
-                    )
-                    .await;
+                    super::thread_read_state::notify(db, &self.outgoing, thread_id).await;
                 }
                 Ok(false) => {}
                 Err(err) => {

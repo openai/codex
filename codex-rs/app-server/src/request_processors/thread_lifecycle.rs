@@ -583,7 +583,7 @@ async fn start_listener(
                         ).await
                     {
                         super::thread_read_state::notify(
-                            &db, &thread_state_manager,
+                            &db,
                             &outgoing_for_task, conversation_id,
                         ).await;
                     }

@@ -1,12 +1,20 @@
+use super::connection_handling_websocket::connect_websocket;
+use super::connection_handling_websocket::read_jsonrpc_message;
+use super::connection_handling_websocket::read_notification_for_method;
+use super::connection_handling_websocket::read_response_for_id;
+use super::connection_handling_websocket::send_request;
+use super::connection_handling_websocket::spawn_websocket_server;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListResponse;
@@ -27,6 +35,86 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+
+#[tokio::test]
+async fn read_state_changes_reach_unsubscribed_experimental_clients() -> Result<()> {
+    let home = TempDir::new()?;
+    MockResponsesConfig::new("http://127.0.0.1:1")
+        .enable_feature(Feature::Sqlite)
+        .write(home.path())?;
+    create_fake_rollout(
+        home.path(),
+        "2025-01-01T12-00-00",
+        "2025-01-01T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let (mut process, addr) = spawn_websocket_server(home.path()).await?;
+    let mut writer = connect_websocket(addr).await?;
+    let mut observer = connect_websocket(addr).await?;
+    let mut stable = connect_websocket(addr).await?;
+    let mut opted_out = connect_websocket(addr).await?;
+    for (client, capabilities) in [
+        (&mut writer, json!({"experimentalApi": true})),
+        (&mut observer, json!({"experimentalApi": true})),
+        (&mut stable, json!({})),
+        (
+            &mut opted_out,
+            json!({
+                "experimentalApi": true,
+                "optOutNotificationMethods": ["thread/readState/changed"]
+            }),
+        ),
+    ] {
+        send_request(
+            client,
+            "initialize",
+            /*id*/ 1,
+            Some(json!({
+                "clientInfo": {"name": "read-state-test", "version": "1"},
+                "capabilities": capabilities
+            })),
+        )
+        .await?;
+        read_response_for_id(client, /*id*/ 1).await?;
+    }
+    send_request(&mut writer, "thread/list", /*id*/ 2, Some(json!({}))).await?;
+    let list = read_response_for_id(&mut writer, /*id*/ 2).await?.result;
+    let id = list["data"][0]["id"].as_str().context("thread id")?;
+    send_request(
+        &mut writer,
+        "thread/readState/update",
+        /*id*/ 3,
+        Some(json!({
+            "threadId": id,
+            "expectedRevision": list["readStates"][id]["revision"],
+            "operation": {"type": "unread"}
+        })),
+    )
+    .await?;
+    let updated = read_response_for_id(&mut writer, /*id*/ 3).await?.result;
+    let event = read_notification_for_method(&mut observer, "thread/readState/changed").await?;
+    assert_eq!(
+        event.params,
+        Some(json!({"threadId": id, "readState": updated["readState"]}))
+    );
+
+    for client in [&mut stable, &mut opted_out] {
+        send_request(client, "thread/loaded/list", /*id*/ 4, Some(json!({}))).await?;
+        loop {
+            match read_jsonrpc_message(client).await? {
+                JSONRPCMessage::Notification(notification) => {
+                    assert_ne!(notification.method, "thread/readState/changed");
+                }
+                JSONRPCMessage::Response(response) if response.id == RequestId::Integer(4) => break,
+                message => anyhow::bail!("unexpected message: {message:?}"),
+            }
+        }
+    }
+    process.kill().await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn read_state_methods_require_experimental_capability() -> Result<()> {

@@ -111,12 +111,12 @@ exact revision match, and both conflicts return `-32600` with
 Do not blindly retry: the original action may precede an unseen result or
 another window's mark. Unavailable threads fail; writes never change recency.
 
-Started, resumed or forked threads send `thread/readState/changed` alongside
-ordinary thread events; thread/unsubscribe or disconnect stops delivery.
-Clients can filter this method with the existing notification opt-out setting.
+The server broadcasts `thread/readState/changed` to initialized experimental clients
+whenever a durable receipt changes, including for chats they have not opened. Clients can
+ignore irrelevant thread IDs or suppress the method with `optOutNotificationMethods`.
 Revisions are equality tokens, not clocks: never compare or merge them across
 threads or hosts. When concurrent responses disagree, refresh with `thread/read`.
-Offscreen threads converge on page refresh.
+Refresh the list after reconnecting to recover changes missed while disconnected.
 
 # Guardian circuit-breaker errors
 

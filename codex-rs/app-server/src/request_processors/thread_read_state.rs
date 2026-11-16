@@ -1,4 +1,4 @@
-//! Read state for durable local threads. Receipt changes use the thread's usual subscribers.
+//! Read state for durable local threads. Receipt changes are broadcast to experimental clients.
 
 use super::*;
 use crate::error_code::method_not_found;
@@ -66,15 +66,13 @@ pub(super) async fn snapshots(
 
 pub(super) async fn notify(
     db: &StateDbHandle,
-    manager: &ThreadStateManager,
     outgoing: &Arc<OutgoingMessageSender>,
     id: ThreadId,
 ) {
     match db.thread_read_states(&[id]).await {
         Ok(mut states) => {
             if let Some(state) = states.remove(&id) {
-                let subscribers = manager.subscribed_connection_ids(id).await;
-                ThreadScopedOutgoingMessageSender::new(Arc::clone(outgoing), subscribers, id)
+                outgoing
                     .send_server_notification(ServerNotification::ThreadReadStateChanged(
                         ThreadReadStateChangedNotification {
                             thread_id: id.to_string(),
@@ -184,7 +182,7 @@ impl ThreadRequestProcessor {
             .map_err(|err| internal_error(format!("read state was not saved: {err}")))?;
         match outcome {
             ReadStateUpdate::Applied(state) => {
-                notify(db, &self.thread_state_manager, &self.outgoing, id).await;
+                notify(db, &self.outgoing, id).await;
                 Ok(Some(
                     ThreadReadStateUpdateResponse {
                         read_state: to_api(state),
