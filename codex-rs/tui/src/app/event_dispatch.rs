@@ -2523,7 +2523,9 @@ impl App {
                     let result = match result {
                         Ok(call) => {
                             owner.accept_realtime_call(call.answer_sdp);
-                            app_server.thread_realtime_start(thread_id, call.call_id).await
+                            app_server
+                                .thread_realtime_start(thread_id, call.call_id, call.voice_session_id)
+                                .await
                         }
                         Err(error) => Err(error),
                     };

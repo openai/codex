@@ -227,6 +227,11 @@ async fn check_remote_voice_start(
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].headers["thread-id"], thread_id.to_string());
     assert_eq!(calls[0].headers["session-id"], thread_id.to_string());
+    let voice_session_id = calls[0].headers["voice-session-id"].to_str()?;
+    let uuid = uuid::Uuid::parse_str(voice_session_id)?;
+    assert_eq!(uuid.get_version(), Some(uuid::Version::Random));
+    assert_eq!(uuid.to_string(), voice_session_id);
+    assert_ne!(voice_session_id, thread_id.to_string());
     if base_path == "/v1" {
         let body = std::str::from_utf8(&calls[0].body)?;
         assert!(body.contains(r#""voice":"marin""#));
@@ -244,6 +249,7 @@ async fn check_remote_voice_start(
     assert_eq!(starts.len(), 1);
     let start = &starts[0];
     assert_eq!(start["realtimeSessionId"], thread_id.to_string());
+    assert_eq!(start["voiceSessionId"], voice_session_id);
     assert_eq!(
         serde_json::json!({
             "threadId": start["threadId"],

@@ -139,7 +139,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     .await?;
     assert_eq!(String::from(call.answer_sdp), "v=answer\r\n");
     app_server
-        .thread_realtime_start(thread_id, call.call_id)
+        .thread_realtime_start(thread_id, call.call_id, call.voice_session_id)
         .await?;
     // The sideband fixture sends its delegation after the first outbound request.
     app_server
