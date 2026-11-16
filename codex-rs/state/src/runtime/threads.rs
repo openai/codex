@@ -1391,12 +1391,49 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         }
         None => builder.push(" FROM threads"),
     };
+    // Keep the stored source values and their order in sync with migration 0063.
+    // SQLite needs a literal IN list to recognize the partial-index predicate.
+    const INDEXED_INTERACTIVE_SOURCES: [&str; 4] = [
+        "cli",
+        "vscode",
+        r#"{"custom":"atlas"}"#,
+        r#"{"custom":"chatgpt"}"#,
+    ];
+    let use_interactive_source_literals = relation_filter.is_none()
+        && !filters.archived_only
+        && filters.cwd_filters.is_none()
+        && filters.section.is_none()
+        && filters.project_id.is_none()
+        && filters.search_term.is_none()
+        && filters.allowed_sources.len() == INDEXED_INTERACTIVE_SOURCES.len()
+        && INDEXED_INTERACTIVE_SOURCES.iter().all(|source| {
+            filters
+                .allowed_sources
+                .iter()
+                .any(|allowed| allowed.as_str() == *source)
+        });
+    let allowed_sources = if use_interactive_source_literals {
+        &[]
+    } else {
+        filters.allowed_sources
+    };
     push_thread_filters_with_preview(
         builder,
-        filters,
+        ThreadFilterOptions {
+            allowed_sources,
+            ..filters
+        },
         /*include_thread_id_tiebreaker*/ true,
         relation_filter,
     );
+    if use_interactive_source_literals {
+        builder.push(" AND threads.source IN (");
+        let mut separated = builder.separated(", ");
+        for source in INDEXED_INTERACTIVE_SOURCES {
+            separated.push(format_args!("'{source}'"));
+        }
+        separated.push_unseparated(")");
+    }
     if !matches!(
         relation_filter,
         Some(
@@ -2807,6 +2844,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn default_sidebar_listing_uses_the_interactive_timestamp_index() -> anyhow::Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await?;
+        let allowed_sources = [
+            SessionSource::VSCode,
+            SessionSource::Custom("chatgpt".to_string()),
+            SessionSource::Cli,
+            SessionSource::Custom("atlas".to_string()),
+        ]
+        .iter()
+        .map(crate::extract::enum_to_string)
+        .collect::<Vec<_>>();
+        let model_providers = ["test-provider".to_string()];
+
+        let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+        push_list_threads_query(
+            &mut builder,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &allowed_sources,
+                model_providers: Some(&model_providers),
+                cwd_filters: None,
+                section: None,
+                project_id: None,
+                anchor: None,
+                sort_key: SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
+            /*relation_filter*/ None,
+            /*limit*/ 56,
+        );
+        let plan = builder
+            .build()
+            .fetch_all(runtime.pool.as_ref())
+            .await?
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_threads_interactive_updated_at_ms")),
+            "the sidebar listing should skip unrelated sources: {plan:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]

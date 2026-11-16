@@ -1820,6 +1820,15 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    let desktop_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T10-30-00",
+        "2025-02-01T10:30:00Z",
+        "Desktop",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Custom("chatgpt".to_string()),
+    )?;
     let exec_id = create_fake_rollout_with_source(
         codex_home.path(),
         "2025-02-01T11-00-00",
@@ -1846,9 +1855,9 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
 
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids, vec![cli_id.as_str()]);
+    assert_eq!(ids, vec![desktop_id.as_str(), cli_id.as_str()]);
     assert_ne!(cli_id, exec_id);
-    assert_eq!(data[0].source, SessionSource::Cli);
+    assert_eq!(data[1].source, SessionSource::Cli);
 
     Ok(())
 }
