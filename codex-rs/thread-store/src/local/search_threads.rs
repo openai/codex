@@ -128,6 +128,7 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
+        let page = codex_rollout::ThreadsPage::from(page);
         let page_thread_ids: Vec<_> = page
             .items
             .iter()
@@ -274,13 +275,7 @@ async fn set_thread_search_result_names(
         .iter()
         .map(|item| (item.thread.thread_id, item.thread.history_mode))
         .collect::<HashMap<_, _>>();
-    let names = resolve_thread_names(
-        store,
-        &thread_history_modes,
-        /*use_state_db_only*/ false,
-    )
-    .await
-    .unwrap_or_default();
+    let names = resolve_thread_names(store, &thread_history_modes).await;
     for item in items {
         if let Some(name) = names.get(&item.thread.thread_id).cloned() {
             set_thread_name(&mut item.thread, name);

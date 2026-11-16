@@ -228,59 +228,68 @@ pub(super) async fn resolve_thread_section_metadata(
         .unwrap_or_default()
 }
 
-/// DB-only listings require complete names; ordinary listings retain best-effort enrichment.
+/// Enriches rollout listings and search results with names on a best-effort basis.
 pub(super) async fn resolve_thread_names(
     store: &LocalThreadStore,
     thread_history_modes: &HashMap<ThreadId, ThreadHistoryMode>,
-    use_state_db_only: bool,
-) -> ThreadStoreResult<HashMap<ThreadId, String>> {
+) -> HashMap<ThreadId, String> {
     let legacy_thread_ids = thread_history_modes
         .iter()
         .filter_map(|(&thread_id, &history_mode)| {
             (history_mode == ThreadHistoryMode::Legacy).then_some(thread_id)
         })
         .collect::<HashSet<_>>();
-    let mut names =
-        match find_thread_names_by_ids(store.config.codex_home.as_path(), &legacy_thread_ids).await
-        {
-            Ok(names) => names,
-            Err(err) if use_state_db_only => {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("failed to read indexed thread names: {err}"),
-                });
-            }
-            Err(_) => HashMap::new(),
-        };
+    let mut names = find_thread_names_by_ids(store.config.codex_home.as_path(), &legacy_thread_ids)
+        .await
+        .unwrap_or_default();
     if let Some(state_db_ctx) = store.state_db().await {
         let thread_ids = thread_history_modes.keys().copied().collect::<Vec<_>>();
-        let metadata_by_id = match state_db_ctx.get_threads(&thread_ids).await {
-            Ok(metadata) => metadata,
-            Err(err) if use_state_db_only => {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("failed to read thread names from state DB: {err}"),
-                });
-            }
-            Err(_) => return Ok(names),
+        let Ok(metadata_by_id) = state_db_ctx.get_threads(&thread_ids).await else {
+            return names;
         };
         for (&thread_id, &history_mode) in thread_history_modes {
             let Some(metadata) = metadata_by_id.get(&thread_id) else {
                 continue;
             };
-            let name = match history_mode {
-                ThreadHistoryMode::Legacy => distinct_thread_metadata_title(metadata),
-                ThreadHistoryMode::Paginated => sqlite_thread_name(metadata),
-            };
-            if let Some(name) = name {
-                if history_mode == ThreadHistoryMode::Legacy && has_guardian_default_title(metadata)
-                {
-                    names.entry(thread_id).or_insert(name);
-                } else {
-                    names.insert(thread_id, name);
-                }
+            if let Some(name) = listed_thread_name(history_mode, metadata, names.remove(&thread_id))
+            {
+                names.insert(thread_id, name);
             }
         }
     }
-    Ok(names)
+    names
+}
+
+pub(super) async fn indexed_thread_names(
+    store: &LocalThreadStore,
+    legacy_thread_ids: &HashSet<ThreadId>,
+    use_state_db_only: bool,
+) -> ThreadStoreResult<HashMap<ThreadId, String>> {
+    match find_thread_names_by_ids(store.config.codex_home.as_path(), legacy_thread_ids).await {
+        Ok(names) => Ok(names),
+        Err(err) if use_state_db_only => Err(ThreadStoreError::Internal {
+            message: format!("failed to read indexed thread names: {err}"),
+        }),
+        Err(_) => Ok(HashMap::new()),
+    }
+}
+
+pub(super) fn listed_thread_name(
+    history_mode: ThreadHistoryMode,
+    metadata: &ThreadMetadata,
+    indexed_name: Option<String>,
+) -> Option<String> {
+    match history_mode {
+        ThreadHistoryMode::Legacy => {
+            let title = distinct_thread_metadata_title(metadata);
+            if has_guardian_default_title(metadata) {
+                indexed_name.or(title)
+            } else {
+                title.or(indexed_name)
+            }
+        }
+        ThreadHistoryMode::Paginated => sqlite_thread_name(metadata),
+    }
 }
 
 /// Identifies the derived Guardian label, which must yield to legacy indexed names.
