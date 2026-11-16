@@ -155,6 +155,14 @@ they are blocked. SOCKS5 UDP and non-HTTPS SOCKS5 TCP remain blocked in limited 
 Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
 through the same host allowlist/denylist checks.
 
+### Tool-call attribution on upstream requests
+
+A managed executor can set `CODEX_TOOL_CALL_ATTRIBUTION_PROXY` to the HTTP(S) URL of an upstream
+proxy that consumes and strips `x-openai-internal-tool-call-id`. When that endpoint is selected,
+the execution-scoped proxy attaches the controller's tool-call ID to plaintext HTTP requests or
+the outer HTTPS CONNECT. Set this option in the executor process environment. Leaving it unset
+disables attribution. Direct destinations and other upstream proxies receive no attribution header.
+
 ## Library API
 
 `codex-network-proxy` can be embedded as a library with a thin API:
