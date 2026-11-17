@@ -1,4 +1,4 @@
-//! Compare model-visible prefixes from two app-server versions using the same client and inputs.
+//! Compare model-visible prefixes from two app-server versions using the same catalog and inputs.
 //! The contract runner supplies a released CLI; ordinary runs check same-version determinism.
 
 use anyhow::Context;
@@ -19,6 +19,14 @@ use tempfile::TempDir;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prompt_prefix_matches_release() -> Result<()> {
     let release = std::env::var_os("CONTRACT_EXECUTOR_BIN").map(std::path::PathBuf::from);
+    // Catalog content is an input to the harness. Give both executors the same
+    // current catalog so normal model and prompt updates cannot cause skew.
+    let catalog_dir = TempDir::new()?;
+    let catalog_path = catalog_dir.path().join("models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
     let mut prefixes = Vec::new();
 
     for program in [release.as_deref(), None] {
@@ -33,10 +41,12 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         )
         .await;
         let home = TempDir::new()?;
-        // Use each binary's bundled model catalog and feature defaults. Supplying a
-        // catalog or base instructions from the test would hide changes to them.
         MockResponsesConfig::new(&server.uri())
             .with_model("gpt-6-astra")
+            .with_root_config(&format!(
+                "model_catalog_json = {}",
+                serde_json::to_string(&catalog_path)?
+            ))
             // CCA disables bundled skills in its orchestrator.
             .with_root_config("skills.bundled.enabled = false")
             .write(home.path())?;
@@ -119,7 +129,7 @@ async fn prompt_prefix_matches_release() -> Result<()> {
     }
     assert_eq!(
         prefixes[0], prefixes[1],
-        "the default inference prefix differs from the released version; gate the change behind a default-off feature key"
+        "the inference prefix differs from the released version for identical catalog and inputs; gate the harness change behind a default-off feature key"
     );
     Ok(())
 }

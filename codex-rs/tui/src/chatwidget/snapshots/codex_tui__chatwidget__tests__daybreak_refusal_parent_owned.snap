@@ -10,5 +10,5 @@ expression: "format!(\"{}\\n{}\", lines_to_single_string(cells.last().unwrap()),
 
 › Viewing sub-agent — direct input is disabled
 
-  GPT-6.1-Sol default · /tmp/project
+  GPT-6.2-Sol default · /tmp/project
   ? for shortcuts

@@ -5,8 +5,7 @@ expression: "render_bottom_popup(&chat, 80)"
   Select Model and Effort
 
 
-› 1. Renamed model                  Older balanced model for straightforward
-                                    work.
+› 1. Renamed model                  Legacy balanced model for agentic coding.
   2. Shared display name (current)  Legacy coding model.
 
   enter select · esc back
