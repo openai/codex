@@ -892,6 +892,17 @@ impl CodexThread {
         self.session.active_turn.lock().await.is_some()
     }
 
+    /// Returns the current turn ID, including while its stop hook runs.
+    pub async fn current_turn_id(&self) -> Option<String> {
+        self.session
+            .active_turn
+            .lock()
+            .await
+            .as_ref()?
+            .turn_id
+            .clone()
+    }
+
     /// Returns the trusted root when the expected turn is currently active.
     pub async fn active_turn_root(&self, expected_turn_id: &str) -> Option<String> {
         let active = self.session.active_turn.lock().await;

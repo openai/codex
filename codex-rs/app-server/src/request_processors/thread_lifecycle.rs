@@ -756,6 +756,25 @@ async fn start_listener(
         drop(turn_cost_worker);
 
         if shutdown_complete {
+            // Close registration and take the queue under the same lock used by turn/interrupt.
+            // Detached finalizers can publish their terminal events after this listener retires.
+            let pending_interrupts = {
+                let mut state = thread_state.lock().await;
+                if state.listener_generation == listener_generation {
+                    state.listener_shutdown = true;
+                    std::mem::take(&mut state.pending_interrupts)
+                } else {
+                    Vec::new()
+                }
+            };
+            for (_, request_id) in pending_interrupts {
+                outgoing_for_task
+                    .send_error(
+                        request_id,
+                        internal_error("thread shut down before turn interruption completed"),
+                    )
+                    .await;
+            }
             drained_tx.send_replace(true);
             let relay_command = |command| {
                 handle_thread_listener_command(

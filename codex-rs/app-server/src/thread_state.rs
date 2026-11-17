@@ -36,7 +36,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
 
-type PendingInterruptQueue = Vec<ConnectionRequestId>;
+type PendingInterruptQueue = Vec<(String, ConnectionRequestId)>;
 
 // The unload that inserts an entry owns its removal. Dropping the sender wakes deferred
 // listener attachment only after that unload finishes cleanup.
@@ -124,6 +124,8 @@ pub(crate) struct ThreadState {
     pub(crate) command_start_times: HashMap<String, HashMap<String, i64>>,
     /// A terminal event can arrive after the listener has already started the next turn.
     pub(crate) last_started_turn_id: Option<String>,
+    // A delegate may announce a different ID from the one on its terminal event.
+    pub(crate) forwarded_turn_id: Option<String>,
     pub(crate) last_terminal_turn_id: Option<String>,
     /// Lets an internal runtime replacement wait until the old listener has processed Core's
     /// `ShutdownComplete` event before that listener is superseded.
@@ -131,6 +133,9 @@ pub(crate) struct ThreadState {
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
+    /// The listener no longer consumes terminal events from this runtime. Unlike Core's
+    /// agent status, this stays closed when a detached finalizer completes after shutdown.
+    pub(crate) listener_shutdown: bool,
     last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
@@ -174,10 +179,12 @@ impl ThreadState {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
+        self.forwarded_turn_id = None;
         self.turn_summaries.clear();
         self.command_start_times.clear();
         self.shutdown_drain = Some(shutdown_drain);
         self.listener_generation = self.listener_generation.wrapping_add(1);
+        self.listener_shutdown = false;
         self.last_thread_settings = Some(thread_settings_baseline);
         self.history_mode = history_mode;
         self.evict_superseded_agent_text =
@@ -197,6 +204,7 @@ impl ThreadState {
         self.listener_command_tx = None;
         self.current_turn_history.reset();
         self.last_started_turn_id = None;
+        self.forwarded_turn_id = None;
         self.turn_summaries.clear();
         self.command_start_times.clear();
         self.listener_thread = None;
@@ -280,6 +288,8 @@ impl ThreadState {
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.note_turn_started(event_turn_id, payload.started_at);
+            self.forwarded_turn_id =
+                (payload.turn_id != event_turn_id).then(|| payload.turn_id.clone());
         } else if let EventMsg::ItemStarted(payload) = event
             && matches!(payload.item, CoreTurnItem::EnteredReviewMode(_))
         {

@@ -200,7 +200,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TurnComplete(turn_complete_event) => {
-            respond_to_pending_interrupts(&thread_state, &outgoing).await;
+            respond_to_pending_interrupts(&event_turn_id, &thread_state, &outgoing).await;
             if finishes_latest_turn {
                 let turn_failed = thread_state
                     .lock()
@@ -1297,7 +1297,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
-            respond_to_pending_interrupts(&thread_state, &outgoing).await;
+            respond_to_pending_interrupts(&event_turn_id, &thread_state, &outgoing).await;
 
             if finishes_latest_turn {
                 thread_watch_manager
@@ -1652,12 +1652,17 @@ async fn handle_turn_interrupted(
 }
 
 async fn respond_to_pending_interrupts(
+    event_turn_id: &str,
     thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let pending = {
         let mut state = thread_state.lock().await;
-        std::mem::take(&mut state.pending_interrupts)
+        state
+            .pending_interrupts
+            .extract_if(.., |(turn_id, _)| turn_id == event_turn_id)
+            .map(|(_, request_id)| request_id)
+            .collect::<Vec<_>>()
     };
 
     for request_id in pending {

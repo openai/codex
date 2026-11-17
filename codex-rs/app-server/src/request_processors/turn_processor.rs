@@ -1525,66 +1525,108 @@ impl TurnRequestProcessor {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "register the interrupt before the listener can consume the validated turn's terminal event"
+    )]
     async fn turn_interrupt_inner(
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
     ) -> Result<Option<TurnInterruptResponse>, JSONRPCErrorError> {
         let TurnInterruptParams { thread_id, turn_id } = params;
-        let is_startup_interrupt = turn_id.is_empty();
-
         let (thread_uuid, thread) = self.load_thread(&thread_id).await?;
 
-        // Record turn interrupts so we can reply when TurnAborted arrives. Startup
-        // interrupts do not have a turn and are acknowledged after submission.
-        if !is_startup_interrupt {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let is_running = matches!(thread.agent_status().await, AgentStatus::Running);
-            {
-                let mut thread_state = thread_state.lock().await;
-                if let Some(active_turn_id) = thread_state.active_turn_id() {
-                    if active_turn_id != turn_id {
-                        return Err(invalid_request(format!(
-                            "expected active turn id {turn_id} but found {active_turn_id}"
-                        )));
-                    }
-                } else if thread_state.last_terminal_turn_id.as_deref() == Some(turn_id.as_str())
-                    || !is_running
-                {
-                    return Err(invalid_request("no active turn to interrupt"));
-                }
-                thread_state.pending_interrupts.push(request_id.clone());
-            }
-
-            self.outgoing
-                .record_request_turn_id(request_id, &turn_id)
-                .await;
+        // Startup interrupts have no target and are acknowledged on submission.
+        if turn_id.is_empty() {
+            self.submit_core_op(request_id, thread.as_ref(), Op::Interrupt)
+                .await
+                .map_err(|err| internal_error(format!("failed to interrupt startup: {err}")))?;
+            return Ok(Some(TurnInterruptResponse {}));
         }
 
-        // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
-        // interrupts respond here because startup cancellation has no turn event.
+        // Reply when the target completes or aborts.
+        let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+        let submit_interrupt = {
+            let mut thread_state = thread_state.lock().await;
+            // Serialize registration with listener shutdown. A handler may also have
+            // loaded the old runtime before a replacement listener was installed.
+            if thread_state.listener_shutdown
+                || (thread_state.shutdown_drain.is_some()
+                    && !thread_state.listener_matches(&thread))
+            {
+                return Err(invalid_request(
+                    "thread runtime is no longer accepting interrupts",
+                ));
+            }
+            let listener_turn_id = thread_state.active_turn_id();
+            if let Some(active_turn_id) = listener_turn_id
+                && active_turn_id != turn_id
+            {
+                return Err(invalid_request(format!(
+                    "expected active turn id {turn_id} but found {active_turn_id}"
+                )));
+            }
+            let terminal_turn_id = interrupt_terminal_turn_id(&thread_state, &turn_id)
+                .ok_or_else(|| invalid_request("no active turn to interrupt"))?;
+            let submit_interrupt = match thread.current_turn_id().await {
+                // Core reserves the ID before it announces the turn.
+                Some(id)
+                    if id == terminal_turn_id
+                        && (listener_turn_id.is_some()
+                            || matches!(thread.agent_status().await, AgentStatus::Running)) =>
+                {
+                    true
+                }
+                // Core drops the slot before publishing TurnAborted.
+                None if thread_state
+                    .pending_interrupts
+                    .iter()
+                    .any(|(id, _)| id == terminal_turn_id) =>
+                {
+                    false
+                }
+                // A listener-visible turn may already be aborting. Only a review
+                // announced before task registration still needs an interrupt here.
+                None if listener_turn_id.is_some()
+                    && thread_state.turn_summaries.contains_key(terminal_turn_id) =>
+                {
+                    listener_turn_id == Some(terminal_turn_id)
+                        && thread_state.last_started_turn_id.as_deref() != Some(terminal_turn_id)
+                }
+                Some(_) | None => return Err(invalid_request("no active turn to interrupt")),
+            };
+            let terminal_turn_id = terminal_turn_id.to_owned();
+            thread_state
+                .pending_interrupts
+                .push((terminal_turn_id, request_id.clone()));
+            submit_interrupt
+        };
+
+        self.outgoing
+            .record_request_turn_id(request_id, &turn_id)
+            .await;
+        if !submit_interrupt {
+            return Ok(None);
+        }
+
         match self
             .submit_core_op(request_id, thread.as_ref(), Op::Interrupt)
             .await
         {
-            Ok(_) if is_startup_interrupt => Ok(Some(TurnInterruptResponse {})),
             Ok(_) => Ok(None),
             Err(err) => {
-                if !is_startup_interrupt {
-                    let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-                    let mut thread_state = thread_state.lock().await;
-                    thread_state
-                        .pending_interrupts
-                        .retain(|pending_request_id| pending_request_id != request_id);
-                }
-                let interrupt_target = if is_startup_interrupt {
-                    "startup"
-                } else {
-                    "turn"
+                let mut state = thread_state.lock().await;
+                let Some(index) = state
+                    .pending_interrupts
+                    .iter()
+                    .position(|(_, id)| id == request_id)
+                else {
+                    // The listener already settled this request.
+                    return Ok(None);
                 };
-                Err(internal_error(format!(
-                    "failed to interrupt {interrupt_target}: {err}"
-                )))
+                state.pending_interrupts.remove(index);
+                Err(internal_error(format!("failed to interrupt turn: {err}")))
             }
         }
     }
@@ -1617,3 +1659,21 @@ impl TurnRequestProcessor {
         .await
     }
 }
+
+fn interrupt_terminal_turn_id<'a>(state: &'a ThreadState, turn_id: &'a str) -> Option<&'a str> {
+    let terminal_id = if state.forwarded_turn_id.as_deref() == Some(turn_id) {
+        // History can still name the delegate after the outer turn has finished.
+        let outer_id = state.last_started_turn_id.as_deref()?;
+        if !state.turn_summaries.contains_key(outer_id) {
+            return None;
+        }
+        outer_id
+    } else {
+        turn_id
+    };
+    (state.last_terminal_turn_id.as_deref() != Some(terminal_id)).then_some(terminal_id)
+}
+
+#[cfg(test)]
+#[path = "turn_interrupt_tests.rs"]
+mod turn_interrupt_tests;

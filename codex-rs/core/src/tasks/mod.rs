@@ -367,6 +367,7 @@ impl Session {
             }
             let turn = active.get_or_insert_with(ActiveTurn::default);
             debug_assert!(turn.task.is_none());
+            turn.turn_id = Some(turn_context.sub_id.clone());
             turn.finishing = None;
             Arc::clone(&turn.turn_state)
         };

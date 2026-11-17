@@ -36,6 +36,8 @@ use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
+    /// The slot's owner, retained after its task detaches to emit the terminal event.
+    pub(crate) turn_id: Option<String>,
     pub(crate) task: Option<RunningTask>,
     pub(crate) sampling_interrupt: Option<SamplingInterrupt>,
     /// Present when input admission is closed; cancelled when the final batch is recorded.
@@ -67,6 +69,7 @@ pub(crate) enum MailboxDeliveryPhase {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
+            turn_id: None,
             task: None,
             sampling_interrupt: None,
             finishing: None,
