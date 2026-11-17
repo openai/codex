@@ -954,6 +954,11 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
         config,
     } = backend;
     let backend_id = app_server.backend_id();
+    let initial_mode = if app_server.uses_remote_workspace() {
+        PageLoadMode::StoreDefault
+    } else {
+        PageLoadMode::StateDbOnly
+    };
     let (bg_tx, events) = mpsc::unbounded_channel();
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
 
@@ -1098,6 +1103,7 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
 
     sources::Source {
         backend_id,
+        initial_mode,
         loader: Arc::new(move |request: PickerLoadRequest| {
             let _ = request_tx.send(request);
         }),

@@ -26,6 +26,7 @@ fn completion_page(catalog: &catalog::ThreadCatalog, failed: &HashSet<BackendId>
 
 pub(super) struct Source {
     pub(super) backend_id: BackendId,
+    pub(super) initial_mode: PageLoadMode,
     pub(super) loader: PickerLoader,
     pub(super) events: mpsc::UnboundedReceiver<BackgroundEvent>,
     pub(super) task: tokio::task::JoinHandle<()>,
@@ -42,12 +43,13 @@ pub(super) fn spawn(
     let mut tasks = Vec::new();
     for Source {
         backend_id,
+        initial_mode,
         loader,
         events: receiver,
         task,
     } in sources
     {
-        assert!(workers.insert(backend_id, loader).is_none());
+        assert!(workers.insert(backend_id, (loader, initial_mode)).is_none());
         tasks.push(task);
         events.push(
             UnboundedReceiverStream::new(receiver)
@@ -77,9 +79,20 @@ pub(super) fn spawn(
                             }
                             let request_token = request.request_token;
                             let mut started = false;
-                            for (id, worker) in &workers {
+                            for (id, (worker, source_initial_mode)) in &workers {
                                 if failed.contains(id) { continue; }
-                                if let Some(page) = catalog.begin_page(*id, request.mode) {
+                                // A listing starts with listing_token == request_token; recovery
+                                // keeps that listing token but allocates a new request token.
+                                // Only the first load can use a source's preferred mode.
+                                let initial_mode = if request.cursor.is_none()
+                                    && request.request_token == request.listing_token
+                                    && request.mode == PageLoadMode::StoreDefault
+                                {
+                                    *source_initial_mode
+                                } else {
+                                    request.mode
+                                };
+                                if let Some(page) = catalog.begin_page(*id, initial_mode) {
                                     let mut source_request = request.clone();
                                     source_request.cursor = page.cursor.clone();
                                     source_request.mode = page.mode;
@@ -116,7 +129,7 @@ pub(super) fn spawn(
                                 | PickerLoadRequest::Unarchive { backend_id, .. } => *backend_id,
                                 PickerLoadRequest::Page(_) => unreachable!(),
                             };
-                            if let Some(worker) = workers.get(&backend) {
+                            if let Some((worker, _)) = workers.get(&backend) {
                                 worker(request);
                             } else {
                                 let error = std::io::Error::other("The session's backend is unavailable.");
@@ -171,7 +184,7 @@ pub(super) fn spawn(
                                 pending_page.page.mode = PageLoadMode::StoreDefault;
                                 pending_page.request = fallback.clone();
                                 pending.insert(id, pending_page);
-                                workers[&id](PickerLoadRequest::Page(fallback));
+                                (workers[&id].0)(PickerLoadRequest::Page(fallback));
                                 continue;
                             }
                             let mut wait_for_other_source = false;

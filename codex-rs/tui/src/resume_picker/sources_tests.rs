@@ -15,6 +15,7 @@ fn source() -> (
     (
         Source {
             backend_id: BackendId::new(),
+            initial_mode: PageLoadMode::StoreDefault,
             loader: Arc::new(move |request| {
                 let _ = requests.send(request);
             }),
@@ -45,6 +46,19 @@ async fn next(receiver: &mut mpsc::UnboundedReceiver<BackgroundEvent>) -> Backgr
         .unwrap()
         .unwrap()
 }
+async fn next_page_request(
+    receiver: &mut mpsc::UnboundedReceiver<PickerLoadRequest>,
+    expected: &str,
+) -> PageLoadRequest {
+    let request = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {expected}"))
+        .unwrap_or_else(|| panic!("worker closed before {expected}"));
+    let PickerLoadRequest::Page(page) = request else {
+        panic!("expected {expected} to be a page request");
+    };
+    page
+}
 fn reply(token: usize, thread: ThreadId, cursor: Option<&str>) -> BackgroundEvent {
     let mut row = make_row("/tmp/worker.jsonl", "2025-01-01T00:00:00Z", "conversation");
     row.thread_id = Some(thread);
@@ -60,6 +74,100 @@ fn reply(token: usize, thread: ThreadId, cursor: Option<&str>) -> BackgroundEven
         )),
     }
 }
+
+#[tokio::test]
+async fn mixed_sources_keep_indexed_and_recovery_modes_separate() {
+    let (mut indexed, mut indexed_requests, indexed_events) = source();
+    indexed.initial_mode = PageLoadMode::StateDbOnly;
+    let (mut recovering, mut recovering_requests, recovering_events) = source();
+    recovering.initial_mode = PageLoadMode::StateDbOnly;
+    let (remote, mut remote_requests, remote_events) = source();
+    let (output, mut events) = mpsc::unbounded_channel();
+    let PickerBackground { loader, task } = spawn(vec![indexed, recovering, remote], output);
+
+    loader(request(/*token*/ 1, /*cursor*/ None));
+    for (requests, expected) in [
+        (&mut indexed_requests, PageLoadMode::StateDbOnly),
+        (&mut recovering_requests, PageLoadMode::StateDbOnly),
+        (&mut remote_requests, PageLoadMode::StoreDefault),
+    ] {
+        let page = next_page_request(requests, "initial source listing").await;
+        assert_eq!(page.mode, expected);
+    }
+
+    remote_events
+        .send(reply(
+            /*token*/ 1,
+            ThreadId::new(),
+            /*cursor*/ None,
+        ))
+        .unwrap();
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::PartialPage { .. }
+    ));
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::Page { .. }
+    ));
+    indexed_events
+        .send(reply(
+            /*token*/ 1,
+            ThreadId::new(),
+            Some("indexed-next"),
+        ))
+        .unwrap();
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::PartialPage { .. }
+    ));
+    recovering_events
+        .send(BackgroundEvent::Page {
+            request_token: 1,
+            search_token: None,
+            mode: PageLoadMode::StateDbOnly,
+            page: Err(std::io::Error::other("indexed listing failed")),
+        })
+        .unwrap();
+    let fallback = next_page_request(&mut recovering_requests, "source-specific repair").await;
+    assert_eq!(fallback.mode, PageLoadMode::StoreDefault);
+    recovering_events
+        .send(reply(
+            /*token*/ 1,
+            ThreadId::new(),
+            Some("recovery-next"),
+        ))
+        .unwrap();
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::PartialPage { .. }
+    ));
+
+    loader(request(/*token*/ 2, Some(PageCursor::Catalog)));
+    for (requests, expected_mode, expected_cursor) in [
+        (
+            &mut indexed_requests,
+            PageLoadMode::StateDbOnly,
+            "indexed-next",
+        ),
+        (
+            &mut recovering_requests,
+            PageLoadMode::StoreDefault,
+            "recovery-next",
+        ),
+    ] {
+        let page = next_page_request(requests, "continuation page").await;
+        assert_eq!(page.mode, expected_mode);
+        assert!(
+            matches!(page.cursor, Some(PageCursor::AppServer(cursor)) if cursor == expected_cursor)
+        );
+    }
+    assert!(remote_requests.try_recv().is_err());
+
+    drop(loader);
+    task.await.unwrap();
+}
+
 #[tokio::test]
 async fn sources_stream_rows_and_route_actions_to_each_source() {
     let (first, mut first_requests, first_events) = source();
@@ -329,7 +437,8 @@ async fn late_source_failure_finishes_catalog_progress() {
 
 #[tokio::test]
 async fn single_source_initial_failure_preserves_fallback_error() {
-    let (source, mut requests, replies) = source();
+    let (mut source, mut requests, replies) = source();
+    source.initial_mode = PageLoadMode::StateDbOnly;
     let (output, mut events) = mpsc::unbounded_channel();
     let PickerBackground { loader, task } = spawn(vec![source], output);
     let PickerLoadRequest::Page(mut initial) = request(/*token*/ 1, /*cursor*/ None) else {
@@ -337,9 +446,7 @@ async fn single_source_initial_failure_preserves_fallback_error() {
     };
     initial.mode = PageLoadMode::StateDbOnly;
     loader(PickerLoadRequest::Page(initial));
-    let Some(PickerLoadRequest::Page(initial)) = requests.recv().await else {
-        panic!("expected initial listing")
-    };
+    let initial = next_page_request(&mut requests, "initial listing").await;
     assert_eq!(initial.mode, PageLoadMode::StateDbOnly);
     replies
         .send(BackgroundEvent::Page {
@@ -349,9 +456,7 @@ async fn single_source_initial_failure_preserves_fallback_error() {
             page: Err(std::io::Error::other("indexed listing failed")),
         })
         .unwrap();
-    let Some(PickerLoadRequest::Page(fallback)) = requests.recv().await else {
-        panic!("expected store fallback")
-    };
+    let fallback = next_page_request(&mut requests, "store fallback").await;
     assert_eq!(fallback.mode, PageLoadMode::StoreDefault);
     replies
         .send(BackgroundEvent::Page {
@@ -375,6 +480,14 @@ async fn single_source_initial_failure_preserves_fallback_error() {
     };
     assert_eq!(mode, PageLoadMode::StoreDefault);
     assert_eq!(err.to_string(), "store listing failed");
+
+    let PickerLoadRequest::Page(mut recovery) = request(/*token*/ 2, /*cursor*/ None) else {
+        unreachable!()
+    };
+    recovery.listing_token = 1;
+    loader(PickerLoadRequest::Page(recovery));
+    let recovery = next_page_request(&mut requests, "explicit recovery request").await;
+    assert_eq!(recovery.mode, PageLoadMode::StoreDefault);
     drop(loader);
     task.await.unwrap();
 }
@@ -499,6 +612,7 @@ async fn detached_picker_cleanup_drains_accepted_mutations() {
     });
     let source = Source {
         backend_id,
+        initial_mode: PageLoadMode::StoreDefault,
         loader: Arc::new(move |request| {
             let _ = requests.send(request);
         }),
