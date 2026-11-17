@@ -149,6 +149,7 @@ impl ChatWidget {
             status_account_display,
             remote_connection: None,
             statusline_read: None,
+            statusline_disconnected: false,
             snapshot_local_images: false,
             thread_params_mode: crate::app_server_session::ThreadParamsMode::Embedded,
             pending_image_submission: None,

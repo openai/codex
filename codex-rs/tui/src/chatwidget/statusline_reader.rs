@@ -70,7 +70,8 @@ impl StatuslineReadEvent {
 
 impl ChatWidget {
     pub(super) fn selected_statusline_provider(&self) -> Option<&StatusLineProviderId> {
-        if self.read_only_history
+        if self.statusline_disconnected
+            || self.read_only_history
             || self
                 .app_event_tx
                 .voice_only
@@ -86,6 +87,11 @@ impl ChatWidget {
             StatusLineSelection::Builtin(_) => None,
             StatusLineSelection::Mcp(id) => Some(id),
         }
+    }
+
+    pub(crate) fn reselect_statusline_provider(&mut self) {
+        self.statusline_read = None;
+        self.refresh_status_line();
     }
 
     pub(super) fn refresh_provider_footer(&mut self) -> bool {

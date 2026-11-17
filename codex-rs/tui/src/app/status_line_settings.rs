@@ -37,6 +37,7 @@ impl App {
 
         self.local_settings.tui.status_line_provider = Some(Box::new(provider.clone()));
         self.chat_widget.local_settings.tui.status_line_provider = Some(Box::new(provider));
+        self.chat_widget.reselect_statusline_provider();
         Ok(())
     }
 }

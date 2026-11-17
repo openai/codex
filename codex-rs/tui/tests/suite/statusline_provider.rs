@@ -55,6 +55,7 @@ async fn statusline_reads_the_selected_stdio_resource_on_the_displayed_thread() 
         let cwd = work.path().canonicalize()?;
         fs::create_dir(cwd.join(".git"))?;
         let client = test_home(&cwd)?;
+        let local_config = client.path().join("config.toml");
         let registration_home = test_home(&cwd)?;
         let host = if mode == Setup::Remote {
             registration_home.path()
@@ -131,6 +132,13 @@ async fn statusline_reads_the_selected_stdio_resource_on_the_displayed_thread() 
                 terminal.write_input(b"/raw off\r")?;
                 terminal.wait_for_screen("Raw output mode off")?;
                 terminal.wait_for_screen(&format!("Provider thread {thread} (standard)"))?;
+                let config = fs::read_to_string(&local_config)?;
+                fs::write(
+                    &local_config,
+                    config.replace("tool='sandbox_meta'", "tool='replacement'"),
+                )?;
+                terminal.write_input(b"/new\r")?;
+                terminal.wait_for_screen("Error loading statusline contents from replacement")?;
             }
             assert_eq!(state["thread"]["workspace"], json!({"cwd": cwd}));
         }

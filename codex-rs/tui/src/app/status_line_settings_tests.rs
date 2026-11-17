@@ -2,6 +2,7 @@
 
 use crate::AppServerTarget;
 use crate::app::test_support::make_test_app;
+use crate::chatwidget::tests::render_bottom_popup;
 use codex_config::types::BuiltinStatusLine;
 use codex_config::types::StatusLineProviderId;
 use codex_config::types::StatusLineSelection;
@@ -120,4 +121,43 @@ async fn failed_write_preserves_the_file_and_the_live_selection() -> anyhow::Res
         );
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn reloading_the_effective_feature_gate_and_reselecting_an_unchanged_preference() {
+    let mut app = make_test_app().await;
+    let path = app.local_settings.user_config_path.clone();
+    let configured = "[features]\ntui_extensions_statusline = true\n[tui]\nstatus_line = []\nstatus_line_provider = { tool='line', server='fixture' } # local formatting\n";
+    std::fs::write(&path, configured).unwrap();
+    app.cli_kv_overrides = vec![(
+        "tui.status_line_provider".into(),
+        toml::toml! {
+            server = "fixture"
+            tool = "line"
+        }
+        .into(),
+    )];
+    app.refresh_in_memory_config_from_disk().await.unwrap();
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
+
+    let selected = app
+        .local_settings
+        .tui
+        .status_line_provider
+        .as_deref()
+        .unwrap()
+        .clone();
+    std::fs::write(&path, configured.replace("tool='line'", "tool='elsewhere'")).unwrap();
+    app.save_status_line_provider(selected).await.unwrap();
+    let stored: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        stored["tui"]["status_line_provider"]["tool"].as_str(),
+        Some("line")
+    );
+    std::fs::write(&path, configured.replace("= true", "= false")).unwrap();
+    app.refresh_in_memory_config_from_disk().await.unwrap();
+    assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
+    std::fs::write(&path, configured).unwrap();
+    app.refresh_in_memory_config_from_disk().await.unwrap();
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
 }

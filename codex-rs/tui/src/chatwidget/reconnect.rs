@@ -53,6 +53,8 @@ impl ChatWidget {
             crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
             "quit".into(),
         )]));
+        self.statusline_disconnected = true;
+        self.refresh_status_line();
     }
 
     /// Restore local input only after replay, which can otherwise move interrupted queues into the draft.

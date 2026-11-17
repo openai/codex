@@ -258,11 +258,12 @@ impl Reader {
                 (params.server_name.as_deref(), params.thread_id),
                 (Some("fixture"), thread)
             );
-            let tool = json!({"name":"line","title":"Calendar","inputSchema":{},"_meta":{
+            let name = &self.chat.selected_statusline_provider().unwrap().tool;
+            let tool = json!({"name":name,"title":"Calendar","inputSchema":{},"_meta":{
                 "openai/ui":{"entrypoints":[{"type":"statusline","resourceUri":URI}]}
             }});
             reply.send(Ok(Ok(json!({"data":[{"name":"fixture","httpOrigin":null,"runtimeStatus":"connected",
-                "tools":{"line":tool},"resources":[],"resourceTemplates":[],"authStatus":"unsupported"}],"nextCursor":null})))).unwrap();
+                "tools":{(name):tool},"resources":[],"resourceTemplates":[],"authStatus":"unsupported"}],"nextCursor":null})))).unwrap();
         }
     }
 
@@ -477,4 +478,81 @@ async fn statusline_startup_timeout_stops_before_the_first_read() {
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
+}
+
+#[tokio::test(start_paused = true)]
+async fn statusline_changing_provider_or_reconnecting_discards_the_previous_read() {
+    enum Change {
+        Provider,
+        Connection,
+    }
+    let mut reader = Reader::new().await;
+    reader.resolve().await;
+    let mut held = reader.read(URI).await;
+    for change in [Change::Provider, Change::Connection] {
+        let old = reader.chat.statusline_read.as_ref().unwrap().token;
+        match change {
+            Change::Provider => {
+                reader.chat.local_settings.tui.status_line_provider =
+                    Some(Box::new(StatusLineSelection::Mcp(StatusLineProviderId {
+                        server: "fixture".into(),
+                        tool: "other".into(),
+                    })));
+            }
+            Change::Connection => {
+                reader.chat.local_settings.tui.status_line = Some(vec!["model".into()]);
+                reader.chat.local_settings.tui.terminal_title = Some(vec!["run-state".into()]);
+                reader.chat.pause_for_disconnect();
+                assert_eq!(
+                    footer(&reader.chat),
+                    Some(reader.chat.model_display_name().into())
+                );
+                reader.assert_idle();
+                reader.chat.statusline_disconnected = false;
+                let (client, requests, _) = CloudClient::channel(/*capacity*/ 8);
+                reader.requests = requests;
+                reader.owner = AppServerSession::new(
+                    reader.owner.backend_id(),
+                    AppServerClient::Cloud(client),
+                    ThreadParamsMode::Cloud,
+                );
+            }
+        }
+        reader.chat.refresh_status_line();
+        reader.dispatch().await;
+        reader.resolve().await;
+        let next = reader.read(URI).await;
+        held.closed().await;
+        for result in [Ok(UiTree(None)), Err("retired".into())] {
+            let step = ReadStep::Finished(reader.owner.backend_id(), result);
+            reader
+                .chat
+                .handle_statusline_read(StatuslineReadEvent { token: old, step }, &reader.owner);
+        }
+        assert_eq!(footer(&reader.chat).as_deref(), Some("Initializing…"));
+        held = next;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn statusline_explicit_reselection_restarts_a_failed_reader() {
+    let mut reader = Reader::new().await;
+    reader.resolve().await;
+    let _held = reader.read(URI).await;
+    advance(/*millis*/ 1000).await;
+    reader.dispatch().await;
+    reader.chat.refresh_status_line();
+    reader.assert_idle();
+    assert!(
+        footer(&reader.chat)
+            .unwrap()
+            .contains("Error loading statusline contents from Calendar")
+    );
+
+    reader.chat.reselect_statusline_provider();
+    reader.dispatch().await;
+    reader.resolve().await;
+    respond(reader.read(URI).await, r#""restored""#);
+    reader.dispatch().await;
+    assert_eq!(footer(&reader.chat).as_deref(), Some("restored"));
 }

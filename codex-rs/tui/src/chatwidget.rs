@@ -578,6 +578,7 @@ pub(crate) struct ChatWidget {
     status_account_display: Option<StatusAccountDisplay>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     statusline_read: Option<statusline_reader::ActiveStatuslineRead>,
+    pub(crate) statusline_disconnected: bool,
     /// Remote app servers cannot read image paths on the TUI host.
     pub(crate) snapshot_local_images: bool,
     pub(crate) thread_params_mode: crate::app_server_session::ThreadParamsMode,

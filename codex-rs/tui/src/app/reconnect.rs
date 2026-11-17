@@ -651,6 +651,8 @@ impl App {
             self.refresh_agents_overview_threads(app_server);
         }
         self.chat_widget.forget_inherited_quota_provider();
+        self.chat_widget.statusline_disconnected = false;
+        self.chat_widget.refresh_status_line();
         self.chat_widget.update_account_state(
             bootstrap.status_account_display,
             bootstrap.plan_type,
