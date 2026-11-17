@@ -6,13 +6,13 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=9fb89f63da333416):
+00:additional_tools/developer (2; hash=2c5684dede3a1a9c):
         - namespace/functions; hash=c0e72eb3b93fb0da
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/new_context
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -60,13 +60,13 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
 
 ## Window 2 (after request 3: input diverged at item 13)
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=9fb89f63da333416):
+00:additional_tools/developer (2; hash=2c5684dede3a1a9c):
         - namespace/functions; hash=c0e72eb3b93fb0da
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/new_context
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

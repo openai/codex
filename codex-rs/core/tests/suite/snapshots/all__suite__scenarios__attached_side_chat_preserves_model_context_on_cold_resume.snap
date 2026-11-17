@@ -6,7 +6,7 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=f2e4edd02b6f9300):
+00:additional_tools/developer (3; hash=a7c46a0959d54866):
         - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
@@ -14,7 +14,7 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -30,14 +30,14 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
     User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
 
-    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+    <OMITTED 151 LINES; ~4851 TOKENS; hash=959762226fedfd0c>
+    ## Decision Boundary
 
-    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
-    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
-    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
-    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
-    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
-    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+    Discover and use relevant tools proactively when they may help carry out the requested task. For example...ng the user for information they may already contain. [hash=3af5c93cbc00b4c7]
+
+    When a plugin is available for a service and its tools are sufficient for completing the task, prefer th...er has an explicit preference, defer to that instead. [hash=936dbd7fe76c210f]
+
+    A user can also tag a plugin using `[@plugin-name](plugin://{{plugin_id}})` or an app using `[$app-name]... app, prefer its relevant capabilities for that turn. [hash=8730f69f41534f8f]
 
 02:message/developer[3]:
     [01] Use plain language.
@@ -108,7 +108,7 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 2 (after request 1: settings changed (prompt_cache_key))
 -- request 2 (turn) --
-00:additional_tools/developer (3; hash=f2e4edd02b6f9300):
+00:additional_tools/developer (3; hash=a7c46a0959d54866):
         - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
@@ -116,7 +116,7 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -132,14 +132,14 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
     User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
 
-    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+    <OMITTED 151 LINES; ~4851 TOKENS; hash=959762226fedfd0c>
+    ## Decision Boundary
 
-    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
-    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
-    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
-    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
-    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
-    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+    Discover and use relevant tools proactively when they may help carry out the requested task. For example...ng the user for information they may already contain. [hash=3af5c93cbc00b4c7]
+
+    When a plugin is available for a service and its tools are sufficient for completing the task, prefer th...er has an explicit preference, defer to that instead. [hash=936dbd7fe76c210f]
+
+    A user can also tag a plugin using `[@plugin-name](plugin://{{plugin_id}})` or an app using `[$app-name]... app, prefer its relevant capabilities for that turn. [hash=8730f69f41534f8f]
 
 02:message/developer[3]:
     [01] Use plain language.

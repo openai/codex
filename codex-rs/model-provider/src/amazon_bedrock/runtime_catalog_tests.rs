@@ -18,33 +18,41 @@ fn runtime_catalog_includes_supported_cross_region_models_in_priority_order() {
             ))
             .collect::<Vec<_>>(),
         vec![
-            ("global.openai.gpt-6.1-sol", "GPT-6.1 Sol (Global)", 0),
-            ("global.openai.gpt-6-astra", "GPT-6-Astra (Global)", 1),
+            ("global.openai.gpt-6.2-sol", "GPT-6.2 Sol (Global)", 0),
+            ("global.openai.gpt-6.2-astra", "GPT-6.2 Astra (Global)", 1),
             ("global.openai.gpt-6.1-terra", "GPT-6.1 Terra (Global)", 2),
-            ("global.openai.gpt-6-sol", "GPT-6 Sol (Global)", 3),
-            ("global.openai.gpt-6-luna", "GPT-6 Luna (Global)", 4),
-            ("global.openai.gpt-5.6-sol", "GPT-5.6 Sol (Global)", 5),
-            ("global.openai.gpt-5.6-terra", "GPT-5.6 Terra (Global)", 6),
-            ("global.openai.gpt-5.6-luna", "GPT-5.6 Luna (Global)", 7),
-            ("us.openai.gpt-6.1-sol", "GPT-6.1 Sol (US cross-region)", 8),
-            ("us.openai.gpt-6-astra", "GPT-6-Astra (US cross-region)", 9),
+            ("global.openai.gpt-6.1-sol", "GPT-6.1 Sol (Global)", 3),
+            ("global.openai.gpt-6-astra", "GPT-6-Astra (Global)", 4),
+            ("global.openai.gpt-6-sol", "GPT-6 Sol (Global)", 5),
+            ("global.openai.gpt-6-luna", "GPT-6 Luna (Global)", 6),
+            ("global.openai.gpt-5.6-sol", "GPT-5.6 Sol (Global)", 7),
+            ("global.openai.gpt-5.6-terra", "GPT-5.6 Terra (Global)", 8),
+            ("global.openai.gpt-5.6-luna", "GPT-5.6 Luna (Global)", 9),
+            ("us.openai.gpt-6.2-sol", "GPT-6.2 Sol (US cross-region)", 10),
+            (
+                "us.openai.gpt-6.2-astra",
+                "GPT-6.2 Astra (US cross-region)",
+                11
+            ),
             (
                 "us.openai.gpt-6.1-terra",
                 "GPT-6.1 Terra (US cross-region)",
-                10
+                12
             ),
-            ("us.openai.gpt-6-sol", "GPT-6 Sol (US cross-region)", 11),
-            ("us.openai.gpt-6-luna", "GPT-6 Luna (US cross-region)", 12),
-            ("us.openai.gpt-5.6-sol", "GPT-5.6 Sol (US cross-region)", 13),
+            ("us.openai.gpt-6.1-sol", "GPT-6.1 Sol (US cross-region)", 13),
+            ("us.openai.gpt-6-astra", "GPT-6-Astra (US cross-region)", 14),
+            ("us.openai.gpt-6-sol", "GPT-6 Sol (US cross-region)", 15),
+            ("us.openai.gpt-6-luna", "GPT-6 Luna (US cross-region)", 16),
+            ("us.openai.gpt-5.6-sol", "GPT-5.6 Sol (US cross-region)", 17),
             (
                 "us.openai.gpt-5.6-terra",
                 "GPT-5.6 Terra (US cross-region)",
-                14
+                18
             ),
             (
                 "us.openai.gpt-5.6-luna",
                 "GPT-5.6 Luna (US cross-region)",
-                15
+                19
             ),
         ]
     );
@@ -67,6 +75,24 @@ fn runtime_catalog_disables_web_search_without_overriding_review_models() {
             .collect::<Vec<_>>(),
         vec![
             (
+                "global.openai.gpt-6.2-sol",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
+                "global.openai.gpt-6.2-astra",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
+                "global.openai.gpt-6.1-terra",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
                 "global.openai.gpt-6.1-sol",
                 None,
                 false,
@@ -74,12 +100,6 @@ fn runtime_catalog_disables_web_search_without_overriding_review_models() {
             ),
             (
                 "global.openai.gpt-6-astra",
-                None,
-                false,
-                Some(MultiAgentVersion::V2),
-            ),
-            (
-                "global.openai.gpt-6.1-terra",
                 None,
                 false,
                 Some(MultiAgentVersion::V2),
@@ -115,6 +135,24 @@ fn runtime_catalog_disables_web_search_without_overriding_review_models() {
                 Some(MultiAgentVersion::V1),
             ),
             (
+                "us.openai.gpt-6.2-sol",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
+                "us.openai.gpt-6.2-astra",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
+                "us.openai.gpt-6.1-terra",
+                None,
+                false,
+                Some(MultiAgentVersion::V2),
+            ),
+            (
                 "us.openai.gpt-6.1-sol",
                 None,
                 false,
@@ -122,12 +160,6 @@ fn runtime_catalog_disables_web_search_without_overriding_review_models() {
             ),
             (
                 "us.openai.gpt-6-astra",
-                None,
-                false,
-                Some(MultiAgentVersion::V2),
-            ),
-            (
-                "us.openai.gpt-6.1-terra",
                 None,
                 false,
                 Some(MultiAgentVersion::V2),

@@ -1,5 +1,5 @@
-//! Compare model-visible prefixes from two app-server versions using the same client and inputs.
-//! The contract runner supplies a released CLI; ordinary runs use the current binary twice.
+//! Compare model-visible prefixes from two app-server versions using the same catalog and inputs.
+//! The contract runner supplies a released CLI; ordinary runs check same-version determinism.
 //! Resume coverage checks that changed tool declarations leave the retained prefix intact.
 
 #[path = "prompt_prefix/resume_tests.rs"]
@@ -23,6 +23,14 @@ use tempfile::TempDir;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prompt_prefix_matches_release() -> Result<()> {
     let release = std::env::var_os("CONTRACT_EXECUTOR_BIN").map(std::path::PathBuf::from);
+    // Catalog content is an input to the harness. Give both executors the same
+    // current catalog so normal model and prompt updates cannot cause skew.
+    let catalog_dir = TempDir::new()?;
+    let catalog_path = catalog_dir.path().join("models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
     let mut prefixes = Vec::new();
 
     for program in [release.as_deref(), None] {
@@ -37,10 +45,12 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         )
         .await;
         let home = TempDir::new()?;
-        // Use each binary's bundled model catalog and feature defaults. Supplying a
-        // catalog or base instructions from the test would hide changes to them.
         MockResponsesConfig::new(&server.uri())
             .with_model("gpt-6-astra")
+            .with_root_config(&format!(
+                "model_catalog_json = {}",
+                serde_json::to_string(&catalog_path)?
+            ))
             // CCA disables bundled skills in its orchestrator.
             .with_root_config("skills.bundled.enabled = false")
             .write(home.path())?;
@@ -124,7 +134,7 @@ async fn prompt_prefix_matches_release() -> Result<()> {
     }
     assert_eq!(
         prefixes[0], prefixes[1],
-        "the default inference prefix differs from the released version; gate the change behind a default-off feature key"
+        "the inference prefix differs from the released version for identical catalog and inputs; gate the harness change behind a default-off feature key"
     );
     Ok(())
 }
@@ -154,15 +164,17 @@ fn accept_spawn_agent_shortlist_rollout(released: &mut Value, current: &Value) {
         return;
     };
     const OLD_MODELS: &str = r#"Available model overrides (optional; inherited parent model is preferred):
-- `gpt-6.1-sol`: Latest workhorse model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
-- `gpt-6-astra`: Frontier intelligence for the most demanding work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
-- `gpt-6-sol`: Previous generation workhorse model. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
-- `gpt-6-luna`: Fast and affordable model for easier tasks. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
-- `gpt-5.6-sol`: Older generation workhorse model. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.2-sol`: Fast, go-to model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.2-astra`: Our most capable model for complex coding and professional work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.1-terra`: Efficient model that excels at visual understanding and computer use. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.1-sol`: Previous generation model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6-astra`: Previous generation model for complex coding and professional work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
 "#;
-    const EXTRA_MODELS: &str = r#"- `gpt-6.1-terra`: GPT-6.1 Terra Codex model. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
-- `gpt-5.6-terra`: Older balanced model for straightforward work. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
-- `gpt-5.6-luna`: Older fast and efficient model. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
+    const EXTRA_MODELS: &str = r#"- `gpt-6-sol`: Legacy model for coding and everyday work. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6-luna`: Fast and affordable model for easier tasks. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
+- `gpt-5.6-sol`: Legacy model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-5.6-terra`: Legacy balanced model for agentic coding. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-5.6-luna`: Legacy fast model for simpler tasks. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
 - `gpt-5.5`: Legacy coding model. Reasoning efforts: low, medium (default), high, xhigh. Service tiers: priority.
 "#;
     if old.matches(OLD_MODELS).count() != 1 {
