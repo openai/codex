@@ -127,11 +127,13 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
         ops.push(sub.op);
     }
     assert!(
-        ops.iter().any(|op| matches!(op, Op::Interrupt)),
+        ops.iter()
+            .any(|op| matches!(op.as_protocol(), Some(Op::Interrupt))),
         "expected Interrupt op after cancellation"
     );
     assert!(
-        ops.iter().any(|op| matches!(op, Op::Shutdown)),
+        ops.iter()
+            .any(|op| matches!(op.as_protocol(), Some(Op::Shutdown))),
         "expected Shutdown op after cancellation"
     );
 }
@@ -153,7 +155,7 @@ async fn forward_ops_preserves_submission_trace_context() {
 
     let submission = Submission {
         id: "sub-1".to_string(),
-        op: Op::Interrupt,
+        op: Op::Interrupt.into(),
         turn_extension_init: None,
         trace: Some(codex_protocol::protocol::W3cTraceContext {
             traceparent: Some(
@@ -174,7 +176,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         .expect("forward_ops hung")
         .expect("forwarded submission missing");
     assert_eq!("sub-1", forwarded.id);
-    assert!(matches!(forwarded.op, Op::Interrupt));
+    assert!(matches!(forwarded.op.as_protocol(), Some(Op::Interrupt)));
     assert_eq!(
         forwarded.trace,
         Some(codex_protocol::protocol::W3cTraceContext {

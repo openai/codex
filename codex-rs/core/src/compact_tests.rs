@@ -185,10 +185,9 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
         Arc::clone(&session),
         step,
         world_state,
-        vec![UserInput::Text {
-            text: "Summarize the conversation.".to_string(),
-            text_elements: Vec::new(),
-        }],
+        vec![ResolvedUserInput::text(
+            "Summarize the conversation.".to_string(),
+        )],
     )
     .await?;
 

@@ -57,7 +57,13 @@ async fn finalization_exports_loss_totals_only_for_accepted_input(window: i64) {
         .collect();
     let mut input = vec![TurnInput::UserInput {
         metadata: Default::default(),
-        content: context.clone().into_user_inputs().unwrap(),
+        content: context
+            .clone()
+            .into_user_inputs()
+            .unwrap()
+            .into_iter()
+            .map(ResolvedUserInput::from_client)
+            .collect(),
         client_id: None,
     }];
     session
@@ -188,7 +194,13 @@ fn required_context(text: String) -> ComposedContext {
 async fn cancelled_startup_does_not_record_unselected_review_evidence() {
     let (session, turn, events) = crate::session::tests::make_session_and_context_with_rx().await;
     let context = required_context("unselected review evidence ".repeat(/*n*/ 10_000));
-    let content = context.clone().into_user_inputs().unwrap();
+    let content = context
+        .clone()
+        .into_user_inputs()
+        .unwrap()
+        .into_iter()
+        .map(ResolvedUserInput::from_client)
+        .collect();
     session
         .services
         .thread_extension_data
@@ -272,7 +284,13 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
     let context = required_context("required action".to_owned());
     let mut input = vec![TurnInput::UserInput {
         metadata: Default::default(),
-        content: context.clone().into_user_inputs().unwrap(),
+        content: context
+            .clone()
+            .into_user_inputs()
+            .unwrap()
+            .into_iter()
+            .map(ResolvedUserInput::from_client)
+            .collect(),
         client_id: None,
     }];
     session
@@ -318,10 +336,7 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
         .record_user_prompt_and_emit_turn_item(
             &step.turn,
             &step.settings.model_info,
-            &[codex_protocol::user_input::UserInput::Text {
-                text: instruction.clone(),
-                text_elements: vec![],
-            }],
+            &[ResolvedUserInput::text(instruction.clone())],
             /*client_id*/ None,
             crate::session::UserInputMetadata {
                 acceptance_order: Some(0),

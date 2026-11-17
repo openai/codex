@@ -58,10 +58,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_user_input::LocalImagePreparation;
-use codex_user_input::from_user_input;
+use codex_user_input::ResolvedUserInput;
 use codex_utils_output_truncation::approx_token_count;
 use tracing::error;
 
@@ -136,11 +135,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         .as_deref()
         .unwrap_or(SUMMARIZATION_PROMPT)
         .to_string();
-    let input = vec![UserInput::Text {
-        text: prompt,
-        // Compaction prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
-    }];
+    let input = vec![ResolvedUserInput::text(prompt)];
 
     run_compact_task_inner(
         sess,
@@ -162,7 +157,7 @@ pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     world_state: Arc<WorldState>,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
 ) -> CodexResult<()> {
     run_compact_task_inner(
         sess.clone(),
@@ -185,7 +180,7 @@ async fn run_compact_task_inner(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<bool> {
@@ -273,7 +268,7 @@ async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<String> {
@@ -287,11 +282,8 @@ async fn run_compact_task_inner_impl(
         sess.emit_turn_item_started(&turn_context, &compaction_item)
             .await;
     }
-    let initial_input_for_turn = from_user_input(
-        input,
-        LocalImagePreparation::Process,
-        &mut std::collections::HashMap::new(),
-    );
+    let (initial_input_for_turn, _) =
+        ResolvedUserInput::into_message(&input, LocalImagePreparation::Process);
 
     let mut history = sess.clone_history().await;
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());

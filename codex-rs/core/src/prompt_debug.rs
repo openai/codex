@@ -11,6 +11,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_user_input::ResolvedUserInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::ThreadStoreBuilder;
@@ -31,6 +32,7 @@ pub async fn build_prompt_input(
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Arc<dyn UserInstructionsProvider>,
 ) -> CodexResult<Vec<ResponseItem>> {
+    let input = crate::codex_thread::resolve_client_inputs(input).await?;
     config.ephemeral = true;
 
     let auth_manager =
@@ -86,9 +88,9 @@ pub async fn build_prompt_input(
     output
 }
 
-pub(crate) async fn build_prompt_input_from_session(
+async fn build_prompt_input_from_session(
     sess: &Arc<Session>,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
     let turn_context = sess.new_default_turn().await;
     // Prompt debugging builds a standalone request without entering run_turn.
@@ -99,7 +101,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .await?;
 
     if !input.is_empty() {
-        let response_item = sess.response_item_from_user_input(input);
+        let response_item = sess.response_item_from_user_input(&input);
         sess.record_conversation_items(
             turn_context.as_ref(),
             &step_context.settings.model_info,

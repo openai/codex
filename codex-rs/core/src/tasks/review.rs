@@ -26,8 +26,8 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
-use codex_protocol::user_input::UserInput;
 use codex_thread_store::PersistContext;
+use codex_user_input::ResolvedUserInput;
 
 use super::SessionTask;
 use super::SessionTaskResult;
@@ -98,7 +98,7 @@ impl SessionTask for ReviewTask {
 async fn start_review_conversation(
     session: Arc<Session>,
     ctx: Arc<TurnContext>,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.config.clone();

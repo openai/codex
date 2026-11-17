@@ -47,6 +47,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::ReadThreadParams;
+use codex_user_input::ResolvedUserInput;
 use futures::StreamExt;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -137,13 +138,15 @@ impl LocalAgentControl {
     pub(crate) async fn send_input(
         &self,
         agent_id: ThreadId,
-        input: Vec<UserInput>,
+        input: Vec<ResolvedUserInput>,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
-            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
+            .start_or_steer_resolved_turn(
+                TurnInputRequest::<ResolvedUserInput>::user_input(input).on_start(start_options),
+            )
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),

@@ -102,7 +102,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::build_hook_prompt_message;
-use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
@@ -136,6 +135,7 @@ use codex_tools::DiscoverableTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_user_input::ResolvedUserInput;
 use codex_utils_path_uri::PathUri;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -303,7 +303,7 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
-    let user_input = turn_user_input(&input);
+    let user_input = input_for_extensions(&input);
     let allow_plugin_mentions =
         !crate::guardian::is_basic_session_source(&turn_context.session_source);
     let McpStartupRequirements {
@@ -594,7 +594,7 @@ pub(crate) async fn run_turn(
                 .await?
             }
             Some(_) | None => {
-                let pending_user_input = turn_user_input(&pending_input);
+                let pending_user_input = input_for_extensions(&pending_input);
                 if allow_plugin_mentions {
                     required_plugins.extend(crate::plugins::collect_explicit_plugin_ids(
                         &pending_user_input,
@@ -1169,7 +1169,7 @@ pub(crate) fn recordable_inputs<'a>(
                 && turn_input_has_uploaded_audio_file(&item)
                 && let TurnInput::UserInput { content, .. } = item.to_mut()
             {
-                content.retain(|part| !is_uploaded_audio_file(part));
+                content.retain(|part| !part.is_uploaded_audio_file());
                 if content.is_empty() {
                     return None;
                 }
@@ -1180,7 +1180,7 @@ pub(crate) fn recordable_inputs<'a>(
 }
 
 fn turn_input_has_uploaded_audio_file(input: &TurnInput) -> bool {
-    matches!(input, TurnInput::UserInput { content, .. } if content.iter().any(is_uploaded_audio_file))
+    matches!(input, TurnInput::UserInput { content, .. } if content.iter().any(ResolvedUserInput::is_uploaded_audio_file))
 }
 
 fn unsupported_uploaded_audio_error() -> CodexErr {
@@ -1189,16 +1189,8 @@ fn unsupported_uploaded_audio_error() -> CodexErr {
     )
 }
 
-fn is_uploaded_audio_file(input: &UserInput) -> bool {
-    matches!(
-        input,
-        UserInput::Audio {
-            audio: AudioReference::File { .. }
-        }
-    )
-}
-
-pub(crate) fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
+/// Extensions and telemetry consume the protocol view, including the original mention and path labels.
+fn input_for_extensions(input: &[TurnInput]) -> Vec<UserInput> {
     input
         .iter()
         .filter_map(|item| match item {
@@ -1208,7 +1200,7 @@ pub(crate) fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
             | TurnInput::InterAgentCommunication(_) => None,
         })
         .flatten()
-        .cloned()
+        .map(ResolvedUserInput::to_user_input)
         .collect()
 }
 
@@ -1568,9 +1560,7 @@ async fn track_turn_resolved_config_analytics(
                     | TurnInput::InterAgentCommunication(_) => None,
                 })
                 .flatten()
-                .filter(|item| {
-                    matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
-                })
+                .filter(|item| item.is_image())
                 .count(),
             submission_type: None,
             ephemeral: thread_config.ephemeral,

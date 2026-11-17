@@ -1,5 +1,6 @@
 use super::Submission;
 use super::sampling_interrupt::SamplingInterrupt;
+use super::submission::SubmissionOp;
 use crate::McpRefreshReason;
 use crate::WithTurnExtensionData;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
@@ -549,7 +550,8 @@ pub(super) async fn submission_loop(
                         },
                         async {
                             while let Ok(sub) = rx_sub.recv().await {
-                                if let Op::InterAgentCommunication { communication, start_options } = sub.op
+                                if let SubmissionOp::Protocol(op) = sub.op
+                                    && let Op::InterAgentCommunication { communication, start_options } = *op
                                     && sub.message_delivery.as_ref().is_some_and(crate::agent_communication::MessageDelivery::awaits_result_write)
                                 {
                                     let mail = crate::PendingAgentMessage::new(communication, sub.message_delivery);
@@ -611,7 +613,23 @@ pub(super) async fn submission_loop(
         );
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
-            match sub.op {
+            let op = match sub.op {
+                SubmissionOp::TurnInput {
+                    request,
+                    mode,
+                    reply,
+                } => {
+                    let request = WithTurnExtensionData {
+                        request: *request,
+                        turn_extension_init: sub.turn_extension_init,
+                    };
+                    let result = turn_input::handle(&sess, request, mode, sub.id.clone()).await;
+                    let _ = reply.send(result);
+                    return false;
+                }
+                SubmissionOp::Protocol(op) => *op,
+            };
+            match op {
                 Op::Interrupt => {
                     interrupt(&sess).await;
                     false
@@ -700,19 +718,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::RealtimeConversationListVoices => {
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
-                    false
-                }
-                Op::TurnInput {
-                    request,
-                    mode,
-                    reply,
-                } => {
-                    let request = WithTurnExtensionData {
-                        request: *request,
-                        turn_extension_init: sub.turn_extension_init,
-                    };
-                    let result = turn_input::handle(&sess, request, mode, sub.id.clone()).await;
-                    let _ = reply.send(result);
                     false
                 }
                 Op::RecoverTurn {
@@ -971,8 +976,8 @@ async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAsse
 pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let op_name = sub.op.kind();
     let span_name = format!("op.dispatch.{op_name}");
-    let dispatch_span = match &sub.op {
-        Op::RealtimeConversationAudio(_) => {
+    let dispatch_span = match sub.op.as_protocol() {
+        Some(Op::RealtimeConversationAudio(_)) => {
             debug_span!(
                 "submission_dispatch",
                 otel.name = span_name.as_str(),

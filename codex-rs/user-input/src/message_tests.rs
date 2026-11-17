@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::LocalImagePreparation;
-use crate::from_user_input;
+use crate::ResolvedUserInput;
 use anyhow::Result;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
@@ -29,7 +29,11 @@ const TINY_PNG_BYTES: &[u8] = &[
 ];
 
 fn user_message(items: Vec<UserInput>) -> ResponseInputItem {
-    from_user_input(items, LocalImagePreparation::Process, &mut HashMap::new())
+    let items: Vec<_> = items
+        .into_iter()
+        .map(ResolvedUserInput::from_client)
+        .collect();
+    ResolvedUserInput::into_message(&items, LocalImagePreparation::Process).0
 }
 
 #[test]
@@ -294,9 +298,12 @@ fn user_input_image_indices_survive_content_expansion() -> Result<()> {
         inline_image.clone(),
         inline_image,
     ];
+    let inputs: Vec<_> = inputs
+        .into_iter()
+        .map(ResolvedUserInput::from_client)
+        .collect();
     for preparation in [LocalImagePreparation::Defer, LocalImagePreparation::Process] {
-        let mut indices = HashMap::new();
-        let item = from_user_input(inputs.clone(), preparation, &mut indices);
+        let (item, indices) = ResolvedUserInput::into_message(&inputs, preparation);
         assert_eq!(indices, HashMap::from([(4, 3), (5, 5), (6, 6)]));
         let ResponseInputItem::Message { content, .. } = item else {
             panic!("expected a user message");

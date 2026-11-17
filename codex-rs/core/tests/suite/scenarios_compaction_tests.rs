@@ -143,14 +143,10 @@ async fn interrupt_during_remote_compaction_preserves_summary_on_resume() -> Res
             .update_thread_settings(ThreadSettingsOverrides::default())
             .await?;
         assert_eq!(child.agent_status().await, AgentStatus::Running);
-        let (reply, resumed) = oneshot::channel();
-        child
-            .submit(Op::TurnInput {
-                request: Box::new(TurnInputRequest::user_input(vec![text("Resume.")])),
-                mode: codex_protocol::turn_input::TurnInputMode::StartOrSteer,
-                reply,
-            })
-            .await?;
+        let resumed =
+            child.start_or_steer_turn(TurnInputRequest::user_input(vec![text("Resume.")]));
+        tokio::pin!(resumed);
+        assert!(futures::poll!(resumed.as_mut()).is_pending());
         release_summary
             .send(())
             .expect("finish sampling the summary");
@@ -169,7 +165,7 @@ async fn interrupt_during_remote_compaction_preserves_summary_on_resume() -> Res
             assert!(matches!(terminal,
                 EventMsg::TurnAborted(event) if event.reason == TurnAbortReason::Interrupted));
         }
-        let TurnInputSubmission::Started { turn_id, .. } = resumed.await?? else {
+        let TurnInputSubmission::Started { turn_id, .. } = resumed.await? else {
             panic!("Resume must start a new turn");
         };
         assert_ne!(turn_id, previous_turn_id);

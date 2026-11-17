@@ -124,19 +124,14 @@ async fn interrupt_retains_one_sampled_item(mut done: serde_json::Value) -> Resu
         .update_thread_settings(ThreadSettingsOverrides::default())
         .await?;
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnStarted(_))).await;
-    let (reply, resumed) = oneshot::channel();
-    child
-        .submit(Op::TurnInput {
-            request: Box::new(codex_core::TurnInputRequest::user_input(vec![
-                codex_protocol::user_input::UserInput::Text {
-                    text: "Resume.".into(),
-                    text_elements: vec![],
-                },
-            ])),
-            mode: codex_protocol::turn_input::TurnInputMode::StartOrSteer,
-            reply,
-        })
-        .await?;
+    let resumed = child.start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+        codex_protocol::user_input::UserInput::Text {
+            text: "Resume.".into(),
+            text_elements: vec![],
+        },
+    ]));
+    tokio::pin!(resumed);
+    assert!(futures::poll!(resumed.as_mut()).is_pending());
     assert_eq!(child.agent_status().await, AgentStatus::Running);
     release_item.send(()).expect("release the sampled item");
     let next = |event: &EventMsg| match event {
@@ -153,7 +148,7 @@ async fn interrupt_retains_one_sampled_item(mut done: serde_json::Value) -> Resu
         EventMsg::TurnAborted(event) if event.reason == TurnAbortReason::Interrupted
     ));
     assert!(matches!(
-        resumed.await??,
+        resumed.await?,
         codex_core::TurnInputSubmission::Started { .. }
     ));
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnStarted(_))).await;

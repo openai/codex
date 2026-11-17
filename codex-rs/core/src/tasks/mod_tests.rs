@@ -95,7 +95,10 @@ async fn task_finish_rejects_uploaded_audio_without_losing_other_pending_input()
                             file_id: "file_disabled_at_finish".to_string(),
                         },
                     },
-                ],
+                ]
+                .into_iter()
+                .map(codex_user_input::ResolvedUserInput::from_client)
+                .collect(),
                 client_id: None,
                 metadata: Default::default(),
             }],

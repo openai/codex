@@ -11,7 +11,8 @@ use crate::session::session::Session;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::TurnInput;
-use codex_protocol::turn_input::TurnInputRequest;
+type TurnInputRequest =
+    codex_protocol::turn_input::TurnInputRequest<codex_user_input::ResolvedUserInput>;
 use codex_protocol::turn_input::TurnInputSubmission;
 use std::sync::Arc;
 

@@ -27,9 +27,9 @@ pub enum SuspendTurnOutcome {
 
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum TurnInput {
+pub enum TurnInput<I = UserInput> {
     UserInput {
-        content: Vec<UserInput>,
+        content: Vec<I>,
         client_id: Option<String>,
     },
     ResponseItem(ResponseItem),
@@ -107,8 +107,8 @@ impl From<ResponseItem> for InjectedResponseItem {
 /// Callers choose start-or-steer, idle-start, or steer-only behavior through
 /// the corresponding `CodexThread` method.
 #[derive(Clone, Debug)]
-pub struct TurnInputRequest {
-    pub input: TurnInput,
+pub struct TurnInputRequest<I = UserInput> {
+    pub input: TurnInput<I>,
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
@@ -169,9 +169,9 @@ pub struct RecoverTurnRequest {
     pub cyber_access_program: Option<CyberAccessProgram>,
 }
 
-impl TurnInputRequest {
+impl<I> TurnInputRequest<I> {
     /// Creates turn input that can be passed to one of the submission methods.
-    pub fn new(input: TurnInput) -> Self {
+    pub fn new(input: TurnInput<I>) -> Self {
         Self {
             input,
             user_item_uuid: None,
@@ -185,7 +185,7 @@ impl TurnInputRequest {
     }
 
     /// Creates ordinary user input without a client-provided message id.
-    pub fn user_input(content: Vec<UserInput>) -> Self {
+    pub fn user_input(content: Vec<I>) -> Self {
         Self::new(TurnInput::UserInput {
             content,
             client_id: None,

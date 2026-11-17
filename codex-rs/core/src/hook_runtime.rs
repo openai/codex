@@ -31,7 +31,6 @@ use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -54,6 +53,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
+use codex_user_input::ResolvedUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Map;
 use serde_json::Value;
@@ -722,7 +722,10 @@ pub(crate) async fn inspect_pending_input(
                 transcript_path: sess.hook_transcript_path().await,
                 model: turn_context.model_info().slug.clone(),
                 permission_mode: hook_permission_mode(turn_context.approval_policy()),
-                prompt: UserMessageItem::new(content).message(),
+                prompt: content
+                    .iter()
+                    .filter_map(ResolvedUserInput::as_text)
+                    .collect(),
             };
             let hooks = with_environment_hooks(
                 sess,
@@ -763,8 +766,6 @@ pub(crate) async fn record_pending_input(
             client_id,
             metadata,
         } => {
-            // Prompt telemetry can contain full text. Emit it only for prompts selected for recording.
-            turn_context.session_telemetry.user_prompt(&content);
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 model_info,

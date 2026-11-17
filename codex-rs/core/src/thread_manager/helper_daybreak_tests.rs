@@ -29,6 +29,7 @@ use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::ThreadMetadataPatch;
+use codex_user_input::ResolvedUserInput;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -97,7 +98,7 @@ async fn spawn_child(
         .control(parent.session.session_id())
         .spawn_agent_with_metadata(
             config.clone(),
-            text(),
+            vec![ResolvedUserInput::text("Continue".into())],
             source,
             SpawnAgentOptions {
                 parent_thread_id: Some(parent_id),

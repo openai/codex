@@ -26,7 +26,7 @@ pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
                     PromptImageMode::ResizeToFit
                 }
             };
-            let file_bytes = read_bounded_local_media(path, MAX_PROMPT_IMAGE_INPUT_BYTES, "image")?;
+            let file_bytes = read_local_image_bytes(path)?;
             let image = load_for_prompt_bytes(path, file_bytes, mode).map_err(io::Error::other)?;
             *input = UserInput::Image {
                 image: ImageReference::Inline {
@@ -36,19 +36,27 @@ pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
             };
         }
         UserInput::LocalAudio { path } => {
-            let mime = audio_mime_for_path(path).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "unsupported audio format")
-            })?;
-            let file_bytes = read_bounded_local_media(path, MAX_PROMPT_AUDIO_INPUT_BYTES, "audio")?;
             *input = UserInput::Audio {
                 audio: AudioReference::Inline {
-                    audio_url: data_url_from_bytes(mime, &file_bytes),
+                    audio_url: read_local_audio_url(path)?,
                 },
             };
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Reads a bounded client-local audio file into a data URL.
+pub(super) fn read_local_audio_url(path: &Path) -> io::Result<String> {
+    let mime = audio_mime_for_path(path)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unsupported audio format"))?;
+    let bytes = read_bounded_local_media(path, MAX_PROMPT_AUDIO_INPUT_BYTES, "audio")?;
+    Ok(data_url_from_bytes(mime, &bytes))
+}
+
+pub(super) fn read_local_image_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    read_bounded_local_media(path, MAX_PROMPT_IMAGE_INPUT_BYTES, "image")
 }
 
 fn read_bounded_local_media(path: &Path, max_bytes: usize, kind: &str) -> io::Result<Vec<u8>> {

@@ -11,6 +11,7 @@ use codex_core::AgentSessionReader;
 use codex_core::AgentTurnAdmission;
 use codex_core::AgentTurnAdmissionRequest;
 use codex_core::CodexThread;
+use codex_core::SteerSubmission;
 use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -158,6 +159,58 @@ fn assert_denied(event: &EventMsg, turn_id: &str) {
         matches!(event, EventMsg::TurnComplete(done) if done.turn_id == turn_id && done.error.is_some()),
         "expected failed turn {turn_id}, got {event:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steered_audio_keeps_bytes_captured_while_admission_is_pending() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["initial", "after-steer"]
+            .map(|id| {
+                responses::sse(vec![
+                    responses::ev_response_created(id),
+                    responses::ev_completed(id),
+                ])
+            })
+            .to_vec(),
+    )
+    .await;
+    let builder = test_codex().with_model_info_override("gpt-5.5", |model| {
+        model
+            .input_modalities
+            .push(codex_protocol::openai_models::InputModality::Audio);
+    });
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let (turn_id, decision) = start(&test, &mut attempts, "Listen to the attachment.").await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("clip.wav");
+    std::fs::write(&path, b"audio")?;
+    let submission = test
+        .codex
+        .steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::LocalAudio { path: path.clone() }]),
+            turn_id.clone(),
+        )
+        .await?;
+    assert_eq!(submission, SteerSubmission::Steered { turn_id });
+    std::fs::remove_file(path)?;
+    assert!(decision.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    let audio = mock.requests()[1]
+        .input()
+        .into_iter()
+        .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
+        .filter(|part| part["type"] == "input_audio")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        audio,
+        [json!({"type": "input_audio", "audio_url": "data:audio/wav;base64,YXVkaW8="})]
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

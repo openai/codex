@@ -836,7 +836,10 @@ impl codex_guardian_reviewer::ReviewerRuntime for GuardianReviewSession {
     async fn submit_turn(&self, request: TurnInputRequest) -> anyhow::Result<TurnInputSubmission> {
         Ok(self
             .io
-            .submit_turn_input(request, TurnInputMode::StartIfIdle)
+            .submit_turn_input(
+                crate::codex_thread::resolve_client_turn_input(request).await?,
+                TurnInputMode::StartIfIdle,
+            )
             .await?)
     }
 

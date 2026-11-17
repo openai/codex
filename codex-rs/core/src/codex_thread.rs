@@ -71,16 +71,19 @@ use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
 use codex_protocol::turn_input::SuspendTurnOutcome;
+use codex_protocol::turn_input::TurnInput;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_protocol::user_input::UserInput;
 use codex_thread_store::PersistContext;
 use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
+use codex_user_input::ResolvedUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
@@ -230,6 +233,54 @@ pub struct BackgroundTerminalInfo {
     pub process_id: String,
     pub command: String,
     pub cwd: PathUri,
+}
+
+/// Captures client attachment paths before an ordered request enters the session.
+pub(crate) async fn resolve_client_turn_input(
+    request: TurnInputRequest,
+) -> CodexResult<TurnInputRequest<ResolvedUserInput>> {
+    let input = match request.input {
+        TurnInput::UserInput { content, client_id } => TurnInput::UserInput {
+            content: resolve_client_inputs(content).await?,
+            client_id,
+        },
+        TurnInput::ResponseItem(item) => TurnInput::ResponseItem(item),
+        TurnInput::AnnotatedResponseItem(item) => TurnInput::AnnotatedResponseItem(item),
+        TurnInput::InterAgentCommunication(message) => TurnInput::InterAgentCommunication(message),
+    };
+    Ok(TurnInputRequest {
+        input,
+        user_item_uuid: request.user_item_uuid,
+        user_input_extension_data: request.user_input_extension_data,
+        thread_settings: request.thread_settings,
+        start: request.start,
+        additional_context: request.additional_context,
+        responsesapi_client_metadata: request.responsesapi_client_metadata,
+        trace: request.trace,
+    })
+}
+
+/// Captures local media off the async executor. Inline inputs do not need a blocking task.
+pub(crate) async fn resolve_client_inputs(
+    content: Vec<UserInput>,
+) -> CodexResult<Vec<ResolvedUserInput>> {
+    let has_local_media = content.iter().any(|item| {
+        matches!(
+            item,
+            UserInput::LocalImage { .. } | UserInput::LocalAudio { .. }
+        )
+    });
+    let resolve = move || {
+        content
+            .into_iter()
+            .map(ResolvedUserInput::from_client)
+            .collect()
+    };
+    if has_local_media {
+        Ok(tokio::task::spawn_blocking(resolve).await?)
+    } else {
+        Ok(resolve())
+    }
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -691,7 +742,7 @@ impl CodexThread {
             .tx_sub
             .send(Box::new(Submission {
                 id: new_submission_id(),
-                op: Op::SuspendTurnAndShutdown { reply },
+                op: Op::SuspendTurnAndShutdown { reply }.into(),
                 turn_extension_init: None,
                 trace: current_span_w3c_trace_context(),
                 parent_turn_id: None,
@@ -735,6 +786,33 @@ impl CodexThread {
     async fn submit_turn_input_with_mode(
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
+        mode: TurnInputMode,
+    ) -> CodexResult<TurnInputSubmission> {
+        let WithTurnExtensionData {
+            request,
+            turn_extension_init,
+        } = request.into();
+        self.submit_resolved_turn_input_with_mode(
+            WithTurnExtensionData {
+                request: resolve_client_turn_input(request).await?,
+                turn_extension_init,
+            },
+            mode,
+        )
+        .await
+    }
+
+    pub(crate) async fn start_or_steer_resolved_turn(
+        &self,
+        request: TurnInputRequest<ResolvedUserInput>,
+    ) -> CodexResult<TurnInputSubmission> {
+        self.submit_resolved_turn_input_with_mode(request.into(), TurnInputMode::StartOrSteer)
+            .await
+    }
+
+    async fn submit_resolved_turn_input_with_mode(
+        &self,
+        request: WithTurnExtensionData<TurnInputRequest<ResolvedUserInput>>,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
         if !matches!(mode, TurnInputMode::Steer { .. }) {

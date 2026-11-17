@@ -38,6 +38,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -56,6 +57,7 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -88,6 +90,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -566,26 +569,63 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
         sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
     )
     .await;
-    let codex = test_codex()
+    let test = test_codex()
         .with_model_info_override("gpt-5.5", |model_info| {
             model_info.input_modalities.push(InputModality::Audio);
         })
-        .build(&server)
-        .await?
-        .codex;
+        .build_with_auto_env(&server)
+        .await?;
+    // Client-selected attachments live on the app-server host, even with a remote executor.
     let temp_dir = tempfile::tempdir()?;
     let audio_path = temp_dir.path().join("recording.wav");
     std::fs::write(&audio_path, b"audio")?;
 
-    codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::LocalAudio {
+    let unsupported = temp_dir.path().join("clip.flac");
+    std::fs::write(&unsupported, b"audio")?;
+    let missing = temp_dir.path().join("missing.wav");
+    let inline = "data:audio/wav;base64,YXVkaW8=";
+    let input = vec![
+        UserInput::Audio {
+            audio: AudioReference::Inline {
+                audio_url: inline.into(),
+            },
+        },
+        UserInput::LocalAudio {
+            path: unsupported.clone(),
+        },
+        UserInput::LocalAudio {
             path: audio_path.clone(),
-        }]))
+        },
+        UserInput::LocalAudio {
+            path: missing.clone(),
+        },
+    ];
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(input.clone()))
         .await?;
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let displayed_input = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(message),
+            ..
+        }) => Some(message.content.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(displayed_input, input);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let request = response_mock.single_request();
-    assert!(request.has_content_kinds(&["user.text", "user.audio", "user.text"]));
+    assert!(request.has_content_kinds(&[
+        "user.audio",
+        "user.text",
+        "user.text",
+        "user.audio",
+        "user.text",
+        "user.text"
+    ]));
     let user_message = request
         .input()
         .into_iter()
@@ -593,12 +633,20 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
         .find(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("user"))
         .expect("request should include a user message");
     let audio_path = audio_path.display();
+    let unsupported = unsupported.display();
+    let missing_error = std::fs::File::open(&missing).unwrap_err();
+    let missing = missing.display();
     assert_eq!(
         user_message["content"],
         json!([
+            {"type": "input_audio", "audio_url": inline},
             {
                 "type": "input_text",
-                "text": format!(r#"<audio name=[Audio #1] path="{audio_path}">"#),
+                "text": format!("Codex cannot attach audio at `{unsupported}`: unsupported audio format; use wav, mp3, m4a, webm, or ogg."),
+            },
+            {
+                "type": "input_text",
+                "text": format!(r#"<audio name=[Audio #3] path="{audio_path}">"#),
             },
             {
                 "type": "input_audio",
@@ -607,6 +655,10 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
             {
                 "type": "input_text",
                 "text": "</audio>",
+            },
+            {
+                "type": "input_text",
+                "text": format!("Codex could not read the local audio at `{missing}`: {missing_error}"),
             },
         ])
     );

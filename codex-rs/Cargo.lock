@@ -5401,7 +5401,9 @@ dependencies = [
  "anyhow",
  "codex-protocol",
  "codex-utils-image",
+ "derive_more 2.1.1",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tempfile",
 ]

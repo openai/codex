@@ -518,7 +518,8 @@ fn settings_submission(
                 turn_id: turn_id.to_string(),
                 update,
                 reply,
-            },
+            }
+            .into(),
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
