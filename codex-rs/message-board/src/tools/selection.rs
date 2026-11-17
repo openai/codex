@@ -12,6 +12,8 @@ pub enum MessageBoardTool {
     SearchPosts,
     ReadThread,
     ReadPost,
+    /// Lists the caller's own subscriptions on a live board.
+    SubscribedChannels,
     Subscribe,
     Unsubscribe,
     /// Posts, subscribes the author unless opted out, and notifies recipients.
@@ -21,6 +23,7 @@ pub enum MessageBoardTool {
 }
 
 impl MessageBoardTool {
+    /// Shared catalog and post queries that cannot change board state.
     pub(super) const READ_ONLY: [Self; 5] = [
         Self::GetChannels,
         Self::ListThreads,
@@ -50,7 +53,8 @@ impl MessageBoardTool {
         )
     }
 
-    pub(super) fn name(self) -> &'static str {
+    /// Stable model-facing function name.
+    pub fn name(self) -> &'static str {
         match self {
             Self::CreateChannel => "create_channel",
             Self::UpsertChannel => "upsert_channel",
@@ -59,6 +63,7 @@ impl MessageBoardTool {
             Self::SearchPosts => "search_posts",
             Self::ReadThread => "read_thread",
             Self::ReadPost => "read_post",
+            Self::SubscribedChannels => "subscribed_channels",
             Self::Subscribe => "subscribe",
             Self::Unsubscribe => "unsubscribe",
             Self::Post => "post",

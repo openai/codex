@@ -2,6 +2,7 @@ use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::context::ContextualUserFragment;
 use crate::context_manager::ContextManager;
+use crate::guardian_review::ReviewRetrieval;
 use crate::session::Submission;
 use crate::session::submission::SubmissionOp;
 use codex_guardian_reviewer::GuardianReviewResponse;
@@ -45,6 +46,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         params.reasoning_summary,
         params.personality,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .unwrap();
     params.parent_session = Arc::clone(&parent);
@@ -272,6 +274,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         reasoning_summary,
         personality,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -389,6 +392,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -410,6 +414,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -563,6 +568,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -584,6 +590,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -664,6 +671,7 @@ async fn guardian_review_session_config_resolves_policy_and_template(
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::from_model(&model),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -1074,6 +1082,7 @@ async fn prewarm_test_session(
     let context = setup::prepare_prewarm(
         Arc::clone(&params.parent_session),
         Arc::clone(params.parent_context.turn()),
+        ReviewRetrieval::ConversationHistory,
     )
     .await
     .unwrap();

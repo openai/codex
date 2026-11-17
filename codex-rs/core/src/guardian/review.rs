@@ -5,6 +5,7 @@
 mod request;
 pub(super) use request::ReviewAuthorization;
 
+use crate::guardian_review::ReviewRetrieval;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_core_plugins::PluginCommandAttribution;
@@ -117,13 +118,14 @@ fn select_synchronous_reviewer(
 )> {
     Some((
         session.guardian_review_session()?,
-        guardian_review_session_config(session, context),
+        guardian_review_session_config(session, context, ReviewRetrieval::ConversationHistory),
     ))
 }
 
 pub(super) async fn guardian_review_session_config(
     session: &Session,
     context: &GuardianReviewContext,
+    retrieval: ReviewRetrieval,
 ) -> anyhow::Result<GuardianReviewSessionConfig> {
     let turn = context.turn();
     let network_proxy = session.services.network_proxy.load_full();
@@ -147,6 +149,7 @@ pub(super) async fn guardian_review_session_config(
         context.reasoning_summary,
         context.personality,
         model_messages,
+        retrieval,
     )?;
     if context.model_info.computer_use_review_required() {
         spawn_config

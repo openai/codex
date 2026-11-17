@@ -47,6 +47,14 @@ pub trait AgentMessageBoard: Send + Sync {
         None
     }
 
+    /// Return a live handle with literal search inside JSON encoded at this JSON pointer.
+    /// Other handles retain their existing search behavior.
+    fn with_json_search(&self, _pointer: &'static str) -> Result<Arc<dyn AgentMessageBoard>> {
+        Err(CodexErr::UnsupportedOperation(
+            "searching nested JSON on a live message board".into(),
+        ))
+    }
+
     /// Capture a live board's channel summaries and post boundary together for read-only access.
     fn read_view(&self, _caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
         unsupported("capturing a board read view")

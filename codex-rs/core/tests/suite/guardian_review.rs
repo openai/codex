@@ -1606,7 +1606,11 @@ async fn guardian_refreshes_missing_default_reviewer_once(
     } else if scenario == "cancel_prewarm" {
         let parent = Arc::clone(&test.codex);
         let prewarm = tokio::spawn(async move {
-            codex_core::guardian_review::prepare_review_prewarm(&parent).await
+            codex_core::guardian_review::prepare_review_prewarm(
+                &parent,
+                codex_core::guardian_review::ReviewRetrieval::ConversationHistory,
+            )
+            .await
         });
         refresh_started.notified().await;
         prewarm.abort();

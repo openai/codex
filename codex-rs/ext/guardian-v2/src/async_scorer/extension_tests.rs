@@ -2839,7 +2839,11 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     model_info.slug = "protected-model".to_owned();
     thread_store.insert_arc(model_info.model);
     // A late prewarm preview must leave the active model's review requirements intact.
-    let _ = codex_core::guardian_review::prepare_review_prewarm(&test.codex).await?;
+    let _ = codex_core::guardian_review::prepare_review_prewarm(
+        &test.codex,
+        codex_core::guardian_review::ReviewRetrieval::ConversationHistory,
+    )
+    .await?;
     let authorization = ScoreAuthorization::current(&test.codex, &Default::default()).await;
     let progress = ConversationBackend::for_turn(thread_store, thread_store)
         .map(|cache| Arc::clone(&cache.progress))

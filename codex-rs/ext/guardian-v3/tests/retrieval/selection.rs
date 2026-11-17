@@ -8,6 +8,7 @@ use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_v3::CHANNEL_SELECTION_INSTRUCTIONS;
 use codex_guardian_v3::DeliveryState;
+use codex_guardian_v3::LiveRetrievalBinding;
 use codex_guardian_v3::RetrievalBinding;
 use codex_guardian_v3::ReviewerSubscriptions;
 use codex_guardian_v3::local_board;
@@ -30,7 +31,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_state::SqliteConfig;
 use codex_tools::ToolCall;
 use codex_tools::ToolCallSource;
-use codex_tools::ToolName;
 use codex_tools::ToolPayload;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -45,11 +45,15 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use crate::BoardReads;
 use crate::retrieval_host;
 
+#[test_case::test_case(BoardReads::Captured; "captured_subscriptions_require_captured_channels")]
+#[test_case::test_case(BoardReads::Live; "live_subscriptions_can_select_later_channels")]
 #[tokio::test]
-async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids()
--> anyhow::Result<()> {
+async fn subscription_tools_only_change_the_callers_channels(
+    reads: BoardReads,
+) -> anyhow::Result<()> {
     let policy = TruncationPolicyConfig::bytes(/*limit*/ 1024);
     let owner = ThreadId::new();
     let reviewer = ThreadId::new();
@@ -63,7 +67,7 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
         .read_only()
         .open(host.clone())
         .await?;
-    // All three reviewer entry points must reject the ordinary board, even for the same root.
+    // A Guardian reviewer must reject the ordinary board, even for the same root.
     let agent_view = agent_board.read_view(reviewer).await?;
     assert!(RetrievalBinding::new(agent_view.as_ref(), reviewer, path.clone()).is_err());
     let cutoff = HistoryPosition {
@@ -77,8 +81,10 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
             .await
             .is_err()
     );
+    let agent_board: Arc<dyn AgentMessageBoard> = Arc::new(agent_board);
+    assert!(LiveRetrievalBinding::new(agent_board.clone(), reviewer, path.clone()).is_err());
     assert!(
-        ReviewerSubscriptions::capture(Arc::new(agent_board), reviewer, path.clone())
+        ReviewerSubscriptions::capture(agent_board, reviewer, path.clone())
             .await
             .is_err()
     );
@@ -107,6 +113,12 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
         .await?;
     let subscriptions =
         Arc::new(ReviewerSubscriptions::capture(Arc::clone(&board), reviewer, path.clone()).await?);
+    let tools = match reads {
+        BoardReads::Captured => subscriptions.tools(Some("guardian"), "Guardian evidence"),
+        BoardReads::Live => {
+            LiveRetrievalBinding::new(board.clone(), reviewer, path.clone())?.tools()
+        }
+    };
     writer
         .upsert_channel(
             owner,
@@ -127,13 +139,18 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
         )
         .await?;
     assert_ne!(original.message_id, later.message_id);
-    // Tool calls reuse the real backend but return only the captured catalog boundary.
-    let tools = subscriptions.tools(Some("guardian"), "Guardian evidence");
+    let live = reads == BoardReads::Live;
     for (name, arguments, succeeds) in [
         ("subscribe", json!({"channel_name":"release"}), true),
         ("unsubscribe", json!({"channel_name":"release"}), true),
         ("subscribe", json!({"channel_name":"release"}), true),
-        ("subscribe", json!({"channel_name":"later"}), false),
+        ("subscribe", json!({"channel_name":"later"}), live),
+        ("unsubscribe", json!({"channel_name":"later"}), live),
+        (
+            "subscribe",
+            json!({"thread_id": original.message_id}),
+            false,
+        ),
         (
             "unsubscribe",
             json!({"channel_name":"release","target_agent":"/"}),
@@ -147,7 +164,7 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
         let call = ToolCall {
             turn_id: "review".into(),
             call_id: name.into(),
-            tool_name: ToolName::namespaced("guardian", name),
+            tool_name: tool.tool_name(),
             model: "test".into(),
             codex_turn_metadata: None,
             truncation_policy: policy.into(),
@@ -167,17 +184,25 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
             let response = result.code_mode_result(&call.payload);
             assert_eq!(result.log_output(), response.to_string());
             let output: SubscriptionState = serde_json::from_value(response)?;
+            let channel = arguments["channel_name"]
+                .as_str()
+                .expect("channel subscription");
+            let last_message_id = match (reads, channel) {
+                (_, "later") => None,
+                (BoardReads::Captured, _) => Some(original.message_id),
+                (BoardReads::Live, _) => Some(later.message_id),
+            };
             assert_eq!(
                 output,
                 SubscriptionState {
-                    channel_name: "release".into(),
+                    channel_name: channel.into(),
                     thread_id: None,
                     target_agent: path.clone(),
                     enabled: name == "subscribe",
-                    last_message_id: Some(original.message_id),
+                    last_message_id,
                 }
             );
-            if name == "unsubscribe" {
+            if name == "unsubscribe" && channel == "release" {
                 assert!(subscriptions.channels().await?.is_empty());
             }
         } else {
@@ -221,7 +246,7 @@ async fn preparation_commits_only_valid_selections_from_the_captured_catalog() -
         })
         .build_with_auto_env(&server)
         .await?;
-    let prepared = prepare_review_prewarm(&test.codex).await?;
+    let prepared = prepare_review_prewarm(&test.codex, codex_guardian_v3::BOARD_RETRIEVAL).await?;
     let key = prepared.reuse_key(/*previous*/ None);
     let (mut options, state) = prepared
         .thread_options(GuardianReviewSessionKind::TrunkNew, /*snapshot*/ None)

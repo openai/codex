@@ -196,10 +196,17 @@ impl ReviewerSubscriptions {
 
     /// Self-only channel tools. Their responses use the captured catalog's post boundary.
     pub fn tools(
-        self: &Arc<Self>,
+        &self,
         namespace: Option<&str>,
         namespace_description: &str,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        crate::subscription_tools::tools(self, namespace, namespace_description)
+        crate::subscription_tools::tools(
+            &self.board,
+            self.caller,
+            &self.path,
+            Some(&self.view),
+            namespace,
+            namespace_description,
+        )
     }
 }

@@ -4,6 +4,7 @@ use codex_analytics::GuardianReviewSessionKind;
 use codex_core::guardian_review::prepare_review_prewarm;
 use codex_extension_api::SessionIsolation;
 use codex_extension_api::ToolPolicy;
+use codex_features::Feature;
 use codex_guardian_v3::DeliveryState;
 use codex_message_board::AgentMessageBoard;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -32,6 +33,7 @@ use crate::evidence_board::routed_original;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel_evidence()
 -> anyhow::Result<()> {
+    const V2_HISTORY_PROMPT: &str = "Use the V2 conversation history tools.";
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
@@ -42,15 +44,20 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
         .with_config(|config| {
             config.approvals_reviewer = ApprovalsReviewer::User;
             config.include_environment_context = false;
+            config.features.enable(Feature::Apps).expect("enable apps");
+            config
+                .features
+                .enable(Feature::GuardianConversationHistoryTools)
+                .expect("enable Guardian history tools");
+            config.guardian_conversation_history_prompt = Some(V2_HISTORY_PROMPT.into());
         })
         .build_with_auto_env(&server)
         .await?;
     let owner = test.session_configured.thread_id;
-    let prepared = prepare_review_prewarm(&test.codex).await?;
+    let prepared = prepare_review_prewarm(&test.codex, codex_guardian_v3::BOARD_RETRIEVAL).await?;
     let (mut options, _state) = prepared
         .thread_options(GuardianReviewSessionKind::TrunkNew, /*snapshot*/ None)
         .await;
-    options.config.base_instructions = Some("Inspect the supplied original evidence.".into());
     options.session_source = Some(SessionSource::Internal(InternalSessionSource::Guardian));
     options
         .thread_extension_init
@@ -136,7 +143,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     ## Window 1
     -- request 1 (turn) --
     00:message/developer:
-        <MODEL_INSTRUCTIONS>
+        <GUARDIAN_INSTRUCTIONS>
     01:message/developer:
         <PERMISSIONS_INSTRUCTIONS>
     02:function_call_output/guardian.guardian_original_evidence:{"sources":[{"id":{"ordinal":2},"original":{"type":"response_item","payload":{"type":"function_call_output","output":"one"}}}]}
@@ -238,7 +245,10 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     ]
     .map(|(ordinal, output)| json!({"sources":[routed_original(ordinal, output)]}));
     assert_eq!(delivered.as_slice(), expected.as_slice());
-    assert_eq!(response.requests().len(), 1);
+    let instructions = response.single_request().instructions_text();
+    assert!(instructions.contains("Use the guardian_board tools"));
+    assert!(instructions.contains("carries the same authority as that message"));
+    assert!(!instructions.contains(V2_HISTORY_PROMPT));
 
     spawned.thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;

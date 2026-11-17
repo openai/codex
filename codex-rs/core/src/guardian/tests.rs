@@ -10,6 +10,7 @@ use crate::context::ContextualUserFragment;
 use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::review::guardian_review_session_config;
+use crate::guardian_review::ReviewRetrieval;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnContext;
@@ -3375,6 +3376,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3419,11 +3421,14 @@ async fn guardian_review_session_config_clears_context_overrides_for_distinct_ef
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config =
-        guardian_review_session_config(session.as_ref(), &GuardianReviewContext::from(&turn))
-            .await
-            .expect("guardian config")
-            .spawn_config;
+    let guardian_config = guardian_review_session_config(
+        session.as_ref(),
+        &GuardianReviewContext::from(&turn),
+        ReviewRetrieval::ConversationHistory,
+    )
+    .await
+    .expect("guardian config")
+    .spawn_config;
 
     assert_eq!(
         (
@@ -3458,11 +3463,14 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config =
-        guardian_review_session_config(session.as_ref(), &GuardianReviewContext::from(&turn))
-            .await
-            .expect("guardian config")
-            .spawn_config;
+    let guardian_config = guardian_review_session_config(
+        session.as_ref(),
+        &GuardianReviewContext::from(&turn),
+        ReviewRetrieval::ConversationHistory,
+    )
+    .await
+    .expect("guardian config")
+    .spawn_config;
 
     assert_eq!(
         (
@@ -3504,6 +3512,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3561,6 +3570,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3608,6 +3618,7 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3685,6 +3696,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::from_model(&model),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 

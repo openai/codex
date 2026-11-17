@@ -171,6 +171,13 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         Some(&self.storage_namespace)
     }
 
+    fn with_json_search(&self, pointer: &'static str) -> Result<Arc<dyn AgentMessageBoard>> {
+        Ok(Arc::new(Self {
+            nested_json_pointer: Some(pointer),
+            ..self.clone()
+        }))
+    }
+
     fn read_view(&self, caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
         Box::pin(async move {
             self.host.agent_path(caller).await?;

@@ -65,6 +65,13 @@ pub(super) struct ReadPost {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct SubscribedChannels {
+    pub(super) limit: Option<NonZeroU32>,
+    pub(super) cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Subscription {
     pub(super) channel_name: Option<String>,
     pub(super) thread_id: Option<Uuid>,
