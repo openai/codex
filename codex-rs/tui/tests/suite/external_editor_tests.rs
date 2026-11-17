@@ -1,7 +1,7 @@
 //! Exercise editor handoff through a terminal, including editors that switch screens.
 
 use super::PtyCodex;
-use super::write_test_config;
+use super::write_test_config_with_bundled_models;
 use anyhow::Result;
 use anyhow::ensure;
 use std::os::fd::AsRawFd;
@@ -19,7 +19,7 @@ fn external_editors_keep_the_screen_and_return_the_draft() -> Result<()> {
         ("", false),
     ] {
         let home = tempfile::tempdir()?;
-        write_test_config(home.path(), &repo_root)?;
+        write_test_config_with_bundled_models(home.path(), &repo_root)?;
         let editor = home.path().join("editor.sh");
         codex_utils_cargo_bin::write_executable(
             &editor,

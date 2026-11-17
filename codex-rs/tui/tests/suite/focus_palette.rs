@@ -568,6 +568,24 @@ fn contains_bytes(buffer: &[u8], needle: &[u8]) -> bool {
     buffer.windows(needle.len()).any(|window| window == needle)
 }
 
+pub(super) fn write_test_config_with_bundled_models(
+    codex_home: &Path,
+    repo_root: &Path,
+) -> Result<()> {
+    write_test_config(codex_home, repo_root)?;
+    // Model fetches must not delay the startup screens this PTY is waiting for.
+    let catalog = codex_home.join("models.json");
+    std::fs::write(
+        &catalog,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
+    let catalog = serde_json::to_string(&catalog)?;
+    let path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&path)?;
+    std::fs::write(path, format!("model_catalog_json = {catalog}\n{config}"))?;
+    Ok(())
+}
+
 pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<()> {
     let repo_root = repo_root.display();
     let config = format!(
