@@ -12,6 +12,7 @@ use codex_app_server_client::CloudCommand;
 use codex_app_server_client::CloudOperation;
 use codex_app_server_client::RequestResult;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::McpResourceContent;
 use codex_config::types::BuiltinStatusLine;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
@@ -31,20 +32,22 @@ fn statusline_resource_requires_one_matching_json_text_item() {
         decode_tree(uri, std::slice::from_ref(&item)).unwrap(),
         UiTree(None)
     );
-    for contents in [
-        vec![],
-        vec![item.clone(), item],
-        vec![content(
-            json!({"uri":"ui://wrong","mimeType":"application/json","text":"null"}),
-        )],
-        vec![content(json!({"uri":uri,"text":"null"}))],
-        vec![content(
-            json!({"uri":uri,"mimeType":"application/json","blob":"bnVsbA=="}),
-        )],
-        vec![text("text/plain", "null")],
-        vec![text("application/json", "{")],
+    let wrong_uri =
+        content(json!({"uri":"ui://wrong","mimeType":"application/json","text":"null"}));
+    let blob = content(json!({"uri":uri,"mimeType":"application/json","blob":"bnVsbA=="}));
+    for (contents, expected) in [
+        (vec![], ReadIssue::Envelope),
+        (vec![item.clone(), item], ReadIssue::Envelope),
+        (vec![wrong_uri], ReadIssue::Uri),
+        (
+            vec![content(json!({"uri":uri,"text":"null"}))],
+            ReadIssue::Mime,
+        ),
+        (vec![blob], ReadIssue::Envelope),
+        (vec![text("text/plain", "null")], ReadIssue::Mime),
+        (vec![text("application/json", "{")], ReadIssue::Tree),
     ] {
-        assert!(decode_tree(uri, &contents).is_err());
+        assert_eq!(decode_tree(uri, &contents).unwrap_err(), expected);
     }
 }
 
@@ -153,7 +156,7 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     chat.read_only_history = false;
     chat.refresh_status_line();
     let [resumed] = read_events(&mut rx).try_into().unwrap();
-    chat.handle_statusline_read(finish(token, None), &server);
+    chat.handle_statusline_read(finish(token, /*root*/ None), &server);
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
     let token = resumed.token;
     chat.primary_environment_cwd = Some(crate::session_state::EnvironmentCwd {
@@ -361,7 +364,7 @@ async fn statusline_invalid_content_stops_polling_immediately() {
     respond(invalid, "{");
     reader.dispatch().await;
     assert_eq!(failed.elapsed(), Duration::ZERO);
-    insta::assert_snapshot!(footer(&reader.chat).unwrap(), @"Error loading statusline contents from Calendar. Use /statusline to (re)select your provider and try again.");
+    insta::assert_snapshot!(footer(&reader.chat).unwrap(), @"Status line failed · /statusline");
     assert!(!reader.chat.provider_needs_snapshot());
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
@@ -377,14 +380,15 @@ async fn statusline_rpc_error_stops_polling_immediately() {
     assert_eq!(resolved.elapsed(), Duration::ZERO);
     let failed = Instant::now();
     reply
-        .send(Err(std::io::Error::other("provider disconnected")))
+        .send(Err(std::io::Error::other(
+            "PRIVATE provider error and account data",
+        )))
         .unwrap();
     reader.dispatch().await;
     assert_eq!(failed.elapsed(), Duration::ZERO);
-    assert!(
-        footer(&reader.chat)
-            .unwrap()
-            .contains("Error loading statusline contents from Calendar")
+    assert_eq!(
+        footer(&reader.chat).as_deref(),
+        Some("Status line failed · /statusline")
     );
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
@@ -436,10 +440,9 @@ async fn statusline_deadline_wins_when_a_late_reply_is_already_queued() {
     assert!(futures::poll!(&mut advance).is_pending());
     respond(reply, r#""too late""#);
     reader.dispatch().await;
-    assert!(
-        footer(&reader.chat)
-            .unwrap()
-            .contains("Error loading statusline contents from Calendar")
+    assert_eq!(
+        footer(&reader.chat).as_deref(),
+        Some("Status line timed out · /statusline")
     );
 }
 
@@ -454,12 +457,13 @@ async fn statusline_hung_read_stops_polling_after_one_second() {
     advance(/*millis*/ 1).await;
     reader.dispatch().await;
     assert_eq!(started.elapsed(), Duration::from_secs(1));
-    assert!(
-        footer(&reader.chat)
-            .unwrap()
-            .contains("Error loading statusline contents from Calendar")
+    assert_eq!(
+        footer(&reader.chat).as_deref(),
+        Some("Status line timed out · /statusline")
     );
     assert!(held.is_closed());
+    reader.chat.local_settings.tui.status_line_provider = None;
+    reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
 }
@@ -476,10 +480,9 @@ async fn statusline_startup_timeout_stops_before_the_first_read() {
     advance(/*millis*/ 1).await;
     reader.dispatch().await;
     assert_eq!(started.elapsed(), Duration::from_secs(5));
-    assert!(
-        footer(&reader.chat)
-            .unwrap()
-            .contains("Error loading statusline contents from line")
+    assert_eq!(
+        footer(&reader.chat).as_deref(),
+        Some("Status line unavailable · /statusline")
     );
     assert!(held.is_closed());
     reader.chat.refresh_status_line();
@@ -530,7 +533,7 @@ async fn statusline_changing_provider_or_reconnecting_discards_the_previous_read
         reader.resolve().await;
         let next = reader.read(URI).await;
         held.closed().await;
-        for result in [Ok(UiTree(None)), Err("retired".into())] {
+        for result in [Ok(UiTree(None)), Err(Failure::Snapshot)] {
             let step = ReadStep::Finished(reader.owner.backend_id(), result);
             reader
                 .chat
@@ -550,10 +553,9 @@ async fn statusline_explicit_reselection_restarts_a_failed_reader() {
     reader.dispatch().await;
     reader.chat.refresh_status_line();
     reader.assert_idle();
-    assert!(
-        footer(&reader.chat)
-            .unwrap()
-            .contains("Error loading statusline contents from Calendar")
+    assert_eq!(
+        footer(&reader.chat).as_deref(),
+        Some("Status line timed out · /statusline")
     );
 
     // An explicit choice can arrive while the displayed thread is starting.

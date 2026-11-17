@@ -1,5 +1,10 @@
 //! Poll the displayed thread’s statusline resource until a read fails or the reader is retired.
 
+mod resource;
+
+use self::resource::Failure;
+use self::resource::ReadIssue;
+use self::resource::decode_tree;
 use super::ChatWidget;
 use super::statusline_state::StatuslineState;
 use crate::app_event::AppEvent;
@@ -12,16 +17,11 @@ use crate::statusline_provider::ResolvedStatuslineProvider;
 use crate::statusline_provider::StatuslineProvider;
 use crate::ui_tree::UiNode;
 use crate::ui_tree::UiTree;
-use codex_app_server_protocol::McpResourceContent;
 use codex_config::types::StatusLineProviderId;
 use codex_config::types::StatusLineSelection;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_utils_path_uri::LegacyAppPathString;
-use color_eyre::eyre::Result;
-use color_eyre::eyre::WrapErr;
-use color_eyre::eyre::bail;
-use color_eyre::eyre::eyre;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -61,7 +61,7 @@ enum ReadStep {
     #[debug("Snapshot(..)")]
     Snapshot(BackendId, oneshot::Sender<StatuslineState>),
     #[debug("Finished(..)")]
-    Finished(BackendId, Result<UiTree, String>),
+    Finished(BackendId, Result<UiTree, Failure>),
 }
 
 impl StatuslineReadEvent {
@@ -171,12 +171,13 @@ impl ChatWidget {
         event: StatuslineReadEvent,
         owner: &AppServerSession,
     ) {
-        let Some(footer) = self.statusline_read.as_ref() else {
+        let Some(footer) = self
+            .statusline_read
+            .as_ref()
+            .filter(|read| read.token == event.token)
+        else {
             return;
         };
-        if event.token != footer.token {
-            return;
-        }
         if !footer.is_current(self) {
             self.refresh_status_line();
             return;
@@ -194,12 +195,19 @@ impl ChatWidget {
                 if backend != owner.backend_id() {
                     return;
                 }
-                let tree = result.unwrap_or_else(|name| {
-                    footer.cancel.cancel();
-                    UiTree(Some(UiNode::String(format!(
-                        "Error loading statusline contents from {name}. Use /statusline to (re)select your provider and try again."
-                    ))))
-                });
+                let tree = match result {
+                    Ok(tree) => tree,
+                    Err(failure) => {
+                        footer.cancel.cancel();
+                        tracing::warn!(?failure, "Status line provider stopped");
+                        let message = match failure {
+                            Failure::Read(ReadIssue::TimedOut) => "Status line timed out",
+                            Failure::Lookup => "Status line unavailable",
+                            Failure::Snapshot | Failure::Read(_) => "Status line failed",
+                        };
+                        UiTree(Some(UiNode::String(format!("{message} · /statusline"))))
+                    }
+                };
                 self.set_status_line(Some(tree.into()));
             }
         }
@@ -231,10 +239,6 @@ impl ActiveStatuslineRead {
         let Some(thread) = self.thread else { return };
         let id = self.selection.clone();
         let provider_from_picker = self.provider_from_picker.clone();
-        let mut name = provider_from_picker.as_ref().map_or_else(
-            || id.tool.as_str().to_owned(),
-            |provider| provider.title.clone(),
-        );
         let token = self.token;
         let events = events.clone();
         let client = owner.request_handle();
@@ -242,9 +246,9 @@ impl ActiveStatuslineRead {
         let cwd = LegacyAppPathString::from_path(&self.host_cwd).to_inferred_path_uri();
         let cancel = self.cancel.clone();
         tokio::spawn(async move {
-            let result: Option<Result<()>> = cancel
+            let result: Option<Result<(), Failure>> = cancel
                 .run_until_cancelled(async {
-                    let cwd = cwd.ok_or_else(|| eyre!("invalid app-server working directory"))?;
+                    let cwd = cwd.ok_or(Failure::Lookup)?;
                     let provider = timeout(Duration::from_secs(/*secs*/ 5), async {
                         loop {
                             if let Ok(Some(provider)) = ResolvedStatuslineProvider::lookup(
@@ -258,14 +262,14 @@ impl ActiveStatuslineRead {
                             )
                             .await
                             {
-                                return Ok::<_, watch::error::RecvError>(provider);
+                                return Ok::<_, Failure>(provider);
                             }
                             // A cold catalog may arrive before the selected MCP server finishes starting.
-                            ready.changed().await?;
+                            ready.changed().await.map_err(|_| Failure::Lookup)?;
                         }
                     })
-                    .await??;
-                    name.clone_from(&provider.provider().title);
+                    .await
+                    .map_err(|_| Failure::Lookup)??;
                     loop {
                         let (reply, snapshot) = oneshot::channel();
                         StatuslineReadEvent::send(
@@ -273,14 +277,16 @@ impl ActiveStatuslineRead {
                             token,
                             ReadStep::Snapshot(backend, reply),
                         );
-                        let snapshot = serde_json::to_value(snapshot.await?)?;
-                        let deadline = Instant::now() + Duration::from_secs(1);
+                        let state = snapshot.await.map_err(|_| Failure::Snapshot)?;
+                        let snapshot =
+                            serde_json::to_value(state).map_err(|_| Failure::Snapshot)?;
+                        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 1);
                         // A ready reply can win the final poll of timeout_at after the deadline.
                         let response = match timeout_at(deadline, provider.read(snapshot)).await {
-                            Ok(response) if Instant::now() < deadline => response?,
-                            Ok(_) | Err(_) => {
-                                bail!("resource read timed out");
+                            Ok(response) if Instant::now() < deadline => {
+                                response.map_err(ReadIssue::from)?
                             }
+                            Ok(_) | Err(_) => return Err(ReadIssue::TimedOut.into()),
                         };
                         let tree = decode_tree(&provider.provider().uri, &response.contents)?;
                         StatuslineReadEvent::send(
@@ -292,30 +298,15 @@ impl ActiveStatuslineRead {
                     }
                 })
                 .await;
-            if let Some(Err(_)) = result {
-                StatuslineReadEvent::send(&events, token, ReadStep::Finished(backend, Err(name)));
+            if let Some(Err(failure)) = result {
+                StatuslineReadEvent::send(
+                    &events,
+                    token,
+                    ReadStep::Finished(backend, Err(failure)),
+                );
             }
         });
     }
-}
-
-fn decode_tree(uri: &str, contents: &[McpResourceContent]) -> Result<UiTree> {
-    let [
-        McpResourceContent::Text {
-            uri: returned_uri,
-            mime_type: Some(mime),
-            text,
-            ..
-        },
-    ] = contents
-    else {
-        bail!("expected one text resource");
-    };
-    let media_type = mime.split(';').next().unwrap_or_default().trim();
-    if uri != returned_uri || !media_type.eq_ignore_ascii_case("application/json") {
-        bail!("expected application/json at the advertised resource URI");
-    }
-    text.parse().wrap_err("invalid UI tree")
 }
 
 #[cfg(test)]

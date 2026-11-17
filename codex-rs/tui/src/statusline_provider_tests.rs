@@ -130,7 +130,10 @@ async fn picker_choice_reads_the_displayed_threads_uri_with_the_snapshot() -> Re
         .await?
         .unwrap();
         assert_eq!(provider.provider().title, "Next event");
-        provider.read(snapshot.clone()).await
+        provider
+            .read(snapshot.clone())
+            .await
+            .map_err(color_eyre::Report::from)
     };
     let (result, ()) = tokio::join!(read, host);
     result?;

@@ -99,7 +99,7 @@ async fn statusline_reads_the_selected_stdio_resource_on_the_displayed_thread() 
         }
         fs::write(&barrier, "")?;
         if mode == Setup::ProjectShadow {
-            terminal.wait_for_screen("Error loading statusline contents from sandbox_meta")?;
+            terminal.wait_for_screen("Status line unavailable · /statusline")?;
             assert!(!receipt.exists());
             assert!(!shadow.exists());
         } else {
@@ -154,7 +154,7 @@ async fn statusline_reads_the_selected_stdio_resource_on_the_displayed_thread() 
                     toml::Value::String("replacement".into());
                 fs::write(&local_config, toml::to_string(&config)?)?;
                 terminal.write_input(b"/new\r")?;
-                terminal.wait_for_screen("Error loading statusline contents from replacement")?;
+                terminal.wait_for_screen("Status line unavailable · /statusline")?;
             }
             assert_eq!(state["thread"]["workspace"], json!({"cwd": cwd}));
         }

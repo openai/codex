@@ -188,10 +188,12 @@ impl ResolvedStatuslineProvider {
     /// A thread/start override can also replace a configured command before lookup. Both
     /// registrations report the same name and no plugin ID. Same-owner plugin replacements
     /// are indistinguishable for the same reason.
-    pub(crate) async fn read(&self, snapshot: Value) -> Result<McpResourceReadResponse> {
+    pub(crate) async fn read(
+        &self,
+        snapshot: Value,
+    ) -> Result<McpResourceReadResponse, codex_app_server_client::TypedRequestError> {
         let provider = &self.provider;
-        Ok(self
-            .client
+        self.client
             .request_typed(ClientRequest::McpResourceRead {
                 request_id: RequestId::String(Uuid::new_v4().to_string()),
                 params: McpResourceReadParams {
@@ -208,7 +210,7 @@ impl ResolvedStatuslineProvider {
                     )])),
                 },
             })
-            .await?)
+            .await
     }
 }
 
