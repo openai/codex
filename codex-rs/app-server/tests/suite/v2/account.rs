@@ -2278,6 +2278,20 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
 
 #[tokio::test]
 async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()> {
+    assert_device_login(DeviceLoginStorage::Writable).await
+}
+
+#[tokio::test]
+async fn device_code_login_reports_failed_save_with_client_originator() -> Result<()> {
+    assert_device_login(DeviceLoginStorage::BlockSave).await
+}
+
+enum DeviceLoginStorage {
+    Writable,
+    BlockSave,
+}
+
+async fn assert_device_login(storage: DeviceLoginStorage) -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
     create_config_toml(
@@ -2289,7 +2303,12 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         },
     )?;
     write_models_cache(codex_home.path()).await?;
-    let collector = super::auth_storage_originator::configure_collector(codex_home.path()).await?;
+    let collector = match storage {
+        DeviceLoginStorage::Writable => None,
+        DeviceLoginStorage::BlockSave => {
+            Some(super::auth_storage_originator::configure_collector(codex_home.path()).await?)
+        }
+    };
 
     mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
     mock_device_code_token_success(&mock_server).await;
@@ -2320,6 +2339,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     })
     .await?;
 
+    if collector.is_some() {
+        // A successful account switch revokes in-flight exports for the old account.
+        // Exercise attribution on the same async device-login save path without switching.
+        std::fs::create_dir(codex_home.path().join("auth.json"))?;
+    }
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let login: LoginAccountResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
@@ -2344,6 +2368,15 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         bail!("unexpected notification: {parsed:?}");
     };
     assert_eq!(payload.login_id, Some(login_id));
+    if let Some(collector) = collector {
+        assert!(!payload.success);
+        assert!(payload.error.is_some());
+        return super::auth_storage_originator::assert_saved_originators(
+            &collector,
+            &["codex_vscode"],
+        )
+        .await;
+    }
     assert_eq!(payload.success, true);
     assert_eq!(payload.error, None);
 
@@ -2362,7 +2395,6 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
     );
-    super::auth_storage_originator::assert_saved_originators(&collector, &["codex_vscode"]).await?;
     Ok(())
 }
 

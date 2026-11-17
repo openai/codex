@@ -21,7 +21,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_login::login_with_api_key;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -123,9 +125,23 @@ pub(super) async fn assert_saved_originators(
 #[tokio::test]
 async fn concurrent_connections_export_their_own_storage_originator() -> Result<()> {
     let codex_home = TempDir::new()?;
+    // An account switch revokes in-flight network requests, including delta exports.
+    // Keep the account fixed while measuring writes from the three different clients.
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    // Storage metrics enable the turn-cost probe. Keep it on loopback, and skip the
+    // online model catalog refresh this three-client login test does not exercise.
+    let backend = MockServer::start().await;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "cli_auth_credentials_store = \"file\"\n",
+        format!(
+            "cli_auth_credentials_store = \"file\"\nfeatures.api_key_model_discovery = false\nchatgpt_base_url = {:?}\n",
+            backend.uri()
+        ),
     )?;
     let collector = configure_collector(codex_home.path()).await?;
     let (_process, address) = spawn_websocket_server(codex_home.path()).await?;
