@@ -2962,6 +2962,7 @@ where
             };
             let event = match event {
                 Ok(ResponseEvent::OutputItemDone(mut item)) => {
+                    provider.normalize_completed_output_item(&mut item);
                     // Assign IDs after interceptors, which may replace provider items.
                     // Reuse the added event's ID so tracing and the harness agree.
                     if item.id().is_none_or(|id| id.is_empty()) {
