@@ -380,6 +380,13 @@ impl TurnMetadataState {
         self.root_turn_id.get().cloned()
     }
 
+    pub(crate) fn apply_start_responsesapi_client_metadata(
+        &self,
+        update: ResponsesApiClientMetadataUpdate,
+    ) {
+        self.update_responsesapi_client_metadata(update);
+    }
+
     pub(crate) fn update_responsesapi_client_metadata(
         &self,
         update: ResponsesApiClientMetadataUpdate,

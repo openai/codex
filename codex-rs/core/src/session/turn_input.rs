@@ -502,7 +502,7 @@ async fn start_or_steer(
             };
             turn_context
                 .turn_metadata_state
-                .update_responsesapi_client_metadata(responsesapi_client_metadata);
+                .apply_start_responsesapi_client_metadata(responsesapi_client_metadata);
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
@@ -660,7 +660,7 @@ async fn start_if_idle(
     };
     turn_context
         .turn_metadata_state
-        .update_responsesapi_client_metadata(responsesapi_client_metadata);
+        .apply_start_responsesapi_client_metadata(responsesapi_client_metadata);
     session
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;

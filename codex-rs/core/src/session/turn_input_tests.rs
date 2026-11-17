@@ -994,14 +994,15 @@ async fn steer_only_enforces_expected_turn_id() {
     }))
     .expect("valid standalone output");
 
+    let request = TurnInputRequest::new(SubmittedTurnInput::ResponseItem(output)).on_start(
+        TurnStartOptions {
+            turn_trigger: Some("automation_cron_scheduled".to_string()),
+            ..Default::default()
+        },
+    );
     let submission = handle(
         &session,
-        TurnInputRequest::new(SubmittedTurnInput::ResponseItem(output)).on_start(
-            TurnStartOptions {
-                turn_trigger: Some("automation_cron_scheduled".to_string()),
-                ..Default::default()
-            },
-        ),
+        request,
         TurnInputMode::StartOrSteer,
         "test-submission".to_string(),
     )
