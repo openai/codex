@@ -1,6 +1,7 @@
-//! Native account repair regression; uses a disposable account and requires elevation.
+//! Tests sandbox account password policy and, with elevation, repairs a disposable account.
 
 use super::ensure_local_user;
+use super::random_password;
 use crate::local_user_flags;
 use crate::set_local_user_flags;
 use crate::to_wide;
@@ -14,6 +15,27 @@ use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_4;
+
+#[test]
+fn generated_passwords_meet_sandbox_account_policy() {
+    const SYMBOLS: &[u8] = b"!@#$%^&*()-_=+";
+
+    // Every draw must satisfy the policy; never assert on the random value itself.
+    for _ in 0..256 {
+        let password = random_password();
+        let bytes = password.as_bytes();
+        assert_eq!(bytes.len(), 24);
+        assert!(
+            bytes
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || SYMBOLS.contains(b))
+        );
+        assert!(bytes.iter().any(u8::is_ascii_uppercase));
+        assert!(bytes.iter().any(u8::is_ascii_lowercase));
+        assert!(bytes.iter().any(u8::is_ascii_digit));
+        assert!(bytes.iter().any(|b| SYMBOLS.contains(b)));
+    }
+}
 
 struct TestAccount(String);
 

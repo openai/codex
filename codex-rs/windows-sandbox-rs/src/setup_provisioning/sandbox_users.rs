@@ -1,9 +1,9 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rand::RngCore;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::Rng;
+use rand::rngs::OsRng;
+use rand::seq::SliceRandom;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -273,17 +273,25 @@ pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
 }
 
 fn random_password() -> String {
-    const CHARS: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
-    let mut rng = SmallRng::from_entropy();
-    let mut buf = [0u8; 24];
-    rng.fill_bytes(&mut buf);
-    buf.iter()
-        .map(|b| {
-            let idx = (*b as usize) % CHARS.len();
-            CHARS[idx] as char
-        })
-        .collect()
+    const CLASSES: [&[u8]; 4] = [
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        b"abcdefghijklmnopqrstuvwxyz",
+        b"0123456789",
+        b"!@#$%^&*()-_=+",
+    ];
+    // NetUserSetInfo enforces the machine's password policy. A random string drawn
+    // from the combined alphabet alone can still omit required character classes.
+    let mut rng = OsRng;
+    let mut password = [0u8; 24];
+    for (slot, class) in password.iter_mut().zip(CLASSES) {
+        *slot = class[rng.gen_range(0..class.len())];
+    }
+    let alphabet = CLASSES.concat();
+    for slot in &mut password[CLASSES.len()..] {
+        *slot = alphabet[rng.gen_range(0..alphabet.len())];
+    }
+    password.shuffle(&mut rng);
+    password.into_iter().map(char::from).collect()
 }
 
 #[derive(Serialize)]

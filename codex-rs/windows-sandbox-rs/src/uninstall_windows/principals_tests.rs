@@ -17,7 +17,9 @@ use anyhow::ensure;
 use pretty_assertions::assert_eq;
 use rand::RngCore;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+use windows_sys::Win32::Foundation::ERROR_DELETE_PENDING;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::NetworkManagement::NetManagement as network;
@@ -198,7 +200,27 @@ fn profile_cleanup_preserves_account_until_profile_can_be_deleted() -> Result<()
     fixture.stop()?;
     fixture.user.remove()?;
     assert_eq!(local_user_flags(name)?, None);
-    assert!(!path.exists());
+    // DeleteProfileW can succeed before the filesystem releases the last
+    // delete-pending directory handle. Observe completion without deleting it ourselves.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match path.try_exists() {
+            Ok(false) => break,
+            Ok(true) => ensure!(
+                Instant::now() < deadline,
+                "deleted profile directory still exists: {}",
+                path.display()
+            ),
+            Err(error)
+                if Instant::now() < deadline
+                    && matches!(
+                        error.raw_os_error().map(|code| code as u32),
+                        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_DELETE_PENDING)
+                    ) => {}
+            Err(error) => return Err(error).context("check whether the deleted profile is gone"),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let mut key = std::ptr::null_mut();
     let status = unsafe {
         registry::RegOpenKeyExW(
