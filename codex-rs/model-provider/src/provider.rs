@@ -25,6 +25,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 
@@ -220,6 +221,9 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn map_api_error(&self, error: ApiError) -> CodexErr {
         codex_api::map_api_error(error)
     }
+
+    /// Normalizes a completed output item before it enters model history.
+    fn normalize_completed_output_item(&self, _item: &mut ResponseItem) {}
 
     /// Returns provider configuration adapted for the API client.
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
