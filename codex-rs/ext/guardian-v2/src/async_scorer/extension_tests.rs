@@ -182,7 +182,7 @@ async fn json_transcript_mode_reaches_classifier_instructions_and_evidence() -> 
             .filter(|item| item["role"] == "developer")
             .flat_map(|item| item["content"].as_array().into_iter().flatten())
             .any(|part| part["text"].as_str().is_some_and(
-                |text| text.starts_with(codex_guardian_context::TRANSCRIPT_JSON_INSTRUCTIONS)
+                |text| text.ends_with(codex_guardian_context::TRANSCRIPT_JSON_INSTRUCTIONS)
             ))
     );
     let record = input

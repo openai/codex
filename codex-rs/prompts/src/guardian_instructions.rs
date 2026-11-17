@@ -76,7 +76,7 @@ impl ContextualUserFragment for GuardianPolicyInstructions<'_> {
         input_text(match transcript_format {
             TranscriptFormat::Line => instructions,
             TranscriptFormat::Json => {
-                format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{instructions}")
+                format!("{instructions}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}")
             }
         })
     }
@@ -154,7 +154,7 @@ impl ContextualUserFragment for GuardianClassifierInstructions<'_> {
         input_text(match transcript_format {
             TranscriptFormat::Line => instructions,
             TranscriptFormat::Json => {
-                format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{instructions}")
+                format!("{instructions}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}")
             }
         })
     }

@@ -59,7 +59,7 @@ fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
             assert_eq!(
                 text,
                 format!(
-                    "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}{suffix}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                    "{expected}{suffix}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"
                 )
             );
         }
@@ -80,7 +80,7 @@ fn template_policy_is_substituted_before_the_single_truncation() {
         assert_eq!(
             rendered_classifier_text(&config, policy),
             format!(
-                "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{}",
+                "{}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}",
                 truncate_entry(
                     &instructions.replace("{{ tenant_policy_config }}", policy),
                     max_tokens,
@@ -115,7 +115,7 @@ fn evaluated_configuration_preserves_gate_and_caps_only_configured_prompt() {
         );
         assert_eq!(
             rendered_classifier_text(&config, &policy),
-            format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}")
+            format!("{expected}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}")
         );
     }
 }
@@ -209,7 +209,7 @@ fn model_defaults_preserve_transcript_mode_and_matching_instructions() {
             rendered_classifier_text(&config, "Policy."),
             match format {
                 TranscriptFormat::Line => expected,
-                TranscriptFormat::Json => format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
+                TranscriptFormat::Json => format!("{expected}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"),
             }
         );
     }
@@ -242,13 +242,13 @@ fn classifier_caps_preserve_complete_provenance_and_output_contract() {
     for config in [local_override, model_override] {
         let rendered = rendered_classifier_text(&config, policy);
         let configured_prompt = rendered
-            .strip_prefix(&format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n"))
+            .strip_suffix(&format!("\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"))
             .expect("complete provenance instructions must survive the 100-token cap");
         assert!(
             configured_prompt.len()
                 <= codex_protocol::protocol::TruncationPolicy::Tokens(100).byte_budget()
         );
-        assert!(rendered.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
+        assert!(configured_prompt.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
     }
 }
 
@@ -321,7 +321,7 @@ fn model_runtime_settings_preserve_local_overrides() {
     assert_eq!(
         rendered_classifier_text(&uncapped, "Tenant policy."),
         format!(
-            "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+            "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"
         )
     );
 }

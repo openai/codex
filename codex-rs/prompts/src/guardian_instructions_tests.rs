@@ -41,7 +41,7 @@ fn reviewer_policy_substitution_preserves_template_layout_and_appends_contract()
             )
             .render()
             .expect_text(),
-            format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
+            format!("{expected}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"),
         );
     }
 }
@@ -75,7 +75,7 @@ fn reviewer_extra_policy_substitution_preserves_tenant_policy() {
             )
             .render()
             .expect_text(),
-            format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
+            format!("{expected}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"),
         );
     }
 }
@@ -93,7 +93,7 @@ fn reviewer_policy_substitution_keeps_inserted_policy_text_literal() {
         .render()
         .expect_text(),
         format!(
-            "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\nTenant: Tenant says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\nAdditional: Additional says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\n\nReview contract.\n"
+            "Tenant: Tenant says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\nAdditional: Additional says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\n\nReview contract.\n\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"
         ),
     );
 }
@@ -132,7 +132,7 @@ fn classifier_policy_substitution_and_legacy_append_keep_one_terminal_contract_b
                 )
                 .render()
                 .expect_text(),
-                format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
+                format!("{expected}\n\n{TRANSCRIPT_JSON_INSTRUCTIONS}"),
             );
         }
     }
