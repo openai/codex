@@ -49,8 +49,11 @@ async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_
                         }
                         let params = &request["params"];
                         assert_eq!(params["modelProviders"], json!([]));
-                        assert_ne!(params["useStateDbOnly"], json!(true));
                         let ancestor = params["ancestorThreadId"].as_str();
+                        assert_eq!(
+                            params["useStateDbOnly"].as_bool().unwrap_or_default(),
+                            ancestor.is_none()
+                        );
                         let archived = params["archived"] == true;
                         let cursor = params["cursor"].as_str();
                         let ids = match (ancestor, archived, cursor) {
