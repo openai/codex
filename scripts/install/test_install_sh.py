@@ -135,6 +135,37 @@ class InstallShTest(unittest.TestCase):
             )
             self.assertTrue(os.access(host_path, os.X_OK))
 
+    def test_shell_lookup_after_adding_and_updating_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive, checksum, metadata = create_package_release(root)
+            for name in ["literal$HOME", r'quote" back\tslash and !tick`']:
+                install_dir = root / name
+                result, _ = run_installer_in(
+                    root,
+                    VERSION,
+                    install_dir=install_dir,
+                    metadata_json=metadata,
+                    archive_path=archive,
+                    checksum_path=checksum,
+                    force_macos=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                env = {"HOME": str(root / "home"), "PATH": "/usr/bin:/bin"}
+                lookup = subprocess.check_output(
+                    ["/bin/sh", "-c", '. "$HOME/.profile" && command -v codex'],
+                    env=env,
+                    text=True,
+                )
+                self.assertEqual(lookup.rstrip("\n"), str(install_dir / "codex"))
+
+                instructions = result.stdout.split("Current terminal: ", 1)[1]
+                launched = subprocess.check_output(
+                    ["/bin/sh", "-c", instructions.splitlines()[0]], env=env, text=True
+                )
+                self.assertEqual(launched.strip(), f"codex-cli {VERSION}")
+
     def test_noninteractive_install_warns_about_existing_npm_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1017,6 +1048,7 @@ def run_installer_in(
     release: str,
     *,
     installer_path: Path = INSTALL_SCRIPT,
+    install_dir: Path | None = None,
     metadata_failure: bool = False,
     metadata_json: str | None = None,
     releases_metadata_json: str | None = None,
@@ -1163,7 +1195,7 @@ def run_installer_in(
     env.update(
         {
             "CODEX_HOME": str(root / "codex-home"),
-            "CODEX_INSTALL_DIR": str(root / "install-bin"),
+            "CODEX_INSTALL_DIR": str(install_dir or root / "install-bin"),
             "CODEX_NON_INTERACTIVE": "1",
             "CODEX_RELEASE": release,
             "CODEX_INSTALL_DAEMON_ONLY": "1" if daemon_only else "0",
