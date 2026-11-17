@@ -53,7 +53,7 @@ Settings:
 
 ## Window 2 (after request 3)
 Settings: relative to window 1
-  tools (11; hash=82d35d01519a030e):
+  tools (11; hash=b70335ec6452062c):
     ~ namespace/mcp__cached_rmcp: Use the tools from live-helper.; hash=36249b57679444b8
       - function/echo
 -- request 4 (request) --

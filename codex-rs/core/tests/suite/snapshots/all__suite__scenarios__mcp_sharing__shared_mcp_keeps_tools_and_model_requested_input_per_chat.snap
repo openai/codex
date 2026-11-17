@@ -50,7 +50,7 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 03)
 Settings: relative to window 1
   prompt_cache_key: "<PROMPT_CACHE_KEY 2>"
-  tools (11; hash=8ae7b46a9664795a):
+  tools (11; hash=2c008bdfc102c512):
     ~ namespace/mcp__shared: Use these tools to exercise the rmcp test server.; hash=a9e155b340098fac
       - function/echo_tool
 -- request 3 (turn; joiner) --

@@ -50,7 +50,7 @@ Settings:
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
-  tools (10; hash=9a7d53c1c520c9d2):
+  tools (10; hash=7e8f038920b8f08a):
     - removed function/release
     + function/deployment: Check deployment.; args=[]; hash=2e9a71e9a20e43ad
 -- request 2 (turn) --
@@ -80,7 +80,7 @@ Settings: relative to window 1
 
 ## Window 3 (after request 4)
 Settings: relative to window 2
-  tools (9; hash=0fb40a4e6b518116):
+  tools (9; hash=9b8b6e1eb2dae92e):
     - removed function/deployment
 -- request 5 (turn) --
 00:message/developer:
