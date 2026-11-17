@@ -3,6 +3,7 @@
 //! Exercises native worker progress and reply attachment.
 
 use super::*;
+use crate::AppServerRequestHandle;
 use futures::stream;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
@@ -93,12 +94,30 @@ async fn rejected_rename_preserves_loaded_cloud_thread_name() -> Result<()> {
 async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> Result<()> {
     let server = MockServer::start().await;
     let home = tempfile::tempdir()?;
-    let config = crate::legacy_core::config::ConfigBuilder::default()
+    let mut config = crate::legacy_core::config::ConfigBuilder::default()
         .codex_home(home.path().to_owned())
         .fallback_cwd(Some(home.path().to_owned()))
         .without_project_context()
         .build()
         .await?;
+    config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    let storage = config.auth_config();
+    let token = "e30.e30.sig";
+    let account = "synthetic-account";
+    let auth = serde_json::from_value(serde_json::json!({
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": token, "access_token": token, "refresh_token": "test", "account_id": account,
+        },
+        "last_refresh": "2026-01-01T00:00:00Z",
+    }))?;
+    codex_login::save_auth(
+        home.path(),
+        &auth,
+        storage.auth_credentials_store_mode,
+        storage.keyring_backend_kind,
+    )?;
+
     let cached = Box::new(serde_json::from_value::<protocol::ThreadResumeResponse>(
         serde_json::json!({
             "thread": {
@@ -116,7 +135,7 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
         client: std::sync::Arc::new(cloud::Client::new(
             &config.http_client_factory(),
             &server.uri(),
-            cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
+            cloud::Credentials::new(token, account)?,
         )?),
         account: protocol::GetAccountResponse {
             user_id: None,
@@ -222,6 +241,279 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
         )
     );
     assert!(notifications.try_recv().is_err());
+    let login = idle::Login {
+        storage,
+        mode: codex_protocol::auth::AuthMode::Chatgpt,
+        token: token.into(),
+        account: account.into(),
+        permit: config
+            .http_client_factory()
+            .network_policy()
+            .acquire(&server.uri().parse()?)?,
+    };
+    // A live replacement installs and forwards held and buffered events.
+    let (ack, installed) = oneshot::channel();
+    let (state, _) = tokio::sync::watch::channel(crate::cloud::IdleReconnect::Inactive);
+    let mut recovery = idle::Recovery::new(state, Arc::clone(&requests.client), login.clone());
+    recovery.held = Some((
+        "t".into(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(8),
+        Box::pin(async move {
+            let idle: &[u8] = b"\x1a\x09\x12\x07\x0a\x02\x12\x00\x12\x01t";
+            Some(idle::Opened {
+                stream: stream::iter([Ok(cloud::Event::Notification(idle.into()))])
+                    .chain(stream::pending())
+                    .boxed(),
+                first: Some(cloud::Event::ServerRequest(Default::default())),
+                ack,
+            })
+        }),
+    ));
+    replies.idle = Some(recovery);
+    requests.warned_partial_history = Some("t".into());
+    replies.next_event(&output).await;
+    assert_eq!(installed.await?, Ok(()));
+    let AppServerEvent::ServerNotification(notification) = notifications.try_recv()? else {
+        panic!("expected held first event");
+    };
+    assert!(matches!(
+        *notification,
+        protocol::ServerNotification::Warning(_)
+    ));
+    replies.next_event(&output).await;
+    assert_eq!(replies.thread_status("t"), Some(&cloud::ThreadStatus::Idle));
+    // Installation must not erase a warning already emitted by the refreshed history.
+    let (commands, receiver) = mpsc::channel(1);
+    drop(commands);
+    run_worker(receiver, &mut requests, &mut replies, &output).await;
+    assert_eq!(requests.warned_partial_history.as_deref(), Some("t"));
+
+    // A quiet Attach cannot prove that no whole turn was missed while disconnected.
+    let attach_path = "/oaiproto.codex_app_server_backend.ThreadService/Attach";
+    for (idle, statuses, outcome) in [
+        (true, &[][..], "pat"),
+        (true, &["quiet"][..], "install"),
+        (true, &["7"][..], "install"),
+        (false, &["14", "7"][..], "install"),
+        (false, &["14", "busy"][..], "install"),
+        (true, &["busy"][..], "install"),
+        (true, &["busy"][..], "cancel"),
+        (true, &["busy", "busy"][..], "retry"),
+        (true, &["busy"][..], "slow-history"),
+        (true, &["busy"][..], "auth-change"),
+    ] {
+        server.reset().await;
+        let attempt = std::sync::atomic::AtomicUsize::new(0);
+        Mock::given(method("POST"))
+            .and(path(attach_path))
+            .and(header("authorization", format!("Bearer {token}")))
+            .respond_with(move |_: &wiremock::Request| {
+                let index = attempt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let response =
+                    ResponseTemplate::new(200).insert_header("content-type", "application/grpc");
+                match statuses[index] {
+                    "quiet" => response.set_body_bytes(b"\x00\x00\x00\x00\x02\x0a\x00".to_vec()),
+                    "busy" => response.set_body_bytes(vec![0, 0, 0, 0, 2, 18, 0]),
+                    status => response
+                        .insert_header("grpc-status", status)
+                        .insert_header("grpc-message", "private backend details"),
+                }
+            })
+            .expect(statuses.len() as u64)
+            .mount(&server)
+            .await;
+        let (client, commands, events) = CloudClient::channel(/*capacity*/ 4);
+        let mut client = AppServerClient::Cloud(client);
+        let requests_handle = client.request_handle();
+        let AppServerRequestHandle::Cloud(handle) = &requests_handle else {
+            unreachable!();
+        };
+        let mut recovery = idle::Recovery::new(
+            handle.reconnect.clone(),
+            Arc::clone(&requests.client),
+            if outcome == "pat" {
+                idle::Login {
+                    mode: codex_protocol::auth::AuthMode::PersonalAccessToken,
+                    ..login.clone()
+                }
+            } else {
+                login.clone()
+            },
+        );
+        recovery.observed_idle = Some(idle);
+        let mut worker_replies = Replies {
+            idle: Some(recovery),
+            ..Default::default()
+        };
+        let mut worker_requests = requests::Requests {
+            client: Arc::clone(&requests.client),
+            account: requests.account.clone(),
+            loaded: Some(cached.clone()),
+            warned_partial_history: Some("t".into()),
+        };
+        let worker = tokio::spawn(async move {
+            run_worker(commands, &mut worker_requests, &mut worker_replies, &events).await;
+        });
+        let budget = std::time::Duration::from_secs(if outcome == "slow-history" { 2 } else { 8 });
+        let result = handle
+            .resume_disconnected_thread(
+                "t".into(),
+                /*require_history*/ false,
+                tokio::time::Instant::now() + budget,
+            )
+            .await;
+        if outcome == "pat" || statuses.last() == Some(&"7") {
+            let Err(crate::TypedRequestError::Server { source, .. }) = result else {
+                panic!("expected recovery to reject this authentication mode or access denial");
+            };
+            assert_eq!(
+                source,
+                idle::recovery_error(if outcome == "pat" {
+                    "Reopen this cloud conversation to reconnect with your personal access token."
+                } else {
+                    "Your account no longer has access to this cloud conversation."
+                })
+            );
+        } else {
+            let (settings, release) = result?;
+            assert_eq!(settings.as_ref(), Some(cached.as_ref()));
+            assert!(client.next_event().now_or_never().is_none());
+            let loaded: protocol::ThreadLoadedListResponse = requests_handle
+                .request_typed(protocol::ClientRequest::ThreadLoadedList {
+                    request_id: protocol::RequestId::Integer(4),
+                    params: Default::default(),
+                })
+                .await?;
+            assert!(loaded.data.is_empty());
+
+            let auth_path = home.path().join("auth.json");
+            Mock::given(method("POST"))
+                .and(wiremock::matchers::path_regex(
+                    "/oaiproto.codex_app_server_backend.ThreadService/List(Turns|Items)",
+                ))
+                .respond_with(move |request: &wiremock::Request| {
+                    if outcome == "auth-change" {
+                        std::fs::remove_file(&auth_path).unwrap();
+                    }
+                    let body: &[u8] = if request.url.path().ends_with("ListItems") {
+                        b"\0\0\0\0\x0f\x0a\x0a\x0a\x08\x0a\x01u\x12\x03\xa2\x01\0\x12\x01x"
+                    } else {
+                        b"\x00\x00\x00\x00\x02\x0a\x00"
+                    };
+                    let response = ResponseTemplate::new(200)
+                        .insert_header("content-type", "application/grpc")
+                        .set_body_bytes(body);
+                    if outcome == "slow-history" {
+                        response.set_delay(std::time::Duration::from_secs(10))
+                    } else {
+                        response
+                    }
+                })
+                .expect(if matches!(outcome, "auth-change" | "slow-history") {
+                    1
+                } else {
+                    3
+                })
+                .mount(&server)
+                .await;
+            let history: Result<protocol::ThreadTurnsListResponse, _> = tokio::time::timeout(
+                std::time::Duration::from_secs(if outcome == "slow-history" { 3 } else { 2 }),
+                requests_handle.request_typed(protocol::ClientRequest::ThreadTurnsList {
+                    request_id: protocol::RequestId::Integer(5),
+                    params: protocol::ThreadTurnsListParams {
+                        thread_id: "t".into(),
+                        cursor: None,
+                        limit: Some(5),
+                        sort_direction: Some(protocol::SortDirection::Desc),
+                        items_view: Some(protocol::TurnItemsView::NotLoaded),
+                    },
+                }),
+            )
+            .await?;
+            if outcome == "auth-change" {
+                let Err(crate::TypedRequestError::Transport { source, .. }) = history else {
+                    panic!("expected changed sign-in to withhold the fetched page");
+                };
+                assert!(source.get_ref().unwrap().is::<CloudRecoverySignInChanged>());
+                assert_eq!(source.to_string(), idle::SIGN_IN_AGAIN);
+                let items = requests_handle
+                    .request(protocol::ClientRequest::ThreadItemsList {
+                        request_id: protocol::RequestId::Integer(7),
+                        params: serde_json::from_value(serde_json::json!({"threadId":"t"}))?,
+                    })
+                    .await
+                    .expect_err("the changed sign-in must reject the next page before RPC");
+                assert!(items.get_ref().unwrap().is::<CloudRecoverySignInChanged>());
+                assert!(
+                    server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .all(|request| !request.url.path().ends_with("/ListItems"))
+                );
+            } else if outcome == "slow-history" {
+                let Err(crate::TypedRequestError::Server { source, .. }) = history else {
+                    panic!("expected the recovery deadline to withhold the page");
+                };
+                assert_eq!(source, idle::recovery_error(idle::RECOVERY_TIMEOUT));
+            } else {
+                assert_eq!(
+                    history?,
+                    protocol::ThreadTurnsListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                        backwards_cursor: None,
+                    }
+                );
+                for page in 0..2 {
+                    let _: protocol::ThreadItemsListResponse = requests_handle
+                        .request_typed(protocol::ClientRequest::ThreadItemsList {
+                            request_id: protocol::RequestId::Integer(7 + page),
+                            params: serde_json::from_value(serde_json::json!({"threadId":"t"}))?,
+                        })
+                        .await?;
+                    if page == 0 {
+                        assert!(matches!(client.next_event().now_or_never().flatten(),
+                            Some(AppServerEvent::ServerNotification(notification))
+                                if matches!(*notification, protocol::ServerNotification::Warning(_))));
+                    } else {
+                        assert!(client.next_event().now_or_never().is_none());
+                    }
+                }
+            }
+            if outcome != "install" {
+                drop(release);
+                if outcome == "retry" {
+                    // No inventory read or yield may retire the canceled hold before this retry.
+                    let (settings, release) = handle
+                        .resume_disconnected_thread(
+                            "t".into(),
+                            /*require_history*/ true,
+                            tokio::time::Instant::now() + std::time::Duration::from_secs(8),
+                        )
+                        .await?;
+                    assert_eq!(settings.as_ref(), Some(cached.as_ref()));
+                    drop(release);
+                }
+                let loaded: protocol::ThreadLoadedListResponse = requests_handle
+                    .request_typed(protocol::ClientRequest::ThreadLoadedList {
+                        request_id: protocol::RequestId::Integer(6),
+                        params: Default::default(),
+                    })
+                    .await?;
+                assert!(loaded.data.is_empty());
+                assert!(client.next_event().now_or_never().is_none());
+            } else {
+                // The wiremock response is finite: it must never ACK a live installation.
+                assert!(release.install().await.is_err());
+                assert!(client.next_event().now_or_never().is_none());
+            }
+        }
+        client.shutdown().await?;
+        worker.await?;
+        server.verify().await;
+    }
     Ok(())
 }
 
@@ -643,25 +935,24 @@ async fn accepted_idle_reconnect_reports_changed_login() -> Result<()> {
     let factory = config.http_client_factory();
     let (mut client, _commands, output) = CloudClient::channel(/*capacity*/ 1);
     let handle = client.request_handle();
+    let mut recovery = idle::Recovery::new(
+        handle.reconnect.clone(),
+        Arc::new(cloud::Client::new(
+            &factory,
+            &server.uri(),
+            cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
+        )?),
+        idle::Login {
+            storage: config.auth_config(),
+            mode: codex_protocol::auth::AuthMode::Chatgpt,
+            token: "synthetic-bearer".into(),
+            account: "synthetic-account".into(),
+            permit: factory.network_policy().acquire(&server.uri().parse()?)?,
+        },
+    );
+    recovery.observed_idle = Some(true);
     let mut replies = Replies {
-        idle: Some(idle::Recovery {
-            state: handle.reconnect.clone(),
-            pending: None,
-            installed: None,
-            observed_idle: Some(true),
-            client: Arc::new(cloud::Client::new(
-                &factory,
-                &server.uri(),
-                cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
-            )?),
-            login: Arc::new(idle::Login {
-                storage: config.auth_config(),
-                mode: codex_protocol::auth::AuthMode::Chatgpt,
-                token: "synthetic-bearer".into(),
-                account: "synthetic-account".into(),
-                permit: factory.network_policy().acquire(&server.uri().parse()?)?,
-            }),
-        }),
+        idle: Some(recovery),
         active: Some(Attachment {
             thread_id: "t".into(),
             stream: stream::empty().boxed(),
