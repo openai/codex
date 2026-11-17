@@ -229,6 +229,7 @@ impl App {
         };
         match event {
             AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
+            AppEvent::RemoteControl(_) | AppEvent::RemoteControlForBackend { .. } | AppEvent::RemoteControlFinished { .. } => {}
             AppEvent::ConfirmDaemonRestart => self.confirm_daemon_restart(),
             AppEvent::RunDaemonRestart => {
                 if self.chat_widget.remote_connection.as_ref().is_some_and(|connection| connection.is_managed_daemon)

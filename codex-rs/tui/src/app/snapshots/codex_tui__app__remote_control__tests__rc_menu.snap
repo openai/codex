@@ -1,0 +1,48 @@
+---
+source: tui/src/app/remote_control_tests.rs
+expression: "views.join(\"\\n\\n\")"
+---
+  Remote control
+  Remote control requires the local background server
+
+
+›    Enable (disabled)
+
+  enter select · esc back
+
+  Remote control
+  Applies to local sessions; cloud sessions are unaffected.
+
+
+› 1. Enable
+     Add device (disabled)  Enable remote control first
+
+  enter select · esc back
+
+  Remote control
+  Applies to local sessions; cloud sessions are unaffected.
+
+
+› 1. Disable
+  2. Add device
+
+  enter select · esc back
+
+  Remote control
+  Remote control is off now, but may return after restart. Choose Disable to
+  save the preference.
+
+
+› 1. Disable
+     Add device (disabled)  Enable remote control first
+
+  enter select · esc back
+
+  Add device
+  Enter this pairing code on your other device: ABCD-EFGH. If it expires,
+  select Add device again.
+
+
+› 1. Done
+
+  enter select · esc back

@@ -324,6 +324,11 @@ fn disconnected_input_dispatches_local_config_command() {
         InputResult::Command(SlashCommand::Config),
     );
     assert_eq!(composer.current_text(), "");
+    composer.set_text_content("/rc".into(), Vec::new(), Vec::new());
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Enter.into(), RestrictedInputMode::Disconnected),
+        InputResult::Command(SlashCommand::Rc),
+    );
 }
 
 #[test]

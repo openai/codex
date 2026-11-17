@@ -248,6 +248,7 @@ mod misalignment_policy;
 mod model_defaults;
 mod new_session;
 mod quick_dials;
+pub(crate) mod remote_control;
 mod turn_tips;
 pub(crate) use new_session::has_launch_setting;
 mod archived_thread;
@@ -649,6 +650,7 @@ pub(crate) struct App {
     pub(crate) pending_update_action: Option<UpdateAction>,
     /// Retained through all loop exits so shutdown cannot interrupt stop followed by start.
     daemon_restart: Option<JoinHandle<anyhow::Result<codex_app_server_daemon::LifecycleOutput>>>,
+    remote_control_pending: bool,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///

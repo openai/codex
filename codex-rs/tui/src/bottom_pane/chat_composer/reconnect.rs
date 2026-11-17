@@ -199,7 +199,7 @@ impl ChatComposer {
                 .or_else(|| input.inline_command(text).map(|command| command.command))
                 .filter(|_| text.trim().lines().count() == 1);
             if matches!(command, Some(SlashCommandItem::Builtin(command))
-                if matches!(command, SlashCommand::Warnings | SlashCommand::Config | SlashCommand::Quit | SlashCommand::Exit)
+                if matches!(command, SlashCommand::Warnings | SlashCommand::Config | SlashCommand::Rc | SlashCommand::Quit | SlashCommand::Exit)
                     || mode == RestrictedInputMode::UnavailableThread && command.available_when_thread_unavailable())
             {
                 let result = self

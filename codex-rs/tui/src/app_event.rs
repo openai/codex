@@ -367,6 +367,15 @@ pub(crate) enum AppEvent {
         notice: crate::security_setup::Notice,
     },
     OpenDaemonMenu,
+    RemoteControl(crate::app::remote_control::Action),
+    RemoteControlForBackend {
+        backend_id: crate::backend_id::BackendId,
+        action: crate::app::remote_control::Action,
+    },
+    RemoteControlFinished {
+        backend_id: crate::backend_id::BackendId,
+        result: crate::app::remote_control::Outcome,
+    },
     ConfirmDaemonRestart,
     RunDaemonRestart,
     ConfirmDaemonUpdate(crate::update_action::DaemonUpdateSource),

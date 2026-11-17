@@ -55,6 +55,8 @@ pub enum SlashCommand {
     Mention,
     Status,
     Daemon,
+    #[strum(to_string = "rc", serialize = "remote")]
+    Rc,
     Warnings,
     Cd,
     #[strum(to_string = "pwd", serialize = "cwd")]
@@ -118,6 +120,7 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Daemon => "Manage the local background server",
+            SlashCommand::Rc => "manage remote control for the local background server",
             SlashCommand::Warnings => "view retained warnings and diagnostic details",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Cd => "change the current working directory",
@@ -196,6 +199,7 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Btw
                 | SlashCommand::Resume
+                | SlashCommand::Rc
         )
     }
 
@@ -211,6 +215,7 @@ impl SlashCommand {
                 | SlashCommand::Mention
                 | SlashCommand::Status
                 | SlashCommand::Daemon
+                | SlashCommand::Rc
                 | SlashCommand::Warnings
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
@@ -237,6 +242,7 @@ impl SlashCommand {
                 | SlashCommand::Quit
                 | SlashCommand::Exit
                 | SlashCommand::Status
+                | SlashCommand::Rc
                 | SlashCommand::Warnings
                 | SlashCommand::DebugConfig
                 | SlashCommand::Pwd
@@ -286,6 +292,7 @@ impl SlashCommand {
             | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::Daemon
+            | SlashCommand::Rc
             | SlashCommand::Warnings
             | SlashCommand::Pwd
             | SlashCommand::Usage

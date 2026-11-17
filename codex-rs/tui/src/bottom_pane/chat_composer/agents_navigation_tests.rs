@@ -14,6 +14,8 @@ fn parent_owned_thread_allows_local_commands() {
         ("/btw", SlashCommand::Btw),
         ("/diff ", SlashCommand::Diff),
         ("/daemon", SlashCommand::Daemon),
+        ("/rc", SlashCommand::Rc),
+        ("/remote", SlashCommand::Rc),
         ("/warnings", SlashCommand::Warnings),
     ] {
         let (mut composer, _rx) = new_test_composer();
@@ -29,6 +31,7 @@ fn parent_owned_thread_allows_local_commands() {
     for (command, args) in [
         (SlashCommand::Title, "model"),
         (SlashCommand::Statusline, "model --no-colors"),
+        (SlashCommand::Rc, "invalid"),
     ] {
         let (mut composer, _rx) = new_test_composer();
         composer.set_parent_owned_thread();
