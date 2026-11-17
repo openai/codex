@@ -111,11 +111,13 @@ ignore = [
     { id = "RUSTSEC-2026-0391", reason = "Codex, tonic and zip use zstd 0.13.3 without reusing borrowed contexts across streams. Remove when all paths use zstd >=0.14.3." },
     { id = "RUSTSEC-2026-0398", reason = "zstd 0.13.3 pulls in zstd-safe 7.2.4 with the affected seekable feature disabled. Remove when all paths use zstd-safe >=8.2.0." },
     { id = "RUSTSEC-2026-0403", reason = "zstd 0.13.3 pulls in zstd-safe 7.2.4. Codex, tonic and zip use read decoders or initialized output buffers and discard output on error. Remove when all paths use zstd-safe >=8.2.0." },
-    { id = "RUSTSEC-2026-0410", reason = "zstd-safe 7.2.4 pulls in zstd-sys 2.0.16. Its allocator bug only affects wasm32, and Codex ships native binaries. Remove when the lockfile uses zstd-sys >=2.1.2." },
-    # Reviewed 2026-10-29.
-    { id = "RUSTSEC-2026-0418", reason = "libz-sys 1.1.29 via curl-sys/curl in codex-http-client is Windows-only and skips the affected probe; cc is locked to 1.2.55 (<1.6.0). Remove when libz-sys >=1.1.31; reassess if used on Unix with cc >=1.6.0." },
     # Reviewed 2026-11-05.
     { id = "RUSTSEC-2026-0441", reason = "pin-utils 0.1.0 is unmaintained; pulled in via aws-smithy-http/aws-smithy-runtime/aws-smithy-types and loom under tokio-graceful; no patched release; remove when these dependency paths drop pin-utils" },
+    # Reviewed 2026-11-17.
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.43 is unmaintained; used directly across the workspace and through sqlx; no patched release; remove when these paths migrate to jiff/time or drop chrono" },
+    { id = "RUSTSEC-2026-0549", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; affected DNSSEC validation is disabled; reassess before enabling DNSSEC; remove when the Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0550", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; affected DNSSEC validation is disabled; reassess before enabling DNSSEC; remove when the Rama upgrade uses Hickory >=0.26.2" },
+    { id = "RUSTSEC-2026-0551", reason = "hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; affected DNSSEC validation is disabled; reassess before enabling DNSSEC; remove when the Rama upgrade uses Hickory >=0.26.2" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
