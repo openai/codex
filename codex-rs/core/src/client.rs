@@ -83,6 +83,7 @@ use codex_login::default_client::add_originator_header;
 use codex_otel::SessionTelemetry;
 use codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC;
 use codex_otel::current_span_w3c_trace_context;
+use codex_otel::inject_span_w3c_trace_headers;
 use codex_protocol::ItemIdGenerator;
 use codex_protocol::ResponseItemId;
 use codex_protocol::auth::AuthMode;
@@ -1504,6 +1505,7 @@ impl ModelClient {
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let mut headers = self.build_websocket_headers(responses_metadata).await;
         headers.extend(responses_headers.clone());
+        inject_span_w3c_trace_headers(&tracing::Span::current(), &mut headers);
         if let Some(affinity) = parent_routing_affinity {
             let uri = api_provider
                 .websocket_url_for_path(RESPONSES_PATH)

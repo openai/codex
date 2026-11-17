@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
-use tracing::trace_span;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
@@ -262,6 +262,13 @@ impl Session {
         let started_at = Instant::now();
         let startup_prewarm_session = Arc::clone(self);
         let input_label = input.as_str();
+        let prewarm_span = info_span!(
+            "startup_prewarm",
+            otel.name = "startup_prewarm",
+            thread.id = %self.thread_id(),
+            prewarm.input = input_label,
+        )
+        .or_current();
         let startup_prewarm = tokio::spawn(
             async move {
                 let result = schedule_startup_prewarm_inner(startup_prewarm_session, input).await;
@@ -278,12 +285,7 @@ impl Session {
                 );
                 result
             }
-            .instrument(trace_span!(
-                "startup_prewarm",
-                otel.name = "startup_prewarm",
-                thread.id = %self.thread_id(),
-                prewarm.input = input_label,
-            )),
+            .instrument(prewarm_span),
         );
         state.set_session_startup_prewarm(SessionStartupPrewarmHandle::new(
             startup_prewarm,
