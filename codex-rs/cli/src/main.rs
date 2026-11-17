@@ -1093,12 +1093,18 @@ async fn dispatch_cli(
         Some(Subcommand::Agents(options)) => Some(options),
         _ => None,
     };
-    if let Some(options) = agents_options
+    let session_remote = match &subcommand {
+        Some(Subcommand::Agents(options)) => Some(("agents", &options.remote)),
+        Some(Subcommand::Resume(options)) => Some(("resume", &options.remote)),
+        Some(Subcommand::Fork(options)) => Some(("fork", &options.remote)),
+        _ => None,
+    };
+    if let Some((command, options)) = session_remote
         && let Some(root_endpoint) = &remote.remote
-        && let Some(agents_endpoint) = &options.remote.remote
-        && root_endpoint != agents_endpoint
+        && let Some(command_endpoint) = &options.remote
+        && root_endpoint != command_endpoint
     {
-        anyhow::bail!("`codex agents` received conflicting remote server endpoints");
+        anyhow::bail!("`codex {command}` received conflicting remote server endpoints");
     }
     let root_remote = agents_options
         .and_then(|options| options.remote.remote.clone())

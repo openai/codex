@@ -653,6 +653,36 @@ fn remote_exec_rejects_conflicting_endpoints() -> Result<()> {
 }
 
 #[test]
+fn tui_session_commands_reject_conflicting_remotes_before_token_lookup() -> Result<()> {
+    const MISSING_TOKEN: &str = "CODEX_TEST_MISSING_TUI_REMOTE_TOKEN";
+    for command in ["resume", "fork"] {
+        let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+            .env_remove(MISSING_TOKEN)
+            .args([
+                "--remote",
+                "wss://a.example:443",
+                "--remote-auth-token-env",
+                MISSING_TOKEN,
+                command,
+                "--remote",
+                "wss://b.example:443",
+                THREAD_ID,
+            ])
+            .output()?;
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(!output.status.success());
+        assert!(
+            stderr.contains(&format!(
+                "`codex {command}` received conflicting remote server endpoints"
+            )),
+            "{command}: {stderr}"
+        );
+        assert!(!stderr.contains(MISSING_TOKEN), "{command}: {stderr}");
+    }
+    Ok(())
+}
+
+#[test]
 fn remote_session_commands_validate_config() -> Result<()> {
     let cases: &[(&[&str], &str, &str)] = &[
         (
