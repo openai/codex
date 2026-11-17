@@ -328,6 +328,42 @@ fn session_picker_layout_uses_editor_handoff_and_saves_choice() {
 }
 
 #[test]
+fn mouse_scroll_speed_picker_preserves_a_custom_value_and_saves_a_preset() {
+    let (mut panel, mut rx) = panel();
+    panel.handle_key_event(KeyCode::Char('/').into());
+    assert!(panel.handle_paste("mouse scroll speed".to_string()));
+    panel.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(
+        rx.try_recv().expect("open editor event"),
+        AppEvent::OpenConfigEditor(handoff) if handoff.editor == ConfigEditor::MouseScrollSpeed
+    ));
+
+    let (tx, mut rx) = unbounded_channel();
+    let keymap = RuntimeKeymap::defaults().list;
+    let tui = Tui {
+        mouse_scroll_speed: Some(1.75),
+        ..Default::default()
+    };
+    let mut picker = ListSelectionView::new(
+        mouse_scroll_speed(&tui, &keymap),
+        AppEventSender::new(tx),
+        keymap,
+    );
+    insta::assert_snapshot!(
+        "config_mouse_scroll_speed_choice",
+        render(&picker, /*width*/ 80)
+    );
+    picker.handle_key_event(KeyCode::Down.into());
+    picker.handle_key_event(KeyCode::Enter.into());
+
+    let AppEvent::SaveConfigPreference(preference) = rx.try_recv().expect("save choice event")
+    else {
+        panic!("expected config preference save");
+    };
+    assert_eq!(preference, ConfigPreference::MouseScrollSpeed(2.0));
+}
+
+#[test]
 fn copy_on_select_uses_editor_handoff_and_saves_choice() {
     let (mut panel, mut rx) = panel();
     for _ in 0..4 {

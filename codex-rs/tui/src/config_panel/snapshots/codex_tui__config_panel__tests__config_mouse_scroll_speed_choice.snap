@@ -1,0 +1,17 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+expression: "render(&picker, 80)"
+---
+
+  Mouse scroll speed
+  Choose a mouse-wheel speed for the fullscreen transcript
+
+
+  1. 0.5×
+  2. 1× (default)
+  3. 1.5×
+› 4. 1.75× (current)
+  5. 2×
+  6. 3×
+
+  enter select · esc back

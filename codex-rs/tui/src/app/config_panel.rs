@@ -100,6 +100,9 @@ impl App {
                 setting.enabled(&resolved.tui) == enabled
             }
             ConfigPreference::CopyOnSelect(mode) => resolved.tui.copy_on_select == mode,
+            ConfigPreference::MouseScrollSpeed(speed) => {
+                resolved.tui.mouse_scroll_speed == Some(speed)
+            }
             ConfigPreference::NotificationCondition(condition) => {
                 resolved.tui.notification_settings.condition == condition
             }

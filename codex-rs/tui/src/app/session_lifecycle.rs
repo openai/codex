@@ -582,6 +582,8 @@ impl App {
             chat_widget.last_terminal_title = previous_terminal_title;
         }
         chat_widget.config_panel_tui = self.chat_widget.config_panel_tui.clone();
+        chat_widget.config_panel_tui.mouse_scroll_speed =
+            chat_widget.local_settings.tui.mouse_scroll_speed;
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
         chat_widget.thread_params_mode = self.chat_widget.thread_params_mode;

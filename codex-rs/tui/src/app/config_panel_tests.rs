@@ -146,6 +146,35 @@ async fn config_toggle_save_uses_host_config_and_applies_live_while_offline() ->
 }
 
 #[tokio::test]
+async fn mouse_scroll_speed_save_updates_local_settings_and_config_file() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.save_config_preference(&mut tui, ConfigPreference::MouseScrollSpeed(1.5))
+        .await;
+    app.prepare_conversation(
+        ratatui::layout::Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+        ),
+        /*conversation_inset*/ None,
+        &tui.frame_requester(),
+    );
+
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(
+        &app.local_settings.user_config_path,
+    )?)?;
+    assert_eq!(
+        (
+            saved["tui"]["mouse_scroll_speed"].as_float(),
+            app.local_settings.tui.mouse_scroll_speed,
+            app.chat_widget.config_panel_tui.mouse_scroll_speed,
+            app.transcript_view.mouse_scroll_speed,
+        ),
+        (Some(1.5), Some(1.5), Some(1.5), 1.5),
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn effects_editor_refresh_preserves_pending_toggles() -> Result<()> {
     let (mut app, mut rx, _ops) = crate::app::tests::make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;

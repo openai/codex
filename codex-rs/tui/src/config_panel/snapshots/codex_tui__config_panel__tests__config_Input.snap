@@ -11,7 +11,7 @@ expression: "render(&panel, 140)"
 › Keyboard shortcuts    Configure ›          Browse actions and remap their keys
   Start in Vim mode     [ ] Off              Start new composers in Vim mode and use /vim for the current composer
   Paste detection       [x] On               Recognize pasted-text bursts and keep multiline input together
-
+  Mouse scroll speed    1× ›                 Adjust how far the fullscreen transcript scrolls with the mouse wheel
 
 
 

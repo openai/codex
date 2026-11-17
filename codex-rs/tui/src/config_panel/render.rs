@@ -118,6 +118,47 @@ pub(crate) fn effects_with_toggle_states(
     }
 }
 
+pub(crate) fn mouse_scroll_speed(
+    tui: &codex_config::types::Tui,
+    keymap: &ListKeymap,
+) -> SelectionViewParams {
+    let current = tui.mouse_scroll_speed.unwrap_or(1.0);
+    let mut speeds = vec![0.5, 1.0, 1.5, 2.0, 3.0];
+    let selected = match speeds.binary_search_by(|speed: &f64| speed.total_cmp(&current)) {
+        Ok(index) => index,
+        Err(index) => {
+            speeds.insert(index, current);
+            index
+        }
+    };
+    SelectionViewParams {
+        title: Some("Mouse scroll speed".to_string()),
+        subtitle: Some("Choose a mouse-wheel speed for the fullscreen transcript".to_string()),
+        footer_hint: Some(picker_hint_line_for_keymap(keymap)),
+        initial_selected_idx: Some(selected),
+        allow_input_when_disconnected: true,
+        items: speeds
+            .into_iter()
+            .map(|speed| SelectionItem {
+                name: if speed == 1.0 {
+                    "1× (default)".to_string()
+                } else {
+                    format!("{speed}×")
+                },
+                is_current: speed == current,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::SaveConfigPreference(
+                        ConfigPreference::MouseScrollSpeed(speed),
+                    ));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect(),
+        ..SelectionViewParams::picker()
+    }
+}
+
 pub(crate) fn notification_condition(
     tui: &codex_config::types::Tui,
     keymap: &ListKeymap,
