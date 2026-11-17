@@ -2610,6 +2610,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
+        reuse_response: bool,
     ) -> Result<()> {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
@@ -2637,6 +2638,13 @@ impl ModelClientSession {
             .await
         {
             Ok(WebsocketStreamOutcome::Stream(opened)) => {
+                if !reuse_response {
+                    // Keep the socket and its normalized images. Drop the continuation
+                    // before waiting so cancellation cannot expose the warm-up ID.
+                    self.websocket_session.last_response_rx = None;
+                    self.websocket_session.continuation_reset_reason =
+                        Some("restored_history_warmup");
+                }
                 let mut stream = (*opened).into_raw_stream()?;
                 // Wait for the v2 warmup request to complete before sending the first turn request.
                 while let Some(event) = stream.next().await {

@@ -135,6 +135,9 @@ mod dynamic_tools;
 #[path = "scenarios_audio_file_tests.rs"]
 mod audio_file;
 
+#[path = "scenarios_restored_history_prewarm.rs"]
+mod restored_history_prewarm;
+
 #[path = "scenarios_retained_tool_outputs.rs"]
 mod retained_tool_outputs;
 

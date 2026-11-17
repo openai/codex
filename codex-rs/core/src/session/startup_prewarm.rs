@@ -30,18 +30,24 @@ use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
+use codex_protocol::models::ResponseItem;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) enum PrewarmInput {
     Base,
     History,
+    Restoring(tokio::sync::oneshot::Receiver<crate::context_manager::ContextManager>),
 }
 
 impl PrewarmInput {
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Self::Base => "base",
             Self::History => "history",
+            Self::Restoring(_) => "restored_history",
         }
     }
 }
@@ -255,6 +261,7 @@ impl Session {
         let session_telemetry = self.services.session_telemetry.clone();
         let started_at = Instant::now();
         let startup_prewarm_session = Arc::clone(self);
+        let input_label = input.as_str();
         let startup_prewarm = tokio::spawn(
             async move {
                 let result = schedule_startup_prewarm_inner(startup_prewarm_session, input).await;
@@ -267,7 +274,7 @@ impl Session {
                 session_telemetry.record_duration(
                     STARTUP_PREWARM_DURATION_METRIC,
                     started_at.elapsed(),
-                    &[("status", status), ("input", input.as_str())],
+                    &[("status", status), ("input", input_label)],
                 );
                 result
             }
@@ -275,7 +282,7 @@ impl Session {
                 "startup_prewarm",
                 otel.name = "startup_prewarm",
                 thread.id = %self.thread_id(),
-                prewarm.input = input.as_str(),
+                prewarm.input = input_label,
             )),
         );
         state.set_session_startup_prewarm(SessionStartupPrewarmHandle::new(
@@ -299,6 +306,35 @@ impl Session {
         startup_prewarm
             .resolve(&self.services.session_telemetry, cancellation_token)
             .await
+    }
+}
+
+fn has_file_image(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|part| {
+            matches!(
+                part,
+                ContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                }
+            )
+        }),
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            output.content_items().is_some_and(|content| {
+                content.iter().any(|part| {
+                    matches!(
+                        part,
+                        FunctionCallOutputContentItem::InputImage {
+                            image: ImageReference::File { .. },
+                            ..
+                        }
+                    )
+                })
+            })
+        }
+        _ => false,
     }
 }
 
@@ -328,7 +364,14 @@ async fn schedule_startup_prewarm_inner(
     if websocket_ready {
         return Ok(client_session);
     }
-    let base_instructions = session.get_prompt_base_instructions().await.text;
+    // Existing warm-ups snapshot instructions before building the turn context.
+    // Only a cold-restore preconnect must defer this read until history is ready.
+    let instructions = session.get_prompt_base_instructions();
+    let instructions = if matches!(input, PrewarmInput::Restoring(_)) {
+        instructions.left_future()
+    } else {
+        futures::future::ready(instructions.await).right_future()
+    };
     let startup_turn_context = session
         .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
@@ -374,21 +417,36 @@ async fn schedule_startup_prewarm_inner(
         context_window_id,
     );
     // Start the handshake with the expected route while capturing tools for generate=false.
-    let (step_context, ()) = tokio::try_join!(
+    let restoring = matches!(input, PrewarmInput::Restoring(_));
+    let loaded_history = matches!(input, PrewarmInput::History);
+    let ((step_context, base_instructions, restored_history), ()) = tokio::try_join!(
         async {
+            // Restoration can change settings and the context window. Only the handshake
+            // may use their provisional values.
+            let (prompt_context, restored_history) = if let PrewarmInput::Restoring(ready) = input {
+                let snapshot = ready
+                    .await
+                    .map_err(|_| codex_protocol::error::CodexErr::TurnAborted)?;
+                (
+                    session
+                        .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+                        .await,
+                    Some(snapshot),
+                )
+            } else {
+                (Arc::clone(&startup_turn_context), None)
+            };
+            let base_instructions = instructions.await.text;
             let built_tools_started_at = Instant::now();
             let step_context = session
-                .capture_step_context(
-                    Arc::clone(&startup_turn_context),
-                    &startup_cancellation_token,
-                )
+                .capture_step_context(prompt_context, &startup_cancellation_token)
                 .await?;
             startup_turn_context.session_telemetry.record_startup_phase(
                 "startup_prewarm_build_tools",
                 built_tools_started_at.elapsed(),
                 /*status*/ None,
             );
-            Ok(step_context)
+            Ok((step_context, base_instructions, restored_history))
         },
         client_session.preconnect_websocket(
             &preconnect_model_info,
@@ -397,27 +455,40 @@ async fn schedule_startup_prewarm_inner(
             &handshake_metadata,
         ),
     )?;
+    // A 426 disables WebSockets for the session. Generation will prepare its own HTTP input.
+    if restoring && !session.services.model_client.responses_websocket_enabled() {
+        return Ok(client_session);
+    }
     let build_prompt_started_at = Instant::now();
-    let prompt_input = match input {
-        PrewarmInput::Base => Vec::new(),
-        PrewarmInput::History => {
-            // Use the same history projection and tool metadata as a sampling request.
-            // The real turn still checks this prefix before reusing the prepared response.
-            let mut history = session
-                .clone_history()
-                .await
-                .for_prompt(
-                    &step_context.settings.model_info.input_modalities,
-                    session.services.image_store.as_ref(),
-                )
-                .await;
-            session
-                .services
-                .executed_tool_calls
-                .attach_to_prompt(&mut history, &mut HashMap::new());
-            history
-        }
+    let history = if loaded_history {
+        Some(session.clone_history().await)
+    } else {
+        restored_history
     };
+    let prompt_input = if let Some(snapshot) = history {
+        // Use the same history projection and tool metadata as a sampling request.
+        let mut history = snapshot
+            .for_prompt(
+                &step_context.settings.model_info.input_modalities,
+                session.services.image_store.as_ref(),
+            )
+            .await;
+        session
+            .services
+            .executed_tool_calls
+            .attach_to_prompt(&mut history, &mut HashMap::new());
+        history
+    } else {
+        Vec::new()
+    };
+    // Only file images can benefit from the socket's normalized-image cache.
+    let warm_restored_images = restoring && prompt_input.iter().any(has_file_image);
+    let prompt_input = if restoring && !warm_restored_images {
+        Vec::new()
+    } else {
+        prompt_input
+    };
+    let reuse_response = !warm_restored_images;
     let startup_prompt = build_prompt(
         prompt_input,
         step_context.as_ref(),
@@ -451,6 +522,7 @@ async fn schedule_startup_prewarm_inner(
             step_context.settings.reasoning_summary,
             step_context.settings.service_tier.clone(),
             &responses_metadata,
+            reuse_response,
         )
         .await?;
     startup_turn_context.session_telemetry.record_startup_phase(

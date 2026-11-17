@@ -161,6 +161,8 @@ pub enum Feature {
     CodeModeHostOutputTruncation,
     /// Establish the code-mode host connection during session startup.
     CodeModePrewarm,
+    /// Warm persisted thread history before the first generation on cold resume.
+    RestoredHistoryPrewarm,
     /// Terminate active code mode cells when their turn is interrupted.
     CodeModeInterrupt,
     /// Removed compatibility flag for Code Mode tool description ordering.
@@ -1363,6 +1365,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModePrewarm,
         key: "code_mode_prewarm",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RestoredHistoryPrewarm,
+        key: "restored_history_prewarm",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

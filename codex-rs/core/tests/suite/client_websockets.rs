@@ -791,6 +791,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             harness.summary,
             /*service_tier*/ None,
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -888,6 +889,7 @@ async fn responses_websocket_request_prewarm_uses_caller_supplied_metadata() {
             harness.summary,
             /*service_tier*/ None,
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -933,6 +935,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             harness.summary,
             /*service_tier*/ None,
             &prewarm_responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -1397,6 +1400,7 @@ async fn responses_websocket_prewarm_reuses_advisory_model_and_tier_routing_hint
             harness.summary,
             warmup_tier.map(str::to_string),
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
