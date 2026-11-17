@@ -1,5 +1,7 @@
 //! Secure Enclave keys; biometric access is enforced by the key, not a separate UI check.
 
+use super::enrollment_diagnostics::EnrollmentError;
+use super::enrollment_diagnostics::log_enrollment_failure;
 use super::error;
 use super::key_protection;
 use crate::UserVerificationBiometricType;
@@ -106,13 +108,15 @@ impl UserVerificationProvider for NativeProvider {
     ) -> Result<UserVerificationKeyCreation, UserVerificationError> {
         let _lock = LifecycleLock::acquire(&self.namespace, guard)?;
         let context = noninteractive_context();
-        let existing = find_key(&self.namespace.label, &context, KeyUse::Protected)?;
+        let existing = find_key(&self.namespace.label, &context, KeyUse::Enrollment)?;
         guard.check()?;
         let (key, created) = match existing {
             Some(key) => (key, false),
             None => (create_key(&self.namespace.label)?, true),
         };
-        let credential = key_info(&key)?;
+        let credential = key_info(&key).inspect_err(|_| {
+            log_enrollment_failure("export_public_key", /*error*/ None);
+        })?;
         guard.check()?;
         Ok(UserVerificationKeyCreation {
             created,
@@ -283,7 +287,7 @@ impl UserVerificationProvider for NativeProvider {
     }
 }
 
-fn noninteractive_context() -> Retained<LAContext> {
+pub(super) fn noninteractive_context() -> Retained<LAContext> {
     // Each context is confined to this blocking operation and never shared across threads.
     unsafe {
         let context = LAContext::new();
@@ -300,6 +304,7 @@ fn check_biometrics(context: &LAContext) -> Result<(), UserVerificationError> {
 
 enum KeyUse {
     Protected,
+    Enrollment,
     Deletion,
 }
 
@@ -315,14 +320,23 @@ fn find_key(
                 _ => None,
             });
             if let Some(key) = &key
-                && matches!(key_use, KeyUse::Protected)
+                && !matches!(key_use, KeyUse::Deletion)
             {
-                key_protection::validate(key)?;
+                key_protection::validate(key).inspect_err(|_| {
+                    if matches!(key_use, KeyUse::Enrollment) {
+                        log_enrollment_failure("validate_existing_key", /*error*/ None);
+                    }
+                })?;
             }
             Ok(key)
         }
         Err(error) if error.code() == errSecItemNotFound => Ok(None),
-        Err(error) => Err(keychain_error(error)),
+        Err(error) => {
+            if matches!(key_use, KeyUse::Enrollment) {
+                log_enrollment_failure("lookup_key", Some(EnrollmentError::Status(error)));
+            }
+            Err(keychain_error(error))
+        }
     }
 }
 
@@ -341,7 +355,13 @@ fn key_query(label: &str, context: &LAContext) -> ItemSearchOptions {
 }
 
 fn create_key(label: &str) -> Result<SecKey, UserVerificationError> {
-    let access = key_protection::access_control()?;
+    let access = key_protection::access_control().map_err(|error| {
+        log_enrollment_failure(
+            "create_access_control",
+            Some(EnrollmentError::Status(error)),
+        );
+        keychain_error(error)
+    })?;
     let mut options = GenerateKeyOptions::default();
     options
         .set_key_type(KeyType::ec_sec_prime_random())
@@ -350,9 +370,15 @@ fn create_key(label: &str) -> Result<SecKey, UserVerificationError> {
         .set_token(Token::SecureEnclave)
         .set_location(Location::DataProtectionKeychain)
         .set_access_control(access);
-    let key = SecKey::new(&options)
-        .map_err(|error| error::classify(&error.domain().to_string(), error.code() as i64))?;
-    key_protection::validate(&key)?;
+    let key = SecKey::new(&options).map_err(|error| {
+        let domain = error.domain().to_string();
+        let code = error.code() as i64;
+        log_enrollment_failure("create_key", Some(EnrollmentError::Creation(&error)));
+        error::classify(&domain, code)
+    })?;
+    key_protection::validate(&key).inspect_err(|_| {
+        log_enrollment_failure("validate_created_key", /*error*/ None);
+    })?;
     Ok(key)
 }
 
