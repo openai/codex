@@ -307,6 +307,9 @@ pub struct TurnStartOptions {
     /// Explicit cyber treatment for this turn. Omission preserves the backend's
     /// automatic behavior.
     pub cyber_access_program: Option<CyberAccessProgram>,
+    /// Client attribution copied when spawning a child. Applied only to its initial
+    /// turn; later parent updates do not change this snapshot.
+    pub inherited_client_metadata: HashMap<String, String>,
 }
 
 /// What Core did with input submitted through `start_or_steer_turn`.

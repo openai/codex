@@ -830,6 +830,46 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
     );
 }
 
+#[tokio::test]
+async fn child_metadata_snapshot_excludes_parent_review_and_routing_fields() {
+    let (_, turn) = make_session_and_context().await;
+    let state = &turn.turn_metadata_state;
+    let client_metadata = HashMap::from([
+        ("cost_center".to_string(), "before".to_string()),
+        ("thread_id".to_string(), "parent-thread".to_string()),
+        ("turn_id".to_string(), "parent-turn".to_string()),
+        (
+            "mcp_request_meta".to_string(),
+            r#"{"selected_connector_ids":["parent-connector"]}"#.to_string(),
+        ),
+        (
+            "parent_response_id".to_string(),
+            "parent-response".to_string(),
+        ),
+        (
+            "misalignment_override".to_string(),
+            r#"{"review_target":"parent-only"}"#.to_string(),
+        ),
+    ]);
+    state.update_responsesapi_client_metadata(ResponsesApiClientMetadataUpdate {
+        replacement: Some(client_metadata),
+        ..Default::default()
+    });
+    let snapshot = state.client_metadata_for_child();
+    state.update_responsesapi_client_metadata(ResponsesApiClientMetadataUpdate {
+        patch: Some(HashMap::from([(
+            "cost_center".to_string(),
+            "after".to_string(),
+        )])),
+        ..Default::default()
+    });
+    assert_eq!(
+        [snapshot, state.client_metadata_for_child()],
+        ["before", "after"]
+            .map(|value| HashMap::from([("cost_center".to_string(), value.to_string(),)])),
+    );
+}
+
 #[test]
 fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     let temp_dir = TempDir::new().expect("temp dir");

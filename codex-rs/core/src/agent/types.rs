@@ -7,6 +7,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::turn_input::CyberAccessProgram;
+use std::collections::HashMap;
 
 /// Registry identity shared by loaded and unloaded agents.
 /// Registered agents have an `agent_id`; a reserved spawn can still be awaiting its ID.
@@ -41,6 +42,8 @@ pub struct SpawnAgentOptions {
     /// Attribute delegated usage to the turn that initiated it.
     pub turn_trigger: Option<String>,
     pub root_turn_id: Option<String>,
+    /// Client attribution captured from the turn that requested the child.
+    pub inherited_client_metadata: HashMap<String, String>,
     /// Inheritable bindings captured by the step that requested the child.
     pub environments: Option<TurnEnvironmentSnapshot>,
     /// Plugin choices from the turn requesting the child. Omission inherits the parent's

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -385,6 +386,22 @@ impl TurnMetadataState {
         update: ResponsesApiClientMetadataUpdate,
     ) {
         self.update_responsesapi_client_metadata(update);
+    }
+
+    /// Capture client attribution without carrying the parent's review or routing intent.
+    pub(crate) fn client_metadata_for_child(&self) -> HashMap<String, String> {
+        self.responsesapi_client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(key, _)| {
+                !matches!(
+                    key.as_str(),
+                    "misalignment_override" | "parent_response_id" | "mcp_request_meta"
+                )
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     }
 
     pub(crate) fn update_responsesapi_client_metadata(

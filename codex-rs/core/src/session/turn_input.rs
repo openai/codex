@@ -160,6 +160,7 @@ impl PreparedTurnInputSettings {
             initiating_agent_path,
             root_turn_id,
             cyber_access_program,
+            inherited_client_metadata,
         } = self.start_options;
         let helper_admission =
             if kind == TurnStartKind::User && turn_trigger.as_deref() != Some("queue") {
@@ -203,6 +204,12 @@ impl PreparedTurnInputSettings {
         let Some((turn_context, settings_snapshot)) = turn_context else {
             return Ok(None);
         };
+        turn_context
+            .turn_metadata_state
+            .update_responsesapi_client_metadata(ResponsesApiClientMetadataUpdate {
+                replacement: Some(inherited_client_metadata),
+                ..Default::default()
+            });
         if let Some(turn_trigger) = turn_trigger {
             turn_context
                 .turn_metadata_state

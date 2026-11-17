@@ -641,6 +641,14 @@ impl Session {
         if let Some(id) = start_options.root_turn_id {
             turn_context.turn_metadata_state.set_root_turn_id(id);
         }
+        turn_context
+            .turn_metadata_state
+            .update_responsesapi_client_metadata(
+                codex_protocol::turn_input::ResponsesApiClientMetadataUpdate {
+                    replacement: Some(start_options.inherited_client_metadata),
+                    ..Default::default()
+                },
+            );
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         // Context construction can outlive an interrupt or replacement. Do not let
