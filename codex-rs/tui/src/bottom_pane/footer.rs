@@ -94,6 +94,7 @@ const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 pub(crate) struct FooterKeyHints {
     pub(crate) agents: Option<ShortcutHint>,
     pub(crate) toggle_shortcuts: Option<ShortcutHint>,
+    pub(crate) shortcut_guide: shortcut_overlay::ShortcutGuideKeys,
     pub(crate) queue: Option<ShortcutHint>,
     pub(crate) insert_newline: Option<ShortcutHint>,
     pub(crate) external_editor: Option<ShortcutHint>,
@@ -113,6 +114,9 @@ impl FooterKeyHints {
         Self {
             agents: None,
             toggle_shortcuts: Some(key_hint::plain(KeyCode::Char('?')).into()),
+            shortcut_guide: shortcut_overlay::ShortcutGuideKeys::from_keymap(
+                &crate::keymap::RuntimeKeymap::defaults(),
+            ),
             queue: Some(key_hint::plain(KeyCode::Tab).into()),
             insert_newline: Some(key_hint::ctrl(KeyCode::Char('j')).into()),
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g')).into()),
@@ -165,7 +169,7 @@ pub(crate) enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
     /// Multi-line shortcut overlay shown after pressing `?`.
-    ShortcutOverlay,
+    ShortcutOverlay(shortcut_overlay::ShortcutView),
     /// Transient "press Esc again" hint shown after the first Esc while idle.
     EscHint,
     /// Base single-line footer when the composer is empty.
@@ -193,8 +197,8 @@ pub(crate) fn toggle_shortcut_mode(
     };
 
     match current {
-        FooterMode::ShortcutOverlay | FooterMode::QuitShortcutReminder => base_mode,
-        _ => FooterMode::ShortcutOverlay,
+        FooterMode::ShortcutOverlay(_) | FooterMode::QuitShortcutReminder => base_mode,
+        _ => FooterMode::ShortcutOverlay(Default::default()),
     }
 }
 
@@ -209,7 +213,7 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
         FooterMode::EscHint
-        | FooterMode::ShortcutOverlay
+        | FooterMode::ShortcutOverlay(_)
         | FooterMode::QuitShortcutReminder
         | FooterMode::HistorySearch
         | FooterMode::ComposerHasDraft => FooterMode::ComposerEmpty,
@@ -219,7 +223,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 
 pub(crate) fn footer_height(props: &FooterProps, width: u16) -> u16 {
     match props.mode {
-        FooterMode::ShortcutOverlay => {
+        FooterMode::ShortcutOverlay(_) => {
             shortcut_overlay::lines(props, width.saturating_sub(FOOTER_INDENT_COLS as u16)).len()
                 as u16
         }
@@ -257,7 +261,7 @@ pub(crate) fn render_footer_from_props(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) {
-    if props.mode == FooterMode::ShortcutOverlay {
+    if matches!(props.mode, FooterMode::ShortcutOverlay(_)) {
         shortcut_overlay::render(props, inset_footer_hint_area(area), buf);
         return;
     }
@@ -767,7 +771,7 @@ fn footer_from_props_lines(
                 key_hints,
             )]
         }
-        FooterMode::ShortcutOverlay => shortcut_overlay::lines(props, u16::MAX),
+        FooterMode::ShortcutOverlay(_) => shortcut_overlay::lines(props, u16::MAX),
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ComposerHasDraft => {
             let state = LeftSideState {
@@ -849,7 +853,7 @@ impl FooterMode {
             Self::ComposerHasDraft => !is_task_running,
             Self::HistorySearch
             | Self::QuitShortcutReminder
-            | Self::ShortcutOverlay
+            | Self::ShortcutOverlay(_)
             | Self::EscHint => false,
         }
     }
@@ -1028,7 +1032,7 @@ mod tests {
                     FooterMode::ComposerHasDraft => false,
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
-                    | FooterMode::ShortcutOverlay
+                    | FooterMode::ShortcutOverlay(_)
                     | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match props.mode {
@@ -1036,7 +1040,7 @@ mod tests {
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
                     | FooterMode::ComposerEmpty
-                    | FooterMode::ShortcutOverlay
+                    | FooterMode::ShortcutOverlay(_)
                     | FooterMode::EscHint => false,
                 };
                 let status_line_active = props.status_line_enabled
@@ -1179,7 +1183,7 @@ mod tests {
                             FooterMode::EscHint
                                 | FooterMode::HistorySearch
                                 | FooterMode::QuitShortcutReminder
-                                | FooterMode::ShortcutOverlay
+                                | FooterMode::ShortcutOverlay(_)
                         );
                     if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
@@ -1285,7 +1289,7 @@ mod tests {
         snapshot_footer(
             "footer_shortcuts_shift_and_esc",
             FooterProps {
-                mode: FooterMode::ShortcutOverlay,
+                mode: FooterMode::ShortcutOverlay(Default::default()),
                 esc_backtrack_hint: true,
                 is_task_running: false,
                 queue_submissions: false,
@@ -1305,7 +1309,7 @@ mod tests {
         snapshot_footer(
             "footer_shortcuts_collaboration_modes_enabled",
             FooterProps {
-                mode: FooterMode::ShortcutOverlay,
+                mode: FooterMode::ShortcutOverlay(Default::default()),
                 esc_backtrack_hint: false,
                 is_task_running: false,
                 queue_submissions: false,
@@ -1322,7 +1326,7 @@ mod tests {
         snapshot_footer(
             "footer_shortcuts_running",
             FooterProps {
-                mode: FooterMode::ShortcutOverlay,
+                mode: FooterMode::ShortcutOverlay(Default::default()),
                 esc_backtrack_hint: false,
                 is_task_running: true,
                 queue_submissions: false,

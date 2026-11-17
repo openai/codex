@@ -1043,7 +1043,7 @@ fn status_survives_hints_feedback_and_queue() {
     composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
     let mut states = Vec::new();
     states.push(render(&composer, /*width*/ 64, /*footer*/ None).0);
-    composer.footer.mode = FooterMode::ShortcutOverlay;
+    composer.footer.mode = FooterMode::ShortcutOverlay(Default::default());
     composer.show_footer_flash("Copied selection".into(), Duration::from_secs(/*secs*/ 3));
     states.push(render(&composer, /*width*/ 64, /*footer*/ None).0);
     composer.footer.flash = None;

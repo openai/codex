@@ -236,7 +236,7 @@ impl App {
         }
     }
 
-    fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
+    pub(super) fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
         self.conversation_focus_available(tui)
             && self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
             && self.sidebar_chooser_available()

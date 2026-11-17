@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/shortcut_overlay_tests.rs
 expression: terminal.backend()
 ---
-"  Keyboard shortcuts                                                            "
+"  Keyboard shortcuts  ·  Tab: Keyboard                                          "
 "                                                                                "
 "  Compose                      Session                                          "
 "  /       Commands             tab      Send message                            "

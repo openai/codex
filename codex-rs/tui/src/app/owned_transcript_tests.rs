@@ -328,6 +328,99 @@ async fn recap_spacing_belongs_to_the_transcript_tail() -> Result<()> {
 }
 
 #[tokio::test]
+async fn shortcut_action_list_leaves_room_for_the_owned_transcript() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells
+        .push(Arc::new(crate::history_cell::PlainHistoryCell::new(vec![
+            "Conversation remains visible".into(),
+        ])));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 60, /*height*/ 24);
+    tui.terminal.resize(size)?;
+
+    app.chat_widget.handle_key_event(KeyCode::Char('?').into());
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let screen = buffer_text(buffer);
+    let visible_lines = screen
+        .lines()
+        .filter(|row| {
+            row.contains("Conversation remains visible")
+                || row.contains("Keyboard shortcuts")
+                || row.contains("resize to see all")
+                || row.contains("/keymap customize")
+                || row.contains("Ask Codex")
+                || row.contains("esc close")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(visible_lines, @"
+    Conversation remains visible
+      Keyboard shortcuts
+      … resize to see all
+      /keymap customize
+    › Ask Codex to do anything
+      ? / esc close
+    ");
+
+    assert!(
+        app.chat_widget
+            .handle_shortcut_view_key(KeyCode::Tab.into())
+    );
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let screen = buffer_text(buffer);
+    assert!(screen.contains("Conversation remains visible"));
+    assert!(screen.contains("Keyboard unavailable"));
+
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shortcut_keyboard_fits_in_owned_transcript_at_80x24() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.chat_widget.handle_key_event(KeyCode::Char('?').into());
+    assert!(
+        app.chat_widget
+            .handle_shortcut_view_key(KeyCode::Tab.into())
+    );
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 24);
+    tui.terminal.resize(size)?;
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    insta::assert_snapshot!(
+        "shortcut_keyboard_owned_transcript",
+        normalize_snapshot_paths(buffer_text(buffer))
+    );
+
+    app.transcript_cells.push(user_cell("needle"));
+    app.transcript_view.begin_search();
+    app.transcript_view.paste_search("needle");
+    app.render_owned_transcript(&mut tui, size)?;
+    assert!(app.transcript_view.is_search_editing());
+    assert!(!app.shortcut_guide_owns_input(&tui));
+
+    app.transcript_view
+        .handle_key(KeyCode::Enter.into(), &app.transcript_cells);
+    assert!(!app.transcript_view.is_search_editing());
+    assert!(app.transcript_view.has_active_interaction());
+    assert!(!app.shortcut_guide_owns_input(&tui));
+
+    app.transcript_view
+        .handle_key(KeyCode::Esc.into(), &app.transcript_cells);
+    assert!(app.shortcut_guide_owns_input(&tui));
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn owned_transcript_reserves_a_row_above_the_composer() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     attach_thread(&mut app, ThreadId::new());

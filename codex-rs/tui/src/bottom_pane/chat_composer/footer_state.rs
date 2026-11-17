@@ -16,6 +16,8 @@ use std::time::Instant;
 
 use super::super::footer::footer_height;
 use super::super::footer::reset_mode_after_activity;
+use super::super::shortcut_overlay;
+use super::super::shortcut_overlay::ShortcutView;
 use super::ActivePopup;
 use super::warning_notice;
 use crate::bottom_pane::StatusLine;
@@ -23,6 +25,7 @@ use crate::bottom_pane::footer::FooterKeyHints;
 use crate::bottom_pane::footer::FooterProps;
 use crate::key_hint;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Styled;
@@ -35,6 +38,7 @@ use crate::bottom_pane::footer::CollaborationModeIndicator;
 use crate::bottom_pane::footer::FooterMode;
 use crate::bottom_pane::footer::GoalStatusIndicator;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
 use crate::style::secondary_text_style;
 use std::time::Duration;
@@ -99,7 +103,8 @@ impl super::ChatComposer {
         let is_wsl = {
             #[cfg(target_os = "linux")]
             {
-                mode == FooterMode::ShortcutOverlay && crate::clipboard_paste::is_probably_wsl()
+                matches!(mode, FooterMode::ShortcutOverlay(_))
+                    && crate::clipboard_paste::is_probably_wsl()
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -122,6 +127,7 @@ impl super::ChatComposer {
                     .agents_navigation_available()
                     .then_some(key_hint::plain(KeyCode::Left).into()),
                 toggle_shortcuts: self.footer.toggle_shortcuts_key,
+                shortcut_guide: self.footer.shortcut_guide_keys,
                 queue: self.footer.queue_key,
                 insert_newline: self.footer.insert_newline_key,
                 external_editor: self.footer.external_editor_key,
@@ -161,7 +167,7 @@ impl super::ChatComposer {
         match self.footer.mode {
             FooterMode::HistorySearch => FooterMode::HistorySearch,
             FooterMode::EscHint => FooterMode::EscHint,
-            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
+            mode @ FooterMode::ShortcutOverlay(_) => mode,
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
             }
@@ -239,7 +245,7 @@ impl super::ChatComposer {
             FooterMode::ComposerHasDraft => Some(ComposerState::Draft),
             FooterMode::HistorySearch
             | FooterMode::QuitShortcutReminder
-            | FooterMode::ShortcutOverlay
+            | FooterMode::ShortcutOverlay(_)
             | FooterMode::EscHint => None,
         };
         match &self.popups.active {
@@ -276,13 +282,39 @@ impl super::ChatComposer {
     }
 
     pub(crate) fn shortcut_overlay_visible(&self) -> bool {
-        self.footer_mode() == FooterMode::ShortcutOverlay
+        matches!(self.footer_mode(), FooterMode::ShortcutOverlay(_))
             && matches!(self.popups.active, ActivePopup::None)
             && self.custom_footer_height().is_none()
     }
 
+    pub(in crate::bottom_pane) fn handle_shortcut_view_key(&mut self, key: KeyEvent) -> bool {
+        let can_switch = self.is_empty() && !self.toggle_shortcuts_keys.is_pressed(key);
+        let props = self.footer_props();
+        let FooterMode::ShortcutOverlay(view) = &mut self.footer.mode else {
+            return false;
+        };
+        can_switch && view.handle_key(key, &props)
+    }
+
     pub(super) fn shortcuts_above_composer(&self, options: ComposerRenderOptions<'_>) -> bool {
-        self.shortcut_overlay_visible() && options.footer.is_none()
+        !options.unfocused && self.shortcut_overlay_visible() && options.footer.is_none()
+    }
+
+    pub(in crate::bottom_pane) fn height_budget(
+        &self,
+        width: u16,
+        options: ComposerRenderOptions<'_>,
+    ) -> u16 {
+        let guide_width = width.saturating_sub(crate::ui_consts::FOOTER_INDENT_COLS as u16);
+        if self.shortcuts_above_composer(options)
+            && self.footer_mode() == FooterMode::ShortcutOverlay(ShortcutView::Keyboard)
+            && shortcut_overlay::keyboard_fits_width(guide_width)
+        {
+            // A keyboard diagram needs all its rows. The conversation viewport still bounds it.
+            u16::MAX
+        } else {
+            options.max_height.unwrap_or(u16::MAX)
+        }
     }
 
     pub(super) fn footer_hint_height(&self, width: u16, options: ComposerRenderOptions<'_>) -> u16 {
@@ -398,6 +430,7 @@ pub(super) struct FooterState {
     pub(super) insert_newline_key: Option<ShortcutHint>,
     pub(super) queue_key: Option<ShortcutHint>,
     pub(super) toggle_shortcuts_key: Option<ShortcutHint>,
+    pub(super) shortcut_guide_keys: super::super::shortcut_overlay::ShortcutGuideKeys,
     pub(super) history_search_key: Option<ShortcutHint>,
     pub(super) reasoning_down_key: Option<ShortcutHint>,
     pub(super) reasoning_up_key: Option<ShortcutHint>,

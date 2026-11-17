@@ -379,7 +379,7 @@ impl ChatComposer {
             || self.is_task_running
             || self.voice_strip.is_some()
             || self.popup_active()
-            || self.footer_mode() == FooterMode::ShortcutOverlay
+            || matches!(self.footer_mode(), FooterMode::ShortcutOverlay(_))
             || area.height < 3
             || textarea.is_empty()
             || effective_stdout_color_level() != StdoutColorLevel::TrueColor

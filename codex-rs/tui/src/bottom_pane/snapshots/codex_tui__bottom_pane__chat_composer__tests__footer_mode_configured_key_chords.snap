@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
-"  Keyboard shortcuts                                                                                "
+"  Keyboard shortcuts  ·  Tab: Keyboard                                                              "
 "                                                                                                    "
 "  Compose                        Session                              Transcript (open first)       "
 "  /         Commands             tab      Send message                ⌃t            Open transcript "

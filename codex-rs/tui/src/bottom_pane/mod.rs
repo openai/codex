@@ -1953,6 +1953,14 @@ impl BottomPane {
         self.no_modal_or_popup_active() && self.composer.shortcut_overlay_visible()
     }
 
+    pub(crate) fn handle_shortcut_view_key(&mut self, key: KeyEvent) -> bool {
+        let handled = self.composer.handle_shortcut_view_key(key);
+        if handled {
+            self.request_redraw();
+        }
+        handled
+    }
+
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.completion_can_yield_focus() && !self.composer.popup_active()
@@ -2695,7 +2703,7 @@ impl Renderable for ChatComposerPresentation<'_> {
     fn desired_height(&self, width: u16) -> u16 {
         self.composer
             .desired_height_with_options(width, self.options)
-            .min(self.options.max_height.unwrap_or(u16::MAX))
+            .min(self.composer.height_budget(width, self.options))
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

@@ -480,6 +480,10 @@ impl ChatWidget {
         self.bottom_pane.shortcut_overlay_visible()
     }
 
+    pub(crate) fn handle_shortcut_view_key(&mut self, key: KeyEvent) -> bool {
+        self.bottom_pane.handle_shortcut_view_key(key)
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }

@@ -61,7 +61,7 @@ fn shortcut_footer_displays_configured_chords() {
     let keymap = RuntimeKeymap::from_config(&config).expect("valid composer chords");
     let (mut composer, _rx) = new_test_composer();
     composer.set_keymap_bindings(&keymap);
-    composer.footer.mode = FooterMode::ShortcutOverlay;
+    composer.footer.mode = FooterMode::ShortcutOverlay(Default::default());
 
     let hints = composer.footer_props().key_hints;
     assert_eq!(
@@ -85,7 +85,7 @@ fn shortcut_footer_displays_configured_chords() {
         /*enhanced_keys_supported*/ false,
         |composer| {
             composer.set_keymap_bindings(&keymap);
-            composer.footer.mode = FooterMode::ShortcutOverlay;
+            composer.footer.mode = FooterMode::ShortcutOverlay(Default::default());
         },
     );
 }

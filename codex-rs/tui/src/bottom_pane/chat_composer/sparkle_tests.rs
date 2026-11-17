@@ -295,7 +295,7 @@ fn shortcut_help_preserves_an_unused_sparkle_but_literal_question_marks_do_not()
                     if scenario == "close" {
                         super::super::FooterMode::ComposerEmpty
                     } else {
-                        super::super::FooterMode::ShortcutOverlay
+                        super::super::FooterMode::ShortcutOverlay(Default::default())
                     },
                     String::new(),
                     SparkleDraft::Untouched
