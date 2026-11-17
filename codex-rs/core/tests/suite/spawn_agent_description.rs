@@ -23,6 +23,7 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::MultiAgentVersion;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
@@ -161,6 +162,126 @@ async fn model_catalog_flag_controls_refresh(
 ) -> Result<()> {
     // The V1 opt-in case also snapshots the full request history in scenarios.rs.
     model_catalog_refresh_requests(multi_agent_version, model_catalog_in_context).await?;
+    Ok(())
+}
+
+#[test_case(false; "schema")]
+#[test_case(true; "context")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expanded_spawn_model_catalog_and_error_preserve_the_visible_limit(
+    model_catalog_in_context: bool,
+) -> Result<()> {
+    let server = start_mock_server().await;
+    let long_description = "x".repeat(300);
+    let mut models = (1..=17)
+        .map(|index| {
+            let slug = format!("picker-model-{index:02}");
+            let description = if index == 1 {
+                long_description.as_str()
+            } else {
+                "Picker model"
+            };
+            let mut model = test_model_info(
+                &slug,
+                &slug,
+                description,
+                ModelVisibility::List,
+                ReasoningEffort::Low,
+                Vec::new(),
+                Vec::new(),
+            );
+            model.priority = index;
+            model
+        })
+        .collect::<Vec<_>>();
+    let mut hidden = models[0].clone();
+    hidden.slug = "hidden-model".to_string();
+    hidden.visibility = ModelVisibility::Hide;
+    hidden.priority = -2;
+    let mut disabled = models[0].clone();
+    disabled.slug = "disabled-model".to_string();
+    disabled.multi_agent_version = Some(MultiAgentVersion::Disabled);
+    disabled.priority = -1;
+    models.extend([hidden, disabled]);
+    mount_models_once(&server, ModelsResponse { models }).await;
+
+    const CALL_ID: &str = "unknown-spawn-model";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_function_call_with_namespace(
+                    CALL_ID,
+                    MULTI_AGENT_V2_NAMESPACE,
+                    SPAWN_AGENT_TOOL_NAME,
+                    &serde_json::json!({
+                        "message": "Do the task",
+                        "task_name": "worker",
+                        "model": "missing-model",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("picker-model-01")
+        .with_config(move |config| {
+            config.features.enable(Feature::Collab).unwrap();
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .set_enabled(Feature::ModelCatalogInContext, model_catalog_in_context)
+                .unwrap();
+            config.multi_agent_v2.hide_spawn_agent_metadata = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_model_available(&test.thread_manager.get_models_manager(), "picker-model-01").await;
+    test.submit_turn("hello").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let listing = if model_catalog_in_context {
+        requests[0]
+            .message_input_texts("developer")
+            .into_iter()
+            .find(|message| message.starts_with("<model_catalog>"))
+            .expect("model catalog context")
+    } else {
+        spawn_agent_description(&requests[0].body_json(), MULTI_AGENT_V2_NAMESPACE)
+            .expect("spawn_agent description")
+    };
+    let listed = listing
+        .lines()
+        .filter_map(|line| line.strip_prefix("- `"))
+        .filter_map(|line| line.split_once('`').map(|(slug, _)| slug.to_string()))
+        .collect::<Vec<_>>();
+    let expected = (1..=16)
+        .map(|index| format!("picker-model-{index:02}"))
+        .collect::<Vec<_>>();
+    assert_eq!(listed, expected);
+    if model_catalog_in_context {
+        assert!(!listing.contains(&"x".repeat(251)));
+    } else {
+        assert!(listing.contains(&long_description));
+    }
+
+    let (output, _) = requests[1]
+        .function_call_output_content_and_success(CALL_ID)
+        .expect("spawn_agent error output");
+    assert_eq!(
+        output,
+        Some(format!(
+            "Unknown model `missing-model` for spawn_agent. Available models: {}",
+            expected.join(", ")
+        ))
+    );
     Ok(())
 }
 

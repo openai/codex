@@ -6,7 +6,7 @@ Scenario: Astra sees two environments with different permissions. Only the secon
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=042356d133fb33da):
+00:additional_tools/developer (3; hash=f388ebd7783b858c):
         - namespace/functions; hash=ebc92fe078f78ade
           - custom/exec
           - function/wait
@@ -14,7 +14,7 @@ Scenario: Astra sees two environments with different permissions. Only the secon
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

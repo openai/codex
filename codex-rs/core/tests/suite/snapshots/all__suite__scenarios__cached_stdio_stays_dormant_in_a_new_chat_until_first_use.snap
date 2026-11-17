@@ -14,7 +14,7 @@ Settings:
   store: false
   stream: true
   tool_choice: "auto"
-  tools (11; hash=03a4422bf5b0f679):
+  tools (11; hash=2b4c921518a4db6f):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=24f4b6739dd5d940
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
@@ -23,7 +23,7 @@ Settings:
     - function/update_plan: Updates the task plan. Provide an optional explanation and a list of plan items, each with a step...; args=[explanation, plan]; hash=cbba5ed302a9c0eb
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
-    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=2327142bda177c50
+    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=f066a006a1fd060e
       - function/close_agent
       - function/resume_agent
       - function/send_input
@@ -53,7 +53,7 @@ Settings:
 
 ## Window 2 (after request 3)
 Settings: relative to window 1
-  tools (11; hash=719b5fb71b0bf5b4):
+  tools (11; hash=82d35d01519a030e):
     ~ namespace/mcp__cached_rmcp: Use the tools from live-helper.; hash=36249b57679444b8
       - function/echo
 -- request 4 (request) --

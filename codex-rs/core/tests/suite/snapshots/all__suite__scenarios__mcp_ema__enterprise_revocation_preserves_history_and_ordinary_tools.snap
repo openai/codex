@@ -15,7 +15,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (14; hash=44600ef2dfd7d301):
+  tools (14; hash=6009d2b483bffccf):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=24f4b6739dd5d940
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
@@ -28,7 +28,7 @@ Settings:
       - function/sleep
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
-    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
       - function/followup_task
       - function/interrupt_agent
       - function/list_agents
@@ -67,7 +67,7 @@ Settings:
 
 ## Window 2 (after request 2)
 Settings: relative to window 1
-  tools (13; hash=b7efc4051fbceed6):
+  tools (13; hash=2469039dcc5dff80):
     - removed namespace/mcp__enterprise
 -- request 3 (turn) --
 00:message/developer:

@@ -16,7 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=ddc1f237b3cabaee):
+00:additional_tools/developer (3; hash=85dc7ee74cc74b50):
         - namespace/functions; hash=a1243ae7ec163900
           - custom/exec
           - function/wait
@@ -25,7 +25,7 @@ Settings:
           - function/new_context
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
