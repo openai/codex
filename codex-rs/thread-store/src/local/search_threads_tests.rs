@@ -177,6 +177,91 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
     }
 }
 
+#[tokio::test]
+async fn searches_are_independent_across_catalog_refills() -> Result<(), Box<dyn std::error::Error>>
+{
+    let home = TempDir::new()?;
+    let config = test_config(home.path());
+    let db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await?;
+    let store = LocalThreadStore::new(config, Some(db.clone()));
+    // At this page size the catalog returns 256 rows. Put a hit on either side.
+    let created_at = Utc::now();
+    for id in 1..=258 {
+        let message = match id {
+            258 => "first needle",
+            257 => "other query",
+            1 => "last NEEDLE",
+            _ => "ordinary conversation",
+        };
+        let path = write_session_file_with(
+            home.path(),
+            home.path().join("sessions/2025/01/03"),
+            "2025-01-03T12-00-00",
+            Uuid::from_u128(id),
+            message,
+            Some("test-provider"),
+            ThreadHistoryMode::Legacy,
+        )?;
+        let mut row = codex_state::ThreadMetadataBuilder::new(
+            ThreadId::from_u128(id),
+            path,
+            created_at,
+            SessionSource::Cli,
+        )
+        .build("test-provider");
+        row.first_user_message = Some(message.to_owned());
+        db.upsert_thread(&row).await?;
+    }
+    let search = async |query: &str| {
+        let page = store
+            .search_threads(SearchThreadsParams {
+                include_attached_threads: false,
+                account: None,
+                page_size: 2,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: vec![SessionSource::Cli],
+                archived: false,
+                search_term: query.to_owned(),
+            })
+            .await?;
+        Ok::<_, crate::ThreadStoreError>((
+            page.items
+                .into_iter()
+                .map(|item| (item.thread.thread_id, item.snippet))
+                .collect::<Vec<_>>(),
+            page.next_cursor,
+        ))
+    };
+    let (many, one, none) = tokio::try_join!(search("needle"), search("other"), search("absent"))?;
+    assert_eq!(
+        (many, one, none),
+        (
+            (
+                vec![
+                    (
+                        ThreadId::from_u128(/*value*/ 258),
+                        "first needle".to_owned()
+                    ),
+                    (ThreadId::from_u128(/*value*/ 1), "last NEEDLE".to_owned()),
+                ],
+                None,
+            ),
+            (
+                vec![(ThreadId::from_u128(/*value*/ 257), "other query".to_owned())],
+                None
+            ),
+            (vec![], None),
+        )
+    );
+    Ok(())
+}
+
 async fn write_named_rollout(home: &Path, id: Uuid, attached_to: Option<Uuid>) -> PathBuf {
     let path = write_session_file_with_fork(
         home,

@@ -27,8 +27,8 @@ use crate::RolloutItem;
 use crate::RolloutLine;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
+use crate::RolloutSnippetMatcher;
 use crate::append_rollout_item_to_path;
-use crate::first_rollout_content_match_snippet;
 use crate::read_session_meta_line;
 use crate::search_rollout_matches;
 
@@ -344,7 +344,7 @@ async fn compressed_search_preserves_first_visible_snippet_and_no_match() -> any
             ("absent", None),
         ] {
             assert_eq!(
-                first_rollout_content_match_snippet(&path, query).await?,
+                RolloutSnippetMatcher::new(query).first_match(&path).await?,
                 expected.map(str::to_string),
                 "compressed={compressed}, query={query}"
             );
@@ -365,11 +365,14 @@ async fn compressed_search_only_reports_stream_errors_before_a_match() -> anyhow
     fs::write(&path, contents)?;
     compress_now(&path)?;
     assert_eq!(
-        first_rollout_content_match_snippet(&path, "needle").await?,
+        RolloutSnippetMatcher::new("needle")
+            .first_match(&path)
+            .await?,
         Some("needle before unreadable tail".to_owned())
     );
     assert_eq!(
-        first_rollout_content_match_snippet(&path, "absent")
+        RolloutSnippetMatcher::new("absent")
+            .first_match(&path)
             .await
             .unwrap_err()
             .kind(),

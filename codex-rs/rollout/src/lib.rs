@@ -161,7 +161,7 @@ pub use recorder::thread_item_from_state_metadata;
 pub use reverse_jsonl_scanner::ReverseJsonlScanner;
 pub use reverse_jsonl_scanner::ScanOutcome;
 pub use rollout_reference_index::RolloutReferenceIndex;
-pub use search::first_rollout_content_match_snippet;
+pub use search::RolloutSnippetMatcher;
 pub use search::search_rollout_matches;
 pub use search::search_rollout_paths;
 pub use session_index::append_thread_name;

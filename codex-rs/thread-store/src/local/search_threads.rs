@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use codex_install_context::InstallContext;
 use codex_rollout::RolloutConfig;
-use codex_rollout::first_rollout_content_match_snippet;
+use codex_rollout::RolloutSnippetMatcher;
 use codex_rollout::parse_cursor;
 use codex_rollout::search_rollout_matches;
 use codex_utils_absolute_path::normalize_windows_device_path;
@@ -117,6 +117,7 @@ pub(super) async fn search_threads(
         .map(|(path, snippet)| (rollout_search_path(&path), snippet))
         .collect::<HashMap<_, _>>();
 
+    let mut snippet_matcher = RolloutSnippetMatcher::new(search_term);
     loop {
         let page = list_rollout_threads(
             state_db.clone(),
@@ -158,7 +159,8 @@ pub(super) async fn search_threads(
                 }
             }
             if snippet.is_none() {
-                snippet = first_rollout_content_match_snippet(item.path.as_path(), search_term)
+                snippet = snippet_matcher
+                    .first_match(&item.path)
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read rollout search match: {err}"),

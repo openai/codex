@@ -4,6 +4,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -125,7 +126,7 @@ async fn scan_rollout_matches(
     let mut matches = HashMap::new();
     let mut dirs = vec![root.to_path_buf()];
     let json_search_term = case_insensitive_literal_regex(json_search_term)?;
-    let mut patterns = None;
+    let mut matcher = RolloutSnippetMatcher::new(search_term);
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -147,17 +148,17 @@ async fn scan_rollout_matches(
                 continue;
             };
             if rollout_file.is_compressed() {
-                if let Some(snippet) =
-                    first_content_match_snippet(rollout_file.path(), search_term, &mut patterns)
-                        .await
-                        .unwrap_or_else(|err| {
-                            tracing::warn!(
-                                path = %rollout_file.path().display(),
-                                %err,
-                                "Failed to search compressed rollout"
-                            );
-                            None
-                        })
+                if let Some(snippet) = matcher
+                    .first_match(rollout_file.path())
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(
+                            path = %rollout_file.path().display(),
+                            %err,
+                            "Failed to search compressed rollout"
+                        );
+                        None
+                    })
                 {
                     matches.insert(
                         compression::plain_rollout_path(rollout_file.path()),
@@ -185,38 +186,44 @@ async fn rollout_contains(path: &Path, search_term: &Regex) -> io::Result<bool> 
     Ok(false)
 }
 
-pub async fn first_rollout_content_match_snippet(
-    path: &Path,
-    search_term: &str,
-) -> io::Result<Option<String>> {
-    first_content_match_snippet(path, search_term, &mut None).await
+/// Finds snippets across rollouts for one search term, compiling only when a file is read.
+pub struct RolloutSnippetMatcher<'a> {
+    search_term: &'a str,
+    patterns: Option<Arc<(Regex, Regex)>>,
 }
 
-async fn first_content_match_snippet(
-    path: &Path,
-    search_term: &str,
-    patterns: &mut Option<(Regex, Regex)>,
-) -> io::Result<Option<String>> {
-    let lines = compression::open_rollout_line_reader(path).await?;
-    // Keep compilation errors inside the caller's per-file error handler.
-    let (json_search_term, search_term) = match patterns {
-        Some(patterns) => patterns,
-        None => patterns.insert((
-            case_insensitive_literal_regex(json_escaped_search_term(search_term)?)?,
-            case_insensitive_literal_regex(search_term)?,
-        )),
-    };
-    let json_search_term = json_search_term.clone();
-    let search_term = search_term.clone();
-    lines
-        .find_map(move |line| {
-            if json_search_term.is_match(line) {
-                content_match_snippet(line, &search_term)
-            } else {
-                None
-            }
-        })
-        .await
+impl<'a> RolloutSnippetMatcher<'a> {
+    pub fn new(search_term: &'a str) -> Self {
+        Self {
+            search_term,
+            patterns: None,
+        }
+    }
+
+    /// Returns the first matching conversation excerpt. The file is opened before compiling
+    /// the patterns so per-file I/O errors take precedence even on the first call.
+    pub async fn first_match(&mut self, path: &Path) -> io::Result<Option<String>> {
+        let lines = compression::open_rollout_line_reader(path).await?;
+        let patterns = match &self.patterns {
+            Some(patterns) => patterns,
+            None => self.patterns.insert(Arc::new((
+                case_insensitive_literal_regex(json_escaped_search_term(self.search_term)?)?,
+                case_insensitive_literal_regex(self.search_term)?,
+            ))),
+        };
+        // Share the regexes across file scans to reuse their scratch caches.
+        let patterns = Arc::clone(patterns);
+        lines
+            .find_map(move |line| {
+                let (json_search_term, search_term) = patterns.as_ref();
+                if json_search_term.is_match(line) {
+                    content_match_snippet(line, search_term)
+                } else {
+                    None
+                }
+            })
+            .await
+    }
 }
 
 async fn scan_compressed_rollout_matches(
@@ -256,20 +263,16 @@ async fn scan_compressed_rollout_matches(
     const COMPRESSED_SEARCH_WORKERS: usize = 4;
     let scan = async |paths: &[PathBuf]| {
         let mut matches = HashMap::new();
-        let mut patterns = None;
+        let mut matcher = RolloutSnippetMatcher::new(search_term);
         for path in paths {
-            if let Some(snippet) =
-                first_content_match_snippet(path.as_path(), search_term, &mut patterns)
-                    .await
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(
-                            path = %path.as_path().display(),
-                            %err,
-                            "Failed to search compressed rollout"
-                        );
-                        None
-                    })
-            {
+            if let Some(snippet) = matcher.first_match(path).await.unwrap_or_else(|err| {
+                tracing::warn!(
+                    path = %path.as_path().display(),
+                    %err,
+                    "Failed to search compressed rollout"
+                );
+                None
+            }) {
                 matches.insert(
                     compression::plain_rollout_path(path.as_path()),
                     Some(snippet),
@@ -291,6 +294,8 @@ fn json_escaped_search_term(search_term: &str) -> io::Result<String> {
 }
 
 fn case_insensitive_literal_regex(search_term: impl AsRef<str>) -> io::Result<Regex> {
+    #[cfg(test)]
+    tests::REGEX_COMPILATIONS.set(tests::REGEX_COMPILATIONS.get() + 1);
     RegexBuilder::new(regex::escape(search_term.as_ref()).as_str())
         .case_insensitive(true)
         .build()
