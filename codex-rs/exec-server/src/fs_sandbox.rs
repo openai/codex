@@ -74,7 +74,7 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let command = self.sandbox_command(sandbox)?;
-        crate::run_integrity_checks(&command).await;
+        crate::run_integrity_checks((&command).into()).await;
         Ok(command)
     }
 
@@ -128,7 +128,7 @@ impl FileSystemSandboxRunner {
                 command,
                 permissions: &sandbox.permissions,
                 workspace_roots: Some(&sandbox.workspace_roots),
-                runtime_readable_paths: &helper_readable_paths,
+                runtime_readable_paths: Some(&helper_readable_paths),
                 selection,
                 enforce_managed_network: false,
                 network: None,
@@ -151,7 +151,8 @@ impl FileSystemSandboxRunner {
                 }
                 err => invalid_request(format!("failed to prepare fs sandbox: {err}")),
             })?
-            .into_command_request();
+            .into_command_request()
+            .map_err(io_error)?;
         request.sandbox_override = sandbox.sandbox_override;
         Ok(request)
     }

@@ -436,7 +436,7 @@ async fn run_command_under_sandbox(
         },
         permissions: &permission_profile,
         workspace_roots: workspace_roots.as_deref(),
-        runtime_readable_paths: &[],
+        runtime_readable_paths: None,
         selection: SandboxSelection::Explicit(sandbox),
         enforce_managed_network: network.is_some(),
         network: network.as_ref(),

@@ -411,7 +411,7 @@ pub async fn build_exec_request(
             command,
             permissions: permission_profile,
             workspace_roots: None,
-            runtime_readable_paths: &[],
+            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(sandbox_type),
             enforce_managed_network,
             environment_id: network_environment_id.as_deref(),
@@ -425,7 +425,7 @@ pub async fn build_exec_request(
             use_legacy_landlock,
             windows_sandbox_level,
         })?
-        .into_command_request();
+        .into_command_request()?;
     // These hints belong to the native Windows backend. Other backends use
     // the materialized profile and must not project executor paths onto this host.
     let windows_sandbox_workspace_roots = if sandbox_type == SandboxType::WindowsRestrictedToken {

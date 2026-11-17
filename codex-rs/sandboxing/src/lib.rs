@@ -45,6 +45,8 @@ pub use manager::with_managed_mitm_ca_readable_root;
 pub use sandbox_integrity::FileContentsChecker;
 pub use sandbox_integrity::IntegrityFinding;
 pub use sandbox_integrity::IntegrityFindingDetails;
+pub use sandbox_integrity::SandboxIntegrityRequest;
+pub use spawn::SpawnOptions;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;

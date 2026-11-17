@@ -115,7 +115,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: &[],
+            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             environment_id: Some("remote"),
@@ -126,7 +126,8 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
         .expect("transform")
-        .into_command_request();
+        .into_command_request()
+        .expect("command request");
 
     assert_eq!(exec_request.cwd, cwd_uri);
     assert_eq!(exec_request.sandbox_policy_cwd, cwd_uri);
@@ -178,7 +179,7 @@ fn symlinked_workspace_reports_seatbelt_preparation_error() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: &[],
+            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::MacosSeatbelt),
             enforce_managed_network: false,
             environment_id: None,
@@ -235,7 +236,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: &[],
+            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             environment_id: None,
@@ -246,7 +247,8 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
         .expect("transform")
-        .into_command_request();
+        .into_command_request()
+        .expect("command request");
 
     assert_eq!(
         exec_request.permission_profile,
@@ -325,7 +327,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             },
             permissions: &permissions,
             workspace_roots: Some(roots),
-            runtime_readable_paths: &[],
+            runtime_readable_paths: Some(&[]),
             selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             network: None,
@@ -338,7 +340,8 @@ fn transform_additional_permissions_preserves_denied_entries() {
         let exec_request = manager
             .transform(request)
             .expect("transform")
-            .into_command_request();
+            .into_command_request()
+            .expect("command request");
         assert_eq!(
             exec_request.permission_profile,
             PermissionProfile::from_runtime_permissions(
@@ -405,7 +408,7 @@ fn sandbox_transform_request(cwd: &PathUri, sandbox: SandboxType) -> SandboxTran
         },
         permissions: &PermissionProfile::Disabled,
         workspace_roots: None,
-        runtime_readable_paths: &[],
+        runtime_readable_paths: None,
         selection: SandboxSelection::Explicit(sandbox),
         enforce_managed_network: false,
         environment_id: None,
@@ -580,6 +583,8 @@ async fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_
         symlink("/bin/sh", &helper)?;
         let mut wrapped =
             transform_linux_seccomp_request(&helper, SandboxManager::for_inherited_terminal(&[]));
+        let facts = wrapped.integrity_request(Default::default());
+        assert_eq!(facts.launcher, Some(helper.as_os_str()));
         // Run a shell probe with the executable and argv[0] produced by the Linux backend.
         let probe = ["-c", r#"printf '%s' "$0""#];
         wrapped.request.command.truncate(1);
@@ -594,22 +599,13 @@ async fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_
             .request
             .command
             .splice(1.., probe.map(str::to_owned));
-        let request = wrapped.into_command_request();
-        let (program, args) = request.program_and_args().expect("prepared command");
-        let cwd = request.cwd.to_abs_path()?;
-        let mut child = crate::spawn_process(crate::SpawnRequest {
-            program,
-            args,
-            cwd: cwd.as_path(),
-            env: &request.env,
-            arg0: &request.arg0,
-            sandbox: request.sandbox,
-            windows_sandbox: None,
-            tty: true,
-            stdin_open: true,
-            inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
-        })
-        .await?;
+        let mut child = wrapped
+            .spawn(crate::SpawnOptions {
+                tty: true,
+                stdin_open: true,
+                inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
+            })
+            .await?;
         let mut output = Vec::new();
         while let Some(bytes) = child.stdout_rx.recv().await {
             output.extend(bytes);
@@ -736,7 +732,7 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
             },
             permissions: &PermissionProfile::Disabled,
             workspace_roots: None,
-            runtime_readable_paths: &[],
+            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
             enforce_managed_network,
             environment_id: None,
@@ -746,7 +742,7 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;
-        let command = prepared.into_command_request().command;
+        let command = prepared.into_command_request()?.command;
         assert_eq!(
             command.iter().any(|arg| arg == "--transparent-tcp"),
             transparent_tcp && expected.is_some(),
@@ -759,6 +755,7 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
             .transpose()?;
         assert_eq!(transported_context, expected, "{label}");
     }
+
     Ok(())
 }
 

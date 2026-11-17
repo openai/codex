@@ -509,7 +509,7 @@ impl<'a> SandboxAttempt<'a> {
                 command,
                 permissions: self.permissions,
                 workspace_roots: None,
-                runtime_readable_paths: &[],
+                runtime_readable_paths: None,
                 selection: SandboxSelection::Explicit(self.sandbox),
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id,
@@ -519,7 +519,7 @@ impl<'a> SandboxAttempt<'a> {
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })?
-            .into_command_request();
+            .into_command_request()?;
         request.sandbox_override = self.sandbox_override;
         let workspace_roots = self
             .workspace_roots

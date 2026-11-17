@@ -77,15 +77,15 @@ fn records_every_outcome_and_times_preparation_without_paths() -> anyhow::Result
     ]);
     let mut request = sandbox_request(&root, &broad_policy);
     // The same policy is checked when configured, but skipped for an approved escalation.
-    runtime.block_on(run_checks_with_metrics(&request, Some(&metrics)));
+    runtime.block_on(run_checks_with_metrics((&request).into(), Some(&metrics)));
     request.sandbox_override = SandboxOverride::EscalatedSandboxWithRestrictions;
-    runtime.block_on(run_checks_with_metrics(&request, Some(&metrics)));
+    runtime.block_on(run_checks_with_metrics((&request).into(), Some(&metrics)));
     request.sandbox_override = SandboxOverride::NoOverride;
     request.sandbox = SandboxType::None;
-    runtime.block_on(run_checks_with_metrics(&request, Some(&metrics)));
+    runtime.block_on(run_checks_with_metrics((&request).into(), Some(&metrics)));
     request.sandbox = backend::SANDBOX_TYPE;
     request.permission_profile = PermissionProfile::Disabled;
-    runtime.block_on(run_checks_with_metrics(&request, Some(&metrics)));
+    runtime.block_on(run_checks_with_metrics((&request).into(), Some(&metrics)));
     let mut expected_preparations = 1;
     if cfg!(any(target_os = "linux", target_os = "windows")) {
         let policy = FileSystemSandboxPolicy::restricted(vec![
@@ -99,7 +99,7 @@ fn records_every_outcome_and_times_preparation_without_paths() -> anyhow::Result
         ]);
         request.permission_profile =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        runtime.block_on(run_checks_with_metrics(&request, Some(&metrics)));
+        runtime.block_on(run_checks_with_metrics((&request).into(), Some(&metrics)));
         // Preparation still runs, but no dependency receives another check result.
         expected_preparations += 1;
     }
@@ -114,7 +114,7 @@ fn records_every_outcome_and_times_preparation_without_paths() -> anyhow::Result
             let _ = wait.recv();
         });
         ready.await?;
-        let mut check = Box::pin(run_checks_with_metrics(&request, Some(&metrics)));
+        let mut check = Box::pin(run_checks_with_metrics((&request).into(), Some(&metrics)));
         assert!(futures::poll!(&mut check).is_pending());
         tokio::time::advance(CHECK_TIMEOUT + Duration::from_millis(/*millis*/ 1)).await;
         assert!(futures::poll!(&mut check).is_ready());

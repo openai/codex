@@ -143,14 +143,16 @@ async fn powershell_alias_falls_back_without_primary_runtime_over_rpc(
     Ok(())
 }
 
-#[test_case::test_case(WindowsSandboxSelection::Mxc, codex_sandboxing::SandboxType::WindowsMxc; "mxc")]
-#[test_case::test_case(WindowsSandboxSelection::Elevated, codex_sandboxing::SandboxType::WindowsRestrictedToken; "elevated")]
+#[test_case::test_case(WindowsSandboxSelection::Mxc, codex_sandboxing::SandboxType::WindowsMxc, NetworkSandboxPolicy::Restricted; "mxc")]
+#[test_case::test_case(WindowsSandboxSelection::Elevated, codex_sandboxing::SandboxType::WindowsRestrictedToken, NetworkSandboxPolicy::Restricted; "elevated")]
+#[test_case::test_case(WindowsSandboxSelection::Elevated, codex_sandboxing::SandboxType::WindowsRestrictedToken, NetworkSandboxPolicy::Enabled; "elevated_with_managed_proxy")]
 #[cfg_attr(not(windows), ignore = "requires a native Windows sandbox")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(remote_exec_server)]
 async fn tmpdir_uses_command_environment_over_rpc(
     selection: WindowsSandboxSelection,
     expected_type: codex_sandboxing::SandboxType,
+    network_policy: NetworkSandboxPolicy,
 ) -> Result<()> {
     if selection == WindowsSandboxSelection::Mxc {
         crate::skip_if_mxc_unavailable!(Ok(()));
@@ -213,11 +215,35 @@ async fn tmpdir_uses_command_environment_over_rpc(
             FileSystemAccessMode::Write,
         ),
     ]);
+    // With network access enabled, only proxy enforcement selects the offline account.
+    let (network_proxy, proxy_probe) = if network_policy.is_enabled() {
+        use codex_network_proxy::NetworkProxyConfig;
+        use codex_network_proxy::RemoteNetworkProxyConfig;
+        use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+
+        let mut config = NetworkProxyConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        config.set_denied_domains(vec!["denied.invalid".into()]);
+        let proxy = RemoteNetworkProxyConfig::from_effective_config(&config)?;
+        // A token without the proxy route SID is disconnected before it can receive a 403.
+        let probe = concat!(
+            r" & %SystemRoot%\System32\whoami.exe | %SystemRoot%\System32\findstr.exe /i /e /l CodexSandboxOffline >NUL || exit /b 2",
+            r" & %SystemRoot%\System32\curl.exe -q -sS --max-time 10 --proxy %HTTP_PROXY% -i http://denied.invalid/",
+            r" | %SystemRoot%\System32\findstr.exe /b /r HTTP/1[.]1.403 >NUL || exit /b 3",
+        );
+        (Some(RemoteNetworkProxyLaunchConfig::new(proxy)), probe)
+    } else {
+        (None, "")
+    };
     let mut sandbox = FileSystemSandboxContext::from_permission_profile(
-        PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted),
+        PermissionProfile::from_runtime_permissions(&fs, network_policy),
         cwd.clone(),
     );
     sandbox.windows_sandbox_selection = selection;
+    // The session must enforce the command TEMP grant even with no workspace roots.
+    sandbox.workspace_roots.clear();
     let env = HashMap::from([
         ("SystemRoot".to_owned(), std::env::var("SystemRoot")?),
         (
@@ -251,7 +277,7 @@ async fn tmpdir_uses_command_environment_over_rpc(
                 "/D".to_owned(),
                 "/S".to_owned(),
                 "/C".to_owned(),
-                "echo CHILD-TEMP:%TEMP% & echo allowed>%ALLOWED_FILE% & echo modified>%OUTSIDE_FILE% & exit /b 0".to_owned(),
+                format!("echo CHILD-TEMP:%TEMP% & echo allowed>%ALLOWED_FILE% & echo modified>%OUTSIDE_FILE%{proxy_probe} & exit /b 0"),
             ],
             cwd,
             env_policy: Some(ExecEnvPolicy {
@@ -267,9 +293,9 @@ async fn tmpdir_uses_command_environment_over_rpc(
             pipe_stdin: false,
             arg0: None,
             sandbox: Some(sandbox),
-            enforce_managed_network: false,
+            enforce_managed_network: network_proxy.is_some(),
             managed_network: None,
-            network_proxy: None,
+            network_proxy,
         })
         .await?;
     assert_eq!(started.sandbox_type, Some(expected_type));

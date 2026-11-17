@@ -1,9 +1,13 @@
 use self::launch::PreparedLaunchPolicy;
 use self::launch::SandboxOperation;
+#[cfg(windows)]
+use self::launch::WindowsSessionPolicy;
 use self::launch::WrappedSandboxCommand;
 use crate::LinuxSandboxPidNamespace;
 #[cfg(windows)]
 use crate::WindowsSandboxFilesystemOverrides;
+#[cfg(windows)]
+use crate::WindowsSandboxProxySettingsMode;
 #[cfg(target_os = "linux")]
 use crate::bwrap::WSL1_BWRAP_WARNING;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -147,13 +151,13 @@ pub struct SandboxTransformRequest<'a> {
     pub permissions: &'a PermissionProfile,
     /// Bind symbolic workspace rules to these executor roots. `None` means they are already resolved.
     pub workspace_roots: Option<&'a [PathUri]>,
-    /// Executor-selected helper binaries and validated trust bundles needed by the child.
-    pub runtime_readable_paths: &'a [AbsolutePathBuf],
+    /// Complete set of runtime files the executor selected for this launch, including its CA
+    /// bundle, if any. With `None`, the sandbox manager looks up the live proxy's CA bundle.
+    pub runtime_readable_paths: Option<&'a [AbsolutePathBuf]>,
     pub selection: SandboxSelection,
     pub enforce_managed_network: bool,
     pub environment_id: Option<&'a str>,
-    // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
-    // to make shared ownership explicit across runtime/sandbox plumbing.
+    /// Live proxy for this launch. The caller keeps its listeners alive while the child uses them.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a PathUri,
     pub sandbox_exe: Option<&'a Path>,
@@ -293,6 +297,8 @@ impl std::error::Error for SandboxTransformError {
 
 #[derive(Clone, Default)]
 pub struct SandboxManager {
+    #[cfg(windows)]
+    windows_token_session: Option<WindowsSandboxProxySettingsMode>,
     linux_sandbox_pid_namespace: LinuxSandboxPidNamespace,
     linux_sandbox_transparent_tcp: bool,
     operation: SandboxOperation,
@@ -325,6 +331,17 @@ impl SandboxManager {
             },
             ..Self::default()
         }
+    }
+
+    /// Prepare the Windows token session for `WrappedSandboxCommand::spawn`.
+    /// By default the caller supplies its own token launcher.
+    #[cfg(windows)]
+    pub fn with_windows_token_session(
+        mut self,
+        proxy_settings: WindowsSandboxProxySettingsMode,
+    ) -> Self {
+        self.windows_token_session = Some(proxy_settings);
+        self
     }
 
     /// Applies a trusted executor startup policy, never a command or repository setting.
@@ -398,9 +415,10 @@ impl SandboxManager {
         request: SandboxTransformRequest<'_>,
     ) -> Result<WrappedSandboxCommand, SandboxTransformError> {
         let command = request.command;
+        let network = request.network;
         let is_file_system_helper = matches!(self.operation, SandboxOperation::FileSystemHelper);
         if is_file_system_helper
-            && (request.network.is_some()
+            && (network.is_some()
                 || request.enforce_managed_network
                 || command.managed_network.is_some())
         {
@@ -417,7 +435,7 @@ impl SandboxManager {
             permissions,
             request.sandbox_policy_cwd,
             request.workspace_roots,
-            request.runtime_readable_paths,
+            request.runtime_readable_paths.unwrap_or_default(),
             &self.operation,
         )
         .map_err(SandboxTransformError::InvalidPolicy)?;
@@ -455,12 +473,15 @@ impl SandboxManager {
         }
         .filter(|path| path.to_str().is_none())
         .map(OsStr::to_owned);
+        let inner_arg_count = 1 + command.args.len();
+        let wrapped = |request, windows_session| WrappedSandboxCommand {
+            request,
+            windows_session,
+            inner_arg_count,
+        };
         let managed_network = command
             .managed_network
             .filter(|_| request.enforce_managed_network || backend == SandboxType::MacosSeatbelt);
-        let managed_mitm_ca_trust_bundle_path = request
-            .network
-            .and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program.to_string_lossy().into_owned());
         argv.extend(command.args);
@@ -471,7 +492,7 @@ impl SandboxManager {
             cwd: command.cwd,
             sandbox_policy_cwd: request.sandbox_policy_cwd.clone(),
             env: command.env,
-            network: request.network.cloned(),
+            network: network.cloned(),
             network_environment_id: request.environment_id.map(str::to_owned),
             sandbox: backend,
             windows_sandbox_level: request.windows_sandbox_level,
@@ -479,8 +500,12 @@ impl SandboxManager {
             arg0: None,
         };
         if backend == SandboxType::None {
-            return Ok(WrappedSandboxCommand { request: exec });
+            return Ok(wrapped(exec, None));
         }
+        let managed_mitm_ca_trust_bundle_path = match request.runtime_readable_paths {
+            Some(_) => None,
+            None => network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path),
+        };
         let pending = PendingSandboxedExecRequest::new(
             &exec.cwd,
             &exec.sandbox_policy_cwd,
@@ -497,7 +522,7 @@ impl SandboxManager {
                 }
                 let route = match managed_network {
                     None if request.enforce_managed_network => {
-                        let proxy = request.network.ok_or_else(|| {
+                        let proxy = network.ok_or_else(|| {
                             SandboxTransformError::WindowsMxcPreparation(
                                 "managed networking requires an executor-local proxy".to_string(),
                             )
@@ -544,7 +569,7 @@ impl SandboxManager {
                 exec.permission_profile = pending.effective_permission_profile;
                 let (file_system_sandbox_policy, network_sandbox_policy) =
                     exec.permission_profile.to_runtime_permissions();
-                let managed_network = match (managed_network, request.network) {
+                let managed_network = match (managed_network, network) {
                     (None, Some(proxy)) => {
                         let prepared = proxy
                             .prepare_for_optional_environment(exec.env, request.environment_id)
@@ -575,7 +600,7 @@ impl SandboxManager {
                         enforce_managed_network: request.enforce_managed_network,
                         managed_network: managed_network.as_ref(),
                         environment_id: request.environment_id,
-                        network: request.network,
+                        network,
                         extra_allow_unix_sockets: sockets,
                     },
                     profile,
@@ -601,11 +626,7 @@ impl SandboxManager {
                 let exe = request
                     .sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let route = match (
-                    request.enforce_managed_network,
-                    managed_network,
-                    request.network,
-                ) {
+                let route = match (request.enforce_managed_network, managed_network, network) {
                     (false, _, _) => None,
                     (true, None, Some(proxy)) => {
                         let prepared = proxy
@@ -630,27 +651,47 @@ impl SandboxManager {
                 )?;
             }
             SandboxType::WindowsRestrictedToken => {
-                exec.permission_profile = pending?.effective_permission_profile;
+                let pending = pending?;
+                exec.permission_profile = pending.effective_permission_profile;
+                #[cfg(not(windows))]
                 if is_file_system_helper {
-                    #[cfg(not(windows))]
                     return Err(SandboxTransformError::SandboxUnavailable);
-                    #[cfg(windows)]
-                    {
-                        let codex_home =
-                            codex_utils_home_dir::find_codex_home().map_err(|err| {
-                                SandboxTransformError::WindowsSandboxPreparation(err.to_string())
-                            })?;
-                        wrap_windows_file_system_helper(
-                            &mut exec,
-                            &policy.workspace_roots,
-                            &codex_home,
-                            request.sandbox_exe,
-                        )?;
-                    }
+                }
+                #[cfg(windows)]
+                if is_file_system_helper {
+                    let codex_home = codex_utils_home_dir::find_codex_home().map_err(|err| {
+                        SandboxTransformError::WindowsSandboxPreparation(err.to_string())
+                    })?;
+                    wrap_windows_file_system_helper(
+                        &mut exec,
+                        &policy.workspace_roots,
+                        &codex_home,
+                        request.sandbox_exe,
+                    )?;
+                } else if let Some(proxy_settings_mode) = self.windows_token_session {
+                    let filesystem_overrides = WindowsSandboxFilesystemOverrides::resolve(
+                        backend,
+                        &exec.permission_profile,
+                        &pending.native_sandbox_policy_cwd,
+                        exec.windows_sandbox_level,
+                        &exec.env,
+                    )
+                    .map_err(|err| SandboxTransformError::InvalidPolicy(io::Error::other(err)))?;
+                    let session = WindowsSessionPolicy {
+                        workspace_roots: policy.workspace_roots,
+                        filesystem_overrides,
+                        proxy_enforced: request.enforce_managed_network,
+                        restricting_sid: windows_proxy_restricting_sid(
+                            network,
+                            request.environment_id,
+                        )?,
+                        proxy_settings_mode,
+                    };
+                    return Ok(wrapped(exec, Some(Box::new(session))));
                 }
             }
         }
-        Ok(WrappedSandboxCommand { request: exec })
+        Ok(wrapped(exec, None))
     }
 
     fn wrap_linux(
@@ -700,6 +741,24 @@ impl SandboxManager {
     }
 }
 
+#[cfg(windows)]
+fn windows_proxy_restricting_sid(
+    proxy: Option<&NetworkProxy>,
+    environment_id: Option<&str>,
+) -> Result<Option<String>, SandboxTransformError> {
+    proxy
+        .map(|network| {
+            network
+                .network_proxy_restricting_sid(environment_id)
+                .ok_or_else(|| {
+                    SandboxTransformError::WindowsSandboxPreparation(
+                        "managed Windows proxy route is missing its restricting SID".to_string(),
+                    )
+                })
+        })
+        .transpose()
+}
+
 #[cfg(target_os = "windows")]
 fn wrap_windows_file_system_helper(
     request: &mut SandboxExecRequest,
@@ -741,19 +800,10 @@ fn wrap_windows_file_system_helper(
 
     let inner_command = std::mem::take(&mut request.command);
     let proxy_enforced = request.network.is_some();
-    let network_proxy_restricting_sid = request
-        .network
-        .as_ref()
-        .map(|network| {
-            network
-                .network_proxy_restricting_sid(request.network_environment_id.as_deref())
-                .ok_or_else(|| {
-                    SandboxTransformError::WindowsSandboxPreparation(
-                        "managed Windows proxy route is missing its restricting SID".to_string(),
-                    )
-                })
-        })
-        .transpose()?;
+    let network_proxy_restricting_sid = windows_proxy_restricting_sid(
+        request.network.as_ref(),
+        request.network_environment_id.as_deref(),
+    )?;
     let overrides = WindowsSandboxFilesystemOverrides::resolve(
         request.sandbox,
         &request.permission_profile,
@@ -788,7 +838,7 @@ fn wrap_windows_file_system_helper(
             request.windows_sandbox_level,
             proxy_enforced,
             network_proxy_restricting_sid.as_deref(),
-            codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
+            WindowsSandboxProxySettingsMode::Preserve,
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,

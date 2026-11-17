@@ -11,6 +11,7 @@ use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::NetworkProxyHandle;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::NetworkUnixSocketPermission;
 #[cfg(target_os = "macos")]
@@ -22,6 +23,7 @@ use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 #[cfg(any(unix, windows))]
 use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::WrappedSandboxCommand;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -34,7 +36,6 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-use super::PreparedExecRequest;
 use super::prepare_exec_request_with_telemetry;
 #[cfg(unix)]
 use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
@@ -51,7 +52,7 @@ async fn prepare_exec_request(
     runtime_paths: Option<&ExecServerRuntimeOptions>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
-) -> Result<PreparedExecRequest, JSONRPCErrorError> {
+) -> Result<(WrappedSandboxCommand, Option<NetworkProxyHandle>), JSONRPCErrorError> {
     prepare_exec_request_with_telemetry(
         params,
         env,
@@ -98,7 +99,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(
+    let (prepared, _) = prepare_exec_request(
         &params,
         HashMap::new(),
         Some(&runtime_paths),
@@ -107,9 +108,10 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
     )
     .await
     .expect("prepare sandboxed request");
+    let prepared = prepared.into_command_request().expect("command request");
 
     assert_ne!(prepared.command, params.argv);
-    assert_eq!(prepared.cwd, cwd);
+    assert_eq!(prepared.cwd, params.cwd);
     #[cfg(target_os = "linux")]
     {
         assert_eq!(
@@ -136,7 +138,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         let mut params = params.clone();
         for policy_cwd in [&cwd, &explicit_cwd] {
             params.sandbox.as_mut().expect("sandbox").cwd = PathUri::from_abs_path(policy_cwd);
-            let prepared = prepare_exec_request(
+            let (prepared, _) = prepare_exec_request(
                 &params,
                 HashMap::new(),
                 Some(&runtime_paths),
@@ -145,6 +147,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
             )
             .await
             .expect("prepare sandboxed request");
+            let prepared = prepared.into_command_request().expect("command request");
             let actual_cwds = prepared
                 .command
                 .windows(4)
@@ -214,7 +217,7 @@ async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(
+    let (prepared, _) = prepare_exec_request(
         &params,
         HashMap::new(),
         Some(&runtime_paths),
@@ -223,6 +226,7 @@ async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
     )
     .await
     .expect("prepare sandboxed request");
+    let prepared = prepared.into_command_request().expect("command request");
     let helper_mode = prepared
         .command
         .iter()
@@ -302,7 +306,8 @@ async fn proxy_config_selects_transparent_tcp_without_executor_switch() {
             RemoteNetworkProxyConfig::from_effective_config(&network.to_network_proxy_config())
                 .unwrap(),
         ));
-        let prepared = prepare(&params).await.unwrap();
+        let (prepared, proxy_handle) = prepare(&params).await.unwrap();
+        let prepared = prepared.into_command_request().unwrap();
         assert_eq!(
             prepared
                 .command
@@ -311,19 +316,15 @@ async fn proxy_config_selects_transparent_tcp_without_executor_switch() {
             expected,
             "{toml}"
         );
-        prepared
-            .network_proxy_handle
-            .unwrap()
-            .shutdown()
-            .await
-            .unwrap();
+        proxy_handle.unwrap().shutdown().await.unwrap();
     }
     params.network_proxy = None;
     params.managed_network = Some(ManagedNetworkSandboxContext {
         transparent_tcp: true,
         ..Default::default()
     });
-    let local = prepare(&params).await.unwrap();
+    let (local, _) = prepare(&params).await.unwrap();
+    let local = local.into_command_request().unwrap();
     assert!(local.command.iter().any(|arg| arg == "--transparent-tcp"));
     let remote = crate::local_process::LocalProcess::default()
         .exec(params.clone(), ProcessTelemetry::default())
@@ -370,7 +371,7 @@ async fn sandbox_request_preserves_prepared_managed_network_policy() {
         dangerously_allow_all_unix_sockets: false,
     });
 
-    let prepared = prepare_exec_request(
+    let (prepared, _) = prepare_exec_request(
         &params,
         HashMap::new(),
         Some(&runtime_paths),
@@ -379,6 +380,7 @@ async fn sandbox_request_preserves_prepared_managed_network_policy() {
     )
     .await
     .expect("prepare managed-network sandbox request");
+    let prepared = prepared.into_command_request().expect("command request");
     let policy = seatbelt_policy_arg(&prepared.command);
     let unix_socket_definitions = prepared
         .command
@@ -415,7 +417,7 @@ async fn sandbox_request_only_allows_all_unix_sockets_when_configured() {
             .as_mut()
             .expect("managed network context")
             .dangerously_allow_all_unix_sockets = allow_all;
-        let prepared = prepare_exec_request(
+        let (prepared, _) = prepare_exec_request(
             &params,
             HashMap::new(),
             Some(&runtime_paths),
@@ -424,6 +426,7 @@ async fn sandbox_request_only_allows_all_unix_sockets_when_configured() {
         )
         .await
         .expect("prepare managed-network sandbox request");
+        let prepared = prepared.into_command_request().expect("command request");
         let policy = seatbelt_policy_arg(&prepared.command);
 
         assert_eq!(
@@ -448,6 +451,7 @@ async fn sandbox_request_only_allows_all_unix_sockets_when_configured() {
 #[tokio::test]
 async fn sandbox_request_preserves_executor_local_proxy_unix_socket_policy() {
     let (mut params, runtime_paths) = managed_network_sandbox_request();
+    params.argv = ["/bin/sh", "-lc", "true"].map(str::to_owned).to_vec();
     let socket_dir = tempfile::tempdir().expect("temporary socket directory");
     let socket_root = socket_dir
         .path()
@@ -479,7 +483,7 @@ async fn sandbox_request_preserves_executor_local_proxy_unix_socket_policy() {
             .expect("supported remote proxy config"),
     ));
 
-    let prepared = prepare_exec_request(
+    let (wrapped, proxy_handle) = prepare_exec_request(
         &params,
         HashMap::new(),
         Some(&runtime_paths),
@@ -488,18 +492,33 @@ async fn sandbox_request_preserves_executor_local_proxy_unix_socket_policy() {
     )
     .await
     .expect("prepare sandbox request with executor-local proxy");
-    let policy = seatbelt_policy_arg(&prepared.command);
-    let proxy_addr: SocketAddr = prepared
-        .env
-        .get("HTTP_PROXY")
+    let capture = wrapped
+        .shell_snapshot_capture_command(&params.argv, "true")
+        .expect("prepared workload");
+    let argv = capture
+        .get_args()
+        .map(|arg| arg.to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let policy = seatbelt_policy_arg(&argv);
+    let proxy_addr: SocketAddr = capture
+        .get_envs()
+        .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value).flatten())
+        .and_then(std::ffi::OsStr::to_str)
         .expect("HTTP proxy env")
         .strip_prefix("http://")
         .expect("HTTP proxy scheme")
         .parse()
         .expect("HTTP proxy address");
     let proxy_port = proxy_addr.port();
-    let unix_socket_definitions = prepared
-        .command
+    assert_eq!(
+        proxy_handle
+            .as_ref()
+            .and_then(NetworkProxyHandle::proxy)
+            .expect("running executor proxy")
+            .http_addr(),
+        proxy_addr
+    );
+    let unix_socket_definitions = argv
         .iter()
         .filter(|arg| arg.starts_with("-DUNIX_SOCKET_PATH_"))
         .cloned()
@@ -517,13 +536,6 @@ async fn sandbox_request_preserves_executor_local_proxy_unix_socket_policy() {
     );
     assert!(!policy.contains("(allow network-outbound (remote unix-socket))"));
     assert!(!policy.contains("(allow network-outbound)\n"));
-
-    prepared
-        .network_proxy_handle
-        .expect("running executor proxy")
-        .shutdown()
-        .await
-        .expect("shut down executor proxy");
 }
 
 #[tokio::test]
@@ -551,7 +563,7 @@ async fn native_request_preserves_native_launch_fields() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(
+    let (prepared, _) = prepare_exec_request(
         &params,
         env.clone(),
         /*runtime_paths*/ None,
@@ -560,9 +572,10 @@ async fn native_request_preserves_native_launch_fields() {
     )
     .await
     .expect("prepare native request");
+    let prepared = prepared.into_command_request().expect("command request");
 
     assert_eq!(prepared.command, params.argv);
-    assert_eq!(prepared.cwd, cwd);
+    assert_eq!(prepared.cwd, params.cwd);
     assert_eq!(prepared.env, env);
     assert_eq!(prepared.arg0, params.arg0);
 
@@ -651,7 +664,7 @@ async fn native_request_handles_remote_proxy_config_for_platform(
         env.insert(key.to_string(), "startup-hook".to_string());
     }
 
-    let prepared = prepare_exec_request(
+    let (wrapped, proxy_handle) = prepare_exec_request(
         &params,
         env.clone(),
         /*runtime_paths*/ None,
@@ -661,22 +674,38 @@ async fn native_request_handles_remote_proxy_config_for_platform(
     .await
     .expect("prepare request with executor-local proxy");
 
-    assert_eq!(prepared.command, params.argv);
+    let command = wrapped.into_direct_command().expect("native command");
+    assert_eq!(command.get_program(), std::ffi::OsStr::new(&params.argv[0]));
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        params.argv[1..]
+            .iter()
+            .map(std::ffi::OsStr::new)
+            .collect::<Vec<_>>()
+    );
+    let prepared_env = command
+        .get_envs()
+        .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
+        .collect::<HashMap<_, _>>();
     for key in ["PATH", "OPENAI_API_KEY"].into_iter().chain(startup_env) {
-        assert_eq!(prepared.env.get(key), env.get(key), "{key}");
+        assert_eq!(
+            prepared_env.get(key).copied(),
+            env.get(key).map(String::as_str),
+            "{key}"
+        );
     }
 
     if cfg!(target_os = "windows") {
-        assert_eq!(prepared.env.get("HTTP_PROXY"), None);
-        assert_eq!(prepared.env.get("TEST_ENV"), Some(&"value".to_string()));
-        assert!(prepared.network_proxy_handle.is_none());
+        assert_eq!(prepared_env.get("HTTP_PROXY"), None);
+        assert_eq!(prepared_env.get("TEST_ENV"), Some(&"value"));
+        assert!(proxy_handle.is_none());
         return;
     }
 
-    let http_proxy = prepared.env.get("HTTP_PROXY").expect("HTTP proxy env");
-    assert_ne!(http_proxy, &stale_proxy);
+    let http_proxy = *prepared_env.get("HTTP_PROXY").expect("HTTP proxy env");
+    assert_ne!(http_proxy, stale_proxy);
     assert!(http_proxy.starts_with("http://127.0.0.1:"));
-    assert!(!prepared.env.contains_key(PROXY_ATTRIBUTION_TOKEN_ENV_KEY));
+    assert!(!prepared_env.contains_key(PROXY_ATTRIBUTION_TOKEN_ENV_KEY));
     let proxy_addr: SocketAddr = http_proxy
         .strip_prefix("http://")
         .expect("HTTP proxy scheme")
@@ -695,13 +724,6 @@ async fn native_request_handles_remote_proxy_config_for_platform(
         .expect("proxy response timeout")
         .expect("read proxy response");
     assert!(String::from_utf8_lossy(&response[..response_len]).starts_with("HTTP/1.1 403"));
-
-    prepared
-        .network_proxy_handle
-        .expect("running executor proxy")
-        .shutdown()
-        .await
-        .expect("shut down executor proxy");
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -818,18 +840,12 @@ async fn managed_network_honors_windows_sandbox_level(windows_sandbox_level: Win
         return;
     }
 
-    let mut prepared = prepared.expect("managed networking accepts an elevated Windows sandbox");
-    let spawn = prepared
-        .windows_sandbox_spawn_request()
-        .expect("Windows sandbox spawn request");
-    assert_eq!(spawn.windows_sandbox_level, WindowsSandboxLevel::Elevated);
-    assert!(spawn.proxy_enforced);
-    assert!(spawn.network_proxy_restricting_sid.is_some());
-    prepared
-        .network_proxy_handle
-        .take()
-        .expect("running executor proxy")
-        .shutdown()
-        .await
-        .expect("shut down executor proxy");
+    let (prepared, _proxy_handle) = prepared.expect("prepared Windows sandbox");
+    assert_eq!(
+        prepared
+            .into_command_request()
+            .expect_err("the token must be applied during spawn")
+            .kind(),
+        std::io::ErrorKind::Unsupported
+    );
 }

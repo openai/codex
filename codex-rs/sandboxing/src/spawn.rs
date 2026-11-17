@@ -16,6 +16,13 @@ use crate::WindowsSandboxFilesystemOverrides;
 use crate::WindowsSandboxProxySettingsMode;
 use crate::terminal_queries::respond_to_terminal_queries;
 
+/// Terminal and standard I/O options for a prepared command.
+pub struct SpawnOptions<'a> {
+    pub tty: bool,
+    pub stdin_open: bool,
+    pub inherited_fds: codex_utils_pty::ChildFds<'a>,
+}
+
 /// Windows-specific inputs for an executor-native process spawn.
 // TODO(anp): Reconcile the Windows backend copy with the supplied sandbox
 // context (TurnEnvironment::sandbox_context for turns), preserving this launch snapshot.

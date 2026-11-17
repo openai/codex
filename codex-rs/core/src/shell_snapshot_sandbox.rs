@@ -166,7 +166,7 @@ impl ShellSnapshotSandbox {
                 },
                 permissions: &self.permissions,
                 workspace_roots: None,
-                runtime_readable_paths: &[],
+                runtime_readable_paths: None,
                 selection: SandboxSelection::Explicit(self.sandbox),
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id: Some(&self.environment_id),
@@ -177,7 +177,7 @@ impl ShellSnapshotSandbox {
                 windows_sandbox_level: self.windows_sandbox_level,
             })
             .context("failed to prepare shell snapshot sandbox")?
-            .into_command_request();
+            .into_command_request()?;
         let workspace_roots = self
             .workspace_roots
             .iter()

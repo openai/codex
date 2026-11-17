@@ -260,4 +260,4 @@ pub use telemetry::ExecServerTelemetry;
 pub use sandbox_integrity::run_integrity_checks;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub async fn run_integrity_checks(_request: &codex_sandboxing::SandboxExecRequest) {}
+pub async fn run_integrity_checks(_request: codex_sandboxing::SandboxIntegrityRequest<'_>) {}

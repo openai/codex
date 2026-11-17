@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use codex_network_proxy::CredentialMaskingFailureMode;
 use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::RemoteCredentialBrokerCache;
 use codex_network_proxy::brokered_credential_value_env_keys;
 use codex_network_proxy::is_managed_proxy_env_var;
@@ -27,28 +26,23 @@ use super::MAX_SNAPSHOT_BYTES;
 use super::SnapshotReplay;
 use super::parse_snapshot;
 use crate::local_process::shell_environment_policy;
-use crate::process_sandbox::PreparedExecRequest;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 
 const CONFIGURED_VALUE_PREFIX: &str = "__CODEX_SHELL_SNAPSHOT_CONFIGURED_";
 
-pub(super) fn restore_fallback(prepared: &mut PreparedExecRequest) {
-    if let Some(proxy) = prepared
-        .network_proxy_handle
-        .as_ref()
-        .and_then(NetworkProxyHandle::proxy)
-    {
-        for value in prepared.env.values_mut() {
-            proxy.restore_brokered_text(value);
-        }
-        proxy.restore_and_disable_brokered_credentials(&mut prepared.env, &mut []);
-        let warning = "Credential masking is unavailable for this shell snapshot; running with unmasked credentials.";
-        tracing::warn!("{warning}");
-        if let Some(script) = prepared.command.last_mut() {
-            *script = format!("\\builtin printf '%s\\n' '{warning}' >&2\n{script}");
-        }
+pub(super) fn restore_fallback(
+    script: &mut String,
+    env: &mut HashMap<String, String>,
+    proxy: &NetworkProxy,
+) {
+    for value in env.values_mut() {
+        proxy.restore_brokered_text(value);
     }
+    proxy.restore_and_disable_brokered_credentials(env, &mut []);
+    let warning = "Credential masking is unavailable for this shell snapshot; running with unmasked credentials.";
+    tracing::warn!("{warning}");
+    *script = format!("\\builtin printf '%s\\n' '{warning}' >&2\n{script}");
 }
 
 pub(super) async fn prepare(

@@ -37,11 +37,8 @@ use codex_exec_server::StartedExecProcess;
 #[cfg(any(unix, windows))]
 use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server::WriteStatus;
-#[cfg(unix)]
 use codex_network_proxy::NetworkProxyConfig;
-#[cfg(unix)]
 use codex_network_proxy::RemoteNetworkProxyConfig;
-#[cfg(unix)]
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(unix)]
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
@@ -1766,6 +1763,11 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
     let (helper_binary, _) = current_test_binary_helper_paths()?;
     let release_dir = TempDir::new()?;
     let release_path = release_dir.path().join("release-delayed-output");
+    let proxy_path = release_dir.path().join("proxy-url");
+    let proxy = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    })?;
     let process_id = "proc-output-after-exit".to_string();
     let session = context
         .backend
@@ -1773,6 +1775,10 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             metadata: Default::default(),
             process_id: process_id.clone().into(),
             argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                r#"printf %s "$HTTP_PROXY" > "$0" && exec "$@""#.to_string(),
+                proxy_path.to_string_lossy().into_owned(),
                 helper_binary.to_string_lossy().into_owned(),
                 DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
                 release_path.to_string_lossy().into_owned(),
@@ -1787,7 +1793,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
-            network_proxy: None,
+            network_proxy: Some(RemoteNetworkProxyLaunchConfig::new(proxy)),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -1809,6 +1815,13 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
     );
     assert_eq!(exit_response.exit_code, Some(0));
     assert!(!exit_response.closed);
+    let proxy_url = std::fs::read_to_string(proxy_path)?;
+    let proxy_addr = proxy_url
+        .strip_prefix("http://")
+        .context("child HTTP proxy")?;
+    tokio::net::TcpStream::connect(proxy_addr)
+        .await
+        .context("the child's proxy should stay live while its descendant holds stdout")?;
     let exit_seq = exit_response
         .next_seq
         .checked_sub(1)
