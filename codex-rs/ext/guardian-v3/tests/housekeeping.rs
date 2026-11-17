@@ -2,7 +2,6 @@
 
 #![allow(clippy::expect_used)]
 
-use chrono::DateTime;
 use chrono::Utc;
 use codex_guardian_v3::EvidenceCursor;
 use codex_guardian_v3::HOUSEKEEPER_INSTRUCTIONS;
@@ -13,18 +12,13 @@ use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::ChannelQuery;
-use codex_message_board::MessageBoardHost;
-use codex_message_board::NotificationDelivery;
 use codex_message_board::PageRequest;
-use codex_message_board::PostPreview;
 use codex_message_board::PostQuery;
 use codex_message_board::ReadPostRequest;
 use codex_message_board::SortDirection;
 use codex_message_board::UpsertChannelRequest;
-use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_state::SqliteConfig;
@@ -34,23 +28,23 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::*;
 use core_test_support::test_codex::test_codex;
-use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-#[path = "../../../message-board/tests/common/mod.rs"]
+#[path = "common/board_host.rs"]
 mod board_host;
+
+use board_host::PausedClockHost;
+use board_host::board_host;
 
 enum RoutingCase {
     Success,
@@ -478,53 +472,6 @@ async fn routes_captured_originals_and_updates_descriptions(
     );
     test.codex.shutdown_and_wait().await?;
     Ok(())
-}
-
-fn board_host(root: ThreadId) -> Arc<board_host::Host> {
-    Arc::new(board_host::Host {
-        clock: AtomicI64::default(),
-        fail_clock: AtomicBool::new(false),
-        agent_path_calls: AtomicUsize::default(),
-        members: [(root, AgentPath::root())].into(),
-        active: AtomicBool::new(true),
-        fail_notifications: AtomicBool::new(false),
-        notifications: Mutex::default(),
-    })
-}
-
-struct PausedClockHost {
-    inner: Arc<board_host::Host>,
-    pause_next: AtomicBool,
-    started: Notify,
-    release: Notify,
-}
-
-impl MessageBoardHost for PausedClockHost {
-    fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, CodexResult<AgentPath>> {
-        self.inner.agent_path(caller)
-    }
-
-    fn resolve_agent(&self, path: AgentPath) -> BoxFuture<'_, CodexResult<ThreadId>> {
-        self.inner.resolve_agent(path)
-    }
-
-    fn current_time(&self, caller: ThreadId) -> BoxFuture<'_, CodexResult<DateTime<Utc>>> {
-        Box::pin(async move {
-            if self.pause_next.swap(false, Ordering::SeqCst) {
-                self.started.notify_one();
-                self.release.notified().await;
-            }
-            self.inner.current_time(caller).await
-        })
-    }
-
-    fn notify(
-        &self,
-        recipient: ThreadId,
-        post: PostPreview,
-    ) -> BoxFuture<'_, CodexResult<NotificationDelivery>> {
-        self.inner.notify(recipient, post)
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

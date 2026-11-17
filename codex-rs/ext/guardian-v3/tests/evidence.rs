@@ -185,6 +185,7 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
     )
     .await?;
     assert!(!store.live_rollout_path(owner).await?.exists());
+    assert!(fresh.capture(&store).await.is_err());
     // A resume must establish its tail even if the rollout is missing.
     assert!(
         EvidenceCursor::at_thread_ready(
