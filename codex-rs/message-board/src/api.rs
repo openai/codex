@@ -96,6 +96,16 @@ pub trait AgentMessageBoard: Send + Sync {
         request: AppendRequest,
     ) -> BoxFuture<'_, Result<PostMetadata>>;
 
+    /// Like a silent append, also returns the subscribers at the moment of insertion.
+    /// An idempotent retry returns the existing post and no new deliveries.
+    fn append_with_subscribers(
+        &self,
+        _caller: ThreadId,
+        _request: AppendRequest,
+    ) -> BoxFuture<'_, Result<(PostMetadata, Vec<ThreadId>)>> {
+        unsupported("appending with subscribers")
+    }
+
     fn list_threads(
         &self,
         caller: ThreadId,
@@ -257,6 +267,7 @@ pub struct PostRequest {
 pub(crate) enum PostBehavior {
     Discussion,
     SilentAppend,
+    SilentAppendWithSubscribers,
 }
 
 /// Request to append evidence without subscribing its author or notifying anyone.

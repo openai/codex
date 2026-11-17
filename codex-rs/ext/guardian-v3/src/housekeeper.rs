@@ -6,6 +6,7 @@ use crate::EvidenceCursor;
 use crate::EvidenceSnapshot;
 use crate::OriginalEvidence;
 use crate::housekeeper_sampler::HousekeeperSampler;
+use crate::inbox::LiveDelivery;
 use crate::sampling::context_input;
 use anyhow::ensure;
 use codex_core::CodexThread;
@@ -27,6 +28,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::time::Instant;
@@ -60,6 +62,7 @@ pub struct Housekeeper {
     cursor: EvidenceCursor,
     sampler: HousekeeperSampler,
     stopped: bool,
+    delivery: Arc<LiveDelivery>,
 }
 
 impl Housekeeper {
@@ -67,14 +70,16 @@ impl Housekeeper {
     pub async fn new(
         board: Arc<dyn AgentMessageBoard>,
         cursor: EvidenceCursor,
+        delivery: Arc<LiveDelivery>,
         parent: &Arc<CodexThread>,
         manager: &codex_core::ThreadManager,
     ) -> anyhow::Result<Self> {
         let owner = cursor.thread_id();
         ensure!(
             board.identity() == SessionId::from(owner)
-                && parent.startup_metadata().thread_id == owner,
-            "housekeeper board owner mismatch"
+                && parent.startup_metadata().thread_id == owner
+                && delivery.root == owner,
+            "housekeeper root mismatch"
         );
         Ok(Self {
             board,
@@ -82,6 +87,7 @@ impl Housekeeper {
             cursor,
             sampler: HousekeeperSampler::new(parent, manager).await?,
             stopped: false,
+            delivery,
         })
     }
 
@@ -229,24 +235,28 @@ impl Housekeeper {
             // The local board finishes an accepted append in its own task. Await it even
             // during shutdown so the root joins the last write before releasing this worker.
             for ((source, destinations), mut text) in sources.iter().zip(output.routes).zip(texts) {
+                let mut recipients = HashMap::new();
                 for (index, channel) in destinations.iter().enumerate() {
                     check_active(deadline, cancellation)?;
-                    self.board
-                        .append(
-                            self.owner,
-                            AppendRequest {
-                                request_id: source.id.request_id(channel)?,
-                                destination: PostDestination::Channel(channel.clone()),
-                                // Multiple destinations need copies; the last one can take ownership.
-                                text: if index + 1 == destinations.len() {
-                                    std::mem::take(&mut text)
-                                } else {
-                                    text.clone()
-                                },
-                            },
-                        )
+                    let request = AppendRequest {
+                        request_id: source.id.request_id(channel)?,
+                        destination: PostDestination::Channel(channel.clone()),
+                        // Multiple destinations need copies; the last one can take ownership.
+                        text: if index + 1 == destinations.len() {
+                            std::mem::take(&mut text)
+                        } else {
+                            text.clone()
+                        },
+                    };
+                    let (post, subscribers) = self
+                        .board
+                        .append_with_subscribers(self.owner, request)
                         .await?;
+                    for actor in subscribers {
+                        recipients.entry(actor).or_insert(post.message_id);
+                    }
                 }
+                self.delivery.publish(source.id, recipients)?;
             }
             // Acknowledge only after every write succeeds. Returned errors leave this batch
             // unread and stop this instance; no replay is attempted.

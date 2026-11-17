@@ -1,6 +1,6 @@
 //! Guardian's durable evidence storage, owned by the main thread.
-//! Reviewer tools search a fixed board view and deliver the originals routed by the housekeeper.
-//! The host owns review scheduling and the lifetime of each view.
+//! The housekeeper routes originals to topic channels. Each reviewer searches the live board
+//! and manages its own subscriptions.
 //! Hosts invoke permanent-deletion cleanup only when Guardian V3 is enabled.
 
 use codex_message_board::LocalBoard;
@@ -13,7 +13,6 @@ mod conversation;
 pub use actor::ActorReviewer;
 pub use actor::PreparedReviewer;
 mod cutoff;
-pub use cutoff::ReviewCutoff;
 pub use cutoff::RootEvidence;
 mod delivery;
 mod evidence;
@@ -21,10 +20,10 @@ mod host;
 mod housekeeper;
 mod housekeeper_sampler;
 mod housekeeper_transport;
+mod inbox;
 pub use host::install;
 mod retrieval_tools;
 mod sampling;
-mod selection;
 mod subscription_tools;
 pub use delivery::DeliveryPlan;
 pub use delivery::DeliveryState;
@@ -34,12 +33,9 @@ pub use evidence::EvidenceSnapshot;
 pub use evidence::OriginalEvidence;
 pub use housekeeper::HOUSEKEEPER_INSTRUCTIONS;
 pub use housekeeper::Housekeeper;
+pub use inbox::LiveDelivery;
 pub use retrieval_tools::LiveRetrievalBinding;
-pub use retrieval_tools::RetrievalBinding;
 pub use retrieval_tools::install_retrieval_tools;
-pub use sampling::OperationResult;
-pub use selection::CHANNEL_SELECTION_INSTRUCTIONS;
-pub use selection::ReviewerSubscriptions;
 
 /// Instructions for a verdict reviewer with live Guardian board tools.
 pub const BOARD_RETRIEVAL: codex_core::guardian_review::ReviewRetrieval =

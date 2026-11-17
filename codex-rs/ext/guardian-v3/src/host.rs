@@ -89,8 +89,9 @@ impl Host {
         let worker = RootWorker {
             wake,
             lifetime: Arc::clone(&lifetime),
-            reader: Arc::clone(&reader),
+            reader,
         };
+        let delivery = Arc::clone(&queue.delivery);
         let scope = lifetime.clone();
         let manager = self.manager.clone();
         lifetime.tasks.spawn(async move {
@@ -106,7 +107,7 @@ impl Host {
                 let startup = async {
                     let manager = manager.upgrade().context("Guardian host stopped")?;
                     let parent = manager.get_thread(root).await?;
-                    Housekeeper::new(Arc::new(board), cursor, &parent, &manager).await
+                    Housekeeper::new(Arc::new(board), cursor, delivery, &parent, &manager).await
                 };
                 let Some(housekeeper) = cancellation.run_until_cancelled(startup).await else {
                     return Ok(());
@@ -118,13 +119,7 @@ impl Host {
                         .await?
                         != 0
                     {}
-                    if cancellation
-                        .run_until_cancelled(capture.finish(&reader))
-                        .await
-                        .is_none()
-                    {
-                        break;
-                    }
+                    capture.finish();
                     let Some(next) = cancellation
                         .run_until_cancelled(captures.recv())
                         .await

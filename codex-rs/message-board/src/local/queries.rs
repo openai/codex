@@ -217,6 +217,18 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         Box::pin(LocalAgentMessageBoard::append(self, caller, request))
     }
 
+    fn append_with_subscribers(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<(PostMetadata, Vec<ThreadId>)>> {
+        Box::pin(self.write_append(
+            caller,
+            request,
+            crate::api::PostBehavior::SilentAppendWithSubscribers,
+        ))
+    }
+
     fn set_subscription(
         &self,
         caller: ThreadId,

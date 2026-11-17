@@ -226,7 +226,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             root,
             SubscriptionRequest {
                 target: SubscriptionTarget::Thread(metadata.message_id),
-                target_agent: Some(child_path),
+                target_agent: Some(child_path.clone()),
                 change: SubscriptionChange::Subscribe,
             },
         )
@@ -239,7 +239,8 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
                 request_id: "reply".into(),
                 destination: PostDestination::Thread(metadata.message_id),
                 text: "done".into(),
-                agents_to_notify: Vec::new(),
+                // Mentioning this subscriber must still deliver only one notification.
+                agents_to_notify: vec![child_path],
             },
         )
         .await

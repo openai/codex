@@ -1,7 +1,6 @@
-//! Self-only channel subscriptions. Captured tools constrain membership and replies to their view.
+//! Reviewer tools that change only the caller’s live channel subscriptions.
 
 use codex_message_board::AgentMessageBoard;
-use codex_message_board::BoardReadView;
 use codex_message_board::MAX_TOOL_ARGUMENT_KIB;
 use codex_message_board::MAX_TOOL_RESPONSE_BYTES;
 use codex_message_board::MessageBoardTool;
@@ -34,7 +33,6 @@ struct SubscriptionTool {
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     path: AgentPath,
-    view: Option<Arc<dyn BoardReadView>>,
     change: SubscriptionChange,
     name: ToolName,
     spec: ToolSpec,
@@ -44,7 +42,6 @@ pub(crate) fn tools(
     board: &Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     path: &AgentPath,
-    view: Option<&Arc<dyn BoardReadView>>,
     namespace: Option<&str>,
     namespace_description: &str,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
@@ -81,7 +78,6 @@ pub(crate) fn tools(
             board: Arc::clone(board),
             caller,
             path: path.clone(),
-            view: view.cloned(),
             change,
             name,
             spec,
@@ -112,30 +108,16 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
             }
             let arguments: Arguments = serde_json::from_str(raw)
                 .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-            let captured = if let Some(view) = &self.view {
-                let channel = view
-                    .channels()
-                    .iter()
-                    .find(|channel| channel.channel_name == arguments.channel_name)
-                    .ok_or_else(|| {
-                        FunctionCallError::RespondToModel(
-                            "channel is outside the captured catalog".into(),
-                        )
-                    })?;
-                Some(channel.last_message_id)
-            } else {
-                None
-            };
             // For live subscriptions the last post ID is known only after the write.
             // Budget for a full UUID to avoid accepting a mutation we cannot acknowledge.
-            let mut response = SubscriptionState {
+            let largest_response = SubscriptionState {
                 channel_name: arguments.channel_name.clone(),
                 thread_id: None,
                 target_agent: self.path.clone(),
                 enabled: self.change == SubscriptionChange::Subscribe,
-                last_message_id: captured.unwrap_or(Some(Uuid::nil())),
+                last_message_id: Some(Uuid::nil()),
             };
-            if serde_json::to_vec(&response)
+            if serde_json::to_vec(&largest_response)
                 .map_err(|error| FunctionCallError::Fatal(error.to_string()))?
                 .len()
                 > call.response_byte_budget(MAX_TOOL_RESPONSE_BYTES)
@@ -156,8 +138,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
                 )
                 .await
                 .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-            response.last_message_id = captured.unwrap_or(state.last_message_id);
-            let response = serde_json::to_value(response)
+            let response = serde_json::to_value(state)
                 .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
             Ok(
                 Box::new(JsonToolOutput::new(response).with_external_context())

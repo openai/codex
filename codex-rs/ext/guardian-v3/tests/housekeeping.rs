@@ -6,6 +6,7 @@ use chrono::Utc;
 use codex_guardian_v3::EvidenceCursor;
 use codex_guardian_v3::HOUSEKEEPER_INSTRUCTIONS;
 use codex_guardian_v3::Housekeeper;
+use codex_guardian_v3::LiveDelivery;
 use codex_guardian_v3::local_board;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -161,8 +162,14 @@ async fn routes_captured_originals_and_updates_descriptions(
         )
         .await?;
     let board_handle: Arc<dyn AgentMessageBoard> = board.clone();
-    let mut housekeeper =
-        Housekeeper::new(board_handle, cursor, &test.codex, &test.thread_manager).await?;
+    let mut housekeeper = Housekeeper::new(
+        board_handle,
+        cursor,
+        Arc::new(LiveDelivery::new(owner)),
+        &test.codex,
+        &test.thread_manager,
+    )
+    .await?;
     let cancellation = CancellationToken::new();
     let reply = match case {
         RoutingCase::MissingNewDescription => {
@@ -733,8 +740,14 @@ async fn command_token_rotation_between_batches_reauthenticates_the_housekeeper(
         .read_write()
         .open(board_host(root))
         .await?;
-    let mut housekeeper =
-        Housekeeper::new(Arc::new(board), cursor, &test.codex, &test.thread_manager).await?;
+    let mut housekeeper = Housekeeper::new(
+        Arc::new(board),
+        cursor,
+        Arc::new(LiveDelivery::new(root)),
+        &test.codex,
+        &test.thread_manager,
+    )
+    .await?;
     for (index, text) in ["Hold the release.", "The release is approved."]
         .into_iter()
         .enumerate()

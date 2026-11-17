@@ -1,12 +1,9 @@
-//! Capture and enqueue each history suffix in one order. The sole board writer opens
-//! each requested view after routing that suffix and before processing its successor.
+//! Order intake requests by source position and acknowledge a request once its history has
+//! been routed. The acknowledgement is a lower bound; subsequent board writes remain visible.
 use std::sync::Arc;
 
 use anyhow::Context;
 use codex_guardian_reviewer::ReviewerTasks;
-use codex_message_board::AgentMessageBoard;
-use codex_protocol::AgentPath;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
 use codex_thread_store::ThreadStore;
 use tokio::sync::Mutex;
@@ -15,17 +12,11 @@ use tokio::sync::oneshot;
 
 use crate::EvidenceCursor;
 use crate::EvidenceSnapshot;
-use crate::ReviewerSubscriptions;
+use crate::inbox::LiveDelivery;
 
 #[cfg(test)]
 #[path = "cutoff_tests.rs"]
 mod tests;
-
-/// One approval's fixed source boundary and matching discovery, retrieval and delivery view.
-pub struct ReviewCutoff {
-    pub source: HistoryPosition,
-    pub subscriptions: ReviewerSubscriptions,
-}
 
 /// Installed on the root thread while its evidence intake is active.
 pub struct RootEvidence {
@@ -35,36 +26,19 @@ pub struct RootEvidence {
     // A rejected durable record keeps its reason for subsequent reviews of this root.
     enqueued: Mutex<Result<EvidenceCursor, String>>,
     pending: mpsc::Sender<Capture>,
-}
-
-struct Freeze {
-    caller: ThreadId,
-    path: AgentPath,
-    reply: oneshot::Sender<anyhow::Result<ReviewCutoff>>,
+    pub(super) delivery: Arc<LiveDelivery>,
 }
 
 pub(super) struct Capture {
     pub snapshot: EvidenceSnapshot,
-    reviewer: Option<Freeze>,
+    routed: Option<oneshot::Sender<HistoryPosition>>,
 }
 
 impl Capture {
-    pub async fn finish(self, reader: &Arc<dyn AgentMessageBoard>) {
-        if let Some(Freeze {
-            caller,
-            path,
-            reply,
-        }) = self.reviewer
-            && !reply.is_closed()
-        {
-            let source = self.snapshot.cutoff();
-            let result = ReviewerSubscriptions::capture(reader.clone(), caller, path)
-                .await
-                .map(|subscriptions| ReviewCutoff {
-                    source,
-                    subscriptions,
-                });
-            let _ = reply.send(result);
+    /// Called by the sole writer only after it published the whole capture to subscriber inboxes.
+    pub(super) fn finish(self) {
+        if let Some(reply) = self.routed {
+            let _ = reply.send(self.snapshot.cutoff());
         }
     }
 }
@@ -76,12 +50,14 @@ impl RootEvidence {
         cursor: EvidenceCursor,
     ) -> (Arc<Self>, mpsc::Receiver<Capture>) {
         let (pending, requests) = mpsc::channel(1);
+        let delivery = Arc::new(LiveDelivery::new(cursor.thread_id()));
         (
             Arc::new(Self {
                 lifetime,
                 history,
                 enqueued: Mutex::new(Ok(cursor)),
                 pending,
+                delivery,
             }),
             requests,
         )
@@ -90,7 +66,7 @@ impl RootEvidence {
     pub(super) async fn capture_on_activity(self: Arc<Self>, mut wakes: mpsc::Receiver<()>) {
         let capture = async {
             while wakes.recv().await.is_some() {
-                if self.enqueue(/*reviewer*/ None).await.is_err() {
+                if self.enqueue(/*routed*/ None).await.is_err() {
                     if self.enqueued.lock().await.is_err() {
                         break;
                     }
@@ -110,7 +86,10 @@ impl RootEvidence {
         clippy::await_holding_invalid_type,
         reason = "capture and enqueue must agree on source order across concurrent approvals"
     )]
-    async fn enqueue(&self, reviewer: Option<Freeze>) -> anyhow::Result<()> {
+    async fn enqueue(
+        &self,
+        routed: Option<oneshot::Sender<HistoryPosition>>,
+    ) -> anyhow::Result<()> {
         let mut enqueued = self.enqueued.lock().await;
         let cursor = enqueued
             .as_mut()
@@ -126,8 +105,8 @@ impl RootEvidence {
                 return Err(error);
             }
         };
-        // A freeze must wait behind earlier writes even when the source has not advanced.
-        if reviewer.is_none() && !snapshot.source_advanced() {
+        // A review must wait for earlier writes even when this capture has no new originals.
+        if routed.is_none() && !snapshot.source_advanced() {
             return Ok(());
         }
         // Cancellation before reserving leaves the cursor unchanged. After reservation,
@@ -147,30 +126,20 @@ impl RootEvidence {
                 "Skipped incomplete Guardian evidence"
             );
         }
-        permit.send(Capture { snapshot, reviewer });
+        permit.send(Capture { snapshot, routed });
         Ok(())
     }
 }
 
 impl RootEvidence {
-    /// Freeze once per review, using caller identity and path from the acting thread's host.
-    pub async fn freeze(&self, caller: ThreadId, path: AgentPath) -> anyhow::Result<ReviewCutoff> {
-        let _task = self.lifetime.tasks.token();
-        let request = async {
-            let (reply, ready) = oneshot::channel();
-            self.enqueue(Some(Freeze {
-                caller,
-                path,
-                reply,
-            }))
-            .await?;
-            ready
-                .await
-                .context("Guardian stopped before the review cutoff")?
-        };
+    /// Admit the current source boundary while the action is being submitted. A successful
+    /// reply means all matching deliveries through this point are already in actor inboxes.
+    pub async fn request_catch_up(&self) -> anyhow::Result<oneshot::Receiver<HistoryPosition>> {
+        let (routed, ready) = oneshot::channel();
         tokio::select! { biased;
             _ = self.lifetime.cancellation.cancelled() => anyhow::bail!("Guardian intake stopped"),
-            result = request => result,
+            result = self.enqueue(Some(routed)) => result?,
         }
+        Ok(ready)
     }
 }

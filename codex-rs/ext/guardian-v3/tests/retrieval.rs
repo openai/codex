@@ -1,11 +1,9 @@
-//! Live and captured reviewer tools can search unsubscribed evidence channels.
+//! Live Guardian tools can search unsubscribed channels and manage only the caller’s subscriptions.
 
 #![allow(clippy::expect_used)]
 
 use codex_guardian_v3::LiveRetrievalBinding;
-use codex_guardian_v3::RetrievalBinding;
 use codex_guardian_v3::local_board;
-use codex_message_board::AgentMessageBoard;
 use codex_message_board::AppendRequest;
 use codex_message_board::CreateChannelRequest;
 use codex_message_board::Page;
@@ -37,8 +35,8 @@ mod delivery;
 mod evidence_board;
 #[path = "retrieval/planning.rs"]
 mod planning;
-#[path = "retrieval/selection.rs"]
-mod selection;
+#[path = "retrieval/subscriptions.rs"]
+mod subscriptions;
 
 fn retrieval_host(
     members: impl IntoIterator<Item = (ThreadId, AgentPath)>,
@@ -54,16 +52,8 @@ fn retrieval_host(
     })
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum BoardReads {
-    Captured,
-    Live,
-}
-
-#[test_case::test_case(BoardReads::Captured; "captured_tools_search_only_through_the_cutoff")]
-#[test_case::test_case(BoardReads::Live; "live_tools_search_later_and_unsubscribed_posts")]
 #[tokio::test]
-async fn searches_guardian_evidence(reads: BoardReads) -> anyhow::Result<()> {
+async fn searches_live_and_unsubscribed_guardian_posts() -> anyhow::Result<()> {
     let owner = ThreadId::new();
     let dir = tempfile::tempdir()?;
     let host = retrieval_host([(owner, AgentPath::root())]);
@@ -114,13 +104,7 @@ async fn searches_guardian_evidence(reads: BoardReads) -> anyhow::Result<()> {
         )
         .await?;
     let reader = Arc::new(storage.read_only().open(host).await?);
-    let tools = match reads {
-        BoardReads::Captured => {
-            let view = reader.read_view(owner).await?;
-            RetrievalBinding::new(view.as_ref(), owner, AgentPath::root())?.tools()
-        }
-        BoardReads::Live => LiveRetrievalBinding::new(reader, owner, AgentPath::root())?.tools(),
-    };
+    let tools = LiveRetrievalBinding::new(reader, owner, AgentPath::root())?.tools();
     let latest = routed(3, r#"Publish "prod" from C:\work\draft now."#);
     let third = board
         .append(
@@ -140,24 +124,24 @@ async fn searches_guardian_evidence(reads: BoardReads) -> anyhow::Result<()> {
             .is_empty()
     );
 
-    let mut expected_names = vec![
+    let expected_names = [
         "get_channels",
         "list_threads",
         "search_posts",
         "read_thread",
         "read_post",
+        "subscribed_channels",
+        "subscribe",
+        "unsubscribe",
     ];
     let tool_names = tools
         .iter()
         .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
-    if reads == BoardReads::Live {
-        expected_names.extend(["subscribed_channels", "subscribe", "unsubscribe"]);
-        assert_eq!(
-            LiveRetrievalBinding::tool_names().collect::<Vec<_>>(),
-            tool_names
-        );
-    }
+    assert_eq!(
+        LiveRetrievalBinding::tool_names().collect::<Vec<_>>(),
+        tool_names
+    );
     assert_eq!(
         tool_names,
         expected_names
@@ -171,20 +155,20 @@ async fn searches_guardian_evidence(reads: BoardReads) -> anyhow::Result<()> {
         .find(|tool| tool.tool_name() == tool_name)
         .expect("board search");
     let ordered = [(&third, &latest), (&second, &call), (&first, &earlier)];
-    let all_visible = match reads {
-        BoardReads::Captured => &ordered[1..],
-        BoardReads::Live => &ordered[..],
-    };
     for (query, expected) in [
-        (r#"publish "prod""#, all_visible),
-        (r"C:\work\draft", all_visible),
+        (r#"publish "prod""#, ordered.as_slice()),
+        (r"C:\work\draft", ordered.as_slice()),
         (r"C:\work\plan-é", &ordered[1..2]),
         ("plan-é", &ordered[1..2]),
         (r#""recipient":"Alice""#, &ordered[1..2]),
         (r#""type":"function_call""#, &ordered[1..2]),
         ("\t", &ordered[..0]),
     ] {
-        let call = reviewer_tool_call(&tool_name, json!({ "query": query }));
+        let call = reviewer_tool_call(
+            &tool_name,
+            &json!({ "query": query }),
+            /*byte_limit*/ 8_000,
+        );
         let result = search.handle(call.clone()).await?;
         let output = result.code_mode_result(&call.payload);
         assert_eq!(result.log_output(), output.to_string());
@@ -210,14 +194,14 @@ async fn searches_guardian_evidence(reads: BoardReads) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn reviewer_tool_call(name: &ToolName, arguments: Value) -> ToolCall<'static> {
+fn reviewer_tool_call(name: &ToolName, arguments: &Value, byte_limit: i64) -> ToolCall<'static> {
     ToolCall {
         turn_id: "review".into(),
         call_id: name.name.clone(),
         tool_name: name.clone(),
         model: "test".into(),
         codex_turn_metadata: None,
-        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 8_000).into(),
+        truncation_policy: TruncationPolicyConfig::bytes(byte_limit).into(),
         source: ToolCallSource::Direct,
         conversation_history: Default::default(),
         turn_item_emitter: Arc::new(codex_tools::NoopTurnItemEmitter),
@@ -264,7 +248,7 @@ async fn lists_only_the_reviewers_own_subscriptions_across_pages() -> anyhow::Re
         .find(|tool| tool.tool_name() == name)
         .expect("live reviewer subscription lookup");
     let list = async |arguments: Value| -> anyhow::Result<Page<String>> {
-        let call = reviewer_tool_call(&name, arguments);
+        let call = reviewer_tool_call(&name, &arguments, /*byte_limit*/ 8_000);
         let result = tool.handle(call.clone()).await?;
         Ok(serde_json::from_value(
             result.code_mode_result(&call.payload),
