@@ -6,7 +6,6 @@
 //! a board after its root has been permanently deleted.
 //! Opening storage adds optional channel metadata without invalidating older readers.
 //! Explicit connections can restrict writes; default handles retain legacy access.
-//! Fixed read views freeze the channel catalog and restrict reads to a captured post sequence.
 //! Posting subscribes and notifies; host appends share persistence without these side effects.
 
 use self::connection::Access;
@@ -62,38 +61,13 @@ const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
 
-/// Capturing a view makes the handle read-only, regardless of its original access.
-#[derive(Clone)]
-enum BoardMode {
-    Live { access: Option<Access> },
-    Fixed { view: Arc<catalog::ReadView> },
-}
-
-impl BoardMode {
-    const FIXED_ACCESS: Access = Access::ReadOnly;
-
-    fn access(&self) -> Option<Access> {
-        match self {
-            Self::Live { access } => *access,
-            Self::Fixed { .. } => Some(Self::FIXED_ACCESS),
-        }
-    }
-
-    fn view(&self) -> Option<&catalog::ReadView> {
-        match self {
-            Self::Live { .. } => None,
-            Self::Fixed { view } => Some(view),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct LocalAgentMessageBoard {
     identity: SessionId,
     storage_namespace: Arc<str>,
     pool: Arc<SqlitePool>,
     host: Arc<dyn MessageBoardHost>,
-    mode: BoardMode,
+    access: Option<Access>,
     nested_json_pointer: Option<&'static str>,
 }
 
@@ -118,7 +92,7 @@ impl LocalAgentMessageBoard {
             pool: pool::open(sqlite, options).await?,
             storage_namespace: Arc::from(options.storage_namespace.as_str()),
             host,
-            mode: BoardMode::Live { access: None },
+            access: None,
             nested_json_pointer: None,
         })
     }
@@ -128,7 +102,7 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: CreateChannelRequest,
     ) -> Result<ChannelSummary> {
-        if let Some(access) = self.mode.access() {
+        if let Some(access) = self.access {
             access.require_write(self.identity, "board.create_channel")?;
         }
         validate_channel(&request.channel_name)?;
@@ -203,7 +177,7 @@ impl LocalAgentMessageBoard {
         request: PostRequest,
         behavior: PostBehavior,
     ) -> Result<(PostMetadata, Vec<ThreadId>)> {
-        if let Some(access) = self.mode.access() {
+        if let Some(access) = self.access {
             access.require_write(
                 self.identity,
                 match &request.destination {
@@ -392,7 +366,7 @@ impl LocalAgentMessageBoard {
         let target_path = request.target_agent.unwrap_or(caller_path);
         let target_agent = self.host.resolve_agent(target_path.clone()).await?;
         if target_agent != caller
-            && let Some(access) = self.mode.access()
+            && let Some(access) = self.access
         {
             access.require_write(self.identity, "board.manage_subscriptions")?;
         }

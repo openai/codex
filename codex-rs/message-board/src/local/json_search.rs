@@ -1,4 +1,4 @@
-//! Literal search over decoded JSON fields in a fixed read view.
+//! Literal search over decoded JSON fields in board posts.
 
 use super::StoredPost;
 use super::paging::Window;

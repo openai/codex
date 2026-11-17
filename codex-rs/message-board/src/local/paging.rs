@@ -1,5 +1,4 @@
-//! Bounded offset pagination. Concurrent posts may shift live results between pages;
-//! fixed read views exclude later appends from every page.
+//! Bounded offset pagination. Concurrent posts may shift results between pages.
 //! Cursors belong to the original query; restart without one to refresh the listing.
 
 use super::StoredPost;

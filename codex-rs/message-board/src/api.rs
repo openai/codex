@@ -1,7 +1,6 @@
 //! Operations on one board. Requests describe intent independently of tool schemas.
 //! Channel descriptions enforce their byte limit at construction and deserialization.
 
-use crate::BoardReadView;
 use crate::ChannelPage;
 use crate::ChannelSummary;
 use crate::Page;
@@ -19,7 +18,6 @@ use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -53,11 +51,6 @@ pub trait AgentMessageBoard: Send + Sync {
         Err(CodexErr::UnsupportedOperation(
             "searching nested JSON on a live message board".into(),
         ))
-    }
-
-    /// Capture a live board's channel summaries and post boundary together for read-only access.
-    fn read_view(&self, _caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
-        unsupported("capturing a board read view")
     }
 
     fn create_channel(
@@ -157,16 +150,6 @@ pub trait AgentMessageBoard: Send + Sync {
         _page: PageRequest,
     ) -> BoxFuture<'_, Result<Page<String>>> {
         unsupported("listing channel subscriptions")
-    }
-
-    /// Set the caller's membership in the supplied channels as one atomic change.
-    /// Other channels and thread subscriptions retain their current membership.
-    fn set_subscriptions<'a>(
-        &'a self,
-        _caller: ThreadId,
-        _channels: &'a BTreeMap<&str, SubscriptionChange>,
-    ) -> BoxFuture<'a, Result<()>> {
-        unsupported("setting channel subscriptions in bulk")
     }
 }
 

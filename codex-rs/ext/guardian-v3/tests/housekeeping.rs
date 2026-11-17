@@ -463,9 +463,19 @@ async fn routes_captured_originals_and_updates_descriptions(
             json!({"catalog":catalog,"sources":[source]})
         );
     }
-    let view = board.read_view(owner).await?;
-    let release = view
-        .channels()
+    let catalog = board
+        .list_channels(
+            owner,
+            ChannelQuery {
+                query: Some("release".into()),
+                direction: SortDirection::OldestFirst,
+                page: PageRequest::default(),
+            },
+        )
+        .await?;
+    let release = catalog
+        .channels
+        .results
         .iter()
         .find(|channel| channel.channel_name == "release");
     assert_eq!(
