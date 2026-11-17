@@ -78,12 +78,6 @@ commands that would enter the bubblewrap path.
   otherwise unrestricted networking still block `AF_VSOCK` sockets. All filter
   modes block `io_uring` to prevent bypassing socket-family restrictions.
 - When bubblewrap is active, the filesystem is read-only by default via `--ro-bind / /`.
-- Filesystem-restricted commands see an empty, read-only `/etc/ssh/ssh_config.d`
-  by default. Host root-owned files can appear to belong to `nobody` in the user
-  namespace, causing OpenSSH to reject them. SSH skips settings in the masked
-  directory, including any `KnownHostsCommand` defined there. Settings in the main
-  `/etc/ssh/ssh_config` and the user's SSH config still apply. Explicit grants
-  to the drop-ins and overlapping write grants keep their configured access.
 - When bubblewrap is active, writable roots are layered with `--bind <root> <root>`.
 - When bubblewrap is active, protected subpaths under writable roots (for
   example `.git`,
