@@ -1,5 +1,5 @@
-//! Temporary cleanup-hook allowlist shared by local and executor plugin discovery.
-//! This narrowly authorizes known MCP cleanup calls; it does not verify plugin signatures.
+//! Temporary bundled-hook exceptions. App session hooks require connector and policy checks
+//! at dispatch; cleanup hooks retain their existing trust rules. This does not verify signatures.
 
 use codex_config::HookHandlerConfig;
 use codex_protocol::protocol::HookEventName;
@@ -110,6 +110,32 @@ const ALLOWLISTED_BUNDLED_HOOKS: &[BundledHook] = &[
         },
     },
 ];
+
+/// Recognizes the bundled SessionStart declaration without starting Apps discovery.
+/// The caller must check this connector's identity and approval policy at dispatch.
+pub fn bundled_hook_app_connector_id(
+    plugin_id: &str,
+    event: HookEventName,
+    matcher: Option<&str>,
+    handler: &HookHandlerConfig,
+) -> Option<&'static str> {
+    let HookHandlerConfig::McpTool {
+        server,
+        tool,
+        input,
+        ..
+    } = handler
+    else {
+        return None;
+    };
+    (plugin_id == "codex-dream-memory@openai-bundled"
+        && event == HookEventName::SessionStart
+        && matcher == Some("^(startup|compact)$")
+        && server == "codex_apps"
+        && tool == "codex_dream_memory.get_mec"
+        && input.is_empty())
+    .then_some("connector_openai_codex_dream_memory")
+}
 
 /// Matches a temporary unsigned cleanup exception. App targets additionally require the
 /// connector identity for this handler's server and tool from the caller's enabled tool

@@ -17,6 +17,7 @@ use codex_config::RequirementSource;
 use codex_config::TomlValue;
 use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
+use codex_plugin::bundled_hook_app_connector_id;
 use codex_plugin::is_allowlisted_bundled_cleanup_hook;
 use codex_protocol::protocol::HookEventName;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -648,6 +649,14 @@ fn append_matcher_groups(
             }
         };
         for (handler_index, handler) in group.hooks.iter().cloned().enumerate() {
+            let expected_app_connector_id = source.plugin_id.as_deref().and_then(|plugin_id| {
+                bundled_hook_app_connector_id(
+                    plugin_id,
+                    event_name,
+                    group.matcher.as_deref(),
+                    &handler,
+                )
+            });
             let normalized = match handler {
                 HookHandlerConfig::Command {
                     command,
@@ -770,7 +779,7 @@ fn append_matcher_groups(
                     NormalizedHandler {
                         config,
                         kind: ConfiguredHandlerKind::McpTool {
-                            expected_app_connector_id: None,
+                            expected_app_connector_id,
                             server,
                             tool,
                             input,
@@ -820,6 +829,7 @@ fn append_matcher_groups(
                     /*app_connector_id*/ None,
                 )
             });
+            let builtin = builtin || expected_app_connector_id.is_some();
             let plugin_content_hash = match source.plugin_content_hash {
                 Some(Ok(hash)) => Some(hash.as_str()),
                 Some(Err(err)) if !builtin && !source.bypass_hook_trust => {

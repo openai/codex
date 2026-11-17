@@ -1,0 +1,69 @@
+---
+source: core/tests/suite/scenarios_bundled_app_hooks.rs
+assertion_line: 151
+expression: "context_snapshot::format_request_history_snapshot(\"A bundled App-only hook injects memory at startup and after compaction without saved trust.\",\n&responses.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A bundled App-only hook injects memory at startup and after compaction without saved trust.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <PLUGINS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/developer:
+    The user prefers concise answers.
+04:message/user:
+    Remember my preferences.
+
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (compaction) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <PLUGINS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/developer:
+    The user prefers concise answers.
+04:message/user:
+    Remember my preferences.
+05:message/assistant:
+    Done.
+06:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 03, settings changed (parallel_tool_calls, tools))
+-- request 3 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <PLUGINS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Remember my preferences.
+04:message/user:
+    <COMPACTION_SUMMARY>
+    Done.
+05:message/developer:
+    The user prefers concise answers.
+06:message/user:
+    Continue after compaction.

@@ -1827,6 +1827,52 @@ fn bundled_cleanup_hooks_are_trusted_without_saved_hashes() {
 }
 
 #[test]
+fn bundled_app_hook_trust_requires_exact_declaration() {
+    for (matcher, input, trusted) in [
+        ("^(startup|compact)$", serde_json::json!({}), true),
+        (".*", serde_json::json!({}), false),
+        (
+            "^(startup|compact)$",
+            serde_json::json!({"untrusted": true}),
+            false,
+        ),
+    ] {
+        let temp = tempdir().expect("plugin root");
+        let mut source = bundled_cleanup_source(
+            "codex-dream-memory@openai-bundled",
+            "codex_apps",
+            "SessionStart",
+        );
+        source.plugin_root = AbsolutePathBuf::try_from(temp.path()).unwrap();
+        source.hooks = serde_json::from_value(serde_json::json!({
+            "SessionStart": [{ "matcher": matcher, "hooks": [{
+                "type": "mcp_tool", "server": "codex_apps", "tool": "codex_dream_memory.get_mec", "input": input,
+            }] }],
+        })).unwrap();
+        let discovered = super::discovery::discover_handlers(
+            /*config_layer_stack*/ None,
+            vec![source],
+            Vec::new(),
+            /*bypass_hook_trust*/ false,
+            DiscoveryMode::Listing,
+        );
+        let expected = if trusted {
+            HookTrustStatus::Trusted
+        } else {
+            HookTrustStatus::Untrusted
+        };
+        assert_eq!(
+            (
+                discovered.handlers.len(),
+                discovered.hook_entries[0].trust_status,
+                discovered.hook_entries[0].builtin
+            ),
+            (usize::from(trusted), expected, trusted)
+        );
+    }
+}
+
+#[test]
 fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
     let temp = tempdir().expect("create plugin directory");
     let mut source = bundled_cleanup_source("browser@openai-bundled", "node_repl", "Stop");

@@ -10,6 +10,7 @@ pub mod manifest;
 use codex_core_plugin_common::plugin_id;
 mod provider;
 
+pub use bundled_hooks::bundled_hook_app_connector_id;
 pub use bundled_hooks::is_allowlisted_bundled_cleanup_hook;
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;

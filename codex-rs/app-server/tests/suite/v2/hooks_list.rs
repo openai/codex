@@ -970,15 +970,24 @@ async fn hooks_list_shows_discovered_plugin_mcp_tool_hook() -> Result<()> {
     Ok(())
 }
 
-#[test_case::test_case("browser", "node_repl"; "node_repl")]
-#[test_case::test_case("unified-computer-use", "cua_repl"; "cua_repl")]
+#[test_case::test_case("browser", "node_repl", "turn_ended", HookEventName::Stop, None; "node_repl")]
+#[test_case::test_case("unified-computer-use", "cua_repl", "turn_ended", HookEventName::Stop, None; "cua_repl")]
+#[test_case::test_case("codex-dream-memory", "codex_apps", "codex_dream_memory.get_mec", HookEventName::SessionStart, Some("^(startup|compact)$"); "memory_without_apps_connection")]
 #[tokio::test]
 async fn hooks_list_hides_builtin_cleanup_and_preserves_other_plugin_hooks(
     plugin_name: &str,
     server: &str,
+    tool: &str,
+    event_name: HookEventName,
+    matcher: Option<&str>,
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
+    let (event_key, event_wire) = match event_name {
+        HookEventName::Stop => ("stop", "Stop"),
+        HookEventName::SessionStart => ("session_start", "SessionStart"),
+        _ => unreachable!("test event"),
+    };
     let plugin_id = format!("{plugin_name}@openai-bundled");
     let plugin_root = codex_home
         .path()
@@ -993,8 +1002,8 @@ async fn hooks_list_hides_builtin_cleanup_and_preserves_other_plugin_hooks(
     std::fs::write(
         plugin_root.join("hooks/hooks.json"),
         serde_json::to_vec(&serde_json::json!({
-            "hooks": { "Stop": [{ "hooks": [
-                { "type": "mcp_tool", "server": server, "tool": "turn_ended" },
+            "hooks": { (event_wire): [{ "matcher": matcher, "hooks": [
+                { "type": "mcp_tool", "server": server, "tool": tool },
                 { "type": "command", "command": ordinary_command, "timeout": 5 },
             ] }] },
         }))?,
@@ -1009,7 +1018,7 @@ hooks = true
 [plugins."{plugin_id}"]
 enabled = true
 
-[hooks.state."{plugin_id}:hooks/hooks.json:stop:0:1"]
+[hooks.state."{plugin_id}:hooks/hooks.json:{event_key}:0:1"]
 enabled = false
 "#
         ),
@@ -1036,13 +1045,13 @@ enabled = false
         vec![HooksListEntry {
             cwd: cwd.path().to_path_buf(),
             hooks: vec![HookMetadata {
-                key: format!("{plugin_id}:hooks/hooks.json:stop:0:1"),
-                event_name: HookEventName::Stop,
+                key: format!("{plugin_id}:hooks/hooks.json:{event_key}:0:1"),
+                event_name,
                 handler: HookHandlerMetadata::Command {
                     command: ordinary_command.to_string(),
                     r#async: false,
                 },
-                matcher: None,
+                matcher: matcher.map(str::to_string),
                 timeout_sec: 5,
                 status_message: None,
                 additional_context_limit: None,
