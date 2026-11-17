@@ -39,6 +39,9 @@ mod root_metadata_tests;
 #[path = "denied_files_tests.rs"]
 mod denied_files_tests;
 
+#[path = "ssh_config_tests.rs"]
+mod ssh_config_tests;
+
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]
