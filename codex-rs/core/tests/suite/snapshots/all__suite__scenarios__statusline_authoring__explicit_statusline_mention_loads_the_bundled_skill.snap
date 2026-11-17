@@ -6,7 +6,7 @@ Scenario: A user requests the bundled statusline skill by name.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=e43eac769da0e93e):
+00:additional_tools/developer (3; hash=f2e4edd02b6f9300):
         - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
@@ -14,7 +14,7 @@ Scenario: A user requests the bundled statusline skill by name.
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0271b89d55152d99
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
