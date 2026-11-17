@@ -1,52 +1,92 @@
-//! Compares the metadata that determines installed-plugin behavior.
+//! Compares installed runtime inputs separately from remote catalog metadata.
 //!
-//! Display metadata (including image URLs and store capability badges) is excluded. Callers must
-//! still publish the unmodified payload so display consumers receive fresh metadata.
+//! Runtime invalidation tracks plugin identity, enablement, canonical connector ownership, and the active bundle identity.
+//! Catalog release, policy, and display changes still need to be published to catalog consumers.
 
+use crate::remote::ActiveRemotePluginBundle;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemoteMarketplace;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-/// Use the same comparisons for invalidation and its diagnostics. Expose field names only.
-fn changed_fields<'a>(
-    previous: &'a RemoteInstalledPlugin,
-    current: &'a RemoteInstalledPlugin,
-) -> impl Iterator<Item = &'static str> + 'a {
-    macro_rules! compare {
-        ($($field:ident),+ $(,)?) => {
-            [$( (stringify!($field), previous.$field != current.$field) ),+]
-        };
+/// The account metadata consumed when building installed plugin runtimes.
+#[derive(PartialEq, Eq)]
+struct InstalledPluginRuntimeState<'a> {
+    marketplace_name: &'a str,
+    id: &'a str,
+    name: &'a str,
+    canonical_app_id: Option<&'a str>,
+    enabled: bool,
+    active_bundle: Option<&'a ActiveRemotePluginBundle>,
+}
+
+impl<'a> From<&'a RemoteInstalledPlugin> for InstalledPluginRuntimeState<'a> {
+    fn from(plugin: &'a RemoteInstalledPlugin) -> Self {
+        Self {
+            marketplace_name: &plugin.marketplace_name,
+            id: &plugin.id,
+            name: &plugin.name,
+            canonical_app_id: plugin.canonical_app_id.as_deref(),
+            enabled: plugin.enabled,
+            active_bundle: plugin
+                .enabled
+                .then_some(plugin.active_bundle.as_ref())
+                .flatten(),
+        }
     }
-    compare!(
-        marketplace_name,
-        id,
-        name,
-        canonical_app_id,
-        version,
-        installed_at,
-        enabled,
-        install_policy,
-        install_policy_source,
-        must_show_installation_interstitial,
-        auth_policy,
-        availability,
-        disabled_reason,
-        eligible_plan_types,
-    )
-    .into_iter()
-    .filter_map(|(field, changed)| changed.then_some(field))
+}
+
+impl InstalledPluginRuntimeState<'_> {
+    /// Report only changed field names, never their values.
+    fn changed_fields(self, current: Self) -> impl Iterator<Item = &'static str> {
+        let Self {
+            marketplace_name,
+            id,
+            name,
+            canonical_app_id,
+            enabled,
+            active_bundle,
+        } = self;
+        [
+            (
+                "marketplace_name",
+                marketplace_name != current.marketplace_name,
+            ),
+            ("id", id != current.id),
+            ("name", name != current.name),
+            (
+                "canonical_app_id",
+                canonical_app_id != current.canonical_app_id,
+            ),
+            ("enabled", enabled != current.enabled),
+            (
+                "active_directory_version",
+                active_bundle.map(|bundle| &bundle.directory_version)
+                    != current
+                        .active_bundle
+                        .map(|bundle| &bundle.directory_version),
+            ),
+            (
+                "active_remote_plugin_id",
+                active_bundle.and_then(|bundle| bundle.remote_plugin_id.as_deref())
+                    != current
+                        .active_bundle
+                        .and_then(|bundle| bundle.remote_plugin_id.as_deref()),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(field, changed)| changed.then_some(field))
+    }
 }
 
 pub(crate) fn installed_plugin_metadata_eq(
     previous: &[RemoteInstalledPlugin],
     current: &[RemoteInstalledPlugin],
 ) -> bool {
-    previous.len() == current.len()
-        && previous
-            .iter()
-            .zip(current)
-            .all(|(previous, current)| changed_fields(previous, current).next().is_none())
+    previous
+        .iter()
+        .map(InstalledPluginRuntimeState::from)
+        .eq(current.iter().map(InstalledPluginRuntimeState::from))
 }
 
 /// Called only for a changed snapshot. Match by remote ID so an insertion does
@@ -66,7 +106,9 @@ pub(crate) fn installed_plugin_metadata_changes(
     let mut changes = BTreeMap::new();
     for (index, plugin) in current.iter().enumerate() {
         let fields = if let Some((old_index, prior)) = old.remove(plugin.id.as_str()) {
-            let mut fields: Vec<_> = changed_fields(prior, plugin).collect();
+            let mut fields: Vec<_> = InstalledPluginRuntimeState::from(prior)
+                .changed_fields(InstalledPluginRuntimeState::from(plugin))
+                .collect();
             if old_index != index && same_members {
                 fields.push("position");
             }

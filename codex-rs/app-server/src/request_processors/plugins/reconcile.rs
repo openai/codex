@@ -32,7 +32,11 @@ impl PluginRequestProcessor {
         let outcome = self
             .thread_manager
             .plugins_manager()
-            .reconcile_remote_installed_plugins(&plugins_input, auth.as_ref())
+            .reconcile_remote_installed_plugins_with_notify(
+                &plugins_input,
+                auth.as_ref(),
+                Some(self.effective_plugins_changed_callback()),
+            )
             .await
             .map_err(|err| {
                 internal_error(format!(

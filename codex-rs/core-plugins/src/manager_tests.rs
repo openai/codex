@@ -1049,6 +1049,7 @@ fn remote_installed_plugin_in_marketplace(
         marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
         version: None,
+        active_bundle: None,
         name: name.to_string(),
         installed_at: None,
         enabled: true,
@@ -2035,6 +2036,80 @@ async fn unresolved_display_assets_does_not_satisfy_display_cache_reads() {
             .build_remote_installed_plugin_marketplaces_from_cache(&[])
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn publish_catalog_changes_without_invalidating_the_installed_runtime() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = test_plugins_manager(codex_home.path().to_path_buf());
+    let auth = manager.auth_manager.auth_cached();
+    let generation = manager
+        .prepare_remote_installed_plugins_cache_generation(auth.as_ref())
+        .unwrap();
+    let mut plugin = remote_installed_linear_plugin();
+    let initial = manager
+        .write_remote_installed_plugins_cache_snapshot(
+            generation,
+            vec![plugin.clone()],
+            auth.as_ref(),
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
+        )
+        .unwrap();
+    assert!(initial.metadata_change_id.is_some());
+
+    plugin.version = Some("2.0.0".into());
+    plugin.installed_at = chrono::DateTime::from_timestamp(/*secs*/ 1, /*nsecs*/ 0);
+    let update = manager
+        .write_remote_installed_plugins_cache_snapshot(
+            generation,
+            vec![plugin.clone()],
+            auth.as_ref(),
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
+        )
+        .unwrap();
+    assert!(update.metadata_change_id.is_none());
+    assert_eq!(
+        manager.build_remote_installed_plugin_marketplaces_from_cache(&[
+            REMOTE_GLOBAL_MARKETPLACE_NAME
+        ]),
+        Some(
+            crate::remote::group_remote_installed_plugins_by_marketplaces(
+                &[plugin],
+                &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+            )
+        )
+    );
+}
+
+#[test]
+fn active_directory_upgrade_is_retained_until_the_host_can_be_notified() {
+    let home = TempDir::new().unwrap();
+    let manager = test_plugins_manager(home.path().to_path_buf());
+    let base = home
+        .path()
+        .join("plugins/cache/openai-curated-remote/linear");
+    let id = PluginId::parse("linear@openai-curated-remote").unwrap();
+    write_plugin_with_version(&base, "0.6.0", "linear", Some("0.6.0"));
+    manager
+        .store
+        .write_remote_plugin_id(&id, "plugins~Plugin_old")
+        .unwrap();
+    let mut plugin = remote_installed_linear_plugin();
+    plugin.id = "plugins~Plugin_replacement".into();
+    plugin.version = Some("0.9.0".into());
+    assert!(manager.write_remote_installed_plugins_cache(vec![plugin.clone()]));
+    assert!(manager.take_pending_runtime_change().is_some());
+    assert_eq!(
+        manager.local_remote_plugin_version(&id.as_key(), &plugin.id),
+        None
+    );
+
+    std::fs::remove_dir_all(base.join("0.6.0")).unwrap();
+    write_plugin_with_version(&base, "0.7.0", "linear", Some("0.7.0"));
+    assert!(manager.write_remote_installed_plugins_cache(vec![plugin.clone()]));
+    assert!(!manager.write_remote_installed_plugins_cache(vec![plugin]));
+    assert!(manager.take_pending_runtime_change().is_some());
+    assert!(manager.take_pending_runtime_change().is_none());
 }
 
 #[tokio::test]
@@ -7917,6 +7992,10 @@ remote_plugin = true
     );
     previous_malformed.id = malformed_remote_plugin_id.to_string();
     previous_malformed.version = Some("local".to_string());
+    previous_malformed.active_bundle = Some(crate::remote::ActiveRemotePluginBundle {
+        directory_version: "local".into(),
+        remote_plugin_id: Some(malformed_remote_plugin_id.to_string()),
+    });
     previous_malformed.enabled = false;
     manager.write_remote_installed_plugins_cache(vec![previous_malformed.clone()]);
 
@@ -7988,7 +8067,12 @@ async fn failed_installed_plugin_pagination_preserves_inventory_and_releases_mut
         Some(Product::Codex),
         auth_manager,
     ));
-    let previous_inventory = vec![remote_installed_plugin("retained")];
+    let mut retained = remote_installed_plugin("retained");
+    retained.active_bundle = Some(crate::remote::ActiveRemotePluginBundle {
+        directory_version: "local".into(),
+        remote_plugin_id: None,
+    });
+    let previous_inventory = vec![retained];
     manager.write_remote_installed_plugins_cache(previous_inventory.clone());
 
     manager.maybe_start_remote_installed_plugin_bundle_sync(
@@ -8098,9 +8182,30 @@ fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
             .map(|update| update.metadata_change_id.is_some()),
         Some(true)
     );
+    // Delivering an observed change must not consume the separate recovery obligation.
+    assert!(manager.take_pending_runtime_change().is_some());
+    let failed_retry_generation = manager
+        .begin_remote_installed_plugins_reconcile(/*auth*/ None)
+        .expect("begin retry before catalog failure");
+    manager.abandon_remote_installed_plugins_reconcile(
+        failed_retry_generation,
+        /*require_refresh*/ false,
+    );
+    assert_eq!(
+        manager
+            .remote_installed_plugins_cache
+            .read()
+            .unwrap()
+            .reconciliation,
+        ReconciliationState::RetryRequired
+    );
     let retry_generation = manager
         .begin_remote_installed_plugins_reconcile(/*auth*/ None)
         .expect("begin retry after cancellation");
+    manager.abandon_remote_installed_plugins_reconcile(
+        failed_retry_generation,
+        /*require_refresh*/ true,
+    );
     assert_eq!(
         manager
             .write_remote_installed_plugins_cache_snapshot(

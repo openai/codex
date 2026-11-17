@@ -14,7 +14,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<()> {
+async fn catalog_metadata_updates_preserve_live_mcp_and_plugin_skills() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = format!("http://{}", listener.local_addr()?);
@@ -156,9 +156,64 @@ async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<(
         warm_skills
     );
 
+    installed.write().await["installed_at"] = json!("2026-11-16T12:00:00Z");
+    refresh_and_expect_logo(&mut app_server, renewed_logo).await?;
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
+    assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
+
+    {
+        let mut plugin = installed.write().await;
+        plugin["release"]["version"] = json!("1.1.0");
+        plugin["release"]["bundle_download_url"] = json!(format!("{base_url}/missing-bundle"));
+    }
+    let request = app_server
+        .send_raw_request("plugin/installed", Some(json!({})))
+        .await?;
+    let _: PluginInstalledResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    let request = app_server
+        .send_raw_request("plugin/reconcile", Some(json!({})))
+        .await?;
+    let reconciled: PluginReconcileResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    assert!(reconciled.changed_plugins.is_empty());
+    assert_eq!(
+        reconciled.failed_remote_plugin_ids,
+        vec!["plugins~Plugin_00000000000000000000000000000000"]
+    );
+    let request = app_server
+        .send_raw_request("plugin/installed", Some(json!({})))
+        .await?;
+    let response: PluginInstalledResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    let plugin = response
+        .marketplaces
+        .iter()
+        .flat_map(|marketplace| &marketplace.plugins)
+        .find(|plugin| plugin.name == "demo-plugin")
+        .context("installed plugin should remain visible after an advertised upgrade")?;
+    assert_eq!(plugin.version.as_deref(), Some("1.1.0"));
+    assert_eq!(plugin.local_version.as_deref(), Some("1.0.0"));
+    let request = app_server
+        .send_raw_request("plugin/reconcile", Some(json!({})))
+        .await?;
+    let _: PluginReconcileResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
+    assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
+    assert_eq!(
+        list_plugin_skills(&mut app_server, codex_home.path()).await?,
+        warm_skills
+    );
+
     // Runtime metadata must update the cached skill catalog without changing the bundle.
-    installed.write().await["release"]["interface"]["logo_url"] = json!(changed_logo);
-    installed.write().await["enabled"] = json!(false);
+    {
+        let mut plugin = installed.write().await;
+        plugin["release"]["version"] = json!("1.0.0");
+        plugin["release"]["bundle_download_url"] = json!(format!("{base_url}/bundle"));
+        plugin["release"]["interface"]["logo_url"] = json!(changed_logo);
+        plugin["enabled"] = json!(false);
+    }
     refresh_and_expect_logo(&mut app_server, changed_logo).await?;
     assert!(
         list_plugin_skills(&mut app_server, codex_home.path())
@@ -167,12 +222,107 @@ async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<(
     );
     read_mcp_skill_resource(&mut app_server, &thread.id).await?;
     assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
-    assert_eq!(calls.snapshot().main_prompt_reads, 4);
+    assert_eq!(calls.snapshot().main_prompt_reads, 6);
     assert_eq!(
         std::fs::read_to_string(warm_skills[0].path.as_str())?,
         SKILL_CONTENTS
     );
+    // Restore the plugin, then simulate a different process activating a new bundle.
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache/openai-curated-remote/demo-plugin");
+    let original_root = plugin_root.join("1.0.0");
+    write_fixture_mcp(&original_root, "fixture-original")?;
+    installed.write().await["enabled"] = json!(true);
+    reconcile_plugins(&mut app_server).await?;
+    expect_fixture_mcp(&mut app_server, &thread.id, "fixture-original").await?;
+
+    {
+        let mut plugin = installed.write().await;
+        plugin["release"]["version"] = json!("1.1.0");
+        plugin["release"]["bundle_download_url"] = json!(format!("{base_url}/missing-bundle"));
+    }
+    let failed = reconcile_plugins(&mut app_server).await?;
+    assert!(failed.changed_plugins.is_empty());
+    assert_eq!(failed.failed_remote_plugin_ids.len(), 1);
+    expect_fixture_mcp(&mut app_server, &thread.id, "fixture-original").await?;
+
+    let upgraded_root = plugin_root.join("1.1.0");
+    std::fs::rename(&original_root, &upgraded_root)?;
+    write_fixture_mcp(&upgraded_root, "fixture-upgrade")?;
+    assert!(
+        reconcile_plugins(&mut app_server)
+            .await?
+            .changed_plugins
+            .is_empty()
+    );
+    expect_fixture_mcp(&mut app_server, &thread.id, "fixture-upgrade").await?;
+
+    // A different remote identity can replace the bundle without changing its directory version.
+    let replacement_id = "plugins~Plugin_00000000000000000000000000000001";
+    installed.write().await["id"] = json!(replacement_id);
+    let failed = reconcile_plugins(&mut app_server).await?;
+    assert_eq!(failed.failed_remote_plugin_ids, vec![replacement_id]);
+    expect_fixture_mcp(&mut app_server, &thread.id, "fixture-upgrade").await?;
+    write_fixture_mcp(&upgraded_root, "fixture-replacement")?;
+    std::fs::write(
+        plugin_root.join(".codex-remote-plugin-install.json"),
+        serde_json::to_vec(&json!({"schema_version": 1, "remote_plugin_id": replacement_id}))?,
+    )?;
+    assert!(
+        reconcile_plugins(&mut app_server)
+            .await?
+            .changed_plugins
+            .is_empty()
+    );
+    expect_fixture_mcp(&mut app_server, &thread.id, "fixture-replacement").await?;
+
     server_handle.abort();
+    Ok(())
+}
+
+fn write_fixture_mcp(root: &std::path::Path, name: &str) -> Result<()> {
+    std::fs::write(
+        root.join(".mcp.json"),
+        serde_json::to_vec(&json!({
+            "mcpServers": {(name): {"type": "http", "url": "http://127.0.0.1:9/mcp"}}
+        }))?,
+    )?;
+    Ok(())
+}
+
+async fn reconcile_plugins(app_server: &mut TestAppServer) -> Result<PluginReconcileResponse> {
+    let request = app_server
+        .send_raw_request("plugin/reconcile", Some(json!({})))
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await?
+}
+
+async fn expect_fixture_mcp(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+    expected: &str,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let request = app_server
+                .send_raw_request("mcpServerStatus/list", Some(json!({"threadId": thread_id})))
+                .await?;
+            let response: serde_json::Value = app_server.read_response(request).await?;
+            let names = response["data"]
+                .as_array()
+                .context("missing MCP status data")?
+                .iter()
+                .filter_map(|row| row["name"].as_str())
+                .filter(|name| name.starts_with("fixture-"))
+                .collect::<Vec<_>>();
+            if names == [expected] {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
     Ok(())
 }
 
