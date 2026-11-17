@@ -249,6 +249,7 @@ impl App {
         tui: &mut tui::Tui,
         initial_backends: super::backend_sessions::InitialBackendSessions,
         mut config: Config,
+        statusline_metrics: crate::statusline_metrics::StatuslineMetrics,
         launch_cwd: PathBuf,
         backend_preference_context: backend_selection::BackendPreferenceContext,
         cli_kv_overrides: Vec<(String, TomlValue)>,
@@ -988,6 +989,7 @@ See the Codex keymap documentation for supported actions and examples."
             agents_overview::AgentsOverviewState::new(local_settings.tui.agents_overview_grouping);
         let mut app = Self {
             statusline_picker: None,
+            statusline_metrics,
             provider_writes,
             feature_write_lock: Arc::default(),
             config_notification_test_generation: 0,

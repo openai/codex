@@ -561,6 +561,7 @@ struct InitialHistoryReplayBuffer {
 
 pub(crate) struct App {
     statusline_picker: Option<statusline_picker::StatuslinePicker>,
+    statusline_metrics: crate::statusline_metrics::StatuslineMetrics,
     provider_writes: HashMap<crate::backend_id::BackendId, crate::model_catalog::ProviderWrite>,
     feature_write_lock: Arc<tokio::sync::Mutex<()>>,
     config_notification_test_generation: u64,

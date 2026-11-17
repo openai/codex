@@ -28,6 +28,7 @@ pub(super) async fn run_startup_for_test(
         tui,
         initial_backends,
         config.clone(),
+        Default::default(),
         config.cwd.to_path_buf(),
         backend_selection::BackendPreferenceContext::new(
             &config,

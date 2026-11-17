@@ -185,6 +185,8 @@ impl App {
         {
             return;
         }
+        self.statusline_metrics
+            .record(&self.config, "codex.statusline.picker_opened", &[]);
         let selected = self
             .chat_widget
             .configured_statusline_provider()

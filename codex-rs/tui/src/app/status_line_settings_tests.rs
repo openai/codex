@@ -3,6 +3,7 @@
 use crate::AppServerTarget;
 use crate::app::test_support::make_test_app;
 use crate::chatwidget::tests::render_bottom_popup;
+use crate::statusline_metrics::tests::Collector;
 use codex_config::types::BuiltinStatusLine;
 use codex_config::types::StatusLineProviderId;
 use codex_config::types::StatusLineSelection;
@@ -101,13 +102,17 @@ async fn remote_session_saves_to_the_active_local_profile() -> anyhow::Result<()
 #[tokio::test]
 async fn failed_write_preserves_the_file_and_the_live_selection() -> anyhow::Result<()> {
     let mut app = make_test_app().await;
+    let collector = Collector::new();
+    app.statusline_metrics = collector.metrics(&mut app.config);
     let path = app.local_settings.user_config_path.clone();
-    let active = StatusLineSelection::Mcp(StatusLineProviderId {
-        server: "work".into(),
-        tool: "usage".into(),
-    });
-    app.save_status_line_provider(active, /*provider_from_picker*/ None)
-        .await?;
+    for tool in ["usage", "other", "other"] {
+        let selection = StatusLineSelection::Mcp(StatusLineProviderId {
+            server: "work".into(),
+            tool: tool.into(),
+        });
+        app.save_status_line_provider(selection, /*provider_from_picker*/ None)
+            .await?;
+    }
     let before = (
         app.local_settings.clone(),
         app.chat_widget.local_settings.clone(),
@@ -126,6 +131,13 @@ async fn failed_write_preserves_the_file_and_the_live_selection() -> anyhow::Res
             (&before.0, &before.1)
         );
     }
+    assert_eq!(
+        collector.snapshot(),
+        [
+            "provider_changed change=enabled_custom 1",
+            "provider_changed change=switched_custom 1"
+        ]
+    );
     Ok(())
 }
 

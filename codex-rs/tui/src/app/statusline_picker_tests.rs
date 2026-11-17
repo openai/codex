@@ -6,6 +6,7 @@ use crate::app::tests::make_test_app_with_channels;
 use crate::app::tests::test_thread_session;
 use crate::app_server_session::ThreadParamsMode;
 use crate::chatwidget::tests::render_bottom_popup;
+use crate::statusline_metrics::tests::Collector;
 use crate::statusline_provider::test_support::advertised;
 use crate::tui::test_support::make_test_tui;
 use codex_app_server_client::AppServerClient;
@@ -149,9 +150,13 @@ async fn statusline_picker_disconnect_leaves_the_item_editor_open() -> anyhow::R
 #[tokio::test(start_paused = true)]
 async fn discovery_batch_keeps_the_highlight() -> anyhow::Result<()> {
     let (mut app, owner, _commands, _events) = picker().await?;
+    let collector = Collector::new();
+    app.statusline_metrics = collector.metrics(&mut app.config);
     let calendar = advertised("work", "calendar", "ui://work/day");
-    app.chat_widget.local_settings.tui.status_line_provider =
+    app.local_settings.tui.status_line_provider =
         Some(Box::new(StatusLineSelection::Mcp((&calendar.id).into())));
+    app.chat_widget.local_settings.tui.status_line_provider =
+        app.local_settings.tui.status_line_provider.clone();
     let update = |server: &str, providers| DiscoveryUpdate::Server(server.into(), Ok(providers));
     app.open_statusline_picker(&owner);
     let scan = app.statusline_picker.as_ref().unwrap().id;
@@ -184,8 +189,10 @@ async fn discovery_batch_keeps_the_highlight() -> anyhow::Result<()> {
         &owner,
     );
     insta::assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 67));
+    assert_eq!(collector.snapshot(), ["picker_opened 1"]);
 
     app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.chat_widget.pause_unavailable_thread();
     app.reconnect.offline = true;
     app.open_statusline_picker(&owner);
     insta::assert_snapshot!(
@@ -203,6 +210,13 @@ async fn discovery_batch_keeps_the_highlight() -> anyhow::Result<()> {
     assert_eq!(
         app.local_settings.tui.status_line_provider.as_deref(),
         Some(&StatusLineSelection::Builtin(BuiltinStatusLine::Default))
+    );
+    assert_eq!(
+        collector.snapshot(),
+        [
+            "picker_opened 1",
+            "provider_changed change=returned_to_default 1"
+        ]
     );
     Ok(())
 }

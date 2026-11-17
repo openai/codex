@@ -44,6 +44,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
 
     Box::new(App {
         statusline_picker: None,
+        statusline_metrics: Default::default(),
         provider_writes: HashMap::new(),
         feature_write_lock: Arc::default(),
         config_notification_test_generation: 0,
