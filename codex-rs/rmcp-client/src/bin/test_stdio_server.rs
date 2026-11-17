@@ -727,11 +727,12 @@ impl ServerHandler for TestToolServer {
                 .and_then(|mut file| writeln!(file, "{state}"))
                 .map_err(|error| McpError::internal_error(error.to_string(), None))?;
             let thread = state["thread"]["id"].as_str().unwrap_or_default();
+            let mode = state["app"]["display_mode"].as_str().unwrap_or_default();
             return Ok(
                 ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri,
                     mime_type: Some("APPLICATION/JSON; charset=utf-8".into()),
-                    text: json!({"type":"text", "children":[format!("Provider thread {thread}")]})
+                    text: json!({"type":"text", "children":[format!("Provider thread {thread} ({mode})")]})
                         .to_string(),
                     meta: None,
                 }])

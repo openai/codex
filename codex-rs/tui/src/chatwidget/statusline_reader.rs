@@ -1,4 +1,4 @@
-//! Read one statusline resource for the displayed thread and keep its footer through native refreshes.
+//! Poll the displayed thread’s statusline resource until a read fails or the reader is retired.
 
 use super::ChatWidget;
 use super::statusline_state::StatuslineState;
@@ -25,6 +25,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::time::Instant;
+use tokio::time::sleep;
+use tokio::time::timeout;
+use tokio::time::timeout_at;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub(super) struct ActiveStatuslineRead {
@@ -33,6 +38,13 @@ pub(super) struct ActiveStatuslineRead {
     selection: StatusLineProviderId,
     host_cwd: PathBuf,
     startup: watch::Sender<()>,
+    cancel: CancellationToken,
+}
+
+impl Drop for ActiveStatuslineRead {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 #[derive(Debug)]
@@ -59,6 +71,10 @@ impl StatuslineReadEvent {
 impl ChatWidget {
     pub(super) fn selected_statusline_provider(&self) -> Option<&StatusLineProviderId> {
         if self.read_only_history
+            || self
+                .app_event_tx
+                .voice_only
+                .load(std::sync::atomic::Ordering::Relaxed)
             || !self
                 .config
                 .features
@@ -92,6 +108,7 @@ impl ChatWidget {
             selection: selection.clone(),
             host_cwd: self.status_line_cwd().to_owned(),
             startup,
+            cancel: CancellationToken::new(),
         });
         self.bottom_pane.set_status_line_enabled(/*enabled*/ true);
         self.set_status_line(Some(
@@ -170,39 +187,58 @@ impl ActiveStatuslineRead {
         let client = owner.request_handle();
         let backend = owner.backend_id();
         let cwd = LegacyAppPathString::from_path(&self.host_cwd).to_inferred_path_uri();
+        let cancel = self.cancel.clone();
         tokio::spawn(async move {
-            let result: Result<UiTree> = async {
-                let cwd = cwd.ok_or_else(|| eyre!("invalid app-server working directory"))?;
-                let provider = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
-                    loop {
-                        if let Ok(Some(provider)) = ResolvedStatuslineProvider::lookup(
-                            &client,
-                            thread,
-                            &cwd,
-                            ProviderSelection::Saved(&id),
-                        )
-                        .await
-                        {
-                            return Ok::<_, watch::error::RecvError>(provider);
+            let result: Option<Result<()>> = cancel
+                .run_until_cancelled(async {
+                    let cwd = cwd.ok_or_else(|| eyre!("invalid app-server working directory"))?;
+                    let provider = timeout(Duration::from_secs(/*secs*/ 5), async {
+                        loop {
+                            if let Ok(Some(provider)) = ResolvedStatuslineProvider::lookup(
+                                &client,
+                                thread,
+                                &cwd,
+                                ProviderSelection::Saved(&id),
+                            )
+                            .await
+                            {
+                                return Ok::<_, watch::error::RecvError>(provider);
+                            }
+                            // A cold catalog may arrive before the selected MCP server finishes starting.
+                            ready.changed().await?;
                         }
-                        // A cold catalog may arrive before the selected MCP server finishes starting.
-                        ready.changed().await?;
+                    })
+                    .await??;
+                    name.clone_from(&provider.provider().title);
+                    loop {
+                        let (reply, snapshot) = oneshot::channel();
+                        StatuslineReadEvent::send(
+                            &events,
+                            token,
+                            ReadStep::Snapshot(backend, reply),
+                        );
+                        let snapshot = serde_json::to_value(snapshot.await?)?;
+                        let deadline = Instant::now() + Duration::from_secs(1);
+                        // A ready reply can win the final poll of timeout_at after the deadline.
+                        let response = match timeout_at(deadline, provider.read(snapshot)).await {
+                            Ok(response) if Instant::now() < deadline => response?,
+                            Ok(_) | Err(_) => {
+                                bail!("resource read timed out");
+                            }
+                        };
+                        let tree = decode_tree(&provider.provider().uri, &response.contents)?;
+                        StatuslineReadEvent::send(
+                            &events,
+                            token,
+                            ReadStep::Finished(backend, Ok(tree)),
+                        );
+                        sleep(Duration::from_secs(/*secs*/ 1)).await;
                     }
                 })
-                .await??;
-                name.clone_from(&provider.provider().title);
-                // Lookup can outlive the displayed thread or its current usage measurements.
-                let (reply, current) = oneshot::channel();
-                StatuslineReadEvent::send(&events, token, ReadStep::Snapshot(backend, reply));
-                let response = provider.read(serde_json::to_value(current.await?)?).await?;
-                decode_tree(&provider.provider().uri, &response.contents)
+                .await;
+            if let Some(Err(_)) = result {
+                StatuslineReadEvent::send(&events, token, ReadStep::Finished(backend, Err(name)));
             }
-            .await;
-            StatuslineReadEvent::send(
-                &events,
-                token,
-                ReadStep::Finished(backend, result.map_err(|_| name)),
-            );
         });
     }
 }
