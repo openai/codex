@@ -2177,7 +2177,7 @@ SELECT
 }
 
 #[tokio::test]
-async fn synchronized_catch_up_does_not_replay_old_rows() {
+async fn flush_projects_only_the_durable_suffix() {
     let home = TempDir::new().expect("temp dir");
     let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
@@ -2205,7 +2205,8 @@ async fn synchronized_catch_up_does_not_replay_old_rows() {
         .live_rollout_path(thread_id)
         .await
         .expect("rollout path");
-    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+    store
+        .flush_thread(thread_id)
         .await
         .expect("catch up synchronized rollout");
 
@@ -2217,6 +2218,32 @@ async fn synchronized_catch_up_does_not_replay_old_rows() {
             .await
             .expect("read projected turn");
     assert_eq!(status, "sentinel");
+
+    // The writer can flush without new items while the projector is behind on disk.
+    for (ordinal, item, compress) in [
+        (2, user_message("suffix"), false),
+        (3, turn_completed("turn-1"), true),
+    ] {
+        append_suffix(
+            &rollout_path,
+            &format!("{}\n", rollout_line(Some(ordinal), item)),
+        );
+        let end = fs::metadata(&rollout_path).expect("metadata").len();
+        if compress {
+            compress_rollout(&rollout_path);
+        }
+        store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush durable suffix");
+        assert_eq!(
+            projection_state(&pool, thread_id).await,
+            (
+                i64::try_from(end).unwrap(),
+                i64::try_from(ordinal + 1).unwrap()
+            )
+        );
+    }
 }
 
 /// Large records keep their byte positions and remain pending until their newline is durable.
