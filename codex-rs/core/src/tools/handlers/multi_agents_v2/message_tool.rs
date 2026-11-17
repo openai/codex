@@ -83,13 +83,6 @@ pub(super) async fn handle_message_string_tool(
     let receiver_agent_path = receipt.metadata.agent_path.ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
-    let output = match mode {
-        MessageDeliveryMode::QueueOnly if receiver_agent_path.is_root() => "Message accepted.",
-        MessageDeliveryMode::QueueOnly => {
-            "Message accepted. If the recipient is idle and should act now, use followup_task to ask it to act on the message."
-        }
-        MessageDeliveryMode::TriggerTurn => "",
-    };
     emit_sub_agent_activity(
         &session,
         &turn,
@@ -104,8 +97,5 @@ pub(super) async fn handle_message_string_tool(
     )
     .await;
 
-    Ok(FunctionToolOutput::from_text(
-        output.to_string(),
-        Some(true),
-    ))
+    Ok(FunctionToolOutput::from_text(String::new(), Some(true)))
 }

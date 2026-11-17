@@ -1359,7 +1359,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         agent_role: None,
     });
 
-    let output = SendMessageHandlerV2
+    SendMessageHandlerV2
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1371,10 +1371,6 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         ))
         .await
         .expect("send_message should accept the root agent path");
-    assert_eq!(
-        expect_text_output(output),
-        ("Message accepted.".to_string(), Some(true))
-    );
 
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == root.thread_id
