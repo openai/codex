@@ -684,7 +684,7 @@ opt-level = 0
 [patch.crates-io]
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
-crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }
+crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "37ca4a27a9424ec5dbe6451f48c339d7b45f8d63" }
 # SQLx 0.9.0 excludes libsqlite3-sys 0.39. Keep its driver and Core traits on
 # the same reviewed source until a release includes transact-rs/sqlx#4502.
 sqlx-core = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }
