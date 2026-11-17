@@ -40,6 +40,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_successful_turn;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -58,6 +59,7 @@ enum HostAccountingBehavior {
     #[default]
     Continue,
     Exhausted,
+    ExhaustedForTurnOnce,
     Fail,
 }
 
@@ -75,7 +77,11 @@ impl AgentUsageAccounting for HostAccounting {
         report: AgentUsageReport,
     ) -> BoxFuture<'_, codex_protocol::error::Result<UsageAccountingDecision>> {
         Box::pin(async move {
-            self.reports.lock().expect("usage reports").push(report);
+            let report_count = {
+                let mut reports = self.reports.lock().expect("usage reports");
+                reports.push(report);
+                reports.len()
+            };
             if let Some(pause) = &self.pause_report {
                 let (resume, resumed) = oneshot::channel();
                 let _ = pause.send(resume);
@@ -84,6 +90,11 @@ impl AgentUsageAccounting for HostAccounting {
             match self.behavior {
                 HostAccountingBehavior::Continue => Ok(UsageAccountingDecision::Continue),
                 HostAccountingBehavior::Exhausted => Ok(UsageAccountingDecision::Exhausted),
+                HostAccountingBehavior::ExhaustedForTurnOnce => Ok(if report_count == 1 {
+                    UsageAccountingDecision::ExhaustedForTurn
+                } else {
+                    UsageAccountingDecision::Continue
+                }),
                 HostAccountingBehavior::Fail => {
                     Err(CodexErr::Stream("accounting unavailable".into()))
                 }
@@ -280,6 +291,84 @@ async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()
             | ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "unbilled-patch"
         )
     )));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_turn_exhaustion_posts_response_state_and_allows_a_later_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("exhausted"),
+                ev_assistant_message("exhausted-message", "accepted output"),
+                ev_completed_with_tokens("exhausted", /*total_tokens*/ 11),
+            ]),
+            sse(vec![
+                ev_response_created("fresh"),
+                ev_assistant_message("fresh-message", "fresh output"),
+                ev_completed_with_tokens("fresh", /*total_tokens*/ 7),
+            ]),
+        ],
+    )
+    .await;
+    let accounting = Arc::new(HostAccounting {
+        behavior: HostAccountingBehavior::ExhaustedForTurnOnce,
+        ..Default::default()
+    });
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(accounting.clone());
+    let test = test_codex()
+        .with_config(|config| {
+            config.response_process_mode =
+                codex_config::config_toml::ResponseProcessMode::AfterCompleteResponse;
+        })
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let input = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }])
+    };
+    test.codex
+        .start_or_steer_turn(input("spend the current turn allowance"))
+        .await?;
+    let mut saw_output = false;
+    let mut saw_usage = false;
+    let error = wait_for_event(&test.codex, |event| {
+        saw_output |= matches!(event, EventMsg::AgentMessage(message) if message.message == "accepted output");
+        saw_usage |= matches!(event, EventMsg::TokenCount(count)
+            if count.info.as_ref().is_some_and(|info| info.total_token_usage.total_tokens == 11));
+        matches!(event, EventMsg::Error(_) | EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!((saw_output, saw_usage), (true, true));
+    assert!(matches!(error, EventMsg::Error(error)
+        if error.codex_error_info == Some(CodexErrorInfo::SessionBudgetExceeded)));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .start_or_steer_turn(input("use a fresh turn allowance"))
+        .await?;
+    wait_for_successful_turn(&test.codex).await;
+    let reports = accounting.reports.lock().expect("usage reports");
+    assert_eq!(
+        reports
+            .iter()
+            .map(|report| report.usage.as_ref().map(|usage| usage.total_tokens))
+            .collect::<Vec<_>>(),
+        vec![Some(11), Some(7)],
+    );
+    assert_ne!(reports[0].turn_id, reports[1].turn_id);
 
     Ok(())
 }
@@ -745,6 +834,7 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
 
 #[tokio::test]
 #[test_case(HostAccountingBehavior::Exhausted, false ; "host exhausts budget")]
+#[test_case(HostAccountingBehavior::ExhaustedForTurnOnce, false ; "host exhausts steered turn")]
 #[test_case(HostAccountingBehavior::Fail, false ; "accounting failure never retries inference")]
 #[test_case(HostAccountingBehavior::Fail, true ; "incomplete response keeps original error")]
 async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
@@ -752,6 +842,10 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
     incomplete: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    let exhausts_budget = matches!(
+        behavior,
+        HostAccountingBehavior::Exhausted | HostAccountingBehavior::ExhaustedForTurnOnce
+    );
     let server = start_mock_server().await;
     let mut response = json!({
         "usage": {
@@ -798,8 +892,7 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
             // This allowance would admit the response. The selected host can still stop it.
-            config.rollout_budget =
-                matches!(behavior, HostAccountingBehavior::Exhausted).then(rollout_budget);
+            config.rollout_budget = exhausts_budget.then(rollout_budget);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -848,11 +941,12 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
             error.message,
             "Incomplete response returned, reason: max_output_tokens"
         );
-    } else if matches!(behavior, HostAccountingBehavior::Exhausted) {
+    } else if exhausts_budget {
         assert_eq!(
             error.codex_error_info,
             Some(CodexErrorInfo::SessionBudgetExceeded)
         );
+        assert_eq!(completed.error.as_ref(), Some(error));
     } else {
         assert!(error.message.contains("Host usage accounting failed"));
         assert_eq!(error.codex_error_info, Some(CodexErrorInfo::Other));

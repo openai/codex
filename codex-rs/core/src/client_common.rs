@@ -121,11 +121,20 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
     }
 }
 
-/// Carries the hook price and whether the response producer has posted the bill.
+/// Whether the producer has posted a response's bill and deferred a turn error.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum ChargePosting {
+    #[default]
+    Unposted,
+    Posted,
+    PostedTurnExhausted,
+}
+
+/// Carries the hook price and the response producer's billing state.
 #[derive(Debug, Default)]
 pub(crate) struct SamplingCharge {
     pub(crate) hooks: codex_hooks::ModelRequestHookOutcome,
-    pub(crate) posted: bool,
+    pub(crate) posting: ChargePosting,
 }
 
 /// Core consumes a terminal event and its hook output together. Other readers

@@ -2920,6 +2920,7 @@ where
         }
         loop {
             let event = tokio::select! {
+                biased;
                 _ = consumer_dropped.cancelled() => {
                     inference_trace_attempt.record_cancelled(
                         STREAM_DROPPED_REASON,

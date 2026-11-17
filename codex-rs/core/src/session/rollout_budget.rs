@@ -3,6 +3,7 @@ use super::turn_context::TurnContext;
 use crate::agent::host::AgentRuntimeServices;
 use crate::agent::host::AgentUsageReport;
 use crate::agent::host::UsageAccountingDecision;
+use crate::client_common::ChargePosting;
 use crate::client_common::SamplingUsage;
 use crate::context::ContextualUserFragment;
 use codex_protocol::error::CodexErr;
@@ -118,9 +119,22 @@ impl Session {
         turn_id: &str,
         usage: &SamplingUsage,
     ) -> CodexResult<()> {
-        if !usage.charge.posted {
-            self.record_numeric_usage(turn_id, usage.provider.as_ref(), usage.charge.hooks.charge)
-                .await?;
+        let result = match usage.charge.posting {
+            ChargePosting::Unposted => {
+                self.record_numeric_usage(
+                    turn_id,
+                    usage.provider.as_ref(),
+                    usage.charge.hooks.charge,
+                )
+                .await
+            }
+            ChargePosting::Posted => Ok(()),
+            ChargePosting::PostedTurnExhausted => Err(CodexErr::SessionBudgetExceeded),
+        };
+        if let Err(error) = &result
+            && !matches!(error.details(), CodexErrorDetails::SessionBudgetExceeded)
+        {
+            return result;
         }
         if let Some(message) = &usage.charge.hooks.invalid_price {
             // A bad price does not erase successful siblings' contributions.
@@ -128,7 +142,7 @@ impl Session {
                 "Invalid post-hook budget units: {message}"
             )));
         }
-        Ok(())
+        result
     }
 
     async fn record_numeric_usage(
@@ -175,7 +189,13 @@ impl Session {
                             "Host usage accounting failed: {error}"
                         ))
                     })?;
-                decision == UsageAccountingDecision::Exhausted
+                match decision {
+                    UsageAccountingDecision::Continue => false,
+                    UsageAccountingDecision::Exhausted => true,
+                    UsageAccountingDecision::ExhaustedForTurn => {
+                        return Err(CodexErr::SessionBudgetExceeded);
+                    }
+                }
             }
         };
         if stop_new_work {

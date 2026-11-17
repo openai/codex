@@ -1,11 +1,13 @@
 //! Settles completed responses and releases output according to the configured processing mode.
 
+use crate::client_common::ChargePosting;
 use crate::client_common::ResponseEvent;
 use crate::client_common::SamplingEvent;
 use crate::hook_runtime::sampling::SamplingAttempt;
 use codex_api::ApiError;
 use codex_hooks::ModelRequestHookEvent;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -125,15 +127,23 @@ impl ResponseDelivery {
         if let Some((session, turn)) = &self.settlement
             && let Ok(ResponseEvent::Completed { token_usage, .. }) = &terminal.event
         {
-            let usage = crate::client_common::SamplingUsage {
+            let mut usage = crate::client_common::SamplingUsage {
                 provider: token_usage.clone(),
                 charge: std::mem::take(&mut terminal.hook_output),
             };
-            session
+            usage.charge.posting = match session
                 .record_rollout_budget_usage(&turn.sub_id, &usage)
-                .await?;
+                .await
+            {
+                Ok(()) => ChargePosting::Posted,
+                Err(error)
+                    if matches!(error.details(), CodexErrorDetails::SessionBudgetExceeded) =>
+                {
+                    ChargePosting::PostedTurnExhausted
+                }
+                Err(error) => return Err(error),
+            };
             terminal.hook_output = usage.charge;
-            terminal.hook_output.posted = true;
         }
         if terminal.event.is_ok() {
             for item in std::mem::take(&mut self.held) {

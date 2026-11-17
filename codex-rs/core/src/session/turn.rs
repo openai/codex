@@ -3177,20 +3177,17 @@ async fn try_run_sampling_request(
                     preempt = CancellationToken::new();
                     continue;
                 }
-                if stream.settlement_started.load(Ordering::Acquire) {
-                    wait_for_bill_only = streaming && stream.interrupt.is_none();
-                } else {
-                    let Some(interrupt) = stream.interrupt.take() else {
-                        // TODO: Reconcile any response item already being presented to the client.
-                        break Ok(SamplingRequestResult {
-                            needs_follow_up: true,
-                            mailbox_preempted: false,
-                            last_agent_message,
-                        });
-                    };
-                    if step_context.settings.model_info.use_responses_lite {
-                        let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
-                    }
+                if stream.interrupt.is_none() {
+                    // Stop upstream polling, but keep receiving until any completion already
+                    // observed by the mapper has finished accounting.
+                    wait_for_bill_only =
+                        streaming || !stream.settlement_started.load(Ordering::Acquire);
+                    stream.consumer_dropped.cancel();
+                } else if !stream.settlement_started.load(Ordering::Acquire)
+                    && let Some(interrupt) = stream.interrupt.take()
+                    && step_context.settings.model_info.use_responses_lite
+                {
+                    let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
                 }
                 // A steer cannot start another request before the accounting owner returns its decision.
                 preempt = CancellationToken::new();
@@ -3202,6 +3199,13 @@ async fn try_run_sampling_request(
 
         let event = SamplingStream::accept_for_turn(event, &cancellation_token);
         let Some(crate::client_common::SamplingEvent { event, hook_output }) = event else {
+            if stream.consumer_dropped.is_cancelled() {
+                break Ok(SamplingRequestResult {
+                    needs_follow_up: true,
+                    mailbox_preempted: *draining_for_mailbox,
+                    last_agent_message,
+                });
+            }
             break Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
             ));
@@ -3237,14 +3241,7 @@ async fn try_run_sampling_request(
 
         // A steer can cut off unread items on an HTTP stream while the owner posts its bill.
         // Consume the terminal accounting decision before opening the follow-up request.
-        if wait_for_bill_only {
-            if matches!(event, ResponseEvent::Completed { .. }) {
-                break Ok(SamplingRequestResult {
-                    needs_follow_up: true,
-                    mailbox_preempted: *draining_for_mailbox,
-                    last_agent_message,
-                });
-            }
+        if wait_for_bill_only && !matches!(event, ResponseEvent::Completed { .. }) {
             continue;
         }
 
@@ -3435,21 +3432,19 @@ async fn try_run_sampling_request(
                         conversation.id = %sess.thread_id,
                         turn.id = %turn_context.sub_id,
                     );
-                    if stream.settlement_started.load(Ordering::Acquire) {
-                        wait_for_bill_only = streaming
-                            && !(step_context.settings.model_info.use_responses_lite
-                                && stream.interrupt.is_some());
-                    } else if step_context.settings.model_info.use_responses_lite
-                        && let Some(interrupt) = stream.interrupt.take()
+                    if step_context.settings.model_info.use_responses_lite
+                        && stream.interrupt.is_some()
                     {
-                        // Completion can already be buffered when the interrupt receiver closes.
-                        let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
+                        if !stream.settlement_started.load(Ordering::Acquire)
+                            && let Some(interrupt) = stream.interrupt.take()
+                        {
+                            // Completion can already be buffered when the interrupt receiver closes.
+                            let _ = interrupt.send(codex_api::ResponseInterrupt::Drain);
+                        }
                     } else {
-                        break Ok(SamplingRequestResult {
-                            needs_follow_up: true,
-                            mailbox_preempted: true,
-                            last_agent_message,
-                        });
+                        wait_for_bill_only =
+                            streaming || !stream.settlement_started.load(Ordering::Acquire);
+                        stream.consumer_dropped.cancel();
                     }
                     // Keep the response ID and terminal decision. Later tools receive a denial.
                     *draining_for_mailbox = true;
@@ -3667,6 +3662,13 @@ async fn try_run_sampling_request(
                 should_emit_token_count = true;
                 if let Err(err) = budget_result {
                     break Err(err);
+                }
+                if wait_for_bill_only {
+                    break Ok(SamplingRequestResult {
+                        needs_follow_up: true,
+                        mailbox_preempted: *draining_for_mailbox,
+                        last_agent_message,
+                    });
                 }
                 if resampling.retry_pending {
                     response_completed = false;

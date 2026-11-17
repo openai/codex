@@ -19,12 +19,15 @@ pub struct AgentUsageReport {
     pub additional_budget_units_overflowed: bool,
 }
 
-/// Both decisions mean the host recorded the reported spending.
+/// Each decision means the host recorded the reported spending.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsageAccountingDecision {
     Continue,
     /// Do not start more tool handlers in this local rollout tree. Already-running work continues.
     Exhausted,
+    /// Fail the reporting response with `SessionBudgetExceeded` after recording its output and usage.
+    /// Background compaction fails only its job; later turns and peer threads remain eligible.
+    ExhaustedForTurn,
 }
 
 /// Replaces this runtime's `AgentControl::record_usage` and native rollout-budget reminders.
