@@ -80,7 +80,8 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         pending_code_cell_lifecycle_events: BTreeMap::new(),
         pending_agent_interaction_edges: Vec::new(),
         first_acceptances: BTreeMap::new(),
-        receipt_only_items: BTreeMap::new(),
+        receivable_ids: BTreeMap::new(),
+        snapshot_output_anchors: BTreeSet::new(),
     };
 
     let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
@@ -206,8 +207,11 @@ struct TraceReducer {
     payload_reader: PayloadReader,
     /// First (wall time, sequence) by receiving thread and Responses item ID.
     first_acceptances: BTreeMap<String, BTreeMap<String, (i64, crate::RawEventSeq)>>,
-    /// Delivered items awaiting their first model-visible sighting, keyed by thread and wire ID.
-    receipt_only_items: BTreeMap<(String, String), String>,
+    /// A native delivery or tool output has one graph ID until its first snapshot.
+    /// None means a snapshot already supplied its body (and a later acceptance is a duplicate).
+    receivable_ids: BTreeMap<(String, String), Option<String>>,
+    /// Accepted tool outputs first encountered in the batch about to be appended.
+    snapshot_output_anchors: BTreeSet<String>,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
     /// Latest session for each thread-local runtime handle; each exec replaces it.
@@ -347,16 +351,17 @@ impl TraceReducer {
             RawTraceEventPayload::HistoryItemAccepted {
                 item_id,
                 agent_message_payload,
+                tool_output_payload,
             } => {
                 let thread_id = event
                     .thread_id
                     .context("history acceptance has no thread")?;
                 self.thread_mut(&thread_id)?;
                 // Keep the acceptance edge even when a capture limit hid the receipt body.
-                if let Some(payload) = agent_message_payload
+                if let Some(payload) = agent_message_payload.or(tool_output_payload)
                     && payload.capture.is_complete()
                 {
-                    self.record_agent_receipt(
+                    self.record_accepted_item(
                         &thread_id,
                         event.codex_turn_id,
                         event.wall_time_unix_ms,
@@ -379,6 +384,7 @@ impl TraceReducer {
                 request_payload,
                 prepared_prompt_payload,
                 warmup_context_payload,
+                stripped_tool_output_ids,
             } => {
                 self.start_inference_call(
                     event.seq,
@@ -392,6 +398,7 @@ impl TraceReducer {
                         request_payload,
                         prepared_prompt_payload,
                         warmup_context_payload,
+                        stripped_tool_output_ids,
                     },
                 )?;
             }

@@ -80,9 +80,9 @@ struct TracedCompactionCompleted<'a> {
 /// `input_history` is the live thread history selected for compaction, while
 /// `replacement_history` is what future prompts may carry after the checkpoint.
 #[derive(Serialize)]
-pub struct CompactionCheckpointTracePayload<'a> {
-    pub input_history: &'a [ResponseItem],
-    pub replacement_history: &'a [ResponseItem],
+pub struct CompactionCheckpointTracePayload<'a, T = ResponseItem> {
+    pub input_history: &'a [T],
+    pub replacement_history: &'a [T],
 }
 
 impl CompactionTraceContext {
@@ -168,6 +168,24 @@ impl CompactionTraceContext {
     /// The checkpoint belongs to the same semantic compaction lifecycle as the
     /// compact endpoint attempts, so the context reuses its stable compaction ID.
     pub fn record_installed(&self, checkpoint: &CompactionCheckpointTracePayload<'_>) {
+        self.write_checkpoint(checkpoint);
+    }
+
+    /// Capture the selected input and frozen replacement without copying their message bodies.
+    pub fn record_local_install<'a>(
+        &self,
+        input: impl Iterator<Item = &'a ResponseItem>,
+        replacement: impl Iterator<Item = &'a ResponseItem>,
+    ) {
+        if self.is_enabled() {
+            self.write_checkpoint(&CompactionCheckpointTracePayload {
+                input_history: &input.collect::<Vec<_>>(),
+                replacement_history: &replacement.collect::<Vec<_>>(),
+            });
+        }
+    }
+
+    fn write_checkpoint(&self, checkpoint: &impl Serialize) {
         let CompactionTraceContextState::Enabled(context) = &self.state else {
             return;
         };

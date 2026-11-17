@@ -3944,7 +3944,11 @@ async fn start_new_context_window_persists_checkpoint_state(clear_tools: bool) {
     );
     let expected_snapshot = world_state.render_full().0.into_object();
     session
-        .start_new_context_window(&step_context, world_state)
+        .start_new_context_window(
+            &step_context,
+            world_state,
+            &codex_rollout_trace::CompactionTraceContext::disabled(),
+        )
         .await;
 
     let live_history = session.clone_history().await;
@@ -6260,8 +6264,25 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     session
         .record_started_turn(&turn_context.sub_id, Some(turn_context.attribution()))
         .await;
-    let input_goal_ids =
-        crate::context::UserGoalUpdate::message_ids(session.clone_history().await.raw_items());
+    let input = session.clone_history().await;
+    let input_goal_ids = crate::context::UserGoalUpdate::message_ids(input.raw_items());
+    let bundle = tempfile::tempdir().unwrap();
+    let thread = session.thread_id().to_string();
+    let writer = codex_rollout_trace::TraceWriter::create(
+        bundle.path(),
+        "trace".into(),
+        "rollout".into(),
+        thread.clone(),
+    )
+    .unwrap();
+    let trace = codex_rollout_trace::CompactionTraceContext::enabled(
+        Arc::new(writer),
+        thread,
+        turn_context.sub_id.clone(),
+        "reset".into(),
+        "test".into(),
+        "test".into(),
+    );
     // The goal edit is accepted after the compaction input was captured.
     session
         .record_user_goal_update(crate::context::UserGoalUpdate::Clear)
@@ -6281,15 +6302,18 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
             turn_context_baseline.clone(),
             world_state.render_full().0,
             /*rejected_audio_file_ids*/ Default::default(),
-            CompactedHistoryMetadata {
-                input_goal_ids,
-                message: String::new(),
-                window_number,
-                window_ids,
-                compaction_response_id: None,
-                compaction_model_hash: None,
-                reviewer_compaction_hash: None,
-            },
+            CompactedHistoryInstallation::Complete(
+                CompactedHistoryMetadata {
+                    input_goal_ids,
+                    message: String::new(),
+                    window_number,
+                    window_ids,
+                    compaction_response_id: None,
+                    compaction_model_hash: None,
+                    reviewer_compaction_hash: None,
+                },
+                Some((&trace, &input)),
+            ),
         )
         .await;
     let live_history = session.clone_history().await.annotated_items().to_vec();
@@ -6312,6 +6336,41 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     else {
         panic!("unexpected compaction records: {compaction_items:#?}");
     };
+    // A goal edit accepted after installation must not appear in either checkpoint history.
+    session
+        .record_user_goal_update(crate::context::UserGoalUpdate::Clear)
+        .await
+        .unwrap();
+    drop(trace); // Drain the writer before reading the checkpoint shard.
+    let events = std::fs::read_to_string(bundle.path().join("trace.jsonl")).unwrap();
+    let checkpoint_payload = events
+        .lines()
+        .find_map(|line| {
+            let event: codex_rollout_trace::RawTraceEvent = serde_json::from_str(line).unwrap();
+            match event.payload {
+                codex_rollout_trace::RawTraceEventPayload::CompactionInstalled {
+                    checkpoint_payload,
+                    ..
+                } => Some(checkpoint_payload),
+                _ => None,
+            }
+        })
+        .unwrap();
+    let checkpoint = codex_rollout_trace::PayloadReader::new(bundle.path())
+        .read_json(&checkpoint_payload)
+        .unwrap();
+    let replacement: Vec<_> = live_history.iter().map(|entry| &entry.item).collect();
+    assert_eq!(
+        checkpoint,
+        json!({
+            "input_history": input.raw_items().collect::<Vec<_>>(),
+            "replacement_history": replacement,
+        })
+    );
+    assert_ne!(
+        session.clone_history().await.annotated_items(),
+        live_history
+    );
     assert_eq!(compacted.replacement_history, Some(live_history));
     assert_eq!(compacted.resume_metadata.as_ref(), Some(&expected));
     assert_eq!(

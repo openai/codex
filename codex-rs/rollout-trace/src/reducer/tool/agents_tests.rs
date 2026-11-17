@@ -256,6 +256,7 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     });
     let receipt = RawTraceEventPayload::HistoryItemAccepted {
         item_id: "amsg-delivery".into(),
+        tool_output_payload: None,
         agent_message_payload: Some(
             writer.write_json_payload(RawPayloadKind::ProtocolEvent, &delivery)?,
         ),

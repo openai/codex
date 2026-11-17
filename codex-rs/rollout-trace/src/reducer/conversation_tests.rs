@@ -226,6 +226,7 @@ fn response_outputs_require_harness_acceptance() -> anyhow::Result<()> {
         RawTraceEventPayload::HistoryItemAccepted {
             item_id: "msg-accepted".into(),
             agent_message_payload: None,
+            tool_output_payload: None,
         },
     )?;
 

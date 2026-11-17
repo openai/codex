@@ -130,6 +130,7 @@ pub(crate) fn append_inference_start_for_thread(
         prepared_prompt_payload: writer
             .write_json_payload(RawPayloadKind::PreparedPrompt, &json!({"input": []}))?,
         warmup_context_payload: None,
+        stripped_tool_output_ids: Vec::new(),
         inference_call_id: inference_call_id.to_string(),
         thread_id: thread_id.to_string(),
         codex_turn_id: codex_turn_id.to_string(),

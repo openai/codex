@@ -62,6 +62,7 @@ fn inference_dispatch_can_finish_before_prepared_prompt_serialization() -> anyho
             caller: thread::current().id(),
             release: Mutex::new(gate),
         }),
+        Vec::new(),
         || Ok(None),
     );
     attempt.record_completed("response", /*upstream_request_id*/ None, &None, &[]);
@@ -102,9 +103,12 @@ fn deferred_serialization_failure_suppresses_the_start_and_closing_marker() -> a
     let dir = TempDir::new()?;
     let (writer, attempt) = recording(&dir)?;
     // JSON cannot encode an array as an object key.
-    attempt.record_started(b"{}", Arc::new(BTreeMap::from([([1, 2], true)])), || {
-        Ok(None)
-    });
+    attempt.record_started(
+        b"{}",
+        Arc::new(BTreeMap::from([([1, 2], true)])),
+        Vec::new(),
+        || Ok(None),
+    );
     assert!(writer.flush().is_err());
     drop(attempt);
     drop(writer);
@@ -116,7 +120,7 @@ fn deferred_serialization_failure_suppresses_the_start_and_closing_marker() -> a
 fn borrowed_response_encoding_failure_preserves_the_queued_start() -> anyhow::Result<()> {
     let dir = TempDir::new()?;
     let (writer, attempt) = recording(&dir)?;
-    attempt.record_started(b"{}", Arc::new("prepared"), || Ok(None));
+    attempt.record_started(b"{}", Arc::new("prepared"), Vec::new(), || Ok(None));
     // Handoff succeeds even though JSON cannot represent this response's map key.
     writer.event_with_payload(
         RawTraceEventContext::turn("root", "turn"),

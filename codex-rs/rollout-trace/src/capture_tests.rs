@@ -93,6 +93,7 @@ fn compressed_budget_admits_small_later_events_after_an_omission() -> Result<()>
         RawTraceEventPayload::HistoryItemAccepted {
             item_id: "missing-receipt".into(),
             agent_message_payload: Some(omitted.clone()),
+            tool_output_payload: None,
         },
     )?;
     let later = writer.write_json_payload(RawPayloadKind::ToolResult, &json!({"ok": true}))?;

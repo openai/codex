@@ -55,7 +55,14 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    sess.start_new_context_window(step_context, world_state)
+    // This reset installs history without making a remote compaction request.
+    let trace = sess.services.rollout_thread_trace.compaction_trace_context(
+        &turn_context.sub_id,
+        compaction_item.id(),
+        &turn_context.model_info().slug,
+        &turn_context.provider.info().name,
+    );
+    sess.start_new_context_window(step_context, world_state, &trace)
         .await;
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;

@@ -30,6 +30,7 @@ pub(super) struct StartedInferenceCall {
     pub(super) request_payload: RawPayloadRef,
     pub(super) prepared_prompt_payload: RawPayloadRef,
     pub(super) warmup_context_payload: Option<RawPayloadRef>,
+    pub(super) stripped_tool_output_ids: Vec<(usize, String)>,
 }
 
 impl TraceReducer {
@@ -92,6 +93,7 @@ impl TraceReducer {
             &thread_id,
             &codex_turn_id,
             context,
+            started.stripped_tool_output_ids,
         )?;
 
         self.thread_mut(&thread_id)?;

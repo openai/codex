@@ -34,14 +34,28 @@ pub(super) struct NormalizedConversationItem {
     pub(super) call_id: Option<String>,
 }
 
+impl NormalizedConversationItem {
+    pub(super) fn is_delivery_or_tool_output(&self) -> bool {
+        self.agent_message.is_some()
+            || matches!(
+                self.kind,
+                ConversationItemKind::FunctionCallOutput
+                    | ConversationItemKind::CustomToolCallOutput
+            )
+    }
+}
+
 pub(super) fn normalize_model_items(
     items: &[Value],
     raw_payload: &RawPayloadRef,
 ) -> Result<Vec<NormalizedConversationItem>> {
     let mut normalized_items = Vec::new();
     for item in items {
-        if item.get("type").and_then(Value::as_str) == Some("additional_tools")
-            || unavailable_ref(item, raw_payload).is_some()
+        // Tools and reasoning settings configure inference. Their raw payload retains the control.
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("additional_tools" | "configuration_update")
+        ) || unavailable_ref(item, raw_payload).is_some()
         {
             continue;
         }

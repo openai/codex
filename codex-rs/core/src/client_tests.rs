@@ -1478,9 +1478,12 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
             "content": [{"type": "input_text", "text": "hello"}]
         }],
     });
-    attempt.record_started(serde_json::to_vec(&request)?, Arc::new(request), || {
-        Ok(None)
-    });
+    attempt.record_started(
+        serde_json::to_vec(&request)?,
+        Arc::new(request),
+        Vec::new(),
+        || Ok(None),
+    );
     // Cancellation tests can start replaying as soon as this helper returns.
     writer.flush()?;
     Ok(attempt)
