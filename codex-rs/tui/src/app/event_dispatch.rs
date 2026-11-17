@@ -517,7 +517,7 @@ impl App {
             }
             AppEvent::StatuslinePicker { scan, updates } => self.finish_statusline_discovery(scan, updates, app_server),
             AppEvent::StatuslineRead(event) => {
-                self.chat_widget.handle_statusline_read(event, app_server);
+                self.chat_widget.handle_statusline_read(event, app_server, &self.statusline_metrics, &self.config);
             }
             AppEvent::TaskToolsAvailable { thread_id } => {
                 app_server.remember_task_tool_thread(thread_id);

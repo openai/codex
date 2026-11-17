@@ -11,6 +11,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::backend_id::BackendId;
+use crate::legacy_core::config::Config;
+use crate::statusline_metrics::StatuslineMetrics;
 use crate::statusline_provider::LOOKUP_TIMEOUT;
 use crate::statusline_provider::ProviderId;
 use crate::statusline_provider::ProviderLookupError;
@@ -171,6 +173,8 @@ impl ChatWidget {
         &mut self,
         event: StatuslineReadEvent,
         owner: &AppServerSession,
+        metrics: &StatuslineMetrics,
+        config: &Config,
     ) {
         let Some(footer) = self
             .statusline_read
@@ -184,7 +188,10 @@ impl ChatWidget {
             return;
         }
         match event.step {
-            ReadStep::Start(ready) => footer.start(owner, &self.app_event_tx, ready),
+            ReadStep::Start(ready) => {
+                metrics.record(config, "codex.statusline.provider_started", &[]);
+                footer.start(owner, &self.app_event_tx, ready);
+            }
             ReadStep::Snapshot(backend, reply) => {
                 if backend == owner.backend_id()
                     && let Some(state) = self.statusline_state()
@@ -199,6 +206,11 @@ impl ChatWidget {
                 let tree = match result {
                     Ok(tree) => tree,
                     Err(failure) => {
+                        metrics.record(
+                            config,
+                            "codex.statusline.provider_failed",
+                            &[("kind", failure.metric_kind())],
+                        );
                         footer.cancel.cancel();
                         tracing::warn!(?failure, "Status line provider stopped");
                         let message = match failure {

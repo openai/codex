@@ -46,6 +46,15 @@ pub(super) enum Failure {
     Read(#[from] ReadIssue),
 }
 
+impl Failure {
+    pub(super) fn metric_kind(&self) -> &'static str {
+        match self {
+            Self::LookupTimedOut | Self::Read(ReadIssue::TimedOut) => "timeout",
+            Self::LookupUnavailable | Self::Snapshot | Self::Read(_) => "error",
+        }
+    }
+}
+
 pub(super) fn decode_tree(uri: &str, contents: &[McpResourceContent]) -> Result<UiTree, ReadIssue> {
     let [
         McpResourceContent::Text {

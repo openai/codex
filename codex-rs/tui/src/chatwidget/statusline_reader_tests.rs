@@ -6,6 +6,7 @@ use crate::app_server_session::ThreadParamsMode;
 use crate::bottom_pane::StatusLineFocus;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::render_bottom_popup;
+use crate::statusline_metrics::tests::Collector;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::CloudClient;
 use codex_app_server_client::CloudCommand;
@@ -136,14 +137,22 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
         token,
         step: ReadStep::Finished(server.backend_id(), Ok(UiTree(root))),
     };
-    chat.handle_statusline_read(finish(token, Some(UiNode::String("Ready".into()))), &server);
+    let collector = Collector::new();
+    let mut app_config = chat.config.clone();
+    let metrics = collector.metrics(&mut app_config);
+    chat.handle_statusline_read(
+        finish(token, Some(UiNode::String("Ready".into()))),
+        &server,
+        &metrics,
+        &app_config,
+    );
     chat.refresh_status_line();
     let ready = footer(&chat).unwrap();
     insta::assert_snapshot!(format!("{initializing}\n{ready}"), @"
     Initializing…
     Ready
     ");
-    chat.handle_statusline_read(finish(token, /*root*/ None), &server);
+    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config);
     chat.refresh_status_line();
     assert_eq!(footer(&chat).as_deref(), Some(""));
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("native-agent-label"));
@@ -156,7 +165,7 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     chat.read_only_history = false;
     chat.refresh_status_line();
     let [resumed] = read_events(&mut rx).try_into().unwrap();
-    chat.handle_statusline_read(finish(token, /*root*/ None), &server);
+    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config);
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
     let token = resumed.token;
     chat.primary_environment_cwd = Some(crate::session_state::EnvironmentCwd {
@@ -173,6 +182,8 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
             step: ReadStep::Snapshot(server.backend_id(), reply),
         },
         &server,
+        &metrics,
+        &app_config,
     );
     assert!(snapshot.await.is_err());
     let [replacement] = read_events(&mut rx).try_into().unwrap();
@@ -183,14 +194,20 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     chat.handle_statusline_read(
         finish(token, Some(UiNode::String("retired".into()))),
         &server,
+        &metrics,
+        &app_config,
     );
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
+    assert!(collector.snapshot().is_empty());
 }
 
 type Reply = oneshot::Sender<std::io::Result<RequestResult>>;
 const URI: &str = "ui://fixture/status";
 
 struct Reader {
+    collector: Collector,
+    app_config: Config,
+    metrics: StatuslineMetrics,
     chat: ChatWidget,
     owner: AppServerSession,
     events: UnboundedReceiver<AppEvent>,
@@ -214,7 +231,13 @@ impl Reader {
                 tool: "line".into(),
             })));
         chat.refresh_status_line();
+        let collector = Collector::new();
+        let mut app_config = chat.config.clone();
+        let metrics = collector.metrics(&mut app_config);
         let mut reader = Self {
+            collector,
+            app_config,
+            metrics,
             chat,
             owner,
             events,
@@ -224,10 +247,15 @@ impl Reader {
         reader
     }
 
+    fn handle(&mut self, event: StatuslineReadEvent) {
+        self.chat
+            .handle_statusline_read(event, &self.owner, &self.metrics, &self.app_config);
+    }
+
     async fn dispatch(&mut self) {
         while let Some(event) = self.events.recv().await {
             if let AppEvent::StatuslineRead(event) = event {
-                self.chat.handle_statusline_read(event, &self.owner);
+                self.handle(event);
                 return;
             }
         }
@@ -348,6 +376,7 @@ async fn statusline_polls_one_second_after_completion_including_empty_content() 
     advance(/*millis*/ 1).await;
     let _third = reader.read(URI).await;
     assert_eq!(completed.elapsed(), Duration::from_secs(1));
+    assert_eq!(reader.collector.snapshot(), ["provider_started 1"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -369,6 +398,10 @@ async fn statusline_invalid_content_stops_polling_immediately() {
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
+    assert_eq!(
+        reader.collector.snapshot(),
+        ["provider_failed kind=error 1", "provider_started 1"]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -466,6 +499,10 @@ async fn statusline_hung_read_stops_polling_after_one_second() {
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
+    assert_eq!(
+        reader.collector.snapshot(),
+        ["provider_failed kind=timeout 1", "provider_started 1"]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -488,6 +525,10 @@ async fn statusline_startup_timeout_stops_before_the_first_read() {
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
+    assert_eq!(
+        reader.collector.snapshot(),
+        ["provider_failed kind=timeout 1", "provider_started 1"]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -562,13 +603,12 @@ async fn statusline_changing_provider_or_reconnecting_discards_the_previous_read
         held.closed().await;
         for result in [Ok(UiTree(None)), Err(Failure::Snapshot)] {
             let step = ReadStep::Finished(reader.owner.backend_id(), result);
-            reader
-                .chat
-                .handle_statusline_read(StatuslineReadEvent { token: old, step }, &reader.owner);
+            reader.handle(StatuslineReadEvent { token: old, step });
         }
         assert_eq!(footer(&reader.chat).as_deref(), Some("Initializing…"));
         held = next;
     }
+    assert_eq!(reader.collector.snapshot(), ["provider_started 3"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -600,4 +640,8 @@ async fn statusline_explicit_reselection_restarts_a_failed_reader() {
     respond(reader.read(URI).await, r#""restored""#);
     reader.dispatch().await;
     assert_eq!(footer(&reader.chat).as_deref(), Some("restored"));
+    assert_eq!(
+        reader.collector.snapshot(),
+        ["provider_failed kind=timeout 1", "provider_started 2"]
+    );
 }
