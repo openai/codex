@@ -118,6 +118,7 @@ members = [
     "otel-trace-websocket",
     "tcp-tunnel",
     "tui",
+    "user-input",
     "user-verification",
     "tools",
     "v8-poc",
@@ -339,6 +340,7 @@ codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
+codex-user-input = { path = "user-input" }
 codex-user-verification = { path = "user-verification" }
 codex-workload-identity = { path = "workload-identity" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }

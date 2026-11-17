@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use codex_utils_image::PromptImageMode;
-use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -14,7 +13,6 @@ use serde::ser::Serializer;
 use serde_with::serde_as;
 use ts_rs::TS;
 
-use crate::local_media::audio_mime_for_path;
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
@@ -25,7 +23,6 @@ use crate::permissions::LegacySandboxPolicyProjection;
 use crate::permissions::NetworkSandboxPolicy;
 use crate::permissions::RawFileSystemSandboxEntry;
 use crate::protocol::SandboxPolicy;
-use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
@@ -43,8 +40,6 @@ mod mcp_content;
 
 use mcp_content::convert_mcp_content_to_items;
 
-pub use crate::local_media::MAX_PROMPT_AUDIO_INPUT_BYTES;
-pub use crate::local_media::snapshot_local_user_input;
 pub use crate::permission_profile_snapshot::PermissionProfileSnapshot;
 pub use crate::permission_profile_snapshot::ProfileWorkspaceRoot;
 pub use configuration_update::ConfigurationReasoning;
@@ -1900,32 +1895,20 @@ fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalMediaKind {
-    Audio,
-    Image,
-}
-
-impl LocalMediaKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Audio => "audio",
-            Self::Image => "image",
-        }
-    }
-}
-
-fn local_media_error_placeholder(
+fn local_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
-    media_kind: LocalMediaKind,
 ) -> ContentItem {
-    let media_name = media_kind.name();
     let path = path.display();
     ContentItem::InputText {
-        text: format!("Codex could not read the local {media_name} at `{path}`: {error}"),
+        text: format!("Codex could not read the local image at `{path}`: {error}"),
     }
 }
+
+/// Maximum accepted decoded byte length for prompt audio inputs.
+///
+/// This matches the Responses API audio input limit.
+pub const MAX_PROMPT_AUDIO_INPUT_BYTES: usize = 50 * 1024 * 1024;
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
@@ -1938,7 +1921,6 @@ const AUDIO_OPEN_TAG: &str = "<audio>";
 const AUDIO_CLOSE_TAG: &str = "</audio>";
 const LOCAL_AUDIO_OPEN_TAG_PREFIX: &str = "<audio name=";
 const LOCAL_AUDIO_OPEN_TAG_SUFFIX: &str = ">";
-const LOCAL_AUDIO_CLOSE_TAG: &str = AUDIO_CLOSE_TAG;
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -2074,21 +2056,13 @@ pub fn local_image_content_items_with_label_number(
             | ImageProcessingError::InvalidDataUrl { .. }
             | ImageProcessingError::ImageTooLarge { .. }
             | ImageProcessingError::ImageTooManyPixels { .. } => {
-                vec![local_media_error_placeholder(
-                    path,
-                    &err,
-                    LocalMediaKind::Image,
-                )]
+                vec![local_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
                 vec![invalid_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } => {
-                vec![local_media_error_placeholder(
-                    path,
-                    &err,
-                    LocalMediaKind::Image,
-                )]
+                vec![local_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::UnsupportedImageFormat { mime } => {
                 vec![unsupported_image_error_placeholder(path, mime)]
@@ -2097,46 +2071,7 @@ pub fn local_image_content_items_with_label_number(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalImagePreparation {
-    Process,
-    Defer,
-}
-
-fn unsupported_audio_error_placeholder(path: &std::path::Path) -> ContentItem {
-    ContentItem::InputText {
-        text: format!(
-            "Codex cannot attach audio at `{}`: unsupported audio format; use wav, mp3, m4a, webm, or ogg.",
-            path.display()
-        ),
-    }
-}
-
-fn local_audio_content_items(
-    path: &std::path::Path,
-    file_bytes: &[u8],
-    label_number: usize,
-) -> Vec<ContentItem> {
-    let Some(mime) = audio_mime_for_path(path) else {
-        return vec![unsupported_audio_error_placeholder(path)];
-    };
-
-    vec![
-        ContentItem::InputText {
-            text: local_audio_open_tag_text_with_path(label_number, path),
-        },
-        ContentItem::InputAudio {
-            audio: AudioReference::Inline {
-                audio_url: data_url_from_bytes(mime, file_bytes),
-            },
-        },
-        ContentItem::InputText {
-            text: LOCAL_AUDIO_CLOSE_TAG.to_string(),
-        },
-    ]
-}
-
-fn local_image_content_items(
+pub fn local_image_content_items(
     path: &std::path::Path,
     image_url: String,
     label_number: Option<usize>,
@@ -2289,97 +2224,6 @@ pub enum ReasoningItemContent {
     Text { text: String },
 }
 
-impl From<Vec<UserInput>> for ResponseInputItem {
-    fn from(items: Vec<UserInput>) -> Self {
-        Self::from_user_input(items, LocalImagePreparation::Process, &mut HashMap::new())
-    }
-}
-
-impl ResponseInputItem {
-    /// Records original user-input indices to image slots in the generated message content.
-    /// Inputs that do not produce an image, including failed local reads, have no entry.
-    pub fn from_user_input(
-        items: Vec<UserInput>,
-        local_image_preparation: LocalImagePreparation,
-        user_image_content_indices: &mut HashMap<usize, usize>,
-    ) -> Self {
-        user_image_content_indices.clear();
-        let mut image_index = 0;
-        let mut audio_index = 0;
-        let mut content = Vec::new();
-        for (input_index, input) in items.into_iter().enumerate() {
-            let generated = match input {
-                UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                UserInput::Image { image, detail, .. } => {
-                    image_index += 1;
-                    let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                    vec![ContentItem::InputImage {
-                        image,
-                        detail: Some(detail),
-                    }]
-                }
-                UserInput::LocalImage { path, detail, .. } => {
-                    image_index += 1;
-                    let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                    match std::fs::read(&path) {
-                        Ok(file_bytes) => match local_image_preparation {
-                            LocalImagePreparation::Process => {
-                                local_image_content_items_with_label_number(
-                                    &path,
-                                    file_bytes,
-                                    Some(image_index),
-                                    detail,
-                                )
-                            }
-                            LocalImagePreparation::Defer => local_image_content_items(
-                                &path,
-                                data_url_from_bytes("application/octet-stream", &file_bytes),
-                                Some(image_index),
-                                detail,
-                            ),
-                        },
-                        Err(err) => vec![local_media_error_placeholder(
-                            &path,
-                            err,
-                            LocalMediaKind::Image,
-                        )],
-                    }
-                }
-                UserInput::Audio { audio } => {
-                    audio_index += 1;
-                    vec![ContentItem::InputAudio { audio }]
-                }
-                UserInput::LocalAudio { path } => {
-                    audio_index += 1;
-                    match std::fs::read(&path) {
-                        Ok(file_bytes) => {
-                            local_audio_content_items(&path, &file_bytes, audio_index)
-                        }
-                        Err(err) => vec![local_media_error_placeholder(
-                            &path,
-                            err,
-                            LocalMediaKind::Audio,
-                        )],
-                    }
-                }
-                UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
-            };
-            // Local images add framing text, while mentions and skills add no content.
-            // Capture the image's actual slot before preparation replaces its reference.
-            for (offset, item) in generated.iter().enumerate() {
-                if matches!(item, ContentItem::InputImage { .. }) {
-                    user_image_content_indices.insert(input_index, content.len() + offset);
-                }
-            }
-            content.extend(generated);
-        }
-        Self::Message {
-            role: "user".to_string(),
-            content,
-            phase: None,
-        }
-    }
-}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct SearchToolCallParams {
     pub query: String,
@@ -2696,14 +2540,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
-
-    // A tiny valid PNG (1x1) so image conversion tests don't depend on cross-crate
-    // file paths, which break under Bazel sandboxing.
-    const TINY_PNG_BYTES: &[u8] = &[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
-        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-    ];
 
     #[test]
     fn base_instructions_preserve_provenance_and_accept_legacy_rollouts() -> Result<()> {
@@ -4165,231 +4001,6 @@ mod tests {
     }
 
     #[test]
-    fn serializes_image_user_input_without_tags() -> Result<()> {
-        let image_url = "data:image/png;base64,abc".to_string();
-
-        let item = ResponseInputItem::from(vec![UserInput::Image {
-            image: ImageReference::Inline {
-                image_url: image_url.clone(),
-            },
-            detail: None,
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                let expected = vec![ContentItem::InputImage {
-                    image: ImageReference::Inline { image_url },
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
-                }];
-                assert_eq!(content, expected);
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    /// A file-backed user image must reach the Responses API without being resolved by Core.
-    #[test]
-    fn file_image_user_input_serializes_file_id() -> Result<()> {
-        let file_id = "file_123".to_string();
-
-        let item = ResponseInputItem::from(vec![UserInput::Image {
-            image: ImageReference::File {
-                file_id: file_id.clone(),
-            },
-            detail: None,
-        }]);
-
-        let expected = ResponseInputItem::Message {
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image: ImageReference::File { file_id },
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            }],
-            phase: None,
-        };
-        assert_eq!(item, expected);
-        assert_eq!(
-            serde_json::to_value(item)?,
-            serde_json::json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_image",
-                    "file_id": "file_123",
-                    "detail": "high"
-                }]
-            })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn serializes_audio_user_input_without_tags() -> Result<()> {
-        for (audio, wire) in [
-            (
-                AudioReference::Inline {
-                    audio_url: "data:audio/wav;base64,abc".into(),
-                },
-                serde_json::json!({"type": "input_audio", "audio_url": "data:audio/wav;base64,abc"}),
-            ),
-            (
-                AudioReference::File {
-                    file_id: "file_audio".into(),
-                },
-                serde_json::json!({"type": "input_audio", "file_id": "file_audio"}),
-            ),
-        ] {
-            let input = UserInput::Audio {
-                audio: audio.clone(),
-            };
-            assert_eq!(
-                serde_json::from_value::<UserInput>(serde_json::to_value(&input)?)?,
-                input
-            );
-            let item = ResponseInputItem::from(vec![input]);
-            assert_eq!(
-                item,
-                ResponseInputItem::Message {
-                    role: "user".into(),
-                    content: vec![ContentItem::InputAudio { audio }],
-                    phase: None,
-                }
-            );
-            assert_eq!(
-                serde_json::to_value(&item)?,
-                serde_json::json!({
-                    "type": "message", "role": "user", "content": [wire],
-                })
-            );
-            assert_eq!(
-                serde_json::from_value::<ResponseInputItem>(serde_json::to_value(&item)?)?,
-                item
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn serializes_local_audio_user_input_with_label_and_data_url() -> Result<()> {
-        let temp_dir = tempdir()?;
-        for (extension, mime) in [
-            ("wav", "audio/wav"),
-            ("mp3", "audio/mpeg"),
-            ("m4a", "audio/mp4"),
-            ("webm", "audio/webm"),
-            ("ogg", "audio/ogg"),
-        ] {
-            let audio_path = temp_dir.path().join(format!("sample.{extension}"));
-            std::fs::write(&audio_path, b"audio")?;
-
-            let item = ResponseInputItem::from(vec![UserInput::LocalAudio {
-                path: audio_path.clone(),
-            }]);
-
-            assert_eq!(
-                item,
-                ResponseInputItem::Message {
-                    role: "user".to_string(),
-                    content: vec![
-                        ContentItem::InputText {
-                            text: local_audio_open_tag_text_with_path(
-                                /*label_number*/ 1,
-                                &audio_path,
-                            ),
-                        },
-                        ContentItem::InputAudio {
-                            audio: AudioReference::Inline {
-                                audio_url: format!("data:{mime};base64,YXVkaW8=")
-                            },
-                        },
-                        ContentItem::InputText {
-                            text: audio_close_tag_text(),
-                        },
-                    ],
-                    phase: None,
-                }
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn replaces_unsupported_local_audio_format_with_placeholder() -> Result<()> {
-        let temp_dir = tempdir()?;
-        let audio_path = temp_dir.path().join("sample.flac");
-        std::fs::write(&audio_path, b"audio")?;
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalAudio {
-            path: audio_path.clone(),
-        }]);
-
-        assert_eq!(
-            item,
-            ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!(
-                        "Codex cannot attach audio at `{}`: unsupported audio format; use wav, mp3, m4a, webm, or ogg.",
-                        audio_path.display()
-                    ),
-                }],
-                phase: None,
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn replaces_unreadable_local_audio_with_placeholder() {
-        let audio_path = PathBuf::from("missing.wav");
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalAudio { path: audio_path }]);
-
-        let ResponseInputItem::Message { content, .. } = item else {
-            panic!("expected message response");
-        };
-        let [ContentItem::InputText { text }] = content.as_slice() else {
-            panic!("expected local audio error placeholder");
-        };
-        assert!(
-            text.starts_with("Codex could not read the local audio at `missing.wav`: "),
-            "unexpected placeholder: {text}"
-        );
-    }
-
-    #[test]
-    fn image_user_input_preserves_requested_detail() -> Result<()> {
-        let image_url = "data:image/png;base64,abc".to_string();
-
-        let item = ResponseInputItem::from(vec![UserInput::Image {
-            image: ImageReference::Inline {
-                image_url: image_url.clone(),
-            },
-            detail: Some(ImageDetail::Original),
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(
-                    content.first(),
-                    Some(&ContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
-                        detail: Some(ImageDetail::Original),
-                    })
-                );
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
     fn tool_search_call_roundtrips() -> Result<()> {
         let parsed: ResponseItem = serde_json::from_str(
             r#"{
@@ -4560,164 +4171,6 @@ mod tests {
         Ok(())
     }
 
-    /// Image associations use original input and expanded content positions, so omitted inputs,
-    /// local-image framing, failed reads, and duplicate URLs cannot shift a later substitution.
-    #[test]
-    fn user_input_image_indices_survive_content_expansion() -> Result<()> {
-        let dir = tempdir()?;
-        let local_path = dir.path().join("local.png");
-        std::fs::write(&local_path, TINY_PNG_BYTES)?;
-        let inline_image = UserInput::Image {
-            image: ImageReference::Inline {
-                image_url: data_url_from_bytes("image/png", TINY_PNG_BYTES),
-            },
-            detail: None,
-        };
-        let inputs = vec![
-            UserInput::Text {
-                text: "compare images".to_string(),
-                text_elements: Vec::new(),
-            },
-            UserInput::Mention {
-                name: "app".to_string(),
-                path: "app://example".to_string(),
-            },
-            UserInput::Skill {
-                name: "skill".to_string(),
-                path: dir.path().join("SKILL.md"),
-            },
-            UserInput::LocalImage {
-                path: dir.path().join("missing.png"),
-                detail: None,
-            },
-            UserInput::LocalImage {
-                path: local_path,
-                detail: None,
-            },
-            inline_image.clone(),
-            inline_image,
-        ];
-        for preparation in [LocalImagePreparation::Defer, LocalImagePreparation::Process] {
-            let mut indices = HashMap::new();
-            let item =
-                ResponseInputItem::from_user_input(inputs.clone(), preparation, &mut indices);
-            assert_eq!(indices, HashMap::from([(4, 3), (5, 5), (6, 6)]));
-            let ResponseInputItem::Message { content, .. } = item else {
-                panic!("expected a user message");
-            };
-            for content_index in indices.into_values() {
-                assert!(matches!(
-                    content[content_index],
-                    ContentItem::InputImage { .. }
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn mixed_remote_and_local_images_share_label_sequence() -> Result<()> {
-        let image_url = "data:image/png;base64,abc".to_string();
-        let dir = tempdir()?;
-        let local_path = dir.path().join("local.png");
-        std::fs::write(&local_path, TINY_PNG_BYTES)?;
-
-        let item = ResponseInputItem::from(vec![
-            UserInput::Image {
-                image: ImageReference::Inline {
-                    image_url: image_url.clone(),
-                },
-                detail: None,
-            },
-            UserInput::LocalImage {
-                path: local_path.clone(),
-                detail: None,
-            },
-        ]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(
-                    content.first(),
-                    Some(&ContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    })
-                );
-                assert_eq!(
-                    content.get(1),
-                    Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text_with_path(
-                            /*label_number*/ 2,
-                            &local_path
-                        ),
-                    })
-                );
-                assert!(matches!(
-                    content.get(2),
-                    Some(ContentItem::InputImage { .. })
-                ));
-                assert_eq!(
-                    content.get(3),
-                    Some(&ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    })
-                );
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn mixed_remote_and_local_audio_share_label_sequence() -> Result<()> {
-        let audio_url = "data:audio/wav;base64,abc".to_string();
-        let dir = tempdir()?;
-        let local_path = dir.path().join("local.mp3");
-        std::fs::write(&local_path, b"audio")?;
-
-        let item = ResponseInputItem::from(vec![
-            UserInput::Audio {
-                audio: AudioReference::Inline {
-                    audio_url: audio_url.clone(),
-                },
-            },
-            UserInput::LocalAudio {
-                path: local_path.clone(),
-            },
-        ]);
-
-        assert_eq!(
-            item,
-            ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputAudio {
-                        audio: AudioReference::Inline { audio_url }
-                    },
-                    ContentItem::InputText {
-                        text: local_audio_open_tag_text_with_path(
-                            /*label_number*/ 2,
-                            &local_path,
-                        ),
-                    },
-                    ContentItem::InputAudio {
-                        audio: AudioReference::Inline {
-                            audio_url: "data:audio/mpeg;base64,YXVkaW8=".to_string()
-                        }
-                    },
-                    ContentItem::InputText {
-                        text: audio_close_tag_text(),
-                    },
-                ],
-                phase: None,
-            }
-        );
-
-        Ok(())
-    }
-
     #[test]
     fn local_image_open_tag_preserves_path() {
         assert_eq!(
@@ -4727,133 +4180,5 @@ mod tests {
             ),
             r#"<image name=[Image #1] path="/tmp/a&"<b>.png">"#
         );
-    }
-
-    #[test]
-    fn local_image_user_input_preserves_requested_detail() -> Result<()> {
-        let dir = tempdir()?;
-        let local_path = dir.path().join("local.png");
-        std::fs::write(&local_path, TINY_PNG_BYTES)?;
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
-            path: local_path,
-            detail: Some(ImageDetail::Original),
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert!(matches!(
-                    content.get(1),
-                    Some(ContentItem::InputImage {
-                        detail: Some(ImageDetail::Original),
-                        ..
-                    })
-                ));
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn local_image_read_error_adds_placeholder() -> Result<()> {
-        let dir = tempdir()?;
-        let missing_path = dir.path().join("missing-image.png");
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
-            path: missing_path.clone(),
-            detail: None,
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 1);
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        let display_path = missing_path.display().to_string();
-                        assert!(
-                            text.contains(&display_path),
-                            "placeholder should mention missing path: {text}"
-                        );
-                        assert!(
-                            text.contains("could not read"),
-                            "placeholder should mention read issue: {text}"
-                        );
-                    }
-                    other => panic!("expected placeholder text but found {other:?}"),
-                }
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn local_image_non_image_adds_placeholder() -> Result<()> {
-        let dir = tempdir()?;
-        let json_path = dir.path().join("example.json");
-        std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
-            path: json_path.clone(),
-            detail: None,
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 1);
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        assert!(
-                            text.contains("unsupported image `application/json`"),
-                            "placeholder should mention unsupported image MIME: {text}"
-                        );
-                        assert!(
-                            text.contains(&json_path.display().to_string()),
-                            "placeholder should mention path: {text}"
-                        );
-                    }
-                    other => panic!("expected placeholder text but found {other:?}"),
-                }
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn local_image_unsupported_image_format_adds_placeholder() -> Result<()> {
-        let dir = tempdir()?;
-        let svg_path = dir.path().join("example.svg");
-        std::fs::write(
-            &svg_path,
-            br#"<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
-        )?;
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
-            path: svg_path.clone(),
-            detail: None,
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 1);
-                let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
-                    svg_path.display()
-                );
-                match &content[0] {
-                    ContentItem::InputText { text } => assert_eq!(text, &expected),
-                    other => panic!("expected placeholder text but found {other:?}"),
-                }
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
     }
 }

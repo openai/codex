@@ -4,6 +4,7 @@ use super::*;
 use crate::McpRefreshReason;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientCacheKey;
+use codex_protocol::models::ResponseInputItem;
 use pretty_assertions::assert_eq;
 
 struct Recorder {

@@ -43,7 +43,6 @@ pub mod exec_output;
 pub mod hooks;
 pub mod items;
 mod legacy_events;
-pub mod local_media;
 pub mod mcp;
 pub mod mcp_approval_meta;
 pub mod mcp_policy;

@@ -5,8 +5,8 @@
 use super::*;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
-use codex_protocol::models::snapshot_local_user_input;
 use codex_protocol::user_input::UserInput as CoreUserInput;
+use codex_user_input::snapshot_local_user_input;
 use tokio::sync::oneshot;
 
 static IMAGE_PREPARATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

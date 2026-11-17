@@ -1,3 +1,5 @@
+//! Reads bounded attachments from the client-facing host.
+
 use std::io;
 use std::io::Read;
 use std::path::Path;
@@ -7,15 +9,11 @@ use codex_utils_image::PromptImageMode;
 use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 
-use crate::models::AudioReference;
-use crate::models::ImageDetail;
-use crate::models::ImageReference;
-use crate::user_input::UserInput;
-
-/// Maximum accepted decoded byte length for prompt audio inputs.
-///
-/// This matches the Responses API audio input limit.
-pub const MAX_PROMPT_AUDIO_INPUT_BYTES: usize = 50 * 1024 * 1024;
+use codex_protocol::models::AudioReference;
+use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
+use codex_protocol::models::MAX_PROMPT_AUDIO_INPUT_BYTES;
+use codex_protocol::user_input::UserInput;
 
 /// Snapshots local image and audio input into portable, validated data URLs.
 pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
@@ -48,11 +46,7 @@ pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
                 },
             };
         }
-        UserInput::Text { .. }
-        | UserInput::Image { .. }
-        | UserInput::Audio { .. }
-        | UserInput::Skill { .. }
-        | UserInput::Mention { .. } => {}
+        _ => {}
     }
     Ok(())
 }
@@ -77,7 +71,7 @@ fn read_bounded_local_media(path: &Path, max_bytes: usize, kind: &str) -> io::Re
     Ok(bytes)
 }
 
-pub(crate) fn audio_mime_for_path(path: &Path) -> Option<&'static str> {
+pub fn audio_mime_for_path(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?;
     if extension.eq_ignore_ascii_case("wav") {
         Some("audio/wav")

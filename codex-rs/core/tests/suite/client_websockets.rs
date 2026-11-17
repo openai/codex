@@ -2092,11 +2092,15 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let audio = ResponseItem::from(ResponseInputItem::from(vec![UserInput::Audio {
-        audio: AudioReference::File {
-            file_id: "file_audio".to_string(),
-        },
-    }]));
+    let audio = ResponseItem::from(ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputAudio {
+            audio: AudioReference::File {
+                file_id: "file_audio".to_string(),
+            },
+        }],
+        phase: None,
+    });
     let prompt_one = prompt_with_input(vec![audio.clone()]);
     let prompt_two = prompt_with_input(vec![
         audio,

@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::*;
 use anyhow::Result;
 use pretty_assertions::assert_eq;
@@ -31,7 +33,7 @@ fn snapshots_local_image_user_input_with_requested_detail() -> Result<()> {
 
         assert_eq!(
             UserInput::Image {
-                image: crate::models::ImageReference::Inline {
+                image: codex_protocol::models::ImageReference::Inline {
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
                         .to_string(),
                 },
