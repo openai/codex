@@ -12,7 +12,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use pretty_assertions::assert_eq;
 
-fn rate_limit_snapshot(
+pub(super) fn rate_limit_snapshot(
     used_percent: i32,
     rate_limit_reached_type: Option<RateLimitReachedType>,
     spend_control_reached: Option<bool>,
@@ -39,7 +39,9 @@ fn rate_limit_snapshot(
     }
 }
 
-fn account_rate_limits_response(snapshot: RateLimitSnapshot) -> GetAccountRateLimitsResponse {
+pub(super) fn account_rate_limits_response(
+    snapshot: RateLimitSnapshot,
+) -> GetAccountRateLimitsResponse {
     GetAccountRateLimitsResponse {
         ordinary_usage_allowed: None,
         account_id: None,

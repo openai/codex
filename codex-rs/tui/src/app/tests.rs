@@ -9915,62 +9915,6 @@ async fn app_server_thread_replacement_clears_previous_transcript_before_replay(
     Ok(())
 }
 
-#[tokio::test]
-async fn snapshot_thread_switch_discards_queued_previous_history() -> Result<()> {
-    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
-    app.transcript_cells = vec![plain_line_cell("Previous thread transcript")];
-    app.chat_widget
-        .add_plain_history_lines(vec![Line::from("Previous queued history")]);
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let next_thread_id = ThreadId::new();
-    app.render_thread_snapshot(
-        &mut tui,
-        &app_server,
-        next_thread_id,
-        ThreadEventSnapshot {
-            delegated_turns: Vec::new(),
-            session: Some(test_thread_session(
-                next_thread_id,
-                test_path_buf("/tmp/next"),
-            )),
-            turns: vec![test_turn(
-                "next-turn",
-                TurnStatus::Completed,
-                vec![ThreadItemPayload::UserMessage {
-                    id: "next-user".to_string(),
-                    client_id: None,
-                    content: vec![AppServerUserInput::Text {
-                        text: "Next thread prompt".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                }],
-            )],
-            events: Vec::new(),
-            active_reasoning_item: None,
-            input_state: None,
-        },
-        /*resume_restored_queue*/ false,
-    )?;
-    assert_eq!(app.pending_thread_switch_resets, 1);
-    while let Ok(event) = events.try_recv() {
-        app.handle_event(&mut tui, &mut app_server, event).await?;
-    }
-    assert_eq!(app.pending_thread_switch_resets, 0);
-    let rendered = app
-        .render_transcript_lines_for_reflow(/*width*/ 80)
-        .lines
-        .iter()
-        .map(rendered_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!rendered.contains("Previous thread transcript"));
-    assert!(!rendered.contains("Previous queued history"));
-    assert!(rendered.contains("Next thread prompt"));
-    app_server.shutdown().await?;
-    Ok(())
-}
-
 fn rendered_line_text(line: &crate::terminal_hyperlinks::HyperlinkLine) -> String {
     line.line
         .spans

@@ -43,6 +43,70 @@ async fn next_rate_limits_loaded(
 }
 
 #[tokio::test]
+async fn new_chat_without_a_chatgpt_account_rejects_stale_recovery() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    set_chatgpt_auth(&mut app.chat_widget);
+    let provider = app.chat_widget.quota_provider_id().to_owned();
+    let (request_id, hard_stop_generation) = app
+        .rate_limit_refresh_state
+        .start(
+            RateLimitRefreshOrigin::Recovery,
+            &mut app.rate_limit_hard_stop_generation,
+        )
+        .expect("start quota recovery");
+
+    // A saved /provider selection makes /new read the account again.
+    *app.model_catalog.provider_write.lock().await = true;
+    Box::pin(app.start_fresh_session(
+        &mut tui,
+        &mut server,
+        crate::app::session_lifecycle::FreshSessionStart::PreserveCurrentView(None),
+        /*initial_user_message*/ None,
+        /*new_thread_name*/ None,
+    ))
+    .await;
+    app.drain_active_thread_events(&mut tui).await?;
+    assert_eq!(app.chat_widget.quota_provider_id(), provider);
+    assert!(!app.chat_widget.has_chatgpt_account());
+
+    // The outgoing chat's limit error can also have queued a refresh just before /new.
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::Recovery,
+        },
+    ))
+    .await?;
+    app.chat_widget.apply_external_edit("continue".into());
+    app.chat_widget
+        .handle_key_event(crossterm::event::KeyCode::Enter.into());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event,
+            AppEvent::CodexOp(Op::UserTurn { items, .. })
+                if matches!(items.as_slice(), [UserInput::Text { text, .. }] if text == "continue")
+        ))
+    );
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::RateLimitsLoaded {
+            request_id,
+            hard_stop_generation,
+            origin: RateLimitRefreshOrigin::Recovery,
+            result: Ok(super::luna_reserve_recovery_tests::reserve_response()),
+        },
+    ))
+    .await?;
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(state["account"]["rate_limits"], json!([]));
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn luna_reserve_periodic_refresh_adapts_without_an_experiment_banner() -> Result<()> {
     let backend = MockServer::start().await;
     let home = tempdir()?;

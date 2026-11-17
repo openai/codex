@@ -551,6 +551,7 @@ impl App {
         self.feedback_audience = bootstrap.feedback_audience;
         self.chat_widget.requires_openai_auth = bootstrap.requires_openai_auth;
         self.chat_widget.invalidate_security_setup();
+        self.chat_widget.forget_inherited_quota_provider();
         self.chat_widget.update_account_state(
             bootstrap.status_account_display,
             bootstrap.plan_type,

@@ -195,6 +195,19 @@ fn has_usable_workspace_credits(credits: &CreditsSnapshot) -> bool {
 }
 
 impl ChatWidget {
+    pub(crate) fn quota_provider_id(&self) -> &str {
+        if self.thread_id().is_none()
+            && let Some(provider) = &self.inherited_quota_provider
+        {
+            return provider;
+        }
+        &self.config.model_provider_id
+    }
+
+    pub(crate) fn forget_inherited_quota_provider(&mut self) {
+        self.inherited_quota_provider = None;
+    }
+
     /// Poll more often near exhaustion for every ChatGPT account, independently of experiments.
     pub(crate) fn rate_limit_refresh_interval(&self) -> Option<std::time::Duration> {
         if !self.should_prefetch_rate_limits() {

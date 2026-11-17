@@ -2111,7 +2111,12 @@ impl App {
                 }
             }
             AppEvent::RefreshRateLimits { origin } => {
-                self.refresh_rate_limits(app_server, origin);
+                // A queued recovery can outlive the chat's ChatGPT account.
+                if origin != RateLimitRefreshOrigin::Recovery
+                    || self.chat_widget.has_chatgpt_account()
+                {
+                    self.refresh_rate_limits(app_server, origin);
+                }
             }
             AppEvent::ApplyBackendBannerFallback { thread_id } => {
                 if self.active_thread_id == Some(thread_id)

@@ -298,8 +298,8 @@ impl ChatWidget {
         self.backend_banner_state = std::mem::take(&mut previous.backend_banner_state);
         self.luna_reserve_notice_account_id = previous.luna_reserve_notice_account_id.take();
         self.backend_banner_state.dismissed |= self.reserve_notice_already_shown();
-        // Usage belongs to the account, so switching tasks must not reset the polling cadence
-        // or discard the already-known limits shown by /status.
+        // The task list can use a different local provider from the chat whose quota it inherits.
+        self.inherited_quota_provider = Some(previous.quota_provider_id().to_owned());
         self.rate_limit_snapshots_by_limit_id =
             std::mem::take(&mut previous.rate_limit_snapshots_by_limit_id);
         self.usage_notice_state = std::mem::take(&mut previous.usage_notice_state);

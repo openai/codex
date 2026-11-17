@@ -581,9 +581,12 @@ impl App {
             self.active_thread_id = Some(id);
             self.active_thread_rx = Some(receiver);
             self.recap.seed_from_turns(&snapshot.turns, Instant::now());
-            if let Err(err) = self.render_thread_snapshot(
-                tui, app_server, id, snapshot, /*resume_restored_queue*/ false,
-            ) {
+            if let Err(err) = self
+                .render_thread_snapshot(
+                    tui, app_server, id, snapshot, /*resume_restored_queue*/ false,
+                )
+                .await
+            {
                 if discard_replaced_view_input
                     && let Err(drain_err) = tui.discard_pending_input_before_interactive_screen()
                 {
@@ -647,6 +650,7 @@ impl App {
         if self.reconnect.presentation == ReconnectPresentation::Overview {
             self.refresh_agents_overview_threads(app_server);
         }
+        self.chat_widget.forget_inherited_quota_provider();
         self.chat_widget.update_account_state(
             bootstrap.status_account_display,
             bootstrap.plan_type,

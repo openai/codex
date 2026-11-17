@@ -19,10 +19,17 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    crate::chatwidget::tests::helpers::set_fast_mode_test_catalog_for_models(
+        &mut app.chat_widget,
+        "gpt-5.5",
+        "gpt-5.6-terra",
+    );
+    app.model_catalog = app.chat_widget.model_catalog();
     let home = tempdir()?;
-    app.config.codex_home = home.path().abs();
-    app.config.sqlite = SqliteConfig::new_for_testing(home.path().abs());
-    app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    let mut server_config = app.config.clone();
+    server_config.codex_home = home.path().abs();
+    server_config.sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    server_config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
     app_test_support::write_chatgpt_auth(
         home.path(),
         app_test_support::ChatGptAuthFixture::new("test-token")
@@ -40,18 +47,61 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
     std::fs::write(
         home.path().join("config.toml"),
         format!(
-            "model_provider = 'amazon-bedrock'\nmodel = 'test-model'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\nmodel_catalog_json = {catalog_path:?}\nfeatures.apps = true\n",
+            "model_provider = 'amazon-bedrock'\nmodel = 'gpt-5.5'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\nmodel_catalog_json = {catalog_path:?}\nfeatures.apps = true\n\n[model_providers.alt]\nname = 'Alt'\nwire_api = 'responses'\nrequires_openai_auth = true\n",
             backend.uri(),
         ),
     )?;
-    let (mut server, _requests, proxy) = Box::pin(start_recording_app_server(
-        &app.config,
-        /*blocked_thread_list*/ None,
-        /*failed_thread_name*/ None,
-    ))
-    .await?;
+    let (mut server, _requests, proxy) =
+        Box::pin(session_lifecycle_requests::start_recording_remote_app_server(&server_config))
+            .await?;
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+    };
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    for provider in ["amazon-bedrock", "openai", "amazon-bedrock"] {
+    for provider in [
+        "amazon-bedrock",
+        "openai",
+        "alt",
+        "openai",
+        "amazon-bedrock",
+    ] {
+        if app.chat_widget.config_ref().model_provider_id == "alt" {
+            // The task list uses the client default, which is also the next provider.
+            Box::pin(app.archive_current_thread(&mut tui, &mut server)).await?;
+            assert!(app.active_thread_id.is_none());
+            app.handle_app_server_event(
+                &server,
+                codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                    ServerNotification::AccountUpdated(
+                        codex_app_server_protocol::AccountUpdatedNotification {
+                            auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+                            plan_type: Some(codex_protocol::account::PlanType::Pro),
+                        },
+                    ),
+                )),
+            )
+            .await;
+        }
+        let mut snapshot = super::rate_limits::rate_limit_snapshot(
+            /*used_percent*/ 90, /*rate_limit_reached_type*/ None,
+            /*spend_control_reached*/ None,
+        );
+        snapshot.credits = None;
+        app.chat_widget
+            .on_rate_limit_snapshot(Some(snapshot.clone()));
+        if provider == "alt" {
+            assert!(app.chat_widget.usage_notice(/*width*/ 100).is_some());
+            app.chat_widget
+                .update_backend_banner(&super::backend_banner_fallback_tests::fallback_response());
+            assert!(app.chat_widget.backend_banner_fallback().is_some());
+        }
+        let (request_id, hard_stop_generation) = app
+            .rate_limit_refresh_state
+            .start(
+                RateLimitRefreshOrigin::Recovery,
+                &mut app.rate_limit_hard_stop_generation,
+            )
+            .expect("start quota recovery on the previous provider");
         crate::config_update::write_config_batch(
             server.request_handle(),
             vec![crate::config_update::replace_config_value(
@@ -60,7 +110,6 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
             )],
         )
         .await?;
-        *app.model_catalog.provider_write.lock().await = true;
         Box::pin(app.start_fresh_session(
             &mut tui,
             &mut server,
@@ -69,7 +118,30 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
             /*new_thread_name*/ None,
         ))
         .await;
-        let chatgpt = provider == "openai";
+        app.drain_active_thread_events(&mut tui).await?;
+        if provider == "alt" {
+            assert!(
+                app.rate_limit_refresh_state
+                    .poll_deadline(std::time::Duration::ZERO)
+                    .is_some(),
+                "the new provider can poll before the old recovery reply"
+            );
+            app.apply_backend_banner_fallback(&mut server).await;
+            assert_eq!(app.chat_widget.current_model(), "gpt-5.5");
+            assert!(app.chat_widget.usage_notice(/*width*/ 100).is_none());
+        }
+        let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+        assert_eq!(state["account"]["rate_limits"], serde_json::json!([]));
+        let late_read = AppEvent::RateLimitsLoaded {
+            request_id,
+            origin: RateLimitRefreshOrigin::Recovery,
+            hard_stop_generation,
+            result: Ok(super::rate_limits::account_rate_limits_response(snapshot)),
+        };
+        Box::pin(app.handle_event(&mut tui, &mut server, late_read)).await?;
+        let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+        assert_eq!(state["account"]["rate_limits"], serde_json::json!([]));
+        let chatgpt = matches!(provider, "openai" | "alt");
         assert_eq!(
             (
                 app.chat_widget.config_ref().model_provider_id.as_str(),
@@ -89,6 +161,183 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
     }
     server.shutdown().await?;
     proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_session_on_same_provider_preserves_quota_and_pending_recovery() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    app_test_support::write_chatgpt_auth(
+        app.config.codex_home.as_path(),
+        app_test_support::ChatGptAuthFixture::new("test-token").plan_type("pro"),
+        codex_login::AuthCredentialsStoreMode::File,
+    )
+    .expect("write synthetic auth");
+    let backend = wiremock::MockServer::start().await;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\n",
+            backend.uri()
+        ),
+    )?;
+    let (mut server, _requests, proxy) =
+        Box::pin(session_lifecycle_requests::start_recording_remote_app_server(&app.config))
+            .await?;
+    let client_home = tempdir()?;
+    std::fs::write(
+        client_home.path().join("config.toml"),
+        "model_provider = 'amazon-bedrock'\n",
+    )?;
+    app.local_settings.codex_home = client_home.path().abs();
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+    };
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    *app.model_catalog.provider_write.lock().await = true;
+    Box::pin(app.start_fresh_session(
+        &mut tui,
+        &mut server,
+        FreshSessionStart::PreserveCurrentView(None),
+        /*initial_user_message*/ None,
+        /*new_thread_name*/ None,
+    ))
+    .await;
+    app.drain_active_thread_events(&mut tui).await?;
+    assert!(app.chat_widget.has_chatgpt_account());
+    let mut snapshot = super::rate_limits::rate_limit_snapshot(
+        /*used_percent*/ 41, /*rate_limit_reached_type*/ None,
+        /*spend_control_reached*/ None,
+    );
+    app.chat_widget
+        .on_rate_limit_snapshot(Some(snapshot.clone()));
+    app.chat_widget.hold_rate_limit_recovery();
+    let (request_id, hard_stop_generation) = app
+        .rate_limit_refresh_state
+        .start(
+            RateLimitRefreshOrigin::Recovery,
+            &mut app.rate_limit_hard_stop_generation,
+        )
+        .expect("start quota recovery");
+
+    for from_task_list in [false, true] {
+        let previous = app.active_thread_id.expect("active thread");
+        if from_task_list {
+            Box::pin(app.archive_current_thread(&mut tui, &mut server)).await?;
+            assert!(app.active_thread_id.is_none());
+            assert_eq!(
+                app.chat_widget.config_ref().model_provider_id,
+                "amazon-bedrock"
+            );
+        }
+        Box::pin(app.start_fresh_session(
+            &mut tui,
+            &mut server,
+            FreshSessionStart::PreserveCurrentView(None),
+            /*initial_user_message*/ None,
+            /*new_thread_name*/ None,
+        ))
+        .await;
+        app.drain_active_thread_events(&mut tui).await?;
+        assert_ne!(
+            app.active_thread_id.expect("/new opened a thread"),
+            previous
+        );
+        assert_eq!(app.chat_widget.config_ref().model_provider_id, "openai");
+        let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+        assert_eq!(
+            state["account"]["rate_limits"][0]["primary_limit"]["used_percent"],
+            41.0
+        );
+    }
+    app.chat_widget.apply_external_edit("after recovery".into());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        ["after recovery"]
+    );
+    snapshot.primary.as_mut().unwrap().used_percent = 60;
+    let reply = AppEvent::RateLimitsLoaded {
+        request_id,
+        origin: RateLimitRefreshOrigin::Recovery,
+        hard_stop_generation,
+        result: Ok(super::rate_limits::account_rate_limits_response(snapshot)),
+    };
+    Box::pin(app.handle_event(&mut tui, &mut server, reply)).await?;
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(event, AppEvent::CodexOp(Op::UserTurn { items, .. })
+            if matches!(items.as_slice(), [UserInput::Text { text, .. }] if text == "after recovery"))
+    }));
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(
+        state["account"]["rate_limits"][0]["primary_limit"]["used_percent"],
+        60.0
+    );
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn switching_to_a_cached_side_chat_clears_the_previous_providers_quota() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let started = server.start_thread(&app.config).await?;
+    let parent = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    app.drain_active_thread_events(&mut tui).await?;
+    set_chatgpt_auth(&mut app.chat_widget);
+    assert!(app.chat_widget.rate_limit_refresh_interval().is_some());
+    let quota = super::rate_limits::rate_limit_snapshot(
+        /*used_percent*/ 73, /*rate_limit_reached_type*/ None,
+        /*spend_control_reached*/ None,
+    );
+    app.chat_widget.on_rate_limit_snapshot(Some(quota.clone()));
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(
+        state["account"]["rate_limits"][0]["primary_limit"]["used_percent"],
+        73.0
+    );
+    let (request_id, hard_stop_generation) = app
+        .rate_limit_refresh_state
+        .start(
+            RateLimitRefreshOrigin::Periodic,
+            &mut app.rate_limit_hard_stop_generation,
+        )
+        .expect("start quota refresh");
+
+    let child = ThreadId::new();
+    let mut session = test_thread_session(child, app.config.cwd.to_path_buf());
+    session.model_provider_id = "amazon-bedrock".into();
+    app.side_threads.insert(child, SideThreadState::new(parent));
+    app.ensure_thread_channel(child)
+        .store
+        .lock()
+        .await
+        .set_session(session, Vec::new());
+    app.select_agent_thread(&mut tui, &mut server, child)
+        .await?;
+
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::RateLimitsLoaded {
+            request_id,
+            hard_stop_generation,
+            origin: RateLimitRefreshOrigin::Periodic,
+            result: Ok(super::rate_limits::account_rate_limits_response(quota)),
+        },
+    ))
+    .await?;
+    let state = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(state["thread"]["model"]["provider"], "amazon-bedrock");
+    assert_eq!(state["account"]["rate_limits"], serde_json::json!([]));
+    assert!(app.chat_widget.rate_limit_refresh_interval().is_none());
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -403,10 +652,10 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         app.config.codex_home = client_home.path().to_path_buf().abs();
         app.config.sqlite = SqliteConfig::new_for_testing(client_home.path().abs());
         app.chat_widget
-            .handle_thread_session_quiet(test_thread_session(
-                ThreadId::new(),
-                client_home.path().to_path_buf(),
-            ));
+            .handle_thread_session_quiet(ThreadSessionState {
+                model_provider_id: server_config.model_provider_id.clone(),
+                ..test_thread_session(ThreadId::new(), client_home.path().to_path_buf())
+            });
         match explicit {
             "model" => app.harness_overrides.model = Some("cli-model".to_string()),
             "effort" => app.cli_kv_overrides.push((
@@ -1396,7 +1645,10 @@ async fn replacement_preserves_remote_launch_paths_and_older_servers() -> Result
             "model = \"configured-model\"\n",
         )?;
         app.enqueue_primary_thread_session(
-            test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf()),
+            ThreadSessionState {
+                model_provider_id: app.config.model_provider_id.clone(),
+                ..test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf())
+            },
             Vec::new(),
         )
         .await?;
