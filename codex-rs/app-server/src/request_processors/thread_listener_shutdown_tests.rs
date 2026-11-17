@@ -168,6 +168,120 @@ async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn only_canonical_id_resumes_share_list_state() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.thread_id;
+    test.thread_store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await?;
+    let (processor, mut outgoing) = test_processor(&test).await?;
+    let connection_id = ConnectionId(1);
+    processor
+        .connection_initialized(connection_id, ConnectionCapabilities::default())
+        .await;
+    let held = processor
+        .thread_list_state_permit
+        .acquire_resume(/*shared*/ true)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let resume_id = ConnectionRequestId {
+        connection_id,
+        request_id: RequestId::Integer(1),
+    };
+    let resume = tokio::time::timeout(
+        Duration::from_secs(10),
+        processor.thread_resume(
+            ThreadResumeTarget::Client(resume_id),
+            ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                exclude_turns: true,
+                ..Default::default()
+            },
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*client_mcp_extensions*/ Default::default(),
+        ),
+    )
+    .await
+    .context("loaded resume blocked by an unrelated held list-state permit")?
+    .map_err(|error| anyhow::anyhow!("resume failed: {}", error.message))?;
+    assert!(resume.is_none());
+    assert!(
+        std::iter::from_fn(|| outgoing.try_recv().ok()).any(|envelope| matches!(
+            envelope,
+            OutgoingEnvelope::ToConnection {
+                message: OutgoingMessage::Response(response),
+                ..
+            } if response.id == RequestId::Integer(1)
+        ))
+    );
+    // The alias uses a different request queue, so it must wait for shared resumes to finish.
+    let alias_resume = processor.thread_resume(
+        ThreadResumeTarget::Client(ConnectionRequestId {
+            connection_id,
+            request_id: RequestId::Integer(3),
+        }),
+        ThreadResumeParams {
+            thread_id: thread_id.to_string().replace('-', ""),
+            exclude_turns: true,
+            ..Default::default()
+        },
+        /*app_server_client_name*/ None,
+        /*app_server_client_version*/ None,
+        /*client_mcp_extensions*/ Default::default(),
+    );
+    tokio::pin!(alias_resume);
+    assert!(futures::poll!(&mut alias_resume).is_pending());
+    drop(held);
+    let alias_response = tokio::time::timeout(Duration::from_secs(10), alias_resume)
+        .await
+        .context("aliased resume did not finish after shared resumes")?
+        .map_err(|error| anyhow::anyhow!("aliased resume failed: {}", error.message))?;
+    assert!(alias_response.is_none());
+    assert!(
+        std::iter::from_fn(|| outgoing.try_recv().ok()).any(|envelope| matches!(
+            envelope,
+            OutgoingEnvelope::ToConnection { message: OutgoingMessage::Response(response), .. }
+                if response.id == RequestId::Integer(3)
+        ))
+    );
+
+    // A path may not exist until an earlier exclusive restore completes. Do not
+    // inspect it or return a path error ahead of that operation.
+    let writer = processor
+        .acquire_thread_list_state_permit()
+        .await
+        .expect("writer permit");
+    let path_resume = processor.thread_resume(
+        ThreadResumeTarget::Client(ConnectionRequestId {
+            connection_id,
+            request_id: RequestId::Integer(2),
+        }),
+        ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            path: Some(
+                test.config
+                    .codex_home
+                    .join("missing-rollout.jsonl")
+                    .to_path_buf(),
+            ),
+            exclude_turns: true,
+            ..Default::default()
+        },
+        /*app_server_client_name*/ None,
+        /*app_server_client_version*/ None,
+        /*client_mcp_extensions*/ Default::default(),
+    );
+    tokio::pin!(path_resume);
+    assert!(futures::poll!(&mut path_resume).is_pending());
+    drop(writer);
+    let error = path_resume.await.expect_err("missing running-thread path");
+    assert!(error.message.contains("stale path"));
+    Ok(())
+}
+
 #[test_case(true; "listener attached before shutdown")]
 #[test_case(false; "listener attached after shutdown")]
 #[tokio::test]

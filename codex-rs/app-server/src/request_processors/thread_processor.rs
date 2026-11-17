@@ -7,7 +7,9 @@ mod daemon_snapshot;
 #[path = "realtime_history.rs"]
 mod realtime_history;
 
+mod resume_permit;
 mod workspace_switching;
+use resume_permit::ResumePermit;
 
 #[path = "thread_resume_account.rs"]
 mod thread_resume_account;
@@ -120,6 +122,21 @@ struct ResumeConfigState {
     workspace_roots: Option<Vec<AbsolutePathBuf>>,
     persisted_metadata: Option<ThreadMetadata>,
     persisted_settings: Option<PersistedResumeSettings>,
+}
+
+#[derive(Default)]
+struct ResumeRetryState<'a> {
+    prepared_config: Option<PreparedResumeConfig>,
+    force_exclusive: bool,
+    held_permit: Option<ResumePermit<'a>>,
+}
+
+impl<'a> ResumeRetryState<'a> {
+    async fn upgrade(&mut self, permit: ResumePermit<'a>) -> Result<(), JSONRPCErrorError> {
+        self.force_exclusive = true;
+        self.held_permit = Some(permit.upgrade().await?);
+        Ok(())
+    }
 }
 
 struct PreparedResumeConfig {
@@ -540,6 +557,8 @@ enum RunningThreadResumeResult {
     /// The optional stored thread contains the history-bearing probe that cold
     /// resume can reuse instead of reading the rollout again.
     NotRunning(Option<Box<StoredThread>>),
+    /// The source changed ownership and must use exclusive list ordering.
+    NeedsExclusive,
 }
 
 impl ThreadRequestProcessor {
@@ -626,7 +645,7 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let mut prepared_config = None;
+        let mut retry = ResumeRetryState::default();
         // Keep the resume future off the request handler's stack.
         while Box::pin(self.thread_resume_inner(
             &target,
@@ -634,7 +653,7 @@ impl ThreadRequestProcessor {
             app_server_client_name.clone(),
             app_server_client_version.clone(),
             client_mcp_extensions.clone(),
-            &mut prepared_config,
+            &mut retry,
         ))
         .await?
         .is_continue()
@@ -3903,14 +3922,14 @@ impl ThreadRequestProcessor {
         .await;
     }
 
-    async fn thread_resume_inner(
-        &self,
+    async fn thread_resume_inner<'a>(
+        &'a self,
         target: &ThreadResumeTarget,
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
-        prepared_config: &mut Option<PreparedResumeConfig>,
+        retry: &mut ResumeRetryState<'a>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -3930,12 +3949,18 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let exclusive =
+            retry.force_exclusive || matches!(target, ThreadResumeTarget::DaemonRecovery(_));
+        let mut permit = match retry.held_permit.take() {
+            Some(permit) => permit,
+            None => ResumePermit::acquire(self, params, exclusive).await?,
+        };
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
                     request_id,
                     params,
+                    &mut permit,
                     app_server_client_name.clone(),
                     app_server_client_version.clone(),
                     /*cold_resume_history*/ None,
@@ -3944,7 +3969,7 @@ impl ThreadRequestProcessor {
             {
                 RunningThreadResumeResult::Handled(completion) => {
                     // The listener may need this permit to finish the response.
-                    drop(_thread_list_state_permit);
+                    drop(permit);
                     // A stopped listener can discard an accepted command before responding.
                     completion
                         .await
@@ -3952,6 +3977,10 @@ impl ThreadRequestProcessor {
                     return Ok(ControlFlow::Break(()));
                 }
                 RunningThreadResumeResult::NotRunning(stored_thread) => stored_thread,
+                RunningThreadResumeResult::NeedsExclusive => {
+                    retry.upgrade(permit).await?;
+                    return Ok(ControlFlow::Continue(()));
+                }
             },
             ThreadResumeTarget::DaemonRecovery(saved) => {
                 let thread_id = ThreadId::from_string(&params.thread_id)
@@ -3990,7 +4019,8 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
-        let prepared_model_context = prepared_config
+        let prepared_model_context = retry
+            .prepared_config
             .as_mut()
             .and_then(|prepared| prepared.model_context.take());
         let (thread_history, resume_source_thread) = if let Some(history) = history {
@@ -4010,6 +4040,11 @@ impl ThreadRequestProcessor {
                     .await?
                 }
             };
+            permit.check_id(stored_thread.thread_id)?;
+            if permit.is_shared() && !resume_permit::source_can_share(&stored_thread) {
+                retry.upgrade(permit).await?;
+                return Ok(ControlFlow::Continue(()));
+            }
             thread_resume_account::check(
                 &self.config.features,
                 app_server_client_name.as_deref(),
@@ -4022,8 +4057,26 @@ impl ThreadRequestProcessor {
                     prepared_model_context,
                 )
                 .await?;
+            permit.check_id(stored_thread.thread_id)?;
+            if permit.is_shared() && !resume_permit::source_can_share(&stored_thread) {
+                retry.upgrade(permit).await?;
+                return Ok(ControlFlow::Continue(()));
+            }
             (thread_history, Some(stored_thread))
         };
+        if let InitialHistory::Resumed(resumed) = &thread_history {
+            permit.check_id(resumed.conversation_id)?;
+        }
+        if permit.is_shared()
+            && let Some((source, _)) = thread_history.get_resumed_session_sources()
+            && !resume_permit::source_kind_can_share(
+                &source,
+                thread_history.get_resumed_parent_thread_id(),
+            )
+        {
+            retry.upgrade(permit).await?;
+            return Ok(ControlFlow::Continue(()));
+        }
         // Path-based resume can use an empty request thread ID. Coordinate once its real
         // identity is known; unrelated loaded threads never wait for this cold startup.
         let _goal_resume_guard = if let InitialHistory::Resumed(resumed) = &thread_history {
@@ -4059,7 +4112,7 @@ impl ThreadRequestProcessor {
         let paginated_resume = paginated_thread_id.is_some();
         if paginated_resume
             && include_turns
-            && prepared_config.is_none()
+            && retry.prepared_config.is_none()
             && let ThreadResumeTarget::Client(request_id) = target
         {
             self.send_deprecation_notice(
@@ -4104,6 +4157,7 @@ impl ThreadRequestProcessor {
                 .resume_running_thread(
                     request_id,
                     &attach_params,
+                    &mut permit,
                     app_server_client_name,
                     app_server_client_version,
                     cold_resume_history,
@@ -4111,7 +4165,7 @@ impl ThreadRequestProcessor {
                 .await?
             {
                 RunningThreadResumeResult::Handled(completion) => {
-                    drop(_thread_list_state_permit);
+                    drop(permit);
                     completion
                         .await
                         .map_err(|_| thread_closing_for_resume(child_thread_id))?;
@@ -4120,9 +4174,14 @@ impl ThreadRequestProcessor {
                 RunningThreadResumeResult::NotRunning(_) => Err(invalid_request(
                     "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it",
                 )),
+                RunningThreadResumeResult::NeedsExclusive => {
+                    retry.upgrade(permit).await?;
+                    Ok(ControlFlow::Continue(()))
+                }
             };
         }
 
+        permit.finish_probe();
         // Copied or referenced history can contain another thread's settings. Only snapshots
         // explicitly owned by this thread can restore its cwd and workspace folders.
         let history_settings = if let InitialHistory::Resumed(resumed) = &thread_history {
@@ -4245,12 +4304,12 @@ impl ThreadRequestProcessor {
             persisted_metadata,
             persisted_settings,
         };
-        let mut config = match prepared_config.take() {
+        let mut config = match retry.prepared_config.take() {
             Some(prepared) if prepared.state == config_state => prepared.config,
             _ => {
                 // Config loading can call back into Desktop; release both locks during host work.
                 drop(_goal_resume_guard);
-                drop(_thread_list_state_permit);
+                drop(permit);
                 let config = self
                     .config_manager
                     .load_for_resume(
@@ -4281,7 +4340,7 @@ impl ThreadRequestProcessor {
                     )
                     .await
                     .map_err(|err| config_load_error(&err))?;
-                *prepared_config = Some(PreparedResumeConfig {
+                retry.prepared_config = Some(PreparedResumeConfig {
                     state: config_state,
                     config,
                     model_context: if paginated_resume
@@ -4617,6 +4676,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
+        permit: &mut ResumePermit<'_>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         cold_resume_history: Option<&[RolloutItem]>,
@@ -4686,8 +4746,18 @@ impl ThreadRequestProcessor {
                     active_path.display()
                 )));
             }
+            permit.check_id(existing_thread_id)?;
             let (config_snapshot, selected_service_tier) =
                 existing_thread.resume_config_snapshot().await;
+            if permit.is_shared()
+                && (!resume_permit::source_can_share(&source_thread)
+                    || !resume_permit::source_kind_can_share(
+                        &config_snapshot.session_source,
+                        /*parent_thread_id*/ None,
+                    ))
+            {
+                return Ok(RunningThreadResumeResult::NeedsExclusive);
+            }
             let mismatch_details = collect_resume_override_mismatches(
                 params,
                 &config_snapshot,
@@ -4744,6 +4814,7 @@ impl ThreadRequestProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            permit.finish_probe();
             self.config_manager
                 .check_thread_model_provider(existing_thread.config().await.as_ref())
                 .await
