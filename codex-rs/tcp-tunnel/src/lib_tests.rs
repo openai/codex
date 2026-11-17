@@ -327,16 +327,17 @@ async fn stdio_propagates_half_close_and_exits_on_gateway_eof_or_rejection() -> 
             input.shutdown().await?;
         }
         let mut output = Vec::new();
-        let result = timeout(
-            Duration::from_secs(3),
-            super::bridge(
+        let result = timeout(Duration::from_secs(3), async {
+            let mut stream = sender.send_request(request).await?;
+            super::check_h3_response(&mut stream).await?;
+            super::bridge_h3_stream(
                 reader,
                 &mut output,
-                &mut sender,
-                request,
-                super::BridgeMode::ProxyCommand,
-            ),
-        )
+                stream,
+                /*exit_on_remote_eof*/ true,
+            )
+            .await
+        })
         .await?;
         match index {
             0 => {

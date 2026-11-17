@@ -5,6 +5,16 @@ use super::Args;
 use super::PUBLIC_GATEWAY;
 use super::oauth_bearer;
 use super::run_ssh_proxy;
+
+#[test]
+fn setup_and_relay_errors_do_not_expose_peer_debug_text() {
+    let error = super::safe_tunnel_error(anyhow::anyhow!("peer supplied secret"));
+    assert!(!error.to_string().contains("secret"));
+    let denied = super::safe_tunnel_error(
+        crate::diagnostics::Code::Rejected(http::StatusCode::FORBIDDEN).into(),
+    );
+    assert!(denied.to_string().contains("403"));
+}
 use clap::Parser;
 use http::HeaderMap;
 use http::Method;

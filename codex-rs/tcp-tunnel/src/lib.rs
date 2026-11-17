@@ -39,7 +39,9 @@ use url::Url;
 
 mod control;
 mod diagnostics;
+mod http2;
 mod ssh;
+mod transport;
 
 pub use ssh::run_ssh_proxy;
 
@@ -330,7 +332,7 @@ fn control_input(
     Ok((initial_metadata, tokens))
 }
 
-fn client_config(mut transport: quinn::TransportConfig) -> Result<quinn::ClientConfig> {
+fn tls_config() -> Result<rustls::ClientConfig> {
     let native = rustls_native_certs::load_native_certs();
     let mut roots = rustls::RootCertStore::empty();
     roots.add_parsable_certificates(native.certs);
@@ -339,12 +341,16 @@ fn client_config(mut transport: quinn::TransportConfig) -> Result<quinn::ClientC
         "no native TLS roots: {:?}",
         native.errors
     );
-    let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()?
     .with_root_certificates(roots)
-    .with_no_client_auth();
+    .with_no_client_auth())
+}
+
+fn client_config(mut transport: quinn::TransportConfig) -> Result<quinn::ClientConfig> {
+    let mut tls = tls_config()?;
     tls.alpn_protocols = vec![b"h3".to_vec()];
     let mut config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls)?));
     transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
@@ -447,7 +453,7 @@ async fn serve(
                     let request = target.request(headers.connect.clone(), headers.auth.borrow().clone())?;
                     tokio::spawn(async move {
                         let (read, write) = socket.into_split();
-                        if let Err(error) = bridge(read, write, &mut sender, request, BridgeMode::Listener(draining)).await {
+                        if let Err(error) = bridge(read, write, &mut sender, request, draining).await {
                             diagnostics.report(
                                 Phase::Connect,
                                 &error,
@@ -530,29 +536,35 @@ async fn serve(
     }
 }
 
-enum BridgeMode {
-    Listener(mpsc::Sender<()>),
-    ProxyCommand,
-}
-
 async fn bridge(
-    mut local_read: impl AsyncRead + Unpin,
-    mut local_write: impl AsyncWrite + Unpin,
+    local_read: impl AsyncRead + Unpin,
+    local_write: impl AsyncWrite + Unpin,
     sender: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     request: Request<()>,
-    mode: BridgeMode,
+    draining: mpsc::Sender<()>,
 ) -> Result<()> {
     let mut stream = match sender.send_request(request).await {
         Ok(stream) => stream,
         Err(error) => {
-            if let BridgeMode::Listener(draining) = &mode
-                && matches!(error, h3::error::StreamError::RemoteClosing { .. })
-            {
+            if matches!(error, h3::error::StreamError::RemoteClosing { .. }) {
                 let _ = draining.try_send(());
             }
             return Err(error).context("sending CONNECT");
         }
     };
+    check_h3_response(&mut stream).await?;
+    bridge_h3_stream(
+        local_read,
+        local_write,
+        stream,
+        /*exit_on_remote_eof*/ false,
+    )
+    .await
+}
+
+type H3Stream = h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>;
+
+async fn check_h3_response(stream: &mut H3Stream) -> Result<()> {
     let status = stream
         .recv_response()
         .await
@@ -561,6 +573,15 @@ async fn bridge(
     if !status.is_success() {
         return Err(Code::Rejected(status).into());
     }
+    Ok(())
+}
+
+async fn bridge_h3_stream(
+    mut local_read: impl AsyncRead + Unpin,
+    mut local_write: impl AsyncWrite + Unpin,
+    stream: H3Stream,
+    exit_on_remote_eof: bool,
+) -> Result<()> {
     let (mut send, mut recv) = stream.split();
     let upload = async {
         let mut buffer = vec![0; 64 * 1024];
@@ -591,10 +612,7 @@ async fn bridge(
         result = &mut upload => { result?; download.await }
         result = &mut download => {
             result?;
-            match mode {
-                BridgeMode::Listener(_) => upload.await,
-                BridgeMode::ProxyCommand => Ok(()),
-            }
+            if exit_on_remote_eof { Ok(()) } else { upload.await }
         }
     }
 }

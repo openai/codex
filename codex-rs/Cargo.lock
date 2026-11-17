@@ -5144,6 +5144,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "h2",
  "h3",
  "h3-quinn",
  "http 1.4.0",
@@ -5155,6 +5156,7 @@ dependencies = [
  "rustls-native-certs",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "url",
 ]
 

@@ -13,13 +13,10 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 use super::Args;
-use super::BridgeMode;
 use super::Code;
-use super::ProxyConnection;
 use super::ProxyTarget;
-use super::bridge;
-use super::client_config;
 use super::control::bearer_header;
+use super::transport::Config as TransportConfig;
 
 // Only gateways shipped with the CLI may receive the signed-in account's credential.
 pub(super) const PUBLIC_GATEWAY: &str = "https://codex-portals.api.openai.com";
@@ -84,17 +81,12 @@ pub async fn run_ssh_proxy(
     stdout: impl AsyncWrite + Unpin,
 ) -> Result<()> {
     let (target, headers) = args.ssh_destination()?;
-    // Linux can advertise UDP segmentation on paths where batched packets are lost.
-    // Single datagrams keep bulk SSH transfers moving on those paths.
-    let mut transport = quinn::TransportConfig::default();
-    transport.enable_segmentation_offload(!cfg!(target_os = "linux"));
-    let ProxyConnection {
-        endpoint: _endpoint,
-        quic: _quic,
-        mut connection,
-        mut sender,
-    } = ProxyConnection::connect(&target, &client_config(transport)?).await?;
-    let request = target.request(headers, oauth_bearer(&access_token.await?)?)?;
+    let tunnel = TransportConfig::new(super::tls_config()?)?
+        .open(&target, async {
+            target.request(headers, oauth_bearer(&access_token.await?)?)
+        })
+        .await
+        .map_err(safe_tunnel_error)?;
 
     // OpenSSH needs EOF when the peer finishes, even if it still holds stdin open.
     // A detached blocking reader lets the Tokio runtime exit in that case.
@@ -120,13 +112,7 @@ pub async fn run_ssh_proxy(
             };
             let _ = outcome.send(result);
         })?;
-    let relay = bridge(
-        reader,
-        stdout,
-        &mut sender,
-        request,
-        BridgeMode::ProxyCommand,
-    );
+    let relay = tunnel.relay(reader, stdout, /*exit_on_remote_eof*/ true);
     let forward = async {
         tokio::pin!(relay);
         tokio::select! {
@@ -134,17 +120,17 @@ pub async fn run_ssh_proxy(
             result = input_done => { result??; relay.await }
         }
     };
-    tokio::pin!(forward);
-    let result = tokio::select! {
-        result = &mut forward => result,
-        // A closing connection may still have a complete status or payload buffered.
-        _ = connection.wait_idle() => forward.await,
-    };
+    let result = forward.await;
     // A peer's close reason can contain arbitrary text. Only surface the HTTP status.
-    result.map_err(|err| match err.downcast_ref::<Code>() {
+    result.map_err(safe_tunnel_error)
+}
+
+fn safe_tunnel_error(err: anyhow::Error) -> anyhow::Error {
+    match err.downcast_ref::<Code>() {
         Some(Code::Rejected(status)) => Code::Rejected(*status).into(),
+        Some(Code::Timeout) => Code::Timeout.into(),
         _ => anyhow::anyhow!("SSH tunnel stream failed"),
-    })
+    }
 }
 
 #[cfg(test)]
