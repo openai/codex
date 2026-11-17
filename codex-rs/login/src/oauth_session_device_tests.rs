@@ -72,7 +72,7 @@ async fn device_login_rejects_an_insecure_verification_link_before_showing_the_c
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "The gateway returned an invalid device verification URL"
+        "The authorization server returned an invalid device verification URL"
     );
 }
 
@@ -137,10 +137,28 @@ async fn device_login_can_be_canceled_while_waiting_for_approval() {
         .set_body_json(json!({"error": "authorization_pending"}))
         .set_delay(Duration::from_secs(30));
     let token_request = mount_device_code_grant(&server, pending).await;
-    let (client, home) = client(device_config(&server), Default::default());
+    let keyring = Arc::new(MockKeyringStore::default());
+    let (device, home) = client(device_config(&server), keyring.clone());
+    let browser = OAuthSessionManager::new(
+        config(&server),
+        home.path().to_path_buf(),
+        transport_default_auth_route_config().http_client_factory(),
+        keyring,
+    )
+    .unwrap();
 
     let cancel = async {
         token_request.wait_until_satisfied().await;
+        let error = browser
+            .login_with_browser(std::future::pending(), |_| {
+                panic!("unexpected browser prompt")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.get_ref().and_then(|error| error.downcast_ref()),
+            Some(&crate::OAuthSessionError::LoginInProgress),
+        );
         // Another Codex process can use the credential store while the user decides.
         let _store = super::super::storage::lock_credentials(home.path())
             .await
@@ -148,9 +166,15 @@ async fn device_login_can_be_canceled_while_waiting_for_approval() {
     };
     let result = tokio::time::timeout(
         Duration::from_secs(15),
-        client.login_with_device_code(cancel, |_| {}),
+        device.login_with_device_code(cancel, |_| {}),
     )
     .await
     .expect("cancel should finish while the issuer is still waiting");
     assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+
+    let cancel = tokio::sync::Notify::new();
+    let retry = browser
+        .login_with_browser(cancel.notified(), |_| cancel.notify_one())
+        .await;
+    assert_eq!(retry.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
 }

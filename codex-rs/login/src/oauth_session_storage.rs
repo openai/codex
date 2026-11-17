@@ -22,18 +22,34 @@ use codex_utils_path::write_atomically;
 
 use super::StoredToken;
 
-pub(super) async fn lock_credentials(codex_home: &Path) -> io::Result<File> {
+fn open_lock_file(codex_home: &Path, name: &str) -> io::Result<File> {
     let directory = codex_home.join("secrets");
     std::fs::create_dir_all(&directory)?;
-    // Configurations have separate credential entries but rewrite the same store file.
-    // Keep one stable sidecar locked from the initial read through token exchange and save.
-    let path = directory.join("gateway_oauth.lock");
-    let file = OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)?;
+        .open(directory.join(name))
+}
+
+// Hold this lock across user approval. Other credentials have independent sign-ins.
+pub(super) fn try_lock_login(codex_home: &Path, credential_id: &str) -> io::Result<File> {
+    let name = secret_name(credential_id)?;
+    let file = open_lock_file(codex_home, &format!("{name}.login.lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            super::OAuthSessionError::LoginInProgress,
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(super) async fn lock_credentials(codex_home: &Path) -> io::Result<File> {
+    // Configurations have separate credential entries but rewrite the same store file.
+    let file = open_lock_file(codex_home, "gateway_oauth.lock")?;
     tokio::time::timeout(Duration::from_secs(/*secs*/ 60), async {
         loop {
             match file.try_lock() {

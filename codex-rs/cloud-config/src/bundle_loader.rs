@@ -11,16 +11,21 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::OAuthDeviceCodePrompt;
+use codex_login::OAuthSessionManager;
 use codex_protocol::account::PlanType;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 
+const CONFIG_SERVER_LOGIN_FAILURE: &str =
+    "Config server sign-in failed. Check config_server.oauth and the credential store.";
+
 pub fn managed_config_auth_manager(
     auth: AuthConfig,
     requirements: &ConfigRequirementsToml,
-) -> std::io::Result<Option<codex_login::OAuthSessionManager>> {
+) -> std::io::Result<Option<OAuthSessionManager>> {
     let Some(service_config) = requirements.config_server.as_ref() else {
         return Ok(None);
     };
@@ -28,25 +33,48 @@ pub fn managed_config_auth_manager(
     crate::config_server_auth_manager(service_config, auth.codex_home, &factory)
 }
 
+/// How to sign in when the config server has no saved OAuth grant.
+pub enum ConfigServerLoginMethod {
+    Browser,
+    DeviceCode { present: fn(&OAuthDeviceCodePrompt) },
+}
+
 /// Existing grants are left to the loader's normal cache and refresh handling.
 pub async fn ensure_config_server_login(
     auth: AuthConfig,
     requirements: &ConfigRequirementsToml,
+    method: ConfigServerLoginMethod,
 ) -> std::io::Result<()> {
     let Some(manager) = managed_config_auth_manager(auth, requirements)? else {
         return Ok(());
     };
-    if let Err(error) = manager.authorization_id().await {
-        if error
-            .get_ref()
-            .and_then(|source| source.downcast_ref::<codex_login::OAuthSessionError>())
-            != Some(&codex_login::OAuthSessionError::LoginRequired)
-        {
-            return Err(error);
+    ensure_config_server_login_with_manager(&manager, method).await
+}
+
+pub(crate) async fn ensure_config_server_login_with_manager(
+    manager: &OAuthSessionManager,
+    method: ConfigServerLoginMethod,
+) -> std::io::Result<()> {
+    let Some(attempt) = manager.start_login_if_required().await? else {
+        return Ok(());
+    };
+    match method {
+        ConfigServerLoginMethod::Browser => attempt.login(CONFIG_SERVER_LOGIN_FAILURE).await,
+        ConfigServerLoginMethod::DeviceCode { present } => {
+            if manager.config().device_authorization_url.is_none() {
+                return Err(std::io::Error::other(
+                    "Device sign-in requires config_server.oauth.device_authorization_url",
+                ));
+            }
+            attempt
+                .login_with_device_code(
+                    std::future::pending(),
+                    present,
+                    CONFIG_SERVER_LOGIN_FAILURE,
+                )
+                .await
         }
-        manager.login().await?;
     }
-    Ok(())
 }
 
 pub fn managed_config_bundle_loader(

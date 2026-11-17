@@ -1,6 +1,8 @@
 #![cfg(test)]
 
 use super::*;
+use crate::ConfigServerLoginMethod;
+use crate::bundle_loader::ensure_config_server_login_with_manager;
 use crate::bundle_loader::managed_config_bundle_loader_for_service;
 use crate::service::CLOUD_CONFIG_BUNDLE_TIMEOUT;
 use crate::service::CloudConfigBundleService;
@@ -13,6 +15,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -87,16 +90,63 @@ async fn a_supplied_chatgpt_token_does_not_replace_config_server_sign_in() {
 }
 
 #[tokio::test]
+async fn device_endpoint_failure_points_to_config_server_oauth() {
+    let server = MockServer::start().await;
+    let home = tempdir().unwrap();
+    let oauth = OAuthSessionConfig {
+        device_authorization_url: Some(format!("{}/missing", server.uri())),
+        ..oauth_config(&server.uri())
+    };
+    let manager = OAuthSessionManager::new(
+        oauth,
+        home.path().to_path_buf(),
+        transport_default_auth_route_config().http_client_factory(),
+        Arc::new(MockKeyringStore::default()),
+    )
+    .unwrap();
+    let error = ensure_config_server_login_with_manager(
+        &manager,
+        ConfigServerLoginMethod::DeviceCode {
+            present: |_| panic!("unexpected device code"),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Config server sign-in failed. Check config_server.oauth and the credential store."
+    );
+}
+
+#[tokio::test]
 async fn policy_fetch_uses_replacement_config_server_credentials() {
     let server = MockServer::start().await;
+    let resource = "https://config.example/audience";
+    let resource_field = b"resource=https%3A%2F%2Fconfig.example%2Faudience";
+    Mock::given(method("POST"))
+        .and(path("/oauth/device"))
+        .and(form_has_field(resource_field))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "device-code",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://login.example/device",
+            "expires_in": 60,
+            "interval": 1,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     let sign_in = AtomicUsize::new(0);
-    Mock::given(path("/token"))
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(form_has_field(resource_field))
         .respond_with(move |_: &wiremock::Request| {
             ResponseTemplate::new(200).set_body_json(json!({
                 "access_token": format!("account-{}", sign_in.fetch_add(1, Ordering::Relaxed)),
                 "token_type": "Bearer", "expires_in": 3600,
             }))
         })
+        .expect(2)
         .mount(&server)
         .await;
     let policies = ["never", "on-request"].map(|approval| {
@@ -116,7 +166,11 @@ async fn policy_fetch_uses_replacement_config_server_credentials() {
     let factory = transport_default_auth_route_config()
         .http_client_factory()
         .clone();
-    let oauth = oauth_config(&server.uri());
+    let oauth = OAuthSessionConfig {
+        device_authorization_url: Some(format!("{}/oauth/device", server.uri())),
+        resource: Some(resource.into()),
+        ..oauth_config(&server.uri())
+    };
     let keyring = Arc::new(MockKeyringStore::default());
     let manager = || {
         OAuthSessionManager::new(
@@ -127,11 +181,17 @@ async fn policy_fetch_uses_replacement_config_server_credentials() {
         )
         .unwrap()
     };
-    let gateway = manager();
-    gateway
-        .login_with_browser(std::future::pending(), complete_browser_authorization)
-        .await
-        .unwrap();
+    let auth = manager().without_interactive_login();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        ensure_config_server_login_with_manager(
+            &auth,
+            ConfigServerLoginMethod::DeviceCode { present: |_| {} },
+        ),
+    )
+    .await
+    .expect("device sign-in should complete")
+    .unwrap();
     let source = ConfigServerSource {
         cache_namespace: "test".into(),
         client: BackendClient::for_config_endpoint(
@@ -150,8 +210,7 @@ async fn policy_fetch_uses_replacement_config_server_credentials() {
         Some(policies[0].clone())
     );
 
-    gateway
-        .login_with_browser(std::future::pending(), complete_browser_authorization)
+    auth.login_with_browser(std::future::pending(), complete_browser_authorization)
         .await
         .unwrap();
     // The old access token is still valid, so this must detect the changed grant.
@@ -159,6 +218,16 @@ async fn policy_fetch_uses_replacement_config_server_credentials() {
         service.load_startup_bundle_with_timeout().await.unwrap(),
         Some(policies[1].clone())
     );
+    server.verify().await;
+}
+
+fn form_has_field(field: &'static [u8]) -> impl wiremock::Match {
+    move |request: &wiremock::Request| {
+        request
+            .body
+            .split(|byte| *byte == b'&')
+            .any(|pair| pair == field)
+    }
 }
 
 fn complete_browser_authorization(url: &wiremock::http::Url) {

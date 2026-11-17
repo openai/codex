@@ -12,9 +12,18 @@ use std::sync::atomic::Ordering;
 use tokio::sync::OwnedMutexGuard;
 use tokio::sync::broadcast;
 
+const GATEWAY_LOGIN_FAILURE: &str =
+    "Gateway sign-in failed; check the gateway configuration and credential store.";
+
 enum LoginMethod<B, D> {
     Browser(B),
     DeviceCode { endpoint: String, present: D },
+}
+
+/// Exclusive permission to start a sign-in for this credential across Codex processes.
+pub struct OAuthLoginAttempt<'a> {
+    manager: &'a OAuthSessionManager,
+    _lock: std::fs::File,
 }
 
 /// Readiness and browser authorization progress for a gateway credential.
@@ -119,6 +128,26 @@ pub(super) fn status_sender_for_host(
 }
 
 impl OAuthSessionManager {
+    pub(super) fn try_start_login(&self) -> io::Result<OAuthLoginAttempt<'_>> {
+        Ok(OAuthLoginAttempt {
+            manager: self,
+            _lock: storage::try_lock_login(&self.state.codex_home, &self.credential_id())?,
+        })
+    }
+
+    /// Reuse a saved sign-in, or reserve a new one before releasing the store lock.
+    pub async fn start_login_if_required(&self) -> io::Result<Option<OAuthLoginAttempt<'_>>> {
+        let _store_lock = storage::lock_credentials(&self.state.codex_home).await?;
+        if self
+            .load_token_async()
+            .await?
+            .is_some_and(|token| token.authorization_id.is_some())
+        {
+            return Ok(None);
+        }
+        self.try_start_login().map(Some)
+    }
+
     /// Identifies the persisted sign-in without refreshing an expired access token.
     /// Refresh preserves this ID; explicit login creates a new one.
     pub async fn authorization_id(&self) -> io::Result<String> {
@@ -135,8 +164,7 @@ impl OAuthSessionManager {
     }
 
     pub async fn login(&self) -> io::Result<()> {
-        self.login_with_browser(std::future::pending(), open_browser)
-            .await
+        self.try_start_login()?.login(GATEWAY_LOGIN_FAILURE).await
     }
 
     /// Removes the persisted grant and its in-memory copy without contacting the issuer.
@@ -328,9 +356,11 @@ impl OAuthSessionManager {
         cancel: impl Future<Output = ()>,
         open_browser: impl FnOnce(&Url),
     ) -> io::Result<()> {
+        let _attempt = self.try_start_login()?;
         self.login_with_method(
             cancel,
             LoginMethod::<_, fn(&OAuthDeviceCodePrompt)>::Browser(open_browser),
+            GATEWAY_LOGIN_FAILURE,
         )
         .await
     }
@@ -341,20 +371,9 @@ impl OAuthSessionManager {
         cancel: impl Future<Output = ()>,
         present: impl FnOnce(&OAuthDeviceCodePrompt),
     ) -> io::Result<()> {
-        let device_authorization_url = self.state.config.device_authorization_url.as_deref()
-            .ok_or_else(|| io::Error::other("The configured gateway does not specify gateway_oauth.device_authorization_url"))?;
-        validate_oauth_url(
-            device_authorization_url,
-            "provider OAuth device authorization endpoint",
-        )?;
-        self.login_with_method(
-            cancel,
-            LoginMethod::<fn(&Url), _>::DeviceCode {
-                endpoint: device_authorization_url.to_owned(),
-                present,
-            },
-        )
-        .await
+        self.try_start_login()?
+            .login_with_device_code(cancel, present, GATEWAY_LOGIN_FAILURE)
+            .await
     }
 
     async fn authorize_with_device_code(
@@ -372,6 +391,7 @@ impl OAuthSessionManager {
                 token_url: &config.token_url,
                 client_id: &config.client_id,
                 scopes: &config.scopes,
+                resource: config.resource.as_deref(),
                 request_timeout: HTTP_TIMEOUT,
             },
             present,
@@ -391,16 +411,9 @@ impl OAuthSessionManager {
         &self,
         cancel: impl Future<Output = ()>,
         method: LoginMethod<impl FnOnce(&Url), impl FnOnce(&OAuthDeviceCodePrompt)>,
+        failure_message: &'static str,
     ) -> io::Result<()> {
         validate_config(&self.state.config)?;
-        let _login_attempt = Arc::clone(&self.state.login_attempt)
-            .try_lock_owned()
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    OAuthSessionError::LoginInProgress,
-                )
-            })?;
         tokio::pin!(cancel);
         let mut cached = tokio::select! {
             biased;
@@ -437,7 +450,7 @@ impl OAuthSessionManager {
             let message = if error.kind() == io::ErrorKind::Interrupted {
                 "Gateway sign-in was canceled"
             } else {
-                "Gateway sign-in failed; check the gateway configuration and credential store."
+                failure_message
             };
             io::Error::new(error.kind(), message)
         });
@@ -447,6 +460,42 @@ impl OAuthSessionManager {
         }
         guard.finish(&result);
         result
+    }
+}
+
+impl OAuthLoginAttempt<'_> {
+    pub async fn login(self, failure_message: &'static str) -> io::Result<()> {
+        self.manager
+            .login_with_method(
+                std::future::pending(),
+                LoginMethod::<_, fn(&OAuthDeviceCodePrompt)>::Browser(open_browser),
+                failure_message,
+            )
+            .await
+    }
+
+    pub async fn login_with_device_code(
+        self,
+        cancel: impl Future<Output = ()>,
+        present: impl FnOnce(&OAuthDeviceCodePrompt),
+        failure_message: &'static str,
+    ) -> io::Result<()> {
+        let device_authorization_url = self.manager.config().device_authorization_url.as_deref()
+            .ok_or_else(|| io::Error::other("The configured gateway does not specify gateway_oauth.device_authorization_url"))?;
+        validate_oauth_url(
+            device_authorization_url,
+            "provider OAuth device authorization endpoint",
+        )?;
+        self.manager
+            .login_with_method(
+                cancel,
+                LoginMethod::<fn(&Url), _>::DeviceCode {
+                    endpoint: device_authorization_url.to_owned(),
+                    present,
+                },
+                failure_message,
+            )
+            .await
     }
 }
 

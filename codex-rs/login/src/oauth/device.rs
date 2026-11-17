@@ -46,6 +46,7 @@ pub(crate) struct DeviceAuthorizationOptions<'a> {
     pub token_url: &'a str,
     pub client_id: &'a str,
     pub scopes: &'a [String],
+    pub resource: Option<&'a str>,
     pub request_timeout: Duration,
 }
 
@@ -55,7 +56,7 @@ pub(crate) enum DeviceAuthorizationError {
     Expired,
     #[error("Device authorization was denied; start sign-in again when ready")]
     Denied,
-    #[error("The gateway returned an invalid device verification URL")]
+    #[error("The authorization server returned an invalid device verification URL")]
     InvalidVerificationUrl,
     #[error(transparent)]
     Policy(NetworkPolicyDenied),
@@ -134,9 +135,12 @@ pub(crate) async fn authorize_device(
             .map_err(network_policy_denial)
     };
     let device_permit = permit_for(oauth.device_authorization_url().url())?;
-    let request = oauth
+    let mut request = oauth
         .exchange_device_code()
         .add_scopes(options.scopes.iter().cloned().map(Scope::new));
+    if let Some(resource) = options.resource {
+        request = request.add_extra_param("resource", resource);
+    }
     let authorization: StandardDeviceAuthorizationResponse = device_permit
         .run(request.request_async(&http))
         .await
@@ -157,7 +161,10 @@ pub(crate) async fn authorize_device(
         verification_uri,
         user_code: authorization.user_code().secret().clone(),
     });
-    let poll = oauth.exchange_device_access_token(&authorization);
+    let mut poll = oauth.exchange_device_access_token(&authorization);
+    if let Some(resource) = options.resource {
+        poll = poll.add_extra_param("resource", resource);
+    }
     token_permit
         .run(poll.request_async(&http, tokio::time::sleep, /*timeout*/ None))
         .await

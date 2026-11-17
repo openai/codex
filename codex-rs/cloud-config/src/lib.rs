@@ -13,6 +13,7 @@ mod metrics;
 mod service;
 mod validation;
 
+pub use bundle_loader::ConfigServerLoginMethod;
 pub use bundle_loader::chatgpt_config_bundle_loader;
 pub use bundle_loader::chatgpt_config_bundle_loader_for_storage;
 pub use bundle_loader::chatgpt_config_bundle_loader_for_storage_without_cache;
