@@ -22,8 +22,8 @@ use crate::http2::tests::tls_configs;
 
 async fn sockets() -> Result<(TcpListener, UdpSocket)> {
     for _ in 0..32 {
-        let udp = UdpSocket::bind("127.0.0.1:0")?;
-        if let Ok(tcp) = TcpListener::bind(udp.local_addr()?).await {
+        let tcp = TcpListener::bind("127.0.0.1:0").await?;
+        if let Ok(udp) = UdpSocket::bind(tcp.local_addr()?) {
             udp.set_nonblocking(true)?;
             return Ok((tcp, udp));
         }
@@ -150,8 +150,8 @@ async fn admission_rejection_is_terminal() -> Result<()> {
         .err()
         .unwrap();
     assert!(matches!(
-        error.downcast_ref::<crate::diagnostics::Code>(),
-        Some(crate::diagnostics::Code::Rejected(StatusCode::FORBIDDEN))
+        error.downcast_ref::<crate::SetupError>(),
+        Some(crate::SetupError::Rejected(StatusCode::FORBIDDEN))
     ));
     assert!(
         timeout(Duration::from_millis(20), tcp.accept())
@@ -191,13 +191,148 @@ async fn setup_deadline_includes_connect_response() -> Result<()> {
     )
     .await?;
     assert!(matches!(
-        result
-            .err()
-            .unwrap()
-            .downcast_ref::<crate::diagnostics::Code>(),
-        Some(crate::diagnostics::Code::Timeout)
+        result.err().unwrap().downcast_ref::<crate::SetupError>(),
+        Some(crate::SetupError::Timeout)
     ));
     quic.abort();
     h2.abort();
+    Ok(())
+}
+
+/// Run with a local, unprivileged sshd and a simple stdio-to-TCP ProxyCommand.
+/// This tests the SSH guarantee: a successful remote command has consumed the
+/// complete upload, even while QUIC delivery and remote EOF race.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a local sshd fixture; see PORTALS_TEST_SSHD_PORT, PORTALS_TEST_KEY, and PORTALS_TEST_PROXY"]
+async fn real_ssh_delivery_over_http3() -> Result<()> {
+    real_ssh_case(/*remote_exits_early*/ false).await?;
+    real_ssh_case(/*remote_exits_early*/ true).await
+}
+
+#[cfg(target_os = "linux")]
+async fn real_ssh_case(remote_exits_early: bool) -> Result<()> {
+    use bytes::Buf;
+    use std::io::Write;
+    use std::process::Command;
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+
+    let sshd_port: u16 = std::env::var("PORTALS_TEST_SSHD_PORT")?.parse()?;
+    let key = std::env::var("PORTALS_TEST_KEY")?;
+    let proxy_script = std::env::var("PORTALS_TEST_PROXY")?;
+    let user = std::env::var("USER")?;
+    let (tls, client) = tls_configs()?;
+    let (tcp, udp) = sockets().await?;
+    let address = tcp.local_addr()?;
+    let endpoint = endpoint(udp, tls)?;
+    let gateway = tokio::spawn(async move {
+        let quic = endpoint.accept().await.unwrap().await?;
+        let mut http: h3::server::Connection<_, Bytes> =
+            h3::server::Connection::new(h3_quinn::Connection::new(quic.clone())).await?;
+        let (_, mut stream) = http.accept().await?.unwrap().resolve_request().await?;
+        stream.send_response(Response::new(())).await?;
+        let socket = tokio::net::TcpStream::connect(("127.0.0.1", sshd_port)).await?;
+        let (mut read, mut write) = socket.into_split();
+        let (mut send, mut recv) = stream.split();
+        let upload = async {
+            while let Some(mut data) = recv.recv_data().await? {
+                while data.has_remaining() {
+                    let part = data.chunk();
+                    write.write_all(part).await?;
+                    data.advance(part.len());
+                }
+            }
+            write.shutdown().await?;
+            Ok::<_, anyhow::Error>(())
+        };
+        let download = async {
+            let mut buf = vec![0; 65536];
+            loop {
+                let n = read.read(&mut buf).await?;
+                if n == 0 {
+                    send.finish().await?;
+                    return Ok::<_, anyhow::Error>(());
+                }
+                send.send_data(Bytes::copy_from_slice(&buf[..n])).await?;
+            }
+        };
+        tokio::pin!(upload, download);
+        tokio::select! {
+            result = &mut download => result?,
+            result = &mut upload => { result?; download.await?; }
+        }
+        quic.closed().await;
+        Ok::<_, anyhow::Error>(())
+    });
+    let front = TcpListener::bind("127.0.0.1:0").await?;
+    let port = front.local_addr()?.port();
+    let ssh = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut command = Command::new("timeout");
+        command.args([
+            "15",
+            "ssh",
+            "-F",
+            "/dev/null",
+            "-T",
+            "-i",
+            &key,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            &format!("ProxyCommand=python3 {proxy_script} {port}"),
+            &format!("{user}@localhost"),
+            if remote_exits_early {
+                "exit 0"
+            } else {
+                "wc -c"
+            },
+        ]);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().unwrap();
+        if remote_exits_early {
+            let output = child.wait_with_output()?;
+            drop(stdin);
+            Ok(output)
+        } else {
+            stdin.write_all(&vec![b'x'; 1024 * 1024 + 17])?;
+            drop(stdin);
+            Ok(child.wait_with_output()?)
+        }
+    });
+    let (socket, _) = front.accept().await?;
+    let tunnel = Config::new(client)?
+        .open(&target(address), async { request(address) })
+        .await?;
+    assert!(matches!(tunnel, Tunnel::Http3(_)));
+    let (input, output) = socket.into_split();
+    let relay = tokio::spawn(tunnel.relay(input, output));
+    let output = ssh.await??;
+    assert!(
+        output.status.success(),
+        "ssh failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?.trim(),
+        if remote_exits_early { "" } else { "1048593" }
+    );
+    relay
+        .await?
+        .map_err(|error| anyhow::anyhow!("client relay: {error:#}"))?;
+    gateway
+        .await?
+        .map_err(|error| anyhow::anyhow!("gateway: {error:#}"))?;
     Ok(())
 }

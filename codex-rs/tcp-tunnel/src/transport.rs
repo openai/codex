@@ -15,7 +15,7 @@ use tokio::io::AsyncWrite;
 use crate::PROXY_CONNECT_TIMEOUT;
 use crate::ProxyConnection;
 use crate::ProxyTarget;
-use crate::diagnostics::Code;
+use crate::SetupError;
 use crate::http2;
 
 const QUIC_HEAD_START: Duration = Duration::from_millis(250);
@@ -50,6 +50,13 @@ impl Config {
         request: impl Future<Output = Result<Request<()>>>,
     ) -> Result<Tunnel> {
         tokio::time::timeout(PROXY_CONNECT_TIMEOUT, async {
+            if let Some((uri, proxy)) = http2::system_proxy(target)? {
+                let (sender, connection) =
+                    http2::connect_through_proxy(target, self.tls.clone(), uri, proxy).await?;
+                return Connection::Http2(sender, Box::new(connection))
+                    .admit(request.await?)
+                    .await;
+            }
             let quic = async {
                 ProxyConnection::connect(target, &self.quic)
                     .await
@@ -57,11 +64,7 @@ impl Config {
             };
             let tcp = async {
                 tokio::time::sleep(QUIC_HEAD_START).await;
-                let addresses: Vec<_> =
-                    tokio::net::lookup_host((target.host.as_str(), target.port))
-                        .await?
-                        .collect();
-                http2::connect(target, self.tls.clone(), &addresses)
+                http2::connect(target, self.tls.clone())
                     .await
                     .map(|(sender, connection)| Connection::Http2(sender, Box::new(connection)))
             };
@@ -73,7 +76,7 @@ impl Config {
             }
         })
         .await
-        .context(Code::Timeout)?
+        .context(SetupError::Timeout)?
     }
 }
 
@@ -105,8 +108,8 @@ async fn complete_or_try_other(
         Ok(tunnel) => Ok(tunnel),
         Err(error)
             if error
-                .downcast_ref::<Code>()
-                .is_some_and(|c| matches!(c, Code::Rejected(_))) =>
+                .downcast_ref::<SetupError>()
+                .is_some_and(|c| matches!(c, SetupError::Rejected(_))) =>
         {
             Err(error)
         }
@@ -167,12 +170,11 @@ impl Tunnel {
         self,
         input: impl AsyncRead + Unpin,
         output: impl AsyncWrite + Unpin,
-        exit_on_remote_eof: bool,
     ) -> Result<()> {
         match self {
             Self::Http3(tunnel) => {
                 let (mut proxy, stream) = *tunnel;
-                let forward = crate::bridge_h3_stream(input, output, stream, exit_on_remote_eof);
+                let forward = crate::bridge_h3_stream(input, output, stream);
                 tokio::pin!(forward);
                 tokio::select! {
                     result = &mut forward => result,
@@ -185,7 +187,7 @@ impl Tunnel {
                 recv,
             } => {
                 let result = {
-                    let forward = http2::bridge(input, output, send, recv, exit_on_remote_eof);
+                    let forward = http2::bridge(input, output, send, recv);
                     tokio::pin!(forward);
                     tokio::select! {
                         result = &mut forward => result,

@@ -20,9 +20,11 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 
-use super::connect;
+use super::connect_addresses as connect;
+use super::connect_through_proxy;
+use super::gateway_uri;
 use crate::ProxyTarget;
-use crate::diagnostics::Code;
+use crate::SetupError;
 use crate::transport::Connection;
 
 pub(crate) fn tls_configs() -> Result<(rustls::ServerConfig, rustls::ClientConfig)> {
@@ -95,9 +97,9 @@ async fn trusted_h2_requires_settings_and_certificate() -> Result<()> {
 }
 
 #[tokio::test]
-async fn forwards_bounded_data_in_both_half_close_orders_and_rejects_before_upload() -> Result<()> {
+async fn forwards_upload_before_response_and_rejects_before_upload() -> Result<()> {
     timeout(Duration::from_secs(15), async {
-        for (remote_first, status) in [(false, 200), (true, 200), (false, 403)] {
+        for status in [200, 403] {
             let (server, client) = tls_configs()?;
             let listener = TcpListener::bind("127.0.0.1:0").await?;
             let address = listener.local_addr()?;
@@ -119,12 +121,11 @@ async fn forwards_bounded_data_in_both_half_close_orders_and_rejects_before_uplo
                 let mut send = respond.send_response(Response::builder().status(status).body(())?, status != 200)?;
                 let handler = async move {
                     if status != 200 { return Ok::<_, anyhow::Error>(()); }
-                    if remote_first { send.send_data(Bytes::from(response_bytes.clone()), true)?; }
                     let mut body = request.into_body();
                     let mut received = Vec::new();
                     while let Some(data) = body.data().await { let data = data?; received.extend_from_slice(&data); body.flow_control().release_capacity(data.len())?; }
                     assert_eq!(received, expected_upload);
-                    if !remote_first { send.send_data(Bytes::from(response_bytes), true)?; }
+                    send.send_data(Bytes::from(response_bytes), true)?;
                     Ok(())
                 };
                 let complete = async { handler.await?; finished.await?; Ok::<_, anyhow::Error>(()) };
@@ -141,19 +142,18 @@ async fn forwards_bounded_data_in_both_half_close_orders_and_rejects_before_uplo
             let (input, output) = tokio::io::split(socket);
             let relay = tokio::spawn(async move {
                 Connection::Http2(sender, Box::new(connection)).admit(request).await?
-                    .relay(input, output, /*exit_on_remote_eof*/ false).await
+                    .relay(input, output).await
             });
             if status == 200 {
                 let mut received = Vec::new();
-                if remote_first { local.read_to_end(&mut received).await?; local.write_all(&upload).await?; local.shutdown().await?; }
-                else { local.write_all(&upload).await?; local.shutdown().await?; local.read_to_end(&mut received).await?; }
+                local.write_all(&upload).await?; local.shutdown().await?; local.read_to_end(&mut received).await?;
                 assert_eq!(received.len(), download.len());
                 assert!(received == download);
                 relay.await??;
             } else {
                 local.write_all(b"must not be forwarded").await?;
                 let error = relay.await?.unwrap_err();
-                assert!(matches!(error.downcast_ref::<Code>(), Some(Code::Rejected(status)) if status.as_u16() == 403));
+                assert!(matches!(error.downcast_ref::<SetupError>(), Some(SetupError::Rejected(status)) if status.as_u16() == 403));
             }
             let _ = done.send(());
             peer.await??;
@@ -163,14 +163,20 @@ async fn forwards_bounded_data_in_both_half_close_orders_and_rejects_before_uplo
 }
 
 #[tokio::test]
-async fn retries_next_address_after_non_certificate_tls_failure() -> Result<()> {
-    timeout(Duration::from_secs(5), async {
+async fn reaches_third_address_while_two_tls_peers_stall() -> Result<()> {
+    timeout(Duration::from_secs(2), async {
         let (server, client) = tls_configs()?;
-        let bad = TcpListener::bind("127.0.0.1:0").await?;
+        let first = TcpListener::bind("127.0.0.1:0").await?;
+        let second = TcpListener::bind("127.0.0.1:0").await?;
         let good = TcpListener::bind("127.0.0.1:0").await?;
-        let addresses = [bad.local_addr()?, good.local_addr()?];
-        let bad_task = tokio::spawn(async move {
-            drop(bad.accept().await.unwrap());
+        let addresses = [
+            first.local_addr()?,
+            second.local_addr()?,
+            good.local_addr()?,
+        ];
+        let stalls = tokio::spawn(async move {
+            let (_first, _second) = tokio::join!(first.accept(), second.accept());
+            std::future::pending::<()>().await;
         });
         let good_task = tokio::spawn(async move {
             let tls = TlsAcceptor::from(Arc::new(server))
@@ -183,8 +189,68 @@ async fn retries_next_address_after_non_certificate_tls_failure() -> Result<()> 
         });
         let connection = connect(&target(addresses[0]), Arc::new(client), &addresses).await?;
         drop(connection);
-        bad_task.await?;
+        stalls.abort();
         good_task.await??;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn proxy_only_egress_keeps_gateway_credentials_inside_tls() -> Result<()> {
+    timeout(Duration::from_secs(3), async {
+        let (server, client) = tls_configs()?;
+        let gateway = TcpListener::bind("127.0.0.1:0").await?;
+        let gateway_address = gateway.local_addr()?;
+        let proxy = TcpListener::bind("127.0.0.1:0").await?;
+        let proxy_address = proxy.local_addr()?;
+        let proxy_task = tokio::spawn(async move {
+            let (mut socket, _) = proxy.accept().await?;
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                header.push(socket.read_u8().await?);
+                anyhow::ensure!(header.len() < 4096);
+            }
+            let header = String::from_utf8(header)?;
+            assert!(header.starts_with(&format!("CONNECT {gateway_address} HTTP/1.1")));
+            assert!(!header.to_lowercase().contains("authorization: bearer"));
+            socket
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await?;
+            let mut upstream = tokio::net::TcpStream::connect(gateway_address).await?;
+            tokio::io::copy_bidirectional(&mut socket, &mut upstream).await?;
+            Ok::<_, anyhow::Error>(())
+        });
+        let gateway_task = tokio::spawn(async move {
+            let tls = TlsAcceptor::from(Arc::new(server))
+                .accept(gateway.accept().await?.0)
+                .await?;
+            let mut conn: h2::server::Connection<_, Bytes> = h2::server::handshake(tls).await?;
+            let (request, mut response) = conn.accept().await.unwrap()?;
+            assert_eq!(request.headers()["authorization"], "Bearer fixture");
+            response.send_response(Response::new(()), /*end_of_stream*/ true)?;
+            let _ = conn.accept().await;
+            Ok::<_, anyhow::Error>(())
+        });
+        let target = target(gateway_address);
+        let uri = gateway_uri(&target)?;
+        let intercept = hyper_util::client::proxy::matcher::Matcher::builder()
+            .https(format!("http://{proxy_address}"))
+            .build()
+            .intercept(&uri)
+            .unwrap();
+        let (sender, mut connection) =
+            connect_through_proxy(&target, Arc::new(client), uri, intercept).await?;
+        let request =
+            target.request(HeaderMap::new(), HeaderValue::from_static("Bearer fixture"))?;
+        let result = tokio::select! {
+            result = super::admit(sender, request) => result,
+            _ = &mut connection => anyhow::bail!("gateway closed"),
+        };
+        drop(result?);
+        drop(connection);
+        gateway_task.await??;
+        proxy_task.await??;
         Ok::<_, anyhow::Error>(())
     })
     .await?

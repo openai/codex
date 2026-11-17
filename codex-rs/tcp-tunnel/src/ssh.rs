@@ -13,9 +13,8 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 use super::Args;
-use super::Code;
 use super::ProxyTarget;
-use super::control::bearer_header;
+use super::SetupError;
 use super::transport::Config as TransportConfig;
 
 // Only gateways shipped with the CLI may receive the signed-in account's credential.
@@ -24,22 +23,20 @@ pub(super) const GATEWAY_ORIGINS: &[&str] = &[PUBLIC_GATEWAY];
 
 impl Args {
     fn ssh_destination(&self) -> Result<(ProxyTarget, HeaderMap)> {
-        let (environment_id, port) = match self.environment_id.as_deref() {
-            Some(id) => (id, self.port.map_or(/*default*/ 22, NonZeroU16::get)),
-            None => {
-                let (id, port) = self
-                    .target
-                    .as_deref()
-                    .and_then(|target| target.rsplit_once(':'))
-                    .context("SSH target must be ENV:PORT")?;
-                (
-                    id,
-                    port.parse::<NonZeroU16>()
-                        .context("invalid SSH target port")?
-                        .get(),
-                )
-            }
-        };
+        if let Some(target) = self.target {
+            ensure!(
+                target.is_ipv4() && target.port() != 0 && self.token_file.is_some(),
+                "invalid legacy CONNECT target"
+            );
+            return Ok((
+                ProxyTarget::parse(&self.proxy_url, GATEWAY_ORIGINS, &target.to_string())?,
+                HeaderMap::new(),
+            ));
+        }
+        let environment_id = self
+            .environment_id
+            .as_deref()
+            .context("missing environment ID")?;
         ensure!(
             (1..=256).contains(&environment_id.len())
                 && environment_id
@@ -56,7 +53,10 @@ impl Args {
             "x-portals-environment-id",
             HeaderValue::from_str(environment_id)?,
         );
-        headers.insert("x-portals-port", port.into());
+        headers.insert(
+            "x-portals-port",
+            self.port.map_or(/*default*/ 22, NonZeroU16::get).into(),
+        );
         Ok((target, headers))
     }
 }
@@ -65,13 +65,45 @@ fn oauth_bearer(token: &str) -> Result<HeaderValue> {
     let unpadded = token.trim_end_matches('=');
     ensure!(
         !unpadded.is_empty()
-            && token.len() < super::control::MAX_TOKEN_BYTES
+            && token.len() < super::MAX_TOKEN_BYTES
             && unpadded
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b)),
-        "invalid OAuth access token"
+        "invalid access token"
     );
-    bearer_header(token)
+    let mut bearer =
+        HeaderValue::from_str(&format!("Bearer {token}")).context("invalid access token")?;
+    bearer.set_sensitive(true);
+    Ok(bearer)
+}
+
+pub async fn run_ssh_proxy_from_file(args: Args, stdout: impl AsyncWrite + Unpin) -> Result<()> {
+    let path = args.token_file.clone().context("missing token file")?;
+    run_ssh_proxy(
+        args,
+        async move {
+            let mut file = std::fs::File::open(&path).context("opening private token file")?;
+            let metadata = file.metadata()?;
+            ensure!(
+                metadata.is_file() && metadata.len() < super::MAX_TOKEN_BYTES as u64,
+                "invalid private token file"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                ensure!(
+                    metadata.permissions().mode() & 0o077 == 0,
+                    "token file must be private"
+                );
+            }
+            std::fs::remove_file(&path).context("removing one-use token file")?;
+            let mut token = String::new();
+            file.read_to_string(&mut token)?;
+            Ok(token)
+        },
+        stdout,
+    )
+    .await
 }
 
 /// Relay one SSH session. Poll the active account's token only after verifying the gateway.
@@ -112,7 +144,7 @@ pub async fn run_ssh_proxy(
             };
             let _ = outcome.send(result);
         })?;
-    let relay = tunnel.relay(reader, stdout, /*exit_on_remote_eof*/ true);
+    let relay = tunnel.relay(reader, stdout);
     let forward = async {
         tokio::pin!(relay);
         tokio::select! {
@@ -126,9 +158,9 @@ pub async fn run_ssh_proxy(
 }
 
 fn safe_tunnel_error(err: anyhow::Error) -> anyhow::Error {
-    match err.downcast_ref::<Code>() {
-        Some(Code::Rejected(status)) => Code::Rejected(*status).into(),
-        Some(Code::Timeout) => Code::Timeout.into(),
+    match err.downcast_ref::<SetupError>() {
+        Some(SetupError::Rejected(status)) => SetupError::Rejected(*status).into(),
+        Some(SetupError::Timeout) => SetupError::Timeout.into(),
         _ => anyhow::anyhow!("SSH tunnel stream failed"),
     }
 }

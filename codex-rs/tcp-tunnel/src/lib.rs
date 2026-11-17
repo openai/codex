@@ -1,8 +1,5 @@
-//! TCP forwarding through a verified HTTP/3 CONNECT proxy, for listeners and SSH stdio.
-//! The listener survives transport loss; individual TCP streams are never replayed.
-use std::io::BufRead;
-use std::io::Write;
-use std::net::IpAddr;
+//! One SSH-owned, authenticated tunnel to a verified Cloud Portals gateway.
+use std::fmt;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
@@ -12,92 +9,69 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::ensure;
 use bytes::Buf;
 use bytes::Bytes;
 use clap::Args as ClapArgs;
-use clap::builder::ArgPredicate;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
 use http::Request;
+use http::StatusCode;
 use http::Uri;
 use http::header;
 use http::uri::Authority;
-use quinn::crypto::rustls::QuicClientConfig;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::sync::watch;
 use url::Host;
 use url::Url;
 
-mod control;
-mod diagnostics;
 mod http2;
 mod ssh;
 mod transport;
 
 pub use ssh::run_ssh_proxy;
-
-use diagnostics::Code;
-use diagnostics::Diagnostics;
-use diagnostics::Phase;
-
-use control::read_bearer;
-use control::read_connect_headers;
+pub use ssh::run_ssh_proxy_from_file;
 
 const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-// Bound decoded QPACK fields before h3 constructs its capacity-limited HeaderMap.
 const MAX_FIELD_SECTION_SIZE: u64 = 64 * 1024;
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// HTTPS proxy origin. With --environment-id, defaults to the public Portals gateway.
-    #[arg(
-        long,
-        required = false,
-        required_unless_present = "environment_id",
-        default_value_if("environment_id", ArgPredicate::IsPresent, ssh::PUBLIC_GATEWAY)
-    )]
+    /// Verified HTTPS gateway origin.
+    #[arg(long, default_value = ssh::PUBLIC_GATEWAY)]
     pub proxy_url: Url,
-    /// Listener mode: file containing one exact approved HTTPS proxy origin per line.
-    #[arg(long, requires = "auth_token_stdin")]
-    proxy_origins_file: Option<PathBuf>,
-    /// SSH environment ID and port (ENV:PORT), or the CONNECT authority in listener mode.
-    #[arg(
-        long,
-        required_unless_present = "environment_id",
-        conflicts_with = "environment_id"
-    )]
-    target: Option<String>,
-    /// Open an SSH stdio tunnel to this canonical Portals environment.
-    #[arg(long, conflicts_with = "auth_token_stdin")]
+    /// Canonical Cloud environment ID.
+    #[arg(long, required_unless_present = "target", conflicts_with = "target")]
     environment_id: Option<String>,
-    /// Published SSH port for --environment-id (default 22).
+    /// Published SSH port.
     #[arg(long, requires = "environment_id")]
     port: Option<NonZeroU16>,
-    /// Loopback listener address (default 127.0.0.1:0).
-    #[arg(long, requires = "auth_token_stdin")]
-    listen_addr: Option<SocketAddr>,
-    /// Start a listener and read its bearer from stdin. Otherwise relay SSH over stdio using the Codex login.
-    #[arg(long, requires = "proxy_origins_file")]
-    pub auth_token_stdin: bool,
-    /// Read replacement bearers from stdin and stop when the controlling pipe closes.
-    #[arg(long, requires = "auth_token_stdin")]
-    auth_token_updates_stdin: bool,
-    /// Read a JSON list of extension-header name/value pairs before the first bearer.
-    #[arg(long, requires = "auth_token_stdin")]
-    connect_headers_stdin: bool,
-    /// Emit credential-safe JSON diagnostics on stderr instead of human-readable errors.
-    #[arg(long, requires = "auth_token_stdin")]
-    diagnostics_json: bool,
+    /// ERS-issued legacy CONNECT authority; requires a private token file.
+    #[arg(long, requires = "token_file", conflicts_with = "environment_id")]
+    target: Option<SocketAddr>,
+    /// One-use bearer in a private file, supplied by Desktop. Never read from SSH stdin.
+    #[arg(long)]
+    pub token_file: Option<PathBuf>,
 }
+
+#[derive(Debug)]
+enum SetupError {
+    Timeout,
+    Rejected(StatusCode),
+}
+impl fmt::Display for SetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("SSH tunnel setup timed out"),
+            Self::Rejected(status) => write!(f, "CONNECT rejected with status {}", status.as_u16()),
+        }
+    }
+}
+impl std::error::Error for SetupError {}
 
 #[derive(Debug, PartialEq, Eq)]
 struct ProxyTarget {
@@ -105,22 +79,11 @@ struct ProxyTarget {
     port: u16,
     authority: String,
 }
-
-struct TunnelHeaders {
-    auth: watch::Receiver<HeaderValue>,
-    connect: HeaderMap,
-}
-
 struct ProxyConnection {
-    endpoint: quinn::Endpoint,
-    quic: quinn::Connection,
+    _endpoint: quinn::Endpoint,
+    _quic: quinn::Connection,
     connection: h3::client::Connection<h3_quinn::Connection, Bytes>,
     sender: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-}
-
-enum ProxyClosure {
-    Draining,
-    Closed(anyhow::Error),
 }
 
 impl ProxyTarget {
@@ -173,165 +136,6 @@ impl ProxyTarget {
     }
 }
 
-fn parse_trusted_origins(origins: &str) -> Result<Vec<String>> {
-    let trusted_origins = origins
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let origin = Url::parse(line).context("invalid trusted proxy origin")?;
-            ensure!(
-                origin.scheme() == "https"
-                    && origin.username().is_empty()
-                    && origin.password().is_none()
-                    && origin.query().is_none()
-                    && origin.fragment().is_none()
-                    && origin.path() == "/"
-                    && line == origin.origin().ascii_serialization(),
-                "trusted proxy origins must be exact HTTPS origins"
-            );
-            Ok(line.to_owned())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    ensure!(!trusted_origins.is_empty(), "no trusted proxy origins");
-    Ok(trusted_origins)
-}
-
-#[cfg(test)]
-#[path = "lib_tests.rs"]
-mod tests;
-
-pub async fn run(args: Args) -> Result<()> {
-    let diagnostics = if args.diagnostics_json {
-        Diagnostics::Json
-    } else {
-        Diagnostics::Human
-    };
-    let mut phase = Phase::Startup;
-    let result = async {
-        ensure!(args.auth_token_stdin, "--auth-token-stdin is required");
-        let listen_addr = args.listen_addr.unwrap_or(SocketAddr::from(([127, 0, 0, 1], 0)));
-        ensure!(
-            listen_addr.ip().is_loopback(),
-            "listener must be loopback"
-        );
-        let origins = std::fs::read_to_string(args.proxy_origins_file.context("missing proxy origins file")?)
-            .context("reading trusted proxy origins")?;
-        let trusted_origins = parse_trusted_origins(&origins)?;
-        let authority = args.target.as_deref().context("missing CONNECT target")?;
-        let target = ProxyTarget::parse(&args.proxy_url, &trusted_origins, authority)?;
-        phase = Phase::Control;
-        let (metadata, mut tokens) = control_input(
-            std::io::BufReader::new(std::io::stdin()),
-            args.connect_headers_stdin,
-            ssh::GATEWAY_ORIGINS.contains(&args.proxy_url.origin().ascii_serialization().as_str()),
-        )?;
-        let connect = metadata.await.context("CONNECT metadata input closed")??;
-        let initial_auth = tokens
-            .recv()
-            .await
-            .context("MASQUE credential input closed")??
-            .context("empty MASQUE token")?;
-        phase = Phase::Startup;
-        let (updates, auth) = watch::channel(initial_auth);
-        let headers = TunnelHeaders { auth, connect };
-
-        let listener = TcpListener::bind(listen_addr)
-            .await
-            .context("binding loopback listener")?;
-        let config = client_config(quinn::TransportConfig::default())?;
-        let (ready, readiness) = oneshot::channel();
-        let tunnel = async move {
-            let connected = ProxyConnection::connect(&target, &config).await?;
-            // The line is the caller readiness contract, including the assigned port.
-            writeln!(std::io::stdout(), "LISTENING {}", listener.local_addr()?)?;
-            std::io::stdout().flush()?;
-            let _ = ready.send(());
-            diagnostics.with_phase(
-                serve(listener, target, config, headers, connected, diagnostics).await,
-                Phase::Transport,
-            )
-        };
-        if args.auth_token_updates_stdin {
-            tokio::select! {
-                result = tunnel => result,
-                result = update_auth_tokens(&mut tokens, updates, readiness, std::io::stdout()) => diagnostics.with_phase(result, Phase::Control),
-            }
-        } else {
-            tunnel.await
-        }
-    }
-    .await;
-    diagnostics.finish(result, phase, &mut std::io::stderr().lock())
-}
-
-type TokenStream = mpsc::Receiver<Result<Option<HeaderValue>>>;
-
-async fn update_auth_tokens(
-    tokens: &mut TokenStream,
-    updates: watch::Sender<HeaderValue>,
-    readiness: oneshot::Receiver<()>,
-    mut output: impl Write,
-) -> Result<()> {
-    let mut readiness = Some(readiness);
-    while let Some(result) = tokens.recv().await {
-        let Some(token) = result? else {
-            break;
-        };
-        updates.send_replace(token);
-        if let Some(readiness) = readiness.take() {
-            readiness.await.context("MASQUE tunnel did not start")?;
-        }
-        writeln!(output, "AUTH_UPDATED")?;
-        output.flush()?;
-    }
-    Ok(())
-}
-
-fn control_input(
-    mut reader: impl BufRead + Send + 'static,
-    connect_headers_stdin: bool,
-    require_portals_oauth: bool,
-) -> Result<(oneshot::Receiver<Result<HeaderMap>>, TokenStream)> {
-    let (metadata, initial_metadata) = oneshot::channel();
-    let (send, tokens) = mpsc::channel(1);
-    // Tokio's blocking stdin can prevent runtime shutdown after a proxy startup failure.
-    std::thread::Builder::new()
-        .name("masque-credentials".to_owned())
-        .spawn(move || {
-            let headers = if connect_headers_stdin {
-                read_connect_headers(&mut reader)
-            } else {
-                Ok(HeaderMap::new())
-            };
-            let headers = match headers {
-                Ok(headers) => headers,
-                Err(error) => {
-                    let _ = metadata.send(Err(error));
-                    return;
-                }
-            };
-            if require_portals_oauth
-                && headers
-                    .get("x-portals-auth-mode")
-                    .is_none_or(|mode| mode != "oauth")
-            {
-                let _ = metadata.send(Err(anyhow!("Portals requires OAuth CONNECT metadata")));
-                return;
-            }
-            let _ = metadata.send(Ok(headers));
-            loop {
-                let token = read_bearer(&mut reader);
-                let finished = !matches!(&token, Ok(Some(_)));
-                if send.blocking_send(token).is_err() || finished {
-                    break;
-                }
-            }
-        })
-        .context("starting MASQUE credential input")?;
-    Ok((initial_metadata, tokens))
-}
-
 fn tls_config() -> Result<rustls::ClientConfig> {
     let native = rustls_native_certs::load_native_certs();
     let mut roots = rustls::RootCertStore::empty();
@@ -349,217 +153,36 @@ fn tls_config() -> Result<rustls::ClientConfig> {
     .with_no_client_auth())
 }
 
-fn client_config(mut transport: quinn::TransportConfig) -> Result<quinn::ClientConfig> {
-    let mut tls = tls_config()?;
-    tls.alpn_protocols = vec![b"h3".to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls)?));
-    transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
-    transport.keep_alive_interval(Some(Duration::from_secs(10)));
-    config.transport_config(Arc::new(transport));
-    Ok(config)
-}
-
 impl ProxyConnection {
     async fn connect(target: &ProxyTarget, config: &quinn::ClientConfig) -> Result<Self> {
-        tokio::time::timeout(PROXY_CONNECT_TIMEOUT, async {
-            let mut last_error = anyhow!("MASQUE proxy resolved to no addresses");
-            for peer in tokio::net::lookup_host((target.host.as_str(), target.port)).await? {
-                let bind = match peer.ip() {
-                    IpAddr::V4(_) => "0.0.0.0:0",
-                    IpAddr::V6(_) => "[::]:0",
+        for peer in tokio::net::lookup_host((target.host.as_str(), target.port)).await? {
+            let attempt = async {
+                let bind = if peer.is_ipv4() {
+                    "0.0.0.0:0"
+                } else {
+                    "[::]:0"
                 };
-                let mut endpoint = match quinn::Endpoint::client(bind.parse()?) {
-                    Ok(endpoint) => endpoint,
-                    Err(error) => {
-                        last_error = anyhow!(error.to_string());
-                        continue;
-                    }
-                };
+                let mut endpoint = quinn::Endpoint::client(bind.parse()?)?;
                 endpoint.set_default_client_config(config.clone());
-                let connecting = match endpoint.connect(peer, &target.host) {
-                    Ok(connecting) => connecting,
-                    Err(error) => {
-                        last_error = anyhow!(error.to_string());
-                        continue;
-                    }
-                };
-                let quic = match tokio::time::timeout(Duration::from_secs(5), connecting).await {
-                    Ok(Ok(quic)) => quic,
-                    Ok(Err(error)) => {
-                        last_error = anyhow!(error.to_string());
-                        continue;
-                    }
-                    Err(_) => {
-                        last_error = Code::HandshakeTimeout.into();
-                        continue;
-                    }
-                };
-                let (connection, sender) = match h3::client::builder()
+                let quic = endpoint.connect(peer, &target.host)?.await?;
+                let (connection, sender) = h3::client::builder()
                     .max_field_section_size(MAX_FIELD_SECTION_SIZE)
-                    .enable_extended_connect(true)
                     .build(h3_quinn::Connection::new(quic.clone()))
-                    .await
-                {
-                    Ok(connection) => connection,
-                    Err(error) => {
-                        last_error = anyhow!(error.to_string());
-                        continue;
-                    }
-                };
-                return Ok(Self {
-                    endpoint,
-                    quic,
+                    .await?;
+                Ok::<_, anyhow::Error>(Self {
+                    _endpoint: endpoint,
+                    _quic: quic,
                     connection,
                     sender,
-                });
-            }
-            if matches!(
-                last_error.downcast_ref::<Code>(),
-                Some(Code::HandshakeTimeout)
-            ) {
-                Err(last_error)
-            } else {
-                bail!("QUIC handshake failed: {last_error}")
-            }
-        })
-        .await
-        .context(Code::Timeout)?
-    }
-}
-
-async fn serve(
-    listener: TcpListener,
-    target: ProxyTarget,
-    config: quinn::ClientConfig,
-    headers: TunnelHeaders,
-    mut connected: ProxyConnection,
-    diagnostics: Diagnostics,
-) -> Result<()> {
-    loop {
-        let ProxyConnection {
-            endpoint,
-            quic,
-            mut connection,
-            sender,
-        } = connected;
-        let mut driver = tokio::spawn(async move { connection.wait_idle().await });
-        let (draining, mut drain_started) = mpsc::channel(1);
-        let failure = loop {
-            tokio::select! {
-                incoming = listener.accept() => {
-                    let (socket, _) = incoming?;
-                    let mut sender = sender.clone();
-                    let draining = draining.clone();
-                    let request = target.request(headers.connect.clone(), headers.auth.borrow().clone())?;
-                    tokio::spawn(async move {
-                        let (read, write) = socket.into_split();
-                        if let Err(error) = bridge(read, write, &mut sender, request, draining).await {
-                            diagnostics.report(
-                                Phase::Connect,
-                                &error,
-                                format_args!("MASQUE TCP connection failed: {error:#}"),
-                            );
-                        }
-                    });
-                }
-                _ = drain_started.recv() => break ProxyClosure::Draining,
-                closed = &mut driver => break ProxyClosure::Closed(match closed {
-                    Ok(error) => anyhow!("MASQUE HTTP/3 connection closed: {error}"),
-                    Err(error) => anyhow!("MASQUE HTTP/3 driver stopped: {error}"),
-                }),
-                closed = quic.closed() => break ProxyClosure::Closed(anyhow!(closed).context("MASQUE QUIC connection closed")),
-            }
-        };
-        drop(sender);
-        match failure {
-            ProxyClosure::Draining => {
-                diagnostics.report(
-                    Phase::Transport,
-                    &Code::Draining.into(),
-                    format_args!("MASQUE HTTP/3 proxy is draining; reconnecting"),
-                );
-                // A refused new CONNECT is not replayed. Accepted streams keep their old transport.
-                tokio::spawn(async move {
-                    tokio::select! {
-                        _ = &mut driver => {},
-                        _ = quic.closed() => driver.abort(),
-                    }
-                    drop(endpoint);
-                });
-            }
-            ProxyClosure::Closed(error) => {
-                driver.abort();
-                quic.close(/*error_code*/ 0_u8.into(), b"reconnecting");
-                drop(endpoint);
-                diagnostics.report(
-                    Phase::Transport,
-                    &Code::Closed.into(),
-                    format_args!("MASQUE proxy connection lost; reconnecting: {error:#}"),
-                );
-            }
-        }
-
-        let mut retry_delay = Duration::from_secs(1);
-        loop {
-            let result = {
-                let attempt = async {
-                    tokio::time::sleep(rand::random_range(retry_delay / 2..=retry_delay)).await;
-                    ProxyConnection::connect(&target, &config).await
-                };
-                tokio::pin!(attempt);
-                loop {
-                    tokio::select! {
-                        incoming = listener.accept() => {
-                            // Offline local connections fail promptly; their traffic is never queued or replayed.
-                            let (socket, _) = incoming?;
-                            drop(socket);
-                        }
-                        result = &mut attempt => break result,
-                    }
-                }
+                })
             };
-            match result {
-                Ok(reconnected) => {
-                    connected = reconnected;
-                    break;
-                }
-                Err(error) => {
-                    diagnostics.report(
-                        Phase::Transport,
-                        &error,
-                        format_args!("MASQUE proxy reconnect failed: {error:#}"),
-                    );
-                    retry_delay = (retry_delay * 2).min(Duration::from_secs(15));
-                }
+            if let Ok(Ok(connection)) = tokio::time::timeout(Duration::from_secs(5), attempt).await
+            {
+                return Ok(connection);
             }
         }
+        Err(anyhow!("HTTP/3 proxy connection failed"))
     }
-}
-
-async fn bridge(
-    local_read: impl AsyncRead + Unpin,
-    local_write: impl AsyncWrite + Unpin,
-    sender: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-    request: Request<()>,
-    draining: mpsc::Sender<()>,
-) -> Result<()> {
-    let mut stream = match sender.send_request(request).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            if matches!(error, h3::error::StreamError::RemoteClosing { .. }) {
-                let _ = draining.try_send(());
-            }
-            return Err(error).context("sending CONNECT");
-        }
-    };
-    check_h3_response(&mut stream).await?;
-    bridge_h3_stream(
-        local_read,
-        local_write,
-        stream,
-        /*exit_on_remote_eof*/ false,
-    )
-    .await
 }
 
 type H3Stream = h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>;
@@ -571,7 +194,7 @@ async fn check_h3_response(stream: &mut H3Stream) -> Result<()> {
         .context("receiving CONNECT response")?
         .status();
     if !status.is_success() {
-        return Err(Code::Rejected(status).into());
+        return Err(SetupError::Rejected(status).into());
     }
     Ok(())
 }
@@ -580,7 +203,6 @@ async fn bridge_h3_stream(
     mut local_read: impl AsyncRead + Unpin,
     mut local_write: impl AsyncWrite + Unpin,
     stream: H3Stream,
-    exit_on_remote_eof: bool,
 ) -> Result<()> {
     let (mut send, mut recv) = stream.split();
     let upload = async {
@@ -612,7 +234,7 @@ async fn bridge_h3_stream(
         result = &mut upload => { result?; download.await }
         result = &mut download => {
             result?;
-            if exit_on_remote_eof { Ok(()) } else { upload.await }
+            Ok(())
         }
     }
 }

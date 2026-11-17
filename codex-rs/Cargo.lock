@@ -5148,15 +5148,16 @@ dependencies = [
  "h3",
  "h3-quinn",
  "http 1.4.0",
+ "hyper-rustls",
+ "hyper-util",
  "pretty_assertions",
  "quinn",
- "rand 0.9.3",
  "rcgen",
  "rustls",
  "rustls-native-certs",
- "serde_json",
  "tokio",
  "tokio-rustls",
+ "tower-service",
  "url",
 ]
 
