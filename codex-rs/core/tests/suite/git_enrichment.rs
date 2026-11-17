@@ -166,11 +166,30 @@ async fn startup_prewarm_skips_git_enrichment_and_user_turn_observes_fresh_state
 }
 
 /// Repository credentials must never cross the outbound model-request boundary.
+#[test_case(false; "ordinary clone")]
+#[test_case(true; "partial clone")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_git_enrichment_redacts_remote_credentials() -> Result<()> {
+async fn user_turn_git_enrichment_redacts_remote_credentials(partial_clone: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (repo, head) = create_git_repo()?;
+    let (source, head) = create_git_repo()?;
+    let repo = if partial_clone {
+        run_git(source.path(), &["config", "uploadpack.allowFilter", "true"])?;
+        let clone = TempDir::new()?;
+        run_git(
+            clone.path(),
+            &[
+                "clone",
+                "--no-local",
+                "--filter=blob:none",
+                source.path().to_str().context("source repo path")?,
+                ".",
+            ],
+        )?;
+        clone
+    } else {
+        source
+    };
     run_git(
         repo.path(),
         &[

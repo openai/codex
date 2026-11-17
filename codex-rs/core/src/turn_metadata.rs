@@ -9,6 +9,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
+#[cfg(test)]
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -26,10 +28,12 @@ use crate::sandbox_tags::SandboxTags;
 use crate::sandbox_tags::record_policy_metadata;
 use crate::session::step_settings::ResolvedStepSettings;
 use codex_file_system::WindowsSandboxSelection;
+use codex_git_utils::GitHeadState;
+use codex_git_utils::GitWorktreeStatus;
 use codex_git_utils::SanitizedGitUrl;
-use codex_git_utils::get_git_remote_urls_assume_git_repo;
-use codex_git_utils::get_has_changes_in_repo;
-use codex_git_utils::get_head_commit_hash;
+use codex_git_utils::get_head_state;
+use codex_git_utils::get_worktree_status_in_repo;
+use codex_git_utils::observe_git_remote_urls;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -40,6 +44,8 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::turn_input::ResponsesApiClientMetadataUpdate;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_git_discovery::GitRootDiscovery;
+use futures::FutureExt;
+use futures::future::FusedFuture;
 
 // Memory requests await this optional metadata before sending their model request.
 const MEMORY_GIT_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -94,31 +100,6 @@ impl<'a> ExecutionMetadata<'a> {
             None => {
                 metadata.extra.remove(REASONING_EFFORT_KEY);
             }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct WorkspaceGitMetadata {
-    associated_remote_urls: Option<BTreeMap<String, SanitizedGitUrl>>,
-    latest_git_commit_hash: Option<String>,
-    has_changes: Option<bool>,
-}
-
-impl WorkspaceGitMetadata {
-    fn is_empty(&self) -> bool {
-        self.associated_remote_urls.is_none()
-            && self.latest_git_commit_hash.is_none()
-            && self.has_changes.is_none()
-    }
-}
-
-impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
-    fn from(value: WorkspaceGitMetadata) -> Self {
-        Self {
-            associated_remote_urls: value.associated_remote_urls,
-            latest_git_commit_hash: value.latest_git_commit_hash,
-            has_changes: value.has_changes,
         }
     }
 }
@@ -585,40 +566,108 @@ impl TurnMetadataState {
     }
 }
 
-async fn memory_workspaces(
-    cwd: &AbsolutePathBuf,
-    repo_root: impl Future<Output = Option<PathBuf>>,
-) -> BTreeMap<String, TurnMetadataWorkspace> {
-    tokio::time::timeout(MEMORY_GIT_METADATA_TIMEOUT, git_workspaces(cwd, repo_root))
-        .await
-        .unwrap_or_default()
-}
-
 async fn git_workspaces(
     cwd: &AbsolutePathBuf,
     repo_root: impl Future<Output = Option<PathBuf>>,
 ) -> BTreeMap<String, TurnMetadataWorkspace> {
-    let Some(repo_root) = repo_root.await else {
-        return BTreeMap::new();
-    };
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
-        get_head_commit_hash(cwd),
-        get_git_remote_urls_assume_git_repo(cwd),
-        get_has_changes_in_repo(cwd, &repo_root),
-    );
-    let workspace_git_metadata = WorkspaceGitMetadata {
-        associated_remote_urls,
-        latest_git_commit_hash: head_commit_hash.map(|sha| sha.0),
-        has_changes,
-    };
     let mut workspaces = BTreeMap::new();
-    if !workspace_git_metadata.is_empty() {
-        workspaces.insert(
-            repo_root.to_string_lossy().into_owned(),
-            workspace_git_metadata.into(),
-        );
-    }
+    collect_git_workspaces(cwd, repo_root, |observed| workspaces = observed).await;
     workspaces
+}
+
+async fn memory_workspaces(
+    cwd: &AbsolutePathBuf,
+    repo_root: impl Future<Output = Option<PathBuf>>,
+) -> BTreeMap<String, TurnMetadataWorkspace> {
+    let mut workspaces = BTreeMap::new();
+    let collect = collect_git_workspaces(cwd, repo_root, |observed| workspaces = observed);
+    let _ = tokio::time::timeout(MEMORY_GIT_METADATA_TIMEOUT, collect).await;
+    workspaces
+}
+
+async fn collect_git_workspaces(
+    cwd: &AbsolutePathBuf,
+    repo_root: impl Future<Output = Option<PathBuf>>,
+    mut publish: impl FnMut(BTreeMap<String, TurnMetadataWorkspace>),
+) {
+    let Some(repo_root) = repo_root.await else {
+        return;
+    };
+    collect_workspace_git_metadata(
+        get_head_state(cwd),
+        |updates| async move { observe_git_remote_urls(cwd, &updates).await },
+        get_worktree_status_in_repo(cwd, &repo_root),
+        |workspace| {
+            publish(BTreeMap::from([(
+                repo_root.to_string_lossy().into_owned(),
+                workspace,
+            )]));
+        },
+    )
+    .await;
+}
+
+async fn collect_workspace_git_metadata<R: Future<Output = ()>>(
+    head: impl Future<Output = GitHeadState>,
+    collect_remotes: impl FnOnce(watch::Sender<BTreeMap<String, SanitizedGitUrl>>) -> R,
+    status: impl Future<Output = Option<GitWorktreeStatus>>,
+    mut publish: impl FnMut(TurnMetadataWorkspace),
+) {
+    let (updates, mut remotes) = watch::channel(BTreeMap::new());
+    let observe = async {
+        let mut head = std::pin::pin!(head.fuse());
+        let mut status = std::pin::pin!(status.fuse());
+        let mut head_state = GitHeadState::Unavailable;
+        let mut observed_status = None;
+        let mut latest_git_commit_hash = None;
+        let mut has_changes = None;
+        let mut observed_remote_urls = false;
+        loop {
+            let mut changed = tokio::select! {
+                result = &mut head, if !head.is_terminated() => {
+                    head_state = result;
+                    if let GitHeadState::Commit(sha) = &head_state {
+                        latest_git_commit_hash = Some(sha.0.clone());
+                    }
+                    latest_git_commit_hash.is_some()
+                }
+                Ok(()) = remotes.changed() => {
+                    observed_remote_urls = true;
+                    true
+                }
+                result = &mut status, if !status.is_terminated() => {
+                    observed_status = result;
+                    false
+                }
+                else => break,
+            };
+            // A shared scan can be stale. Use its HEAD and status together when
+            // the independent lookup failed, but reject a conflicting known HEAD.
+            if head.is_terminated()
+                && let Some(observed) = observed_status.take()
+            {
+                let matches_head = match &head_state {
+                    GitHeadState::Commit(sha) => observed.head_commit_hash.as_ref() == Some(sha),
+                    GitHeadState::Missing => observed.head_commit_hash.is_none(),
+                    GitHeadState::Unavailable => true,
+                };
+                if matches_head {
+                    latest_git_commit_hash = observed.head_commit_hash.map(|sha| sha.0);
+                    has_changes = Some(observed.has_changes);
+                    changed = true;
+                }
+            }
+            if changed {
+                publish(TurnMetadataWorkspace {
+                    associated_remote_urls: observed_remote_urls
+                        .then(|| remotes.borrow_and_update().clone()),
+                    latest_git_commit_hash: latest_git_commit_hash.clone(),
+                    has_changes,
+                });
+            }
+        }
+    };
+    tokio::join!(collect_remotes(updates), observe);
 }
 
 #[cfg(test)]

@@ -284,6 +284,31 @@ pub struct CodexResponsesMetadata {
 }
 
 impl CodexResponsesMetadata {
+    /// Adds a Git-confirmed positive observation to an otherwise unknown Memory status.
+    /// A completed full scan wins, and an independently observed HEAD must match.
+    pub fn apply_memory_git_change_observation(
+        &mut self,
+        repo_root: &std::path::Path,
+        observed: codex_git_utils::GitWorktreeStatus,
+    ) {
+        if !matches!(self.request_kind, Some(CodexResponsesRequestKind::Memory))
+            || !observed.has_changes
+        {
+            return;
+        }
+        let Some(workspace) = self
+            .workspaces
+            .get_mut(repo_root.to_string_lossy().as_ref())
+        else {
+            return;
+        };
+        if workspace.has_changes.is_none()
+            && let Some(head) = observed.head_commit_hash
+            && workspace.latest_git_commit_hash.as_deref() == Some(head.0.as_str())
+        {
+            workspace.has_changes = Some(true);
+        }
+    }
     pub(crate) fn new(
         installation_id: String,
         session_id: String,

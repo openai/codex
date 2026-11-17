@@ -28,6 +28,34 @@ fn metadata_with_remote(url: &str) -> CodexResponsesMetadata {
 }
 
 #[test]
+fn memory_positive_status_requires_matching_head_and_unknown_full_status() {
+    let root = std::path::Path::new("/workspace/東京");
+    let mut metadata = metadata_with_remote("https://example.invalid/repo");
+    metadata.request_kind = Some(CodexResponsesRequestKind::Memory);
+    let observation = |head: &str| codex_git_utils::GitWorktreeStatus {
+        head_commit_hash: Some(codex_git_utils::GitSha::new(head)),
+        has_changes: true,
+    };
+    metadata.apply_memory_git_change_observation(root, observation("abc123"));
+    assert_eq!(
+        metadata.workspaces["/workspace/東京"].has_changes,
+        Some(false)
+    );
+    metadata
+        .workspaces
+        .get_mut("/workspace/東京")
+        .unwrap()
+        .has_changes = None;
+    metadata.apply_memory_git_change_observation(root, observation("other"));
+    assert_eq!(metadata.workspaces["/workspace/東京"].has_changes, None);
+    metadata.apply_memory_git_change_observation(root, observation("abc123"));
+    assert_eq!(
+        metadata.workspaces["/workspace/東京"].has_changes,
+        Some(true)
+    );
+}
+
+#[test]
 fn turn_metadata_keeps_the_exact_boundary_and_omits_an_overlong_remote() {
     let prefix = "https://example.invalid/";
     let initial_len = metadata_with_remote(prefix)

@@ -262,6 +262,11 @@ mod job {
         rollout_git_branch: Option<&str>,
         stage_one_context: &StageOneRequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
+        // Overlap the positive Git observation with reading and preparing the rollout.
+        // JoinSet aborts the probe if preparation fails or this job is cancelled.
+        let mut git_probe = tokio::task::JoinSet::new();
+        let cwd = config.cwd.clone();
+        git_probe.spawn(async move { codex_git_utils::probe_worktree_changes(&cwd).await });
         let rollout_items = crate::rollout_input::read_recent_rollout_items(rollout_path).await?;
         let rollout_contents = match config.memories.version {
             MemoryVersion::V1 => serialize_filtered_rollout_response_items(&rollout_items)?,
@@ -311,7 +316,7 @@ mod job {
         prompt.output_schema_strict = true;
 
         let (result, token_usage) = context
-            .stream_stage_one_prompt(config, prompt, stage_one_context)
+            .stream_stage_one_prompt(config, prompt, stage_one_context, git_probe)
             .await?;
 
         let output = StageOneOutput::parse(&result, config.memories.version)?;

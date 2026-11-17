@@ -5,6 +5,7 @@ pub use remotes::get_git_remote_urls_assume_git_repo;
 pub use remotes::observe_git_remote_urls;
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -129,18 +130,36 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
 
 /// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
 pub async fn get_head_commit_hash(cwd: &Path) -> Option<GitSha> {
-    let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
-    if !output.status.success() {
-        return None;
+    match get_head_state(cwd).await {
+        GitHeadState::Commit(hash) => Some(hash),
+        GitHeadState::Missing | GitHeadState::Unavailable => None,
     }
+}
 
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let hash = stdout.trim();
-    if hash.is_empty() {
-        None
-    } else {
-        Some(GitSha::new(hash))
+/// Distinguishes a missing HEAD reference from an unavailable Git lookup.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GitHeadState {
+    Commit(GitSha),
+    Missing,
+    Unavailable,
+}
+
+pub async fn get_head_state(cwd: &Path) -> GitHeadState {
+    let Some(output) =
+        run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", "HEAD"], cwd).await
+    else {
+        return GitHeadState::Unavailable;
+    };
+    if output.status.code() == Some(1) {
+        return GitHeadState::Missing;
     }
+    if output.status.success()
+        && let Ok(stdout) = str::from_utf8(&output.stdout)
+        && !stdout.trim().is_empty()
+    {
+        return GitHeadState::Commit(GitSha::new(stdout.trim()));
+    }
+    GitHeadState::Unavailable
 }
 
 pub fn canonicalize_git_remote_url(url: &str) -> Option<String> {
@@ -363,7 +382,7 @@ pub(crate) async fn detect_local_fsmonitor_override(
 
 pub(crate) async fn run_git_command_with_timeout_from(
     git: &Path,
-    args: &[&str],
+    args: &[impl AsRef<OsStr>],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
@@ -373,7 +392,7 @@ pub(crate) async fn run_git_command_with_timeout_from(
 
 pub(crate) fn local_git_command(
     git: &Path,
-    args: &[&str],
+    args: &[impl AsRef<OsStr>],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Command {
