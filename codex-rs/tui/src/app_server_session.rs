@@ -611,6 +611,16 @@ pub(crate) enum TurnPermissionsOverride {
 )]
 pub(crate) struct UnsupportedLegacyPermissionProfile;
 
+/// The environment choice for a new Cloud thread.
+pub(crate) enum CloudThreadStart<'a> {
+    Project(Option<&'a std::path::Path>),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "saved starts are wired by the Cloud picker")
+    )]
+    Saved(String),
+}
+
 impl AppServerSession {
     /// Platform of the app-server process, not necessarily its executor.
     pub(crate) fn app_server_platform_family(&self) -> Option<&str> {
@@ -1146,6 +1156,26 @@ impl AppServerSession {
         selected_profile: Option<&PermissionProfileSelection>,
         host_project_cwd: Option<&std::path::Path>,
     ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_environment(
+            local_settings,
+            config,
+            session_start_source,
+            remote_cwd_override,
+            selected_profile,
+            CloudThreadStart::Project(host_project_cwd),
+        )
+        .await
+    }
+
+    pub(crate) async fn start_thread_with_environment(
+        &mut self,
+        local_settings: &LocalSettings,
+        config: &Config,
+        session_start_source: Option<ThreadStartSource>,
+        remote_cwd_override: Option<&std::path::Path>,
+        selected_profile: Option<&PermissionProfileSelection>,
+        cloud_start: CloudThreadStart<'_>,
+    ) -> Result<AppServerStartedThread> {
         if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Server
             && selected_profile.is_some()
         {
@@ -1187,17 +1217,21 @@ impl AppServerSession {
             self.thread_tool_transport().configure(&mut params);
         }
         let request_handle = self.request_handle();
-        let project = if self.thread_params_mode == ThreadParamsMode::Cloud {
-            match host_project_cwd {
-                Some(cwd) => cloud_project::from_local_cwd(cwd).await,
-                None => None,
+        use codex_app_server_client::EnvironmentSelection;
+        let environment = if self.thread_params_mode == ThreadParamsMode::Cloud {
+            match cloud_start {
+                CloudThreadStart::Saved(id) => Some(EnvironmentSelection::Saved(id)),
+                CloudThreadStart::Project(Some(cwd)) => cloud_project::from_local_cwd(cwd)
+                    .await
+                    .map(EnvironmentSelection::Project),
+                CloudThreadStart::Project(None) => None,
             }
         } else {
             None
         };
-        let started = match project {
-            Some(project) => request_handle
-                .start_cloud_project_thread(request_id, params, project)
+        let started = match environment {
+            Some(environment) => request_handle
+                .start_cloud_thread_with_environment(request_id, params, environment)
                 .await
                 .map(|response| (response, ThreadHistorySupport::Paginated, false)),
             None => {

@@ -312,8 +312,9 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
 const PREWARM_CODEX_PLUGINS: &[u8] = b"\xe2\x01\x07\x0a\x05codex";
 
 #[tokio::test]
-async fn prewarm_defers_readiness_only_for_selected_projects() {
+async fn prewarm_defers_readiness_for_explicit_environments() {
     let mut fixture = fixture_responses(vec![
+        response(vec![frame(&[])], tonic::Status::ok("")),
         response(vec![frame(&[])], tonic::Status::ok("")),
         response(vec![frame(&[])], tonic::Status::ok("")),
     ])
@@ -339,14 +340,14 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
             .prewarm_thread(
                 /*model*/ None,
                 /*model_provider*/ None,
-                Some(ProjectEnvironment {
+                Some(EnvironmentSelection::Project(ProjectEnvironment {
                     name: "App".to_owned(),
                     cwd: Some("/workspace/acme/app".to_owned()),
                     origin_urls: vec![
                         "git@github.com:acme/app.git".to_owned(),
                         "https://github.com/acme/lib.git".to_owned(),
                     ],
-                }),
+                })),
             )
             .await,
         Err(Error::InvalidResponse)
@@ -360,6 +361,25 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
         b"\x0a\x21\x2a\x1f",
         b"https://github.com/acme/lib.git",
         b"\x12\x03App",
+        PREWARM_CODEX_PLUGINS,
+        b"\xe8\x01\x01",
+    ]
+    .concat();
+    assert_request(&mut fixture, "Prewarm", &expected).await;
+
+    assert!(matches!(
+        fixture
+            .client
+            .prewarm_thread(
+                /*model*/ None,
+                /*model_provider*/ None,
+                Some(EnvironmentSelection::Saved("ws~asenvcfg_saved".to_owned())),
+            )
+            .await,
+        Err(Error::InvalidResponse)
+    ));
+    let expected = [
+        b"\x52\x17\x0a\x15\x0a\x13\x0a\x11ws~asenvcfg_saved".as_slice(),
         PREWARM_CODEX_PLUGINS,
         b"\xe8\x01\x01",
     ]

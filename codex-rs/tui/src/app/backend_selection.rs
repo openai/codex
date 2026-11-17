@@ -110,14 +110,18 @@ impl App {
             .filter(|owner| *owner != backends.displayed_owner())
     }
 
-    pub(super) fn can_cycle_conversation_backend(&self) -> bool {
-        self.voice_owner_thread_id().is_none()
-            && self.chat_widget.can_choose_new_backend()
-            && self
-                .current_displayed_thread_id()
-                .and_then(|id| self.thread_event_channels.get(&id))
-                .and_then(|channel| channel.store.try_lock().ok())
-                .is_some_and(|store| store.session.is_some() && store.latest_turn_id.is_none())
+    pub(super) fn backend_draft(&self) -> Option<ThreadId> {
+        if self.voice_owner_thread_id().is_some() || !self.chat_widget.can_choose_new_backend() {
+            return None;
+        }
+        let thread_id = self.current_displayed_thread_id()?;
+        let store = self
+            .thread_event_channels
+            .get(&thread_id)?
+            .store
+            .try_lock()
+            .ok()?;
+        (store.session.is_some() && store.latest_turn_id.is_none()).then_some(thread_id)
     }
 
     pub(super) async fn start_new_session_on_other_backend(

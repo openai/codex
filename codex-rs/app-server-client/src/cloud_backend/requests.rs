@@ -78,7 +78,7 @@ impl Requests {
         &mut self,
         request: protocol::ClientRequest,
         mode: cloud::SubmissionMode,
-        project: Option<cloud::ProjectEnvironment>,
+        environment: Option<cloud::EnvironmentSelection>,
         output: &mpsc::UnboundedSender<crate::AppServerEvent>,
     ) -> Result<Response> {
         use protocol::ClientRequest as Request;
@@ -130,7 +130,10 @@ impl Requests {
                         "Cloud conversations start with server defaults. Custom settings are not supported yet."
                     );
                 }
-                let settings = self.client.prewarm_thread(model, provider, project).await?;
+                let settings = self
+                    .client
+                    .prewarm_thread(model, provider, environment)
+                    .await?;
                 return attach_response(settings);
             }
             Request::ThreadResume { params, .. } => {

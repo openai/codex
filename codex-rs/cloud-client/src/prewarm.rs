@@ -16,6 +16,13 @@ pub struct ProjectEnvironment {
     pub cwd: Option<String>,
 }
 
+/// An explicit saved environment or the default environment with a project checkout.
+#[derive(Clone, Debug)]
+pub enum EnvironmentSelection {
+    Saved(String),
+    Project(ProjectEnvironment),
+}
+
 pub(super) const DEFAULT_ENVIRONMENT_CONFIG_ID: &str = "asenvcfg_base";
 
 impl std::fmt::Debug for ProjectEnvironment {
@@ -35,24 +42,28 @@ impl Client {
         model: Option<String>,
         model_provider: Option<String>,
     ) -> Result<crate::ThreadActivation, Error> {
-        self.prewarm_thread(model, model_provider, /*project*/ None)
+        self.prewarm_thread(model, model_provider, /*environment*/ None)
             .await
     }
 
-    /// Prewarm a coding thread, deferring executor readiness for a selected project checkout.
+    /// Prewarm a coding thread, deferring executor readiness for an explicit environment.
     pub async fn prewarm_thread(
         &self,
         model: Option<String>,
         model_provider: Option<String>,
-        project: Option<ProjectEnvironment>,
+        environment: Option<EnvironmentSelection>,
     ) -> Result<crate::ThreadActivation, Error> {
-        let deferred_environment = project.is_some().then_some(true);
-        let managed = match project {
-            Some(ProjectEnvironment {
+        let deferred_environment = environment.is_some().then_some(true);
+        let managed = match environment {
+            Some(EnvironmentSelection::Saved(id)) => wire::ManagedEnvironment {
+                environment_config_id: Some(id),
+                ..Default::default()
+            },
+            Some(EnvironmentSelection::Project(ProjectEnvironment {
                 name,
                 origin_urls,
                 cwd,
-            }) => wire::ManagedEnvironment {
+            })) => wire::ManagedEnvironment {
                 environment_config_id: Some(DEFAULT_ENVIRONMENT_CONFIG_ID.to_owned()),
                 cwd,
                 overrides: Some(wire::EnvironmentOverrides {

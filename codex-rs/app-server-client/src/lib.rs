@@ -22,7 +22,9 @@
 
 mod cloud;
 pub mod cloud_backend;
+pub use codex_cloud_client::EnvironmentSelection;
 pub use codex_cloud_client::ProjectEnvironment;
+pub use codex_cloud_client::SavedEnvironment;
 mod path;
 mod remote;
 mod remote_addr;
@@ -725,22 +727,22 @@ impl InProcessAppServerRequestHandle {
 }
 
 impl AppServerRequestHandle {
-    /// Starts a native cloud thread with host project metadata without adding wire fields.
-    pub async fn start_cloud_project_thread(
+    /// Starts a native Cloud thread with a saved config or a default project checkout.
+    pub async fn start_cloud_thread_with_environment(
         &self,
         request_id: RequestId,
         params: codex_app_server_protocol::ThreadStartParams,
-        project: codex_cloud_client::ProjectEnvironment,
+        environment: codex_cloud_client::EnvironmentSelection,
     ) -> Result<codex_app_server_protocol::ThreadStartResponse, TypedRequestError> {
         let response = match self {
             Self::Cloud(handle) => {
                 handle
-                    .start_project_thread(request_id, params, project)
+                    .start_thread_with_environment(request_id, params, environment)
                     .await
             }
             Self::InProcess(_) | Self::Remote(_) => Err(IoError::new(
                 std::io::ErrorKind::Unsupported,
-                "Project checkout requires the native cloud transport.",
+                "Selecting an environment requires the native Cloud transport.",
             )),
         };
         decode_typed_response("thread/start", response)

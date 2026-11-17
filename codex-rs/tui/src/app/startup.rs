@@ -1361,11 +1361,11 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 backends.replay_ready_side_startup(&app);
                 let multi_backend = app.config.features.enabled(Feature::TuiMultiBackend);
-                let next_backend = if multi_backend && app.can_cycle_conversation_backend() {
-                    backends.next_listening_backend(displayed_owner)
-                } else {
-                    None
-                };
+                let draft = multi_backend.then(|| app.backend_draft()).flatten();
+                let next_backend = draft
+                    .is_some()
+                    .then(|| backends.next_listening_backend(displayed_owner))
+                    .flatten();
                 let current_label =
                     next_backend.and_then(|_| backends.displayed_name(&app.app_server_target));
                 app.chat_widget.set_new_backend_control(current_label);

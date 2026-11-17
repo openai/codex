@@ -35,11 +35,11 @@ pub enum CloudOperation {
     },
     /// Sent on the scoped channel after the caller has prepared the replacement view.
     CommitPreparedResume,
-    /// Host project metadata stays on the private transport, outside the app-server wire.
-    StartProjectThread {
+    /// Environment selection stays on the private transport, outside the app-server wire.
+    StartThreadWithEnvironment {
         request_id: RequestId,
         params: Box<codex_app_server_protocol::ThreadStartParams>,
-        project: codex_cloud_client::ProjectEnvironment,
+        environment: codex_cloud_client::EnvironmentSelection,
     },
     SubmitUserMessage(Box<TurnStartParams>),
     /// Apply the result of a name write that already succeeded outside the command queue.
@@ -339,16 +339,31 @@ impl CloudRequestHandle {
         })
     }
 
-    pub(crate) async fn start_project_thread(
+    /// Discover saved environments using this Cloud connection's authenticated account.
+    pub async fn list_saved_environments(
+        &self,
+    ) -> Result<Vec<codex_cloud_client::SavedEnvironment>, codex_cloud_client::Error> {
+        let catalog = self
+            .native
+            .as_ref()
+            .ok_or(codex_cloud_client::Error::InvalidCredentials)?;
+        let environments = catalog.list_saved_environments().await?;
+        if !catalog.model_catalog_is_current() {
+            return Err(codex_cloud_client::Error::InvalidCredentials);
+        }
+        Ok(environments)
+    }
+
+    pub(crate) async fn start_thread_with_environment(
         &self,
         request_id: RequestId,
         params: codex_app_server_protocol::ThreadStartParams,
-        project: codex_cloud_client::ProjectEnvironment,
+        environment: codex_cloud_client::EnvironmentSelection,
     ) -> io::Result<RequestResult> {
-        self.send(CloudOperation::StartProjectThread {
+        self.send(CloudOperation::StartThreadWithEnvironment {
             request_id,
             params: Box::new(params),
-            project,
+            environment,
         })
         .await
     }

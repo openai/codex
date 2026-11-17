@@ -362,7 +362,7 @@ async fn run_worker_with_prepared(
                 protocol::ClientRequest::ThreadResume { .. } => (false, true),
                 _ => (false, false),
             },
-            CloudOperation::StartProjectThread { .. } => (true, true),
+            CloudOperation::StartThreadWithEnvironment { .. } => (true, true),
             CloudOperation::PrepareThreadResume { .. } if command.response.is_closed() => continue,
             CloudOperation::PrepareThreadResume { .. } => (false, true),
             _ => (false, false),
@@ -419,17 +419,17 @@ async fn run_worker_with_prepared(
             CloudOperation::CommitPreparedResume => Err(eyre!(
                 "Cloud resume commit requires its scoped history handle."
             )),
-            CloudOperation::StartProjectThread {
+            CloudOperation::StartThreadWithEnvironment {
                 request_id,
                 params,
-                project,
+                environment,
             } => Ok((
                 protocol::ClientRequest::ThreadStart {
                     request_id,
                     params: *params,
                 },
                 cloud::SubmissionMode::StartIfIdle,
-                Some(project),
+                Some(environment),
             )),
             CloudOperation::SubmitUserMessage(params) => Ok((
                 protocol::ClientRequest::TurnStart {
@@ -448,7 +448,7 @@ async fn run_worker_with_prepared(
             )),
         };
         let result = match request {
-            Ok((request, mode, project)) => {
+            Ok((request, mode, environment)) => {
                 let unloads = prepared.as_ref().is_some_and(|candidate| {
                     let id = match &request {
                         protocol::ClientRequest::ThreadArchive { params, .. } => &params.thread_id,
@@ -479,7 +479,7 @@ async fn run_worker_with_prepared(
                         }
                         continue;
                     }
-                    result = handle_request(request, mode, project, requests, replies, output) => result,
+                    result = handle_request(request, mode, environment, requests, replies, output) => result,
                 };
                 if unloads
                     && result.is_ok()
@@ -556,7 +556,7 @@ async fn prepare_thread_resume(
         _ = ready.closed() => return None,
         prepared = async {
             let response = replies.while_listening(
-                requests.handle(request, cloud::SubmissionMode::StartIfIdle, /*project*/ None, output),
+                requests.handle(request, cloud::SubmissionMode::StartIfIdle, /*environment*/ None, output),
                 output,
             ).await?;
             let requests::Response::Attach(settings) = response else {
@@ -655,7 +655,7 @@ async fn advance_prepared_resume(
                     _ = response.closed() => None,
                     _ = output.closed() => None,
                     page = replies.while_listening(
-                        requests.handle(*request, cloud::SubmissionMode::StartIfIdle, /*project*/ None, &warning_output),
+                        requests.handle(*request, cloud::SubmissionMode::StartIfIdle, /*environment*/ None, &warning_output),
                         output,
                     ) => Some(page),
                 };
@@ -688,7 +688,7 @@ async fn advance_prepared_resume(
 async fn handle_request(
     request: protocol::ClientRequest,
     mode: cloud::SubmissionMode,
-    project: Option<cloud::ProjectEnvironment>,
+    environment: Option<cloud::EnvironmentSelection>,
     requests: &mut requests::Requests,
     replies: &mut Replies,
     output: &mpsc::UnboundedSender<AppServerEvent>,
@@ -731,7 +731,7 @@ async fn handle_request(
         _ => false,
     };
     let response = {
-        let handling = requests.handle(request, mode, project, output);
+        let handling = requests.handle(request, mode, environment, output);
         tokio::pin!(handling);
         let immediate = if selected_mutation && let Some(recovery) = &mut replies.idle {
             // Local admission validation finishes before the RPC yields. Poll without

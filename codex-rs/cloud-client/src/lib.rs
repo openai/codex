@@ -59,6 +59,7 @@ pub use items::CommandSummary;
 pub use items::ItemLifecycle;
 pub use items::ItemStatus;
 pub use items::ItemSummary;
+pub use prewarm::EnvironmentSelection;
 pub use prewarm::ProjectEnvironment;
 pub use transcript::FileUpdate;
 pub use transcript::ItemDelta;

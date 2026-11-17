@@ -1596,7 +1596,7 @@ async fn backend_cycling_waits_for_foreground_and_parked_voice_calls() -> Result
             Vec::new(),
         )
         .await?;
-        assert!(app.can_cycle_conversation_backend());
+        assert!(app.backend_draft().is_some());
         crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, thread_id);
         if parked {
             let (visible, _, _, _) =
@@ -1605,7 +1605,7 @@ async fn backend_cycling_waits_for_foreground_and_parked_voice_calls() -> Result
         }
         app.chat_widget
             .restore_user_message_to_composer("keep draft".into());
-        assert!(!app.can_cycle_conversation_backend());
+        assert!(app.backend_draft().is_none());
         let mut backends = BackendSessions::from_initial(source, vec![destination]);
         let mut tui = crate::tui::test_support::make_test_tui()?;
         let error = app

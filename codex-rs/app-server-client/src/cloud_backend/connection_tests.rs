@@ -74,7 +74,7 @@ async fn rejected_rename_preserves_loaded_cloud_thread_name() -> Result<()> {
             },
         },
         cloud::SubmissionMode::StartIfIdle,
-        /*project*/ None,
+        /*environment*/ None,
         &mut requests,
         &mut replies,
         &output,
@@ -154,7 +154,7 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
                     },
                 },
                 cloud::SubmissionMode::StartIfIdle,
-                /*project*/ None,
+                /*environment*/ None,
                 &mut requests,
                 &mut replies,
                 &output,
@@ -168,7 +168,7 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
                 params: Default::default(),
             },
             cloud::SubmissionMode::StartIfIdle,
-            /*project*/ None,
+            /*environment*/ None,
             &mut requests,
             &mut replies,
             &output,
@@ -202,7 +202,7 @@ async fn failed_archive_loaded_list_tracks_attachment_not_cached_metadata() -> R
                 params: Default::default(),
             },
             cloud::SubmissionMode::StartIfIdle,
-            /*project*/ None,
+            /*environment*/ None,
             &mut requests,
             &mut replies,
             &output,
@@ -266,14 +266,14 @@ async fn dropping_an_in_flight_start_unblocks_the_native_worker() -> Result<()> 
             request_id: protocol::RequestId::Integer(1),
             params: Default::default(),
         })),
-        CloudOperation::StartProjectThread {
+        CloudOperation::StartThreadWithEnvironment {
             request_id: protocol::RequestId::Integer(1),
             params: Box::default(),
-            project: cloud::ProjectEnvironment {
+            environment: cloud::EnvironmentSelection::Project(cloud::ProjectEnvironment {
                 name: "project".into(),
                 origin_urls: vec!["https://github.com/example/project.git".into()],
                 cwd: None,
-            },
+            }),
         },
     ] {
         assert_abandoned_request_unblocks_worker("Prewarm", operation).await?;
@@ -337,13 +337,13 @@ async fn assert_abandoned_request_unblocks_worker(
     let mut pending = Box::pin(async {
         match operation {
             CloudOperation::Request(request) => client.request(*request).await,
-            CloudOperation::StartProjectThread {
+            CloudOperation::StartThreadWithEnvironment {
                 request_id,
                 params,
-                project,
+                environment,
             } => {
                 handle
-                    .start_project_thread(request_id, *params, project)
+                    .start_thread_with_environment(request_id, *params, environment)
                     .await
             }
             _ => unreachable!("fixture supports Cloud lists and starts"),
