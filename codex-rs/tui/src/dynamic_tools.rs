@@ -81,6 +81,7 @@ const DEFAULT_LIST_LIMIT: u32 = 10;
 const MAX_LIST_LIMIT: u32 = 50;
 const DEFAULT_READ_TURN_LIMIT: u32 = 1;
 const MAX_READ_TURN_LIMIT: u32 = 10;
+const READ_ITEMS_PER_TURN: u32 = 20;
 const DEFAULT_OUTPUT_CHARS: usize = 2_000;
 const MAX_OUTPUT_CHARS: usize = 20_000;
 const MAX_ERROR_CHARS: usize = 248;
@@ -404,6 +405,7 @@ async fn execute_inner(
                 ));
             }
             let thread = read_thread(&handle, &arguments.thread_id).await?;
+            let paginated = thread.history_mode == ThreadHistoryMode::Paginated;
             let page: Result<ThreadTurnsListResponse, TypedRequestError> = handle
                 .request_typed(ClientRequest::ThreadTurnsList {
                     request_id: RequestId::String(format!("tui-dynamic-{}", Uuid::new_v4())),
@@ -412,11 +414,46 @@ async fn execute_inner(
                         cursor: arguments.cursor.clone(),
                         limit: Some(turn_limit),
                         sort_direction: Some(SortDirection::Desc),
-                        items_view: Some(TurnItemsView::Full),
+                        items_view: Some(if paginated {
+                            TurnItemsView::NotLoaded
+                        } else {
+                            TurnItemsView::Full
+                        }),
                     },
                 })
                 .await;
             let (turns, next_cursor) = match page {
+                Ok(page) if paginated => {
+                    let turns =
+                        futures::future::try_join_all(page.data.into_iter().map(|mut turn| {
+                            let handle = &handle;
+                            let thread_id = &arguments.thread_id;
+                            async move {
+                                let items: ThreadItemsListResponse =
+                                    request(handle, |request_id| ClientRequest::ThreadItemsList {
+                                        request_id,
+                                        params: ThreadItemsListParams {
+                                            thread_id: thread_id.clone(),
+                                            turn_id: Some(turn.id.clone()),
+                                            cursor: None,
+                                            limit: Some(READ_ITEMS_PER_TURN),
+                                            sort_direction: Some(SortDirection::Desc),
+                                            defer_output: None,
+                                        },
+                                    })
+                                    .await?;
+                                turn.items = items
+                                    .data
+                                    .into_iter()
+                                    .rev()
+                                    .map(|entry| entry.item)
+                                    .collect();
+                                Ok::<_, String>(turn)
+                            }
+                        }))
+                        .await?;
+                    (turns, page.next_cursor)
+                }
                 Ok(page) => (page.data, page.next_cursor),
                 Err(TypedRequestError::Server { source, .. })
                     if crate::app_server_session::is_history_pagination_unsupported(&source) =>
@@ -1599,7 +1636,7 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
                 "type": "contextCompaction", "id": id
             }),
         })
-        .take(20)
+        .take(READ_ITEMS_PER_TURN as usize)
         .collect();
     items.reverse();
     json!({

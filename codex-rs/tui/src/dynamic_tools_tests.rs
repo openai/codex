@@ -14,6 +14,7 @@ use tempfile::TempDir;
 
 async fn test_server(
     tool_arguments: Value,
+    older_messages: usize,
 ) -> color_eyre::Result<(TempDir, AppServerSession, String, String)> {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()
@@ -34,12 +35,26 @@ async fn test_server(
         .lines()
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    for payload in [
+    let start = json!({
+        "type": "task_started",
+        "turn_id": "persisted-turn",
+        "model_context_window": null
+    });
+    let messages = (0..older_messages).map(|i| {
         json!({
-            "type": "task_started",
+            "type": "item_completed",
+            "thread_id": target,
             "turn_id": "persisted-turn",
-            "model_context_window": null
-        }),
+            "item": {
+                "type": "AgentMessage",
+                "id": format!("older-{i}"),
+                "phase": "commentary",
+                "content": [{"type":"Text","text":"Working"}]
+            },
+            "completed_at_ms": 0
+        })
+    });
+    for payload in std::iter::once(start).chain(messages).chain([
         json!({
             "type": "item_completed",
             "thread_id": target,
@@ -72,7 +87,7 @@ async fn test_server(
             "turn_id": "persisted-turn",
             "last_agent_message": "Persisted assistant output"
         }),
-    ] {
+    ]) {
         serde_json::from_value::<codex_protocol::protocol::EventMsg>(payload.clone())?;
         records.push(json!({
             "timestamp": "2026-01-02T00:00:00Z",
@@ -144,9 +159,43 @@ fn response_json(response: DynamicToolCallResponse) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_thread_returns_the_newest_twenty_items_in_order() -> color_eyre::Result<()> {
+    let (_home, server, source, target) = test_server(json!({}), /*older_messages*/ 25).await?;
+    let mut expected = (7..25).map(|i| format!("older-{i}")).collect::<Vec<_>>();
+    expected.extend([
+        "persisted-message".to_string(),
+        "persisted-tool".to_string(),
+    ]);
+    for include_outputs in [false, true] {
+        let read = response_json(
+            call_tool(
+                &server,
+                &source,
+                "read_thread",
+                json!({
+                    "threadId": target, "includeOutputs": include_outputs
+                }),
+            )
+            .await,
+        );
+        let ids = read["turns"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_read_preserves_answer_in_next_model_request() -> color_eyre::Result<()> {
-    let (_home, app_server, source, target) =
-        test_server(json!({"padding": "supporting tool arguments".repeat(4_000)})).await?;
+    let (_home, app_server, source, target) = test_server(
+        json!({"padding": "supporting tool arguments".repeat(4_000)}),
+        /*older_messages*/ 0,
+    )
+    .await?;
     let mock_server = responses::start_mock_server().await;
     let call_id = "read-task";
     let mock = responses::mount_sse_sequence(
@@ -445,7 +494,7 @@ fn file_backed_image_generation_is_retained_as_a_reference() -> color_eyre::Resu
 
 #[tokio::test]
 async fn task_management_tools_use_existing_app_server_operations() -> color_eyre::Result<()> {
-    let (codex_home, server, source, target) = test_server(json!({})).await?;
+    let (codex_home, server, source, target) = test_server(json!({}), /*older_messages*/ 0).await?;
 
     let listed = response_json(call_tool(&server, &source, "list_threads", json!({})).await);
     assert!(
@@ -618,7 +667,8 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
 
 #[tokio::test]
 async fn wait_threads_preserves_snapshots_and_rejects_self_wait() -> color_eyre::Result<()> {
-    let (_codex_home, server, source, target) = test_server(json!({})).await?;
+    let (_codex_home, server, source, target) =
+        test_server(json!({}), /*older_messages*/ 0).await?;
 
     let snapshot = response_json(
         call_tool(
@@ -710,7 +760,8 @@ async fn wait_threads_preserves_snapshots_and_rejects_self_wait() -> color_eyre:
 
 #[tokio::test]
 async fn task_creation_and_followup_start_background_turns() -> color_eyre::Result<()> {
-    let (codex_home, mut server, source, target) = test_server(json!({})).await?;
+    let (codex_home, mut server, source, target) =
+        test_server(json!({}), /*older_messages*/ 0).await?;
 
     for (tool, arguments) in [
         (
