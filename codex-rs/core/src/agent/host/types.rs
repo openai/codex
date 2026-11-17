@@ -32,7 +32,7 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug)]
 pub struct RestrictRootCapabilities;
 
-/// The root's session ID, supplied by a trusted host when starting a fresh child.
+/// The root's session ID, supplied by a trusted host when starting a new or forked child.
 ///
 /// Insert this into the thread's startup [`codex_extension_api::ExtensionDataInit`].
 /// The child keeps its own distinct thread ID. Resumed threads take their session
