@@ -328,13 +328,27 @@ impl ChatWidget {
     }
 
     pub(super) fn open_status_line_setup(&mut self) {
+        use crate::bottom_pane::StatuslineProviderActions;
+
         let configured_status_line_items = self.configured_status_line_items();
+        let providers = if !self
+            .config
+            .features
+            .enabled(codex_features::Feature::TuiExtensionsStatusLine)
+        {
+            StatuslineProviderActions::Hidden
+        } else if self.thread_params_mode == crate::ThreadParamsMode::Cloud {
+            StatuslineProviderActions::Choose
+        } else {
+            StatuslineProviderActions::CreateAndChoose {
+                backend: self.model_catalog.backend,
+                thread_id: self.thread_id(),
+            }
+        };
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
             self.local_settings.tui.status_line_use_colors,
-            self.config
-                .features
-                .enabled(codex_features::Feature::TuiExtensionsStatusLine),
+            providers,
             self.status_surface_preview_data(),
             self.app_event_tx.clone(),
             self.bottom_pane.list_keymap(),

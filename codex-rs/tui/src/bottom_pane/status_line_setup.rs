@@ -31,6 +31,7 @@ use strum_macros::EnumString;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::backend_id::BackendId;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
@@ -281,6 +282,15 @@ impl StatusLineItem {
     }
 }
 
+pub(crate) enum StatuslineProviderActions {
+    Hidden,
+    Choose,
+    CreateAndChoose {
+        backend: Option<BackendId>,
+        thread_id: Option<codex_protocol::ThreadId>,
+    },
+}
+
 /// Interactive view for configuring which items appear in the status line.
 ///
 /// Wraps a [`MultiSelectPicker`] with status-line-specific behavior:
@@ -311,19 +321,36 @@ impl StatusLineSetupView {
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
         use_theme_colors: bool,
-        provider_actions: bool,
+        providers: StatuslineProviderActions,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
         list_keymap: ListKeymap,
     ) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
-        if provider_actions {
+        if !matches!(providers, StatuslineProviderActions::Hidden) {
             items.push(MultiSelectItem {
-                name: "Choose a statusline plugin".into(),
+                name: "Choose a status line provider".into(),
+                orderable: false,
+                section_break_after: matches!(providers, StatuslineProviderActions::Choose),
+                on_activate: Some(Box::new(|tx, key| {
+                    tx.send(AppEvent::OpenStatuslinePicker(key))
+                })),
+                ..Default::default()
+            });
+        }
+        if let StatuslineProviderActions::CreateAndChoose { backend, thread_id } = providers {
+            items.push(MultiSelectItem {
+                name: "Create a custom status line".into(),
                 orderable: false,
                 section_break_after: true,
-                on_activate: Some(|tx, key| tx.send(AppEvent::OpenStatuslinePicker(key))),
+                on_activate: Some(Box::new(move |tx, key| {
+                    tx.send(AppEvent::CreateCustomStatusline {
+                        backend,
+                        thread_id,
+                        key,
+                    })
+                })),
                 ..Default::default()
             });
         }
@@ -754,7 +781,7 @@ mod tests {
             let mut view = StatusLineSetupView::new(
                 Some(&[StatusLineItem::PullRequestNumber.to_string()]),
                 use_theme_colors,
-                /*provider_actions*/ false,
+                StatuslineProviderActions::Hidden,
                 preview,
                 AppEventSender::new(tx),
                 crate::keymap::RuntimeKeymap::defaults().list,
@@ -779,7 +806,7 @@ mod tests {
                 StatusLineItem::GitBranch.to_string(),
             ]),
             /*use_theme_colors*/ true,
-            /*provider_actions*/ false,
+            StatuslineProviderActions::Hidden,
             StatusSurfacePreviewData::from_iter([
                 (
                     StatusLineItem::ModelName.preview_item(),
@@ -814,7 +841,7 @@ mod tests {
                 StatusLineItem::EstimatedThreadCost.to_string(),
             ]),
             /*use_theme_colors*/ true,
-            /*provider_actions*/ false,
+            StatuslineProviderActions::Hidden,
             StatusSurfacePreviewData::from_iter([
                 (
                     StatusLineItem::ThreadCredits.preview_item(),
@@ -841,7 +868,7 @@ mod tests {
                 StatusLineItem::CurrentDir.to_string(),
             ]),
             /*use_theme_colors*/ true,
-            /*provider_actions*/ false,
+            StatuslineProviderActions::Hidden,
             StatusSurfacePreviewData::from_iter([
                 (
                     StatusLineItem::Hostname.preview_item(),

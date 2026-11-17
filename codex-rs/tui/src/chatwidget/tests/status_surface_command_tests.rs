@@ -26,6 +26,18 @@ fn rendered_history(events: Vec<AppEvent>) -> String {
 }
 
 #[tokio::test]
+async fn built_in_statusline_accepts_a_second_enter() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.restore_user_message_to_composer("/statusline".into());
+    chat.handle_key_event(KeyCode::Enter.into());
+    chat.handle_key_event(KeyCode::Enter.into());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StatusLineSetup { .. }))
+    );
+}
+
+#[tokio::test]
 async fn inline_status_surface_commands_are_session_only_and_atomic() {
     let (mut chat, mut events, _ops) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let saved_tui = chat.config_panel_tui.clone();

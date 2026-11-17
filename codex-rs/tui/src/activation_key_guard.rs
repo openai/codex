@@ -14,6 +14,7 @@ const LEGACY_REPEAT_GUARD: Duration = Duration::from_secs(/*secs*/ 1);
 pub(crate) enum ActivationKeySuppression {
     ViewTransition,
     ReportedRepeats,
+    PressOnlyFallback,
 }
 
 #[derive(Clone, Copy)]

@@ -133,9 +133,7 @@ async fn statusline_reads_the_selected_stdio_resource_on_the_displayed_thread() 
                 terminal.wait_for_screen("Raw output mode off")?;
                 terminal.wait_for_screen(&format!("Provider thread {thread} (standard)"))?;
                 terminal.write_input(b"/statusline\r")?;
-                terminal.wait_for_screen("Choose a statusline plugin")?;
-                // This PTY reports presses only. Navigate back to the action before pressing Enter again.
-                terminal.write_input(b"\x1b[B\x1b[A")?;
+                terminal.wait_for_screen("Choose a status line provider")?;
                 for row in ["Default status line", "fixture / sandbox_meta"] {
                     terminal.write_input(b"\r")?;
                     terminal.wait_for_screen(row)?;

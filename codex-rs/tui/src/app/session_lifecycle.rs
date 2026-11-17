@@ -18,9 +18,12 @@ use crate::app_server_session::SideChatStorage;
 use crate::app_server_session::is_server_shutting_down_error;
 use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
+use crate::bottom_pane::MentionBinding;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use crate::chatwidget::UserMessage;
 use crate::startup_draft::StartupDraftPump;
 use crate::streaming::commit_tick::CommitTickScope;
+use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use std::collections::HashSet;
@@ -1343,14 +1346,14 @@ impl App {
                 } else {
                     ThreadAttachPresentation::Fresh
                 };
-                self.adopt_fresh_session(
+                crate::boxed_future!(self.adopt_fresh_session(
                     tui,
                     app_server,
                     prepared,
                     presentation,
                     initial_user_message,
                     new_thread_name,
-                )
+                ))
                 .await;
             }
             Err(err) => {
@@ -1368,6 +1371,65 @@ impl App {
         } else {
             tui.frame_requester().schedule_frame();
         }
+    }
+
+    pub(super) async fn start_statusline_authoring(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) {
+        if self.reconnect.offline {
+            self.chat_widget.add_error_message(
+                "Reconnect to the app server to create a custom statusline.".into(),
+            );
+            return;
+        }
+        let previous_thread_id = self.chat_widget.thread_id();
+        self.start_fresh_session(
+            tui,
+            app_server,
+            FreshSessionStart::NewConversation,
+            /*initial_user_message*/ None,
+            /*new_thread_name*/ None,
+        )
+        .await;
+        let thread_id = self.chat_widget.thread_id();
+        if thread_id.is_none() || thread_id == previous_thread_id {
+            return;
+        }
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        let mut draft = UserMessage::from("Help me build and enable a custom statusline.");
+        if let Ok(skills) = app_server
+            .skills_list(SkillsListParams {
+                cwds: vec![cwd.clone()],
+                force_reload: false,
+            })
+            .await
+        {
+            if let Some(skill) = skills
+                .data
+                .iter()
+                .find(|entry| entry.cwd == cwd)
+                .into_iter()
+                .flat_map(|entry| &entry.skills)
+                .find(|skill| {
+                    skill.enabled
+                        && skill.scope == SkillScope::System
+                        && skill.name == "create-statusline"
+                })
+            {
+                draft.text =
+                    "Use $create-statusline to help me build and enable a custom statusline."
+                        .into();
+                draft.mention_bindings.push(MentionBinding {
+                    sigil: '$',
+                    mention: skill.name.clone(),
+                    path: skill.path.as_str().to_owned(),
+                });
+            }
+            self.handle_skills_list_response(skills);
+        }
+        self.chat_widget.restore_user_message_to_composer(draft);
     }
 
     async fn prepare_fresh_session(
@@ -1483,17 +1545,15 @@ impl App {
             self.chat_widget.add_error_message(error.to_string());
             return;
         }
-        if let Some(thread_id) = self.current_displayed_thread_id()
+        // A completed turn can release queued input while draining the outgoing thread.
+        let handoff = self.chat_widget.pause_input_for_resume_handoff();
+        let source_thread = self.current_displayed_thread_id();
+        if let Some(thread_id) = source_thread
             && let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id)
+            && let Some(channel) = self.thread_event_channels.get(&thread_id)
+            && let Some(session) = channel.store.lock().await.session.as_ref()
         {
-            if let Some(channel) = self.thread_event_channels.get(&thread_id)
-                && let Some(session) = channel.store.lock().await.session.as_ref()
-            {
-                blank.session = session.clone();
-            }
-            if let Some(input) = self.chat_widget.capture_thread_input_state() {
-                self.agents_overview.input_states.insert(thread_id, input);
-            }
+            blank.session = session.clone();
         }
         self.detach_current_thread_for_navigation(app_server, Some(started.session.thread_id))
             .await;
@@ -1532,16 +1592,21 @@ impl App {
                 .blank_sessions
                 .insert(thread_id, started.clone());
         }
-        if let Err(err) = self
+        let attached = self
             .replace_chat_widget_with_account(
                 tui,
                 started,
                 presentation,
                 initial_user_message,
                 account,
+                source_thread,
             )
-            .await
-        {
+            .await;
+        drop(handoff);
+        if let Err(err) = attached {
+            if self.current_displayed_thread_id() == source_thread {
+                self.chat_widget.maybe_send_next_queued_input();
+            }
             self.agents_overview.blank_sessions.remove(&thread_id);
             self.chat_widget.add_error_message(format!(
                 "Failed to attach to fresh app-server thread: {err}"
@@ -1571,6 +1636,7 @@ impl App {
             presentation,
             initial_user_message,
             /*account*/ None,
+            /*source_thread*/ None,
         )
         .await
     }
@@ -1606,6 +1672,7 @@ impl App {
         presentation: ThreadAttachPresentation,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
         account: Option<SessionAccount>,
+        source_thread: Option<ThreadId>,
     ) -> Result<()> {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
@@ -1615,6 +1682,13 @@ impl App {
             ThreadAttachPresentation::SessionLineageAfterClear
         ) {
             self.drain_outgoing_thread_events().await;
+        }
+        if let Some(thread_id) = source_thread
+            && (self.agents_overview.blank_sessions.contains_key(&thread_id)
+                || self.chat_widget.has_unsent_input())
+            && let Some(input) = self.chat_widget.capture_thread_input_state()
+        {
+            self.agents_overview.input_states.insert(thread_id, input);
         }
         self.store_active_thread_receiver().await;
         self.refresh_transcript_document_links();

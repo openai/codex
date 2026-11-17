@@ -1910,6 +1910,11 @@ pub(crate) enum AppEvent {
         id: Option<crate::statusline_provider::ProviderId>,
         key: crate::key_hint::KeyBinding,
     },
+    CreateCustomStatusline {
+        backend: Option<crate::backend_id::BackendId>,
+        thread_id: Option<ThreadId>,
+        key: crate::key_hint::KeyBinding,
+    },
     StatuslinePicker {
         scan: uuid::Uuid,
         updates: Vec<crate::statusline_provider::discovery::DiscoveryUpdate>,

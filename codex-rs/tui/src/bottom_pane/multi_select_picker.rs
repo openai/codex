@@ -110,6 +110,9 @@ pub type ConfirmCallback = Box<dyn Fn(&[String], &AppEventSender) + Send + Sync>
 /// Callback invoked when the user cancels the picker (presses Escape).
 pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+/// Action dispatched from a picker row with the key that activated it.
+type ActionCallback = Box<dyn Fn(&AppEventSender, KeyBinding) + Send + Sync>;
+
 /// Callback to generate an optional preview line based on current item states.
 /// Returns `None` to hide the preview area.
 type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<StatusLine> + Send + Sync>;
@@ -137,7 +140,7 @@ pub(crate) struct MultiSelectItem {
     /// Whether to draw a divider after this item when another visible item follows.
     pub section_break_after: bool,
     /// An action row opens its child on Enter and has no checkbox.
-    pub on_activate: Option<fn(&AppEventSender, KeyBinding)>,
+    pub on_activate: Option<ActionCallback>,
 }
 
 impl Default for MultiSelectItem {
@@ -406,7 +409,7 @@ impl MultiSelectPicker {
             .state
             .selected_idx
             .and_then(|index| self.filtered_indices.get(index))
-            .and_then(|index| self.items[*index].on_activate)
+            .and_then(|index| self.items[*index].on_activate.as_deref())
         {
             action(&self.app_event_tx, activation_key);
             return;

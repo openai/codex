@@ -29,6 +29,7 @@ async fn picker() -> anyhow::Result<(
         .enable(Feature::TuiExtensionsStatusLine)?;
     app.chat_widget
         .set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
+    app.chat_widget.thread_params_mode = ThreadParamsMode::Cloud;
     let (client, commands, _) = CloudClient::channel(/*capacity*/ 8);
     let owner = AppServerSession::new(
         BackendId::new(),
@@ -39,8 +40,9 @@ async fn picker() -> anyhow::Result<(
 }
 
 #[tokio::test(start_paused = true)]
-async fn holding_enter_opens_the_statusline_picker_without_selecting() -> anyhow::Result<()> {
+async fn quick_second_enter_opens_the_statusline_picker_without_selecting() -> anyhow::Result<()> {
     let (mut app, mut owner, _commands, mut events) = picker().await?;
+    app.chat_widget.thread_params_mode = ThreadParamsMode::Embedded;
     let mut tui = make_test_tui()?;
     app.chat_widget
         .restore_user_message_to_composer("/statusline".into());
@@ -80,6 +82,33 @@ async fn holding_enter_opens_the_statusline_picker_without_selecting() -> anyhow
         !std::iter::from_fn(|| events.try_recv().ok())
             .any(|event| matches!(event, AppEvent::OpenStatuslinePicker(_)))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn statusline_create_is_ignored_after_dismissing_setup() -> anyhow::Result<()> {
+    let (mut app, _, _, mut events) = picker().await?;
+    app.chat_widget.thread_params_mode = ThreadParamsMode::Embedded;
+    app.chat_widget
+        .dispatch_command(crate::slash_command::SlashCommand::Statusline);
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    let create = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::CreateCustomStatusline { .. }))
+        .expect("Create selected");
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+
+    let (client, mut requests, _) = CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        BackendId::new(),
+        AppServerClient::Cloud(client),
+        ThreadParamsMode::Remote,
+    );
+    let mut tui = make_test_tui()?;
+    tokio::select! {
+        result = app.handle_event(&mut tui, &mut server, create) => { result.unwrap(); }
+        _ = requests.recv() => panic!("dismissed Create contacted the server"),
+    }
     Ok(())
 }
 

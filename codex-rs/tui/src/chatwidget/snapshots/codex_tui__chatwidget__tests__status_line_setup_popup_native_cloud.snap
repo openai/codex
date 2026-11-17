@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: status_line_popup_snapshot(&mut chat)
+---
+  Configure Status Line
+  Select which items to display in the status line.
+
+  Type to search
+
+› Choose a status line provider
+  ───────────────────────
+  [x] Use theme colors           Apply colors from the active /theme
+  ───────────────────────
+  [x] model-with-reasoning       Current model name with reasoning level
+  [x] current-dir                Current working directory
+  [x] thread-name                Current thread name (omitted when unnamed)
+  [ ] model                      Current model name
+↓
+  GPT-5.6-Sol default · /tmp/project · thread name
+  enter select · esc back

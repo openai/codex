@@ -1693,6 +1693,184 @@ async fn replacement_preserves_remote_launch_paths_and_older_servers() -> Result
 }
 
 #[tokio::test]
+async fn fresh_session_saves_input_restored_by_a_late_interrupt() -> Result<()> {
+    use crate::app::session_lifecycle::PreparedFreshSession;
+    use crate::app::session_lifecycle::ThreadAttachPresentation;
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::CloudClient;
+    use codex_app_server_client::CloudOperation;
+
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    let source = ThreadId::new();
+    let cwd = app.config.cwd.to_path_buf();
+    app.enqueue_primary_thread_session(test_thread_session(source, cwd.clone()), Vec::new())
+        .await?;
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(source, "running"),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget
+        .apply_external_edit("queued follow-up".into());
+    app.chat_widget.handle_key_event(KeyCode::Tab.into());
+    app.chat_widget.apply_external_edit("source draft".into());
+    let events = app.ensure_thread_channel(source).sender.clone();
+
+    let mut session = test_thread_session(ThreadId::new(), cwd);
+    session.model_provider_id = app.chat_widget.quota_provider_id().to_owned();
+    let prepared = PreparedFreshSession {
+        started: AppServerStartedThread {
+            session,
+            turns: Vec::new(),
+            blocks_direct_input: false,
+            task_tools_available: false,
+        },
+        config: app.config.clone(),
+        local_settings: app.local_settings.clone(),
+    };
+    let (client, mut commands, _) = CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Remote,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tokio::join!(
+        crate::boxed_future!(app.adopt_fresh_session(
+            &mut tui,
+            &mut server,
+            prepared,
+            ThreadAttachPresentation::Fresh,
+            /*initial_user_message*/ None,
+            /*new_thread_name*/ None,
+        )),
+        async {
+            let command = commands.recv().await.unwrap();
+            assert!(
+                matches!(command.operation, CloudOperation::Request(request) if matches!(
+                    request.as_ref(),
+                    ClientRequest::ThreadUnsubscribe { params, .. } if params.thread_id == source.to_string()
+                ))
+            );
+            events
+                .send(ThreadBufferedEvent::Notification(Box::new(
+                    turn_completed_notification(source, "running", TurnStatus::Interrupted),
+                )))
+                .await
+                .unwrap();
+            command
+                .response
+                .send(Ok(Ok(serde_json::json!({
+                    "status": "unsubscribed"
+                }))))
+                .unwrap();
+        }
+    );
+    let input = app.agents_overview.input_states.remove(&source).unwrap();
+    app.chat_widget.restore_thread_input_state(
+        Some(input),
+        crate::chatwidget::ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: false,
+        },
+    );
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "queued follow-up\nsource draft"
+    );
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_statusline_keeps_the_draft_editable() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .enable(Feature::TuiExtensionsStatusLine)?;
+    app.chat_widget
+        .set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
+    let cwd = app.config.codex_home.to_path_buf();
+    let user_skill = cwd.join("skills/create-statusline");
+    std::fs::create_dir_all(&user_skill)?;
+    std::fs::write(
+        user_skill.join("SKILL.md"),
+        "---\nname: create-statusline\ndescription: A user skill with the same name.\n---\nUser skill.\n",
+    )?;
+    let source = ThreadId::new();
+    app.enqueue_primary_thread_session(test_thread_session(source, cwd), Vec::new())
+        .await?;
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(source, "running"),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget
+        .apply_external_edit("queued follow-up".into());
+    app.chat_widget.handle_key_event(KeyCode::Tab.into());
+    app.chat_widget
+        .apply_external_edit("Keep this draft".into());
+    app.chat_widget
+        .dispatch_command(crate::slash_command::SlashCommand::Statusline);
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    let create = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::CreateCustomStatusline { .. }))
+        .expect("Create selected");
+    app.enqueue_thread_notification(
+        source,
+        turn_completed_notification(source, "running", TurnStatus::Completed),
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.handle_event(&mut tui, &mut server, create).await?;
+    assert_ne!(app.chat_widget.thread_id(), Some(source));
+    let draft = app.chat_widget.composer_draft_snapshot();
+    assert!(draft.text.contains("$create-statusline"));
+    let home = app.config.codex_home.canonicalize()?.abs();
+    let bundled_skill =
+        codex_skills::system_cache_root_dir(&home).join("create-statusline/SKILL.md");
+    let [binding] = draft.mention_bindings.as_slice() else {
+        panic!("expected one skill binding");
+    };
+    assert_eq!(binding.path, bundled_skill.to_string_lossy());
+    // Press-only terminals report a held Enter as another press.
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    assert_eq!(app.chat_widget.composer_draft_snapshot(), draft);
+    assert!(
+        !std::iter::from_fn(|| ops.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
+    );
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+    );
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    let edited = app.chat_widget.composer_draft_snapshot();
+    assert!(!edited.text.contains("$create-statusline"));
+    assert!(edited.mention_bindings.is_empty());
+
+    let input = app.agents_overview.input_states.remove(&source).unwrap();
+    app.chat_widget.restore_thread_input_state(
+        Some(input),
+        crate::chatwidget::ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: false,
+        },
+    );
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Keep this draft"
+    );
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        ["queued follow-up"]
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn provider_continuation_starts_current_provider_and_drafts_saved_reference() -> Result<()> {
     use crate::app_server_session::ThreadParamsMode;
     for (mode, capabilities) in [
