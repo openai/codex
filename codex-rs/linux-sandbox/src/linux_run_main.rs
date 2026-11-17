@@ -167,10 +167,8 @@ pub fn run_main() -> ! {
     } else {
         ProxyRouting::Explicit
     };
-    if transparent_tcp
-        && (!allow_network_for_proxy || use_legacy_landlock || inherit_pid_namespace || no_proc)
-    {
-        panic!("transparent TCP requires managed networking and private bubblewrap namespaces");
+    if transparent_tcp && (!allow_network_for_proxy || use_legacy_landlock || no_proc) {
+        panic!("transparent TCP requires managed networking, bubblewrap, and procfs");
     }
     if transparent_tcp_fd.is_empty() == (transparent_tcp && apply_seccomp_then_exec) {
         panic!("invalid transparent TCP namespace handoff");
@@ -229,6 +227,12 @@ pub fn run_main() -> ! {
             Relay::prepare(transparent_tcp_fd, socks_bridge)
                 .unwrap_or_else(|err| panic!("failed to prepare transparent TCP: {err}"))
         });
+        if transparent_tcp && inherit_pid_namespace {
+            // The relay's open descriptors must be private even when its PID is visible.
+            codex_process_hardening::disable_process_dumping()
+                .unwrap_or_else(|err| panic!("failed to protect transparent TCP processes: {err}"));
+        }
+        let supervisor_pid = unsafe { libc::getpid() };
         let signal_mask = ForwardedSignalMask::block();
         let command_pid = unsafe { libc::fork() };
         if command_pid < 0 {
@@ -237,6 +241,9 @@ pub fn run_main() -> ! {
         }
 
         if command_pid == 0 {
+            if transparent_tcp && inherit_pid_namespace {
+                kill_on_parent_death(supervisor_pid);
+            }
             if let Some((relay, mut reader)) = transport {
                 drop(relay);
                 reader
@@ -248,6 +255,52 @@ pub fn run_main() -> ! {
             exec_or_panic(command);
         }
 
+        if inherit_pid_namespace && let Some((relay, reader)) = transport {
+            drop(reader);
+            // Bubblewrap starts a new session. Give the workload its own group
+            // within it so relay failure can kill the group while we stay alive
+            // to reap the command. The child is still waiting for relay readiness.
+            if unsafe { libc::setpgid(command_pid, command_pid) } < 0 {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to set transparent TCP workload process group: {err}");
+            }
+            let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
+            let relay_pid = unsafe { libc::fork() };
+            if relay_pid < 0 {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to fork transparent TCP relay: {err}");
+            }
+            if relay_pid == 0 {
+                reset_forwarded_signal_handlers_to_default();
+                kill_on_parent_death(supervisor_pid);
+                signal_mask.restore();
+                relay
+                    .serve()
+                    .unwrap_or_else(|err| panic!("failed to start transparent TCP relay: {err}"));
+                loop {
+                    std::thread::park();
+                }
+            }
+            // The supervisor must release its copies of the TUN and readiness
+            // writer so early relay failure also closes the startup pipe.
+            drop(relay);
+            signal_mask.restore();
+            let (pid, status) = wait_for_child(/*pid*/ -1);
+            let exit_signal_mask = ForwardedSignalMask::block();
+            if pid == relay_pid {
+                eprintln!("transparent TCP relay exited before the command");
+                send_signal_to_bwrap_child(command_pid, libc::SIGKILL);
+                wait_for_child(command_pid);
+            } else {
+                debug_assert_eq!(pid, command_pid);
+                unsafe { libc::kill(relay_pid, libc::SIGKILL) };
+                wait_for_child(relay_pid);
+            }
+            signal_forwarders.restore();
+            exit_signal_mask.restore();
+            exit_with_wait_status(status);
+        }
+
         let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
         if let Some((relay, reader)) = transport {
             drop(reader);
@@ -257,21 +310,12 @@ pub fn run_main() -> ! {
         }
         signal_mask.restore();
         loop {
-            let mut status = 0;
-            let reaped_pid = unsafe { libc::waitpid(-1, &mut status, 0) };
+            let (reaped_pid, status) = wait_for_child(/*pid*/ -1);
             if reaped_pid == command_pid {
                 let exit_signal_mask = ForwardedSignalMask::block();
                 signal_forwarders.restore();
                 exit_signal_mask.restore();
                 exit_with_wait_status(status);
-            }
-            if reaped_pid >= 0 {
-                continue;
-            }
-
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::EINTR) {
-                panic!("failed to reap sandboxed child: {err}");
             }
         }
     }
@@ -335,7 +379,7 @@ pub fn run_main() -> ! {
             crate::wslg::ensure_supported_path(&executable)
                 .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
         }
-        let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        let mut inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
             permission_profile: &permission_profile,
@@ -343,6 +387,9 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        if transparent_tcp && inherit_pid_namespace {
+            inner.insert(1, "--inherit-pid-namespace".to_string());
+        }
         run_bwrap_with_proc_fallback(
             caller_pid,
             &sandbox_policy_cwd,
@@ -454,8 +501,9 @@ fn run_bwrap_with_proc_fallback(
         transparent_tcp,
     );
 
-    // Transparent TCP must mount procfs for the private PID namespace. Let the
-    // real bwrap launch fail if it cannot, since a root bind can expose host procfs.
+    // Transparent TCP with PID isolation requires a fresh procfs. With PID
+    // inheritance it uses the policy's existing procfs view. Relay readiness
+    // verifies that socket identities are visible before the command starts.
     if !transparent_tcp
         && options.mount_proc
         && !preflight_proc_mount_support(options)
@@ -685,7 +733,7 @@ fn supervise_child(
 ) -> ! {
     let signal_forwarders = install_bwrap_signal_forwarders(pid);
     setup_signal_mask.restore();
-    let status = wait_for_bwrap_child(pid);
+    let (_, status) = wait_for_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup();
@@ -816,18 +864,18 @@ fn reset_forwarded_signal_handlers_to_default() {
     }
 }
 
-fn wait_for_bwrap_child(pid: libc::pid_t) -> libc::c_int {
+fn wait_for_child(pid: libc::pid_t) -> (libc::pid_t, libc::c_int) {
     loop {
         let mut status: libc::c_int = 0;
         let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
         if wait_res >= 0 {
-            return status;
+            return (wait_res, status);
         }
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EINTR) {
             continue;
         }
-        panic!("waitpid failed for bubblewrap child: {err}");
+        panic!("waitpid failed for child {pid}: {err}");
     }
 }
 
@@ -1190,7 +1238,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         panic!("failed to read bubblewrap stderr: {err}");
     }
 
-    let status = wait_for_bwrap_child(pid);
+    let (_, status) = wait_for_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);

@@ -3,7 +3,7 @@ use super::*;
 #[cfg(test)]
 use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
-use crate::linux_run_main::wait_for_bwrap_child;
+use crate::linux_run_main::wait_for_child;
 #[cfg(test)]
 use codex_network_proxy::ManagedNetworkSandboxContext;
 #[cfg(test)]
@@ -462,7 +462,7 @@ fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
         run_bwrap_signal_forwarder_test_supervisor();
     }
 
-    let status = wait_for_bwrap_child(supervisor_pid);
+    let (_, status) = wait_for_child(supervisor_pid);
     assert!(libc::WIFEXITED(status), "supervisor status: {status}");
     assert_eq!(libc::WEXITSTATUS(status), 0);
 }
@@ -489,7 +489,7 @@ fn run_bwrap_signal_forwarder_test_supervisor() -> ! {
         libc::raise(libc::SIGTERM);
     }
 
-    let status = wait_for_bwrap_child(child_pid);
+    let (_, status) = wait_for_child(child_pid);
     let child_terminated_by_sigterm =
         libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM;
     unsafe {

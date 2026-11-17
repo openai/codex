@@ -5,13 +5,14 @@ use codex_utils_cargo_bin::runfiles;
 use pretty_assertions::assert_eq;
 use socks5_protocol::CommandRequest;
 use socks5_protocol::sync::FromIO;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
 
 #[tokio::test]
 async fn transparent_tcp_rejects_incompatible_options_and_untrusted_proxy_ports() {
-    let incompatible =
-        "transparent TCP requires managed networking and private bubblewrap namespaces";
+    let incompatible = "transparent TCP requires managed networking, bubblewrap, and procfs";
     let untrusted = "outside the managed sandbox context";
     let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);
@@ -19,7 +20,7 @@ async fn transparent_tcp_rejects_incompatible_options_and_untrusted_proxy_ports(
     for (context, extra, reason) in [
         (None, None, incompatible),
         (Some("{}"), Some("--use-legacy-landlock"), incompatible),
-        (Some("{}"), Some("--inherit-pid-namespace"), incompatible),
+        (Some("{}"), Some("--inherit-pid-namespace"), untrusted),
         (Some("{}"), Some("--no-proc"), incompatible),
         (Some("{}"), None, untrusted),
         (Some(r#"{"loopbackPorts":[32102]}"#), None, untrusted),
@@ -44,8 +45,14 @@ async fn transparent_tcp_rejects_incompatible_options_and_untrusted_proxy_ports(
     }
 }
 
+#[test_case::test_case(&[], false; "isolated")]
+#[test_case::test_case(&["--inherit-pid-namespace"], false; "inherited")]
+#[test_case::test_case(&["--inherit-pid-namespace"], true; "inherited_relay_failure")]
 #[tokio::test]
-async fn managed_tcp_native_client_uses_attributed_socks_and_preserves_restrictions() {
+async fn managed_tcp_native_client_uses_attributed_socks_and_preserves_restrictions(
+    pid_options: &[&str],
+    kill_relay: bool,
+) {
     // Container device policies can expose the node but deny opening it.
     if let Err(err) = std::fs::OpenOptions::new()
         .read(true)
@@ -97,6 +104,16 @@ async fn managed_tcp_native_client_uses_attributed_socks_and_preserves_restricti
         PROXY_ATTRIBUTION_TOKEN_ENV_KEY.into(),
         "native-client".into(),
     );
+    if !pid_options.is_empty() {
+        let pid_namespace = std::fs::read_link("/proc/self/ns/pid").unwrap();
+        env.insert(
+            "CODEX_TEST_PID_NAMESPACE".into(),
+            pid_namespace.display().to_string(),
+        );
+    }
+    if kill_relay {
+        env.insert("CODEX_TEST_RELAY_FAILURE".into(), "1".into());
+    }
     let serve = |mut stdin: tokio::process::ChildStdin| async move {
         let mut kept = None;
         for (host, allow) in [
@@ -146,6 +163,9 @@ async fn managed_tcp_native_client_uses_attributed_socks_and_preserves_restricti
     };
     let script = r#"
         unset ALL_PROXY all_proxy
+        if [ -n "${CODEX_TEST_PID_NAMESPACE:-}" ]; then
+            test "$(readlink /proc/self/ns/pid)" = "$CODEX_TEST_PID_NAMESPACE"
+        fi
         if command -v ip >/dev/null; then
             ip link show codextun >/dev/null
             if ip link set codextun down 2>/dev/null; then exit 15; fi
@@ -176,7 +196,16 @@ PY
         fi
         if (exec 5<>/dev/tcp/127.0.0.2/"$1") 2>/dev/null; then exit 13; fi
         if (exec 5>>"$2") 2>/dev/null; then exit 14; fi
+        if [ -n "${CODEX_TEST_RELAY_FAILURE:-}" ]; then
+            # Keep stdout open in both processes so the test only sees EOF
+            # after cleanup reaches the whole process group.
+            sleep 60 &
+            printf '%s %s\n' "$PPID" "$!"
+            wait
+        fi
     "#;
+    let mut options = vec!["--transparent-tcp"];
+    options.extend_from_slice(pid_options);
     let mut command = linux_sandbox_command_with_options(
         &[
             "bash",
@@ -189,7 +218,7 @@ PY
         &PermissionProfile::read_only(),
         Some(&format!(r#"{{"loopbackPorts":[{}]}}"#, proxy_addr.port())),
         env,
-        &["--transparent-tcp"],
+        &options,
     );
     let mut child = command
         .stdin(std::process::Stdio::piped())
@@ -197,15 +226,49 @@ PY
         .spawn()
         .unwrap();
     let peer = tokio::spawn(serve(child.stdin.take().unwrap()));
+    if kill_relay {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        tokio::time::timeout(SANDBOX_TIMEOUT, stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let (supervisor, background) = line.trim().split_once(' ').expect("workload PIDs");
+        let children_path = format!("/proc/{supervisor}/task/{supervisor}/children");
+        let children = std::fs::read_to_string(children_path).expect("supervisor children");
+        let background: libc::pid_t = background.parse().unwrap();
+        let workload_group = unsafe { libc::getpgid(background) };
+        assert!(workload_group > 0 && workload_group != background);
+        let supervisor: libc::pid_t = supervisor.parse().unwrap();
+        let relay = children
+            .split_whitespace()
+            .map(|pid| pid.parse::<libc::pid_t>().unwrap())
+            .find(|&pid| pid != workload_group)
+            .expect("relay sibling");
+        assert_eq!(unsafe { libc::getpgid(relay) }, supervisor);
+        assert_eq!(unsafe { libc::kill(relay, libc::SIGKILL) }, 0);
+        let mut remaining = Vec::new();
+        tokio::time::timeout(OPERATION_TIMEOUT, stdout.read_to_end(&mut remaining))
+            .await
+            .expect("relay failure should close stdout for both workload processes")
+            .unwrap();
+    }
     let output = tokio::time::timeout(SANDBOX_TIMEOUT, child.wait_with_output())
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        Some(if kill_relay { 128 + libc::SIGKILL } else { 0 }),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    if kill_relay {
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("transparent TCP relay exited before the command")
+        );
+    }
     tokio::time::timeout(OPERATION_TIMEOUT, peer)
         .await
         .unwrap()

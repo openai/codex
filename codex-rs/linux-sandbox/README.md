@@ -22,7 +22,9 @@ codex sandbox --transparent-tcp --permission-profile db -- psql -h pg.example
 The Rust sandbox helper includes the TCP stack. Codex starts it automatically.
 The Linux host needs distro `bwrap` on `PATH`, user and network namespaces, IPv6,
 and read/write access to `/dev/net/tun`.
-Use full managed SOCKS5 mode for native database ports and an isolated PID namespace.
+Use full managed SOCKS5 mode for native database ports. Transparent TCP uses
+PID isolation by default and also supports exec-server's
+`--linux-sandbox-pid-namespace=inherit` in dedicated environments.
 For proxy configuration, executor-wide capture and HTTP CONNECT routing, see the [exec-server setup](../exec-server/README.md#transparent-tcp).
 
 The private DNS stub maps up to 8,192 names to stable addresses in `198.18.0.0/15`
@@ -33,7 +35,20 @@ connections. When the TCP stack is full, clients retry their opening SYN. The re
 native socket by both endpoints and its inode in the private namespace TCP tables. Closing that
 socket cancels its pending approval connection, including when other clients use the same
 destination. A client that shuts down only its write side can still receive a reply. General UDP,
-QUIC, ICMP, legacy Landlock, host PID inheritance, and procfs fallback are outside this mode.
+QUIC, ICMP, legacy Landlock, and procfs fallback are outside this mode.
+
+With PID isolation, the relay runs in the namespace's PID 1 process. When it
+exits, the kernel kills the remaining processes in the PID namespace.
+With PID inheritance, a supervisor runs the relay and the command as separate
+children. Cleanup depends on which process exits first.
+
+- If the relay dies first, the supervisor sends `SIGKILL` to the command's
+  process group and the command itself. Descendants that left the group can
+  survive.
+- If the supervisor dies first, the relay and the command receive the
+  parent-death `SIGKILL`. Background descendants can survive even if they
+  stayed in the command's process group. This is an existing limitation of
+  inherited-PID mode when the launcher dies.
 
 With transparent TCP off, Codex prefers the first `bwrap` found on `PATH`
 outside the current working directory whenever it is available. If `bwrap` is
@@ -122,7 +137,9 @@ commands that would enter the bubblewrap path.
   sockets unless `dangerously_allow_all_unix_sockets` is granted. Unix socket
   pairs remain allowed for communication between related processes.
 - When bubblewrap is active, it mounts a fresh `/proc` via `--proc /proc` by default.
-  Transparent TCP requires this mount and aborts the launch if it fails.
+  Transparent TCP with PID isolation requires this mount and aborts the launch
+  if it fails. With PID inheritance it uses the existing `/proc` view and checks
+  that the relay can see socket identities before starting the command.
   In other modes, if that mount is denied, it retains the inherited `/proc` and still creates a
   PID namespace, preserving the existing fallback. `--no-proc` also retains the
   inherited `/proc` without disabling PID isolation. In these cases, process IDs

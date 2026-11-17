@@ -63,7 +63,7 @@ impl Relay {
         crate::managed_tcp_dns::serve(Arc::clone(&names), self.dns_udp, self.dns_tcp)?;
         let (started, readiness) = std::sync::mpsc::sync_channel(1);
         thread::Builder::new().spawn(move || {
-            // This is the namespace reaper. Losing the data path must end the workload.
+            // Relay exit triggers workload cleanup in the PID namespace or its supervisor.
             if let Ok(Err(error)) =
                 std::panic::catch_unwind(|| stack::run(self.tun, self.proxy, names, started))
             {
