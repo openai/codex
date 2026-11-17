@@ -15,8 +15,11 @@ use codex_api::RealtimeWebsocketClient;
 use codex_api::map_api_error;
 use codex_async_utils::OrCancelExt;
 use codex_http_client::HttpClientFactory;
+use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::RealtimeExistingCallAuth;
 use http::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -25,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(super) struct ExistingCallAttachment {
     pub(super) attachment_cancellation: CancellationToken,
+    pub(super) existing_call_auth: RealtimeExistingCallAuth,
     pub(super) client: RealtimeWebsocketClient,
     pub(super) model_client: ModelClient,
     pub(super) auth_context: codex_model_provider::ProviderAuthContext,
@@ -46,6 +50,7 @@ pub(super) struct ExistingCallAttachment {
 pub(super) async fn attach(attachment: ExistingCallAttachment) -> CodexResult<JoinHandle<()>> {
     let ExistingCallAttachment {
         attachment_cancellation,
+        existing_call_auth,
         client,
         model_client,
         auth_context,
@@ -63,15 +68,36 @@ pub(super) async fn attach(attachment: ExistingCallAttachment) -> CodexResult<Jo
         transcript_tail_flush,
         stop_token,
     } = attachment;
-    let (auth, sideband_headers, factory) = model_client
-        .realtime_sideband_auth(
-            extra_headers,
-            &sideband_base_url,
-            &auth_context,
-            http_client_factory,
-        )
-        .or_cancel(&attachment_cancellation)
-        .await??;
+    let (auth, sideband_headers, factory) = match existing_call_auth {
+        RealtimeExistingCallAuth::ModelProvider => {
+            model_client
+                .realtime_sideband_auth(
+                    extra_headers,
+                    &sideband_base_url,
+                    &auth_context,
+                    http_client_factory,
+                )
+                .or_cancel(&attachment_cancellation)
+                .await??
+        }
+        RealtimeExistingCallAuth::ExternalHeaders => {
+            let Some(auth @ CodexAuth::Headers(_)) = auth_context
+                .credentials
+                .auth()
+                .or_cancel(&attachment_cancellation)
+                .await?
+            else {
+                return Err(CodexErr::InvalidRequest(
+                    "external header authentication requires header-based authentication".into(),
+                ));
+            };
+            (
+                codex_model_provider::auth_provider_from_auth(&auth),
+                extra_headers,
+                http_client_factory,
+            )
+        }
+    };
     let client = client.with_http_client_factory(factory).with_auth(auth);
     let transcript_state = RealtimeTranscriptState::default();
     let connection = client

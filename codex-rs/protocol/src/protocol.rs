@@ -226,7 +226,19 @@ pub struct ConversationStartParams {
     pub voice: Option<Option<RealtimeVoice>>,
 }
 
-/// Controls when an in-process realtime attachment may establish a connection.
+/// Authentication selected by the embedding host for an existing call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RealtimeExistingCallAuth {
+    /// Use the model provider's authentication and runtime destination checks.
+    #[default]
+    ModelProvider,
+    /// Use the selected auth manager's external headers and the host's transport.
+    /// The trusted host must authorize the destination, call owner, and calling
+    /// workload before selecting this mode. Never derive it from a client URL.
+    ExternalHeaders,
+}
+
+/// Controls connection admission and authentication for an in-process attachment.
 #[derive(Debug, Clone, Default)]
 pub struct RealtimeAttachmentOptions {
     /// Set the watch to `true` to cancel a pending connection.
@@ -234,6 +246,8 @@ pub struct RealtimeAttachmentOptions {
     pub cancel: Option<watch::Receiver<bool>>,
     /// Optional caller deadline for publishing the connection. Cleanup can finish later.
     pub start_before: Option<SystemTime>,
+    /// Applies only to existing calls; external headers require an explicit host-selected URL.
+    pub existing_call_auth: RealtimeExistingCallAuth,
 }
 
 /// A caller-owned realtime sideband. Dropping either direction seals input and ends

@@ -59,6 +59,7 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeExistingCallAuth;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
@@ -695,7 +696,7 @@ impl RealtimeConversationManager {
             attachment_control,
             sideband,
             auth_context,
-            api_provider,
+            mut api_provider,
             http_client_factory,
             realtime_sideband_base_url,
             extra_headers,
@@ -758,6 +759,13 @@ impl RealtimeConversationManager {
 
         let sideband_base_url =
             realtime_sideband_base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        if attachment_control.options.existing_call_auth
+            == RealtimeExistingCallAuth::ExternalHeaders
+        {
+            // Model-provider headers may contain inference authentication. The
+            // host-selected observer uses only its external auth and session headers.
+            api_provider.headers.clear();
+        }
         let client = RealtimeWebsocketClient::new(api_provider, http_client_factory.clone())
             .with_webrtc_sideband_base_url(sideband_base_url.clone());
         let transcript_tail_flush = RealtimeTranscriptTailFlush {
@@ -821,6 +829,7 @@ impl RealtimeConversationManager {
         } else if let Some(call_id) = existing_call_id {
             let task = existing_call::attach(existing_call::ExistingCallAttachment {
                 attachment_cancellation: attachment_control.token.clone(),
+                existing_call_auth: attachment_control.options.existing_call_auth,
                 client,
                 model_client,
                 auth_context,
@@ -2244,6 +2253,20 @@ pub(crate) async fn handle_attach(
     params: ConversationStartParams,
     options: RealtimeAttachmentOptions,
 ) -> CodexResult<()> {
+    if options.existing_call_auth == RealtimeExistingCallAuth::ExternalHeaders
+        && !matches!(
+            &params.transport,
+            Some(ConversationStartTransport::ExistingCall {
+                sideband_base_url: Some(base_url),
+                ..
+            }) if !base_url.trim().is_empty()
+        )
+    {
+        return Err(CodexErr::InvalidRequest(
+            "external header authentication requires an existing call with an explicit sideband URL"
+                .into(),
+        ));
+    }
     let attachment_control = RealtimeAttachmentControl {
         token: CancellationToken::new(),
         options,
