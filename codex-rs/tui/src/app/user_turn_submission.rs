@@ -25,6 +25,19 @@ pub(super) async fn try_submit_user_turn(
     else {
         return Ok(false);
     };
+    let is_user_prompt = *turn_trigger == "user"
+        && matches!(
+            cloud_submission,
+            CloudSubmissionIntent::StartOrSteer | CloudSubmissionIntent::StartIfIdle
+        );
+    if is_user_prompt
+        && app.primary_thread_id == Some(thread_id)
+        && app.active_thread_id == Some(thread_id)
+        && app.chat_widget.thread_id() == Some(thread_id)
+    {
+        app.statusline_metrics
+            .record_first_prompt(&app.config, &app.chat_widget);
+    }
     let intent = if *turn_trigger == "user" {
         match (*cloud_submission, app_server.thread_params_mode()) {
             (

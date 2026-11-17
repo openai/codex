@@ -1,12 +1,15 @@
 //! Aggregate statusline counters with fixed labels and the current analytics consent.
 
+use crate::chatwidget::ChatWidget;
 use crate::legacy_core::config::Config;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::OtelExporterKind;
+use codex_features::Feature;
 use codex_otel::MetricsClient;
 
 #[derive(Default)]
 pub(crate) struct StatuslineMetrics {
+    first_prompt_recorded: bool,
     collector: Option<(MetricsClient, OtelExporterKind)>,
 }
 
@@ -40,10 +43,34 @@ impl StatuslineMetrics {
             OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. } => true,
         };
         Self {
+            first_prompt_recorded: false,
             collector: metrics
                 .filter(|_| eligible)
                 .map(|client| (client, exporter.clone())),
         }
+    }
+
+    pub(crate) fn begin_visit(&mut self) {
+        self.first_prompt_recorded = false;
+    }
+
+    pub(crate) fn record_first_prompt(&mut self, config: &Config, chat: &ChatWidget) {
+        if self.first_prompt_recorded {
+            return;
+        }
+        self.first_prompt_recorded = true;
+        let mode = if !chat
+            .config_ref()
+            .features
+            .enabled(Feature::TuiExtensionsStatusLine)
+        {
+            "feature_off"
+        } else if chat.selected_statusline_provider().is_some() {
+            "custom"
+        } else {
+            "builtin"
+        };
+        self.record(config, "codex.statusline.first_prompt", &[("mode", mode)]);
     }
 
     pub(crate) fn record(

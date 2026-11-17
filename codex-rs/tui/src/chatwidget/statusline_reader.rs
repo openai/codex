@@ -72,7 +72,7 @@ impl StatuslineReadEvent {
 }
 
 impl ChatWidget {
-    pub(super) fn selected_statusline_provider(&self) -> Option<&StatusLineProviderId> {
+    pub(crate) fn selected_statusline_provider(&self) -> Option<&StatusLineProviderId> {
         if self.statusline_disconnected
             || self.read_only_history
             || self

@@ -1677,6 +1677,7 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
+        let new_visit = self.primary_thread_id != Some(started.session.thread_id);
         if !matches!(
             presentation,
             ThreadAttachPresentation::SessionLineageAfterClear
@@ -1755,6 +1756,9 @@ impl App {
             presentation,
         )
         .await?;
+        if new_visit {
+            self.statusline_metrics.begin_visit();
+        }
         Ok(())
     }
 
