@@ -36,8 +36,10 @@ impl From<TypedRequestError> for ReadIssue {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
-    #[error("The selected provider could not be resolved for this thread.")]
-    Lookup,
+    #[error("The selected provider is unavailable.")]
+    LookupUnavailable,
+    #[error("The selected provider lookup timed out.")]
+    LookupTimedOut,
     #[error("The displayed thread could not supply its current status line state.")]
     Snapshot,
     #[error("Resource read: {0}.")]

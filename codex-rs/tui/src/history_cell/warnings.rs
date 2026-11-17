@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub(crate) enum WarningId {
     Message(String),
     McpServer(String),
+    StatuslineDiscovery(uuid::Uuid),
 }
 
 /// A retained diagnostic. Identity is independent of wrapping and duplicate delivery.

@@ -22,9 +22,10 @@ pub(crate) use descriptor::StatuslineProvider;
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use uuid::Uuid;
 
-const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProviderLookupError {
@@ -107,11 +108,17 @@ impl ResolvedStatuslineProvider {
         thread: ThreadId,
         cwd: &PathUri,
         selection: ProviderSelection<'_>,
+        deadline: Instant,
     ) -> Result<Option<Self>, ProviderLookupError> {
         tokio::select! {
             biased;
-            () = tokio::time::sleep(LOOKUP_TIMEOUT) => Err(ProviderLookupError::TimedOut),
-            result = Self::resolve(client, thread, cwd, selection) => Ok(result?),
+            () = tokio::time::sleep_until(deadline) => Err(ProviderLookupError::TimedOut),
+            result = Self::resolve(client, thread, cwd, selection) => {
+                if Instant::now() >= deadline {
+                    return Err(ProviderLookupError::TimedOut);
+                }
+                Ok(result?)
+            }
         }
     }
 

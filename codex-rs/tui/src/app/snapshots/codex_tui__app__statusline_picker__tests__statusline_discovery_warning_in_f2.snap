@@ -1,0 +1,16 @@
+---
+source: tui/src/app/statusline_picker_tests.rs
+expression: warning
+---
+  Warnings · 1 of 1 · Status line provider discovery
+
+  Global provider inventory: request failed.
+  beta: no result by the 5-second discovery deadline.
+  mail: no result by the 5-second discovery deadline.
+  chat: no result by the 5-second discovery deadline.
+  docs: no result by the 5-second discovery deadline.
+  Additional affected servers: 1.
+
+
+
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning

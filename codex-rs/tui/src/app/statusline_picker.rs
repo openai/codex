@@ -5,7 +5,9 @@ use crate::backend_id::BackendId;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionKeyAction;
 use crate::config_update::format_config_error;
+use crate::statusline_provider::McpServerName;
 use crate::statusline_provider::ProviderId;
+use crate::statusline_provider::ProviderLookupError;
 use crate::statusline_provider::StatuslineProvider;
 use crate::statusline_provider::discovery::DiscoveryUpdate;
 use crate::statusline_provider::discovery::refresh_statusline_providers;
@@ -25,6 +27,52 @@ pub(super) struct StatuslinePicker {
     providers: Vec<StatuslineProvider>,
     offline: bool,
     worker: Option<AbortOnDropHandle<()>>,
+}
+
+#[derive(Default)]
+struct DiscoveryFailures {
+    servers: Vec<String>,
+    omitted: usize,
+    inventory: Option<&'static str>,
+}
+
+impl DiscoveryFailures {
+    fn record_server(&mut self, server: &McpServerName, error: &ProviderLookupError) {
+        if self.servers.len() < 4 {
+            let name: String = label(server.as_str().to_owned()).chars().take(80).collect();
+            let reason = discovery_failure_reason(error);
+            self.servers.push(format!("{name}: {reason}."));
+        } else {
+            self.omitted += 1;
+        }
+    }
+
+    fn into_details(mut self) -> Option<String> {
+        if self.servers.is_empty() && self.inventory.is_none() {
+            return None;
+        }
+        tracing::warn!(
+            affected_servers = self.servers.len() + self.omitted,
+            inventory = self.inventory,
+            "Status line provider discovery was incomplete"
+        );
+        if let Some(reason) = self.inventory {
+            self.servers
+                .insert(0, format!("Global provider inventory: {reason}."));
+        }
+        if self.omitted > 0 {
+            self.servers
+                .push(format!("Additional affected servers: {}.", self.omitted));
+        }
+        Some(self.servers.join("\n"))
+    }
+}
+
+fn discovery_failure_reason(error: &ProviderLookupError) -> &'static str {
+    match error {
+        ProviderLookupError::TimedOut => "no result by the 5-second discovery deadline",
+        ProviderLookupError::Request(_) => "request failed",
+    }
 }
 
 fn label(text: String) -> String {
@@ -205,10 +253,19 @@ impl App {
         if picker.worker.take().is_none() {
             return;
         }
+        let mut failures = DiscoveryFailures::default();
         for update in updates {
-            let DiscoveryUpdate::Server(_server, Ok(mut providers)) = update else {
-                continue;
+            let (server, result) = match update {
+                DiscoveryUpdate::Server(server, result) => (server, result),
+                DiscoveryUpdate::InventoryFailed(error) => {
+                    failures.inventory = Some(discovery_failure_reason(&error));
+                    continue;
+                }
             };
+            let mut providers = result.unwrap_or_else(|error| {
+                failures.record_server(&server, &error);
+                Vec::new()
+            });
             for provider in &mut providers {
                 provider.title = label(std::mem::take(&mut provider.title));
                 provider.plugin_label = provider.plugin_label.take().map(label);
@@ -219,6 +276,8 @@ impl App {
             .providers
             .sort_unstable_by(|a, b| (&a.title, &a.id).cmp(&(&b.title, &b.id)));
         let view = picker.view(selected_index);
+        self.chat_widget
+            .set_statusline_discovery_warning(scan, failures.into_details());
         self.chat_widget
             .replace_selection_view_if_present(PICKER, view);
     }

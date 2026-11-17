@@ -482,12 +482,39 @@ async fn statusline_startup_timeout_stops_before_the_first_read() {
     assert_eq!(started.elapsed(), Duration::from_secs(5));
     assert_eq!(
         footer(&reader.chat).as_deref(),
-        Some("Status line unavailable · /statusline")
+        Some("Status line timed out · /statusline")
     );
     assert!(held.is_closed());
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
+}
+
+#[tokio::test(start_paused = true)]
+async fn statusline_hung_retry_reports_the_remaining_startup_deadline() {
+    let mut reader = Reader::new().await;
+    let started = Instant::now();
+    let (_, first) = reader.request().await;
+    first
+        .send(Err(std::io::Error::other("private config error")))
+        .unwrap();
+    advance(/*millis*/ 2_000).await;
+    reader
+        .chat
+        .statusline_read
+        .as_ref()
+        .unwrap()
+        .server_ready("fixture");
+    let (ClientRequest::ConfigRead { .. }, held) = reader.request().await else {
+        panic!("expected a retry after the selected server became ready");
+    };
+    advance(/*millis*/ 3_000).await;
+    reader.dispatch().await;
+    assert!(held.is_closed());
+    assert_eq!(started.elapsed(), LOOKUP_TIMEOUT);
+    insta::assert_snapshot!(
+        footer(&reader.chat).unwrap(), @"Status line timed out · /statusline"
+    );
 }
 
 #[tokio::test(start_paused = true)]

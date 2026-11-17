@@ -17,6 +17,7 @@ const FALLBACK_MODEL_METADATA_WARNING_SUFFIX: &str =
 #[derive(Default)]
 pub(crate) struct WarningDisplayState {
     pub(super) count: usize,
+    discovery: Option<WarningEntry>,
     /// Completed resume history does not end startup; active work does.
     pub(super) startup_complete: bool,
     /// Initialization config warnings may also arrive as ordinary thread warnings.
@@ -35,6 +36,7 @@ impl WarningDisplayState {
     fn visible_entries(&self, cells: &[Arc<dyn HistoryCell>]) -> Vec<WarningEntry> {
         crate::history_cell::warning_entries(cells)
             .into_iter()
+            .chain(self.discovery.clone())
             .filter(|entry| self.dismissed.get(&entry.id) != Some(&entry.details))
             .collect()
     }
@@ -78,7 +80,7 @@ impl super::ChatWidget {
                         .warning_display_state
                         .startup_config_warnings
                         .contains(message),
-                    WarningId::McpServer(_) => false,
+                    WarningId::McpServer(_) | WarningId::StatuslineDiscovery(_) => false,
                 })
             });
         self.bottom_pane.show_warnings(
@@ -86,6 +88,21 @@ impl super::ChatWidget {
             Arc::clone(&self.warning_display_state.transcript),
             daemon_restart_hint_at,
         );
+    }
+
+    pub(crate) fn set_statusline_discovery_warning(
+        &mut self,
+        scan: uuid::Uuid,
+        details: Option<String>,
+    ) {
+        let state = &mut self.warning_display_state;
+        state.discovery = details.map(|details| WarningEntry {
+            id: WarningId::StatuslineDiscovery(scan),
+            source: "Status line provider discovery".into(),
+            details,
+        });
+        state.synced_cells = None;
+        self.request_redraw();
     }
 
     pub(crate) fn sync_warnings(&mut self, cells: &[Arc<dyn HistoryCell>]) {
@@ -99,8 +116,15 @@ impl super::ChatWidget {
         }) {
             return;
         }
+        state.dismissed.retain(|id, _| match id {
+            WarningId::StatuslineDiscovery(_) => state
+                .discovery
+                .as_ref()
+                .is_some_and(|entry| id == &entry.id),
+            WarningId::Message(_) | WarningId::McpServer(_) => true,
+        });
         state.count = if state.dismissed.is_empty() {
-            crate::history_cell::warning_count(cells)
+            crate::history_cell::warning_count(cells) + usize::from(state.discovery.is_some())
         } else {
             state.visible_entries(cells).len()
         };

@@ -238,6 +238,7 @@ async fn a_cold_picker_and_configured_provider_have_independent_deadlines() {
             ThreadId::new(),
             &cwd,
             ProviderSelection::Saved(&id),
+            selected_start + LOOKUP_TIMEOUT,
         )
         .await
     });

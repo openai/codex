@@ -11,7 +11,9 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::backend_id::BackendId;
+use crate::statusline_provider::LOOKUP_TIMEOUT;
 use crate::statusline_provider::ProviderId;
+use crate::statusline_provider::ProviderLookupError;
 use crate::statusline_provider::ProviderSelection;
 use crate::statusline_provider::ResolvedStatuslineProvider;
 use crate::statusline_provider::StatuslineProvider;
@@ -28,7 +30,6 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio::time::sleep;
-use tokio::time::timeout;
 use tokio::time::timeout_at;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -201,8 +202,10 @@ impl ChatWidget {
                         footer.cancel.cancel();
                         tracing::warn!(?failure, "Status line provider stopped");
                         let message = match failure {
-                            Failure::Read(ReadIssue::TimedOut) => "Status line timed out",
-                            Failure::Lookup => "Status line unavailable",
+                            Failure::LookupTimedOut | Failure::Read(ReadIssue::TimedOut) => {
+                                "Status line timed out"
+                            }
+                            Failure::LookupUnavailable => "Status line unavailable",
                             Failure::Snapshot | Failure::Read(_) => "Status line failed",
                         };
                         UiTree(Some(UiNode::String(format!("{message} · /statusline"))))
@@ -248,28 +251,30 @@ impl ActiveStatuslineRead {
         tokio::spawn(async move {
             let result: Option<Result<(), Failure>> = cancel
                 .run_until_cancelled(async {
-                    let cwd = cwd.ok_or(Failure::Lookup)?;
-                    let provider = timeout(Duration::from_secs(/*secs*/ 5), async {
-                        loop {
-                            if let Ok(Some(provider)) = ResolvedStatuslineProvider::lookup(
-                                &client,
-                                thread,
-                                &cwd,
-                                provider_from_picker.as_ref().map_or(
-                                    ProviderSelection::Saved(&id),
-                                    ProviderSelection::Discovered,
-                                ),
-                            )
-                            .await
-                            {
-                                return Ok::<_, Failure>(provider);
+                    let cwd = cwd.ok_or(Failure::LookupUnavailable)?;
+                    let deadline = Instant::now() + LOOKUP_TIMEOUT;
+                    let provider = loop {
+                        let choice = provider_from_picker
+                            .as_ref()
+                            .map_or(ProviderSelection::Saved(&id), ProviderSelection::Discovered);
+                        match ResolvedStatuslineProvider::lookup(
+                            &client, thread, &cwd, choice, deadline,
+                        )
+                        .await
+                        {
+                            Ok(Some(provider)) => break provider,
+                            Err(ProviderLookupError::TimedOut) => {
+                                return Err(Failure::LookupTimedOut);
                             }
-                            // A cold catalog may arrive before the selected MCP server finishes starting.
-                            ready.changed().await.map_err(|_| Failure::Lookup)?;
+                            Ok(None) | Err(ProviderLookupError::Request(_)) => {}
                         }
-                    })
-                    .await
-                    .map_err(|_| Failure::Lookup)??;
+                        // A cold catalog can arrive before this server finishes starting.
+                        if !matches!(timeout_at(deadline, ready.changed()).await, Ok(Ok(())))
+                            || Instant::now() >= deadline
+                        {
+                            return Err(Failure::LookupUnavailable);
+                        }
+                    };
                     loop {
                         let (reply, snapshot) = oneshot::channel();
                         StatuslineReadEvent::send(

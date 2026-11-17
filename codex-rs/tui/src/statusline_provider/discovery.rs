@@ -26,7 +26,6 @@ pub(crate) enum DiscoveryUpdate {
         McpServerName,
         Result<Vec<StatuslineProvider>, ProviderLookupError>,
     ),
-    #[cfg_attr(not(test), expect(dead_code, reason = "picker diagnostics are staged"))]
     InventoryFailed(ProviderLookupError),
 }
 

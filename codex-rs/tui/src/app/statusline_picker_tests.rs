@@ -211,3 +211,37 @@ async fn discovery_only_starts_a_reader_on_explicit_selection() -> anyhow::Resul
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn discovery_shows_a_bounded_warning_without_rpc_details() -> anyhow::Result<()> {
+    let (mut app, owner, _requests, _events) = picker().await?;
+    app.open_statusline_picker(&owner);
+    let scan = app.statusline_picker.as_ref().unwrap().id;
+    let private_error = color_eyre::eyre::eyre!("private credentials in an RPC message");
+    let inventory = DiscoveryUpdate::InventoryFailed(private_error.into());
+    let mut updates = vec![inventory];
+    for server in ["\x1b[31mbeta\x1b[0m", "mail", "chat", "docs", "links"] {
+        let update = DiscoveryUpdate::Server(server.into(), Err(ProviderLookupError::TimedOut));
+        updates.push(update);
+    }
+    app.finish_statusline_discovery(scan, updates, &owner);
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+
+    app.open_statusline_picker(&owner);
+    let canceled_scan = app.statusline_picker.as_ref().unwrap().id;
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    // A canceled rescan and its queued completion leave the last warning available.
+    app.finish_statusline_discovery(canceled_scan, Vec::new(), &owner);
+    app.chat_widget.open_warnings(&[]);
+    let warning = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    insta::assert_snapshot!("statusline_discovery_warning_in_f2", warning);
+
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.open_statusline_picker(&owner);
+    let successful_scan = app.statusline_picker.as_ref().unwrap().id;
+    app.finish_statusline_discovery(successful_scan, Vec::new(), &owner);
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.chat_widget.open_warnings(&[]);
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("No warnings"));
+    Ok(())
+}
