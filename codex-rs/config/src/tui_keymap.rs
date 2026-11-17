@@ -137,6 +137,8 @@ pub struct TuiGlobalKeymap {
     pub leader: Option<KeybindingsSpec>,
     /// Change where a new conversation runs.
     pub change_host: Option<KeybindingsSpec>,
+    /// Choose a saved environment for a new Cloud conversation.
+    pub choose_cloud_environment: Option<KeybindingsSpec>,
     /// Focus the main conversation composer.
     pub focus_main_composer: Option<KeybindingsSpec>,
     /// Focus the side conversation, or hide it when already focused.

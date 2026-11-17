@@ -112,6 +112,9 @@ impl App {
                 | ServerNotification::ThreadDeleted(_)
         ) {
             self.agents_overview.blank_sessions.remove(&thread_id);
+            self.agents_overview
+                .draft_cloud_environments
+                .remove(&thread_id);
         }
         self.track_agents_overview_activity(thread_id, notification);
         let thread = self

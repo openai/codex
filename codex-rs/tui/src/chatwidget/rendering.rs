@@ -5,6 +5,8 @@ use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
 use crate::keymap::KeymapContext;
+use crate::line_truncation::span_width;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::RectExt;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::wrapping::RtOptions;
@@ -13,6 +15,27 @@ use ratatui::style::Styled as _;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use std::cell::Cell;
+
+struct NewBackendControl<'a>(Line<'a>, Option<(usize, String)>);
+
+impl Renderable for NewBackendControl<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut line = self.0.clone();
+        if let Some((index, environment)) = &self.1 {
+            let reserved: usize = line.iter().map(span_width).sum();
+            let environment = truncate_line_with_ellipsis_if_overflow(
+                Line::from(environment.clone()),
+                usize::from(area.width).saturating_sub(reserved),
+            );
+            line.spans.splice(*index..*index, environment.spans);
+        }
+        Widget::render(line, area, buf);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+}
 
 struct ReadOnlyThreadNotice {
     reason: ReadOnlyThread,
@@ -298,13 +321,25 @@ impl ChatWidget {
             let bottom_pane = self.bottom_pane.backdrop_with_options(options);
             let above_composer = if self.quick_dial_menu && !options.floating_shortcuts {
                 RenderableItem::Owned(Box::new(self.quick_dial_hud()))
-            } else if let Some(backend) = self.visible_new_backend_control() {
-                let mut spans = vec!["  ".into(), backend.into()];
+            } else if let Some((cycle, environment)) = self.visible_new_backend_control() {
+                let mut spans = vec!["  ".into(), cycle.unwrap_or("Cloud").into()];
                 let keymap = self.bottom_pane.keymap();
-                if let Some(key) = keymap.primary_hint(KeymapContext::Global, "change_host") {
-                    spans.extend(["  ".into(), key.into(), " to cycle".dim()]);
+                if cycle.is_some()
+                    && let Some(key) = keymap.primary_hint(KeymapContext::Global, "change_host")
+                {
+                    spans.extend(["  ".into(), key.into(), " cycle".dim()]);
                 }
-                RenderableItem::Owned(Box::new(Paragraph::new(Line::from(spans))))
+                let environment = environment.map(|name| {
+                    spans.push(" - ".dim());
+                    let index = spans.len();
+                    if let Some(key) =
+                        keymap.primary_hint(KeymapContext::Global, "choose_cloud_environment")
+                    {
+                        spans.extend(["  ".into(), key.into(), " change".dim()]);
+                    }
+                    (index, name.to_owned())
+                });
+                RenderableItem::Owned(Box::new(NewBackendControl(Line::from(spans), environment)))
             } else {
                 return bottom_pane;
             };

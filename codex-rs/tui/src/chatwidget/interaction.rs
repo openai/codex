@@ -83,12 +83,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
-        let contexts = self.bottom_pane.keymap_contexts();
-        if self.visible_new_backend_control().is_some() {
-            contexts.with_backend_cycling()
-        } else {
-            contexts
+        let mut contexts = self.bottom_pane.keymap_contexts();
+        if let Some((cycle, choose_environment)) = self.visible_new_backend_control() {
+            if cycle.is_some() {
+                contexts = contexts.with_backend_cycling();
+            }
+            if choose_environment.is_some() {
+                contexts = contexts.with_cloud_environment_selection();
+            }
         }
+        contexts
     }
 
     pub(crate) fn take_key_chord_reset(&mut self) -> bool {
@@ -122,9 +126,15 @@ impl ChatWidget {
         self.handle_key_event_with_activation_key(key_event, /*activation_key*/ None)
     }
 
-    pub(crate) fn set_new_backend_control(&mut self, label: Option<String>) {
-        if self.new_backend_label != label {
+    pub(crate) fn set_new_backend_control(
+        &mut self,
+        label: Option<String>,
+        cloud_environment_name: Option<String>,
+    ) {
+        if self.new_backend_label != label || self.cloud_environment_name != cloud_environment_name
+        {
             self.new_backend_label = label;
+            self.cloud_environment_name = cloud_environment_name;
             self.request_redraw();
         }
     }
@@ -138,9 +148,11 @@ impl ChatWidget {
             && self.initial_user_message.is_none()
     }
 
-    pub(super) fn visible_new_backend_control(&self) -> Option<&str> {
-        let label = self.new_backend_label.as_deref()?;
-        (self.can_choose_new_backend()
+    pub(super) fn visible_new_backend_control(&self) -> Option<(Option<&str>, Option<&str>)> {
+        let cycle = self.new_backend_label.as_deref();
+        let environment = self.cloud_environment_name.as_deref();
+        ((cycle.is_some() || environment.is_some())
+            && self.can_choose_new_backend()
             && self.bottom_pane.no_modal_or_popup_active()
             && !self.fork_in_progress
             && !self.shortcut_overlay_visible()
@@ -148,7 +160,7 @@ impl ChatWidget {
             && self.safety_recourse.is_none()
             && !self.has_provider_error()
             && matches!(self.external_editor_state, ExternalEditorState::Closed))
-        .then_some(label)
+        .then_some((cycle, environment))
     }
 
     pub(crate) fn handle_key_event_with_activation_key(
@@ -194,12 +206,18 @@ impl ChatWidget {
         }
 
         let keymap = self.bottom_pane.keymap();
-        if keymap.app.change_host.is_pressed(key_event)
-            && self.visible_new_backend_control().is_some()
-        {
-            self.app_event_tx
-                .send(AppEvent::CycleNewConversationBackend);
-            return KeyEventAction::None;
+        if let Some((cycle, choose_environment)) = self.visible_new_backend_control() {
+            if cycle.is_some() && keymap.app.change_host.is_pressed(key_event) {
+                self.app_event_tx
+                    .send(AppEvent::CycleNewConversationBackend);
+                return KeyEventAction::None;
+            }
+            if choose_environment.is_some()
+                && keymap.app.choose_cloud_environment.is_pressed(key_event)
+            {
+                self.app_event_tx.send(AppEvent::ChooseCloudEnvironment);
+                return KeyEventAction::None;
+            }
         }
 
         if self.shortcut_overlay_visible() && key_hint::plain(KeyCode::Esc).is_press(key_event) {

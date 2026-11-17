@@ -79,10 +79,37 @@ async fn empty_thread_backend_chord_preserves_draft_until_first_submission() -> 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.chat_widget
         .apply_external_edit("first draft".to_string());
-    app.chat_widget
-        .set_new_backend_control(Some("Cloud".to_string()));
-    let screen = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(screen.lines().find(|line| line.trim_start().starts_with("Cloud")).unwrap().trim(), @"Cloud  ⌃x b to cycle");
+    let host_lines = [
+        ("Default", 80),
+        ("Team Rust", 80),
+        ("Team Rust — shared development environment", 45),
+    ]
+    .map(|(environment, width)| {
+        app.chat_widget
+            .set_new_backend_control(Some("Cloud".into()), Some(environment.into()));
+        render_bottom_popup(&app.chat_widget, width)
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("Cloud"))
+            .unwrap()
+            .to_owned()
+    });
+    insta::assert_snapshot!(host_lines.join("\n"), @"
+    Cloud  ⌃x b cycle - Default  ⌃x e change
+    Cloud  ⌃x b cycle - Team Rust  ⌃x e change
+    Cloud  ⌃x b cycle - Team Rust…  ⌃x e change
+    ");
+
+    assert_eq!(app.route_key_chord_event(&mut tui, ctrl('x')), None);
+    let key = app
+        .route_key_chord_event(&mut tui, KeyCode::Char('e').into())
+        .expect("environment chord dispatch");
+    app.chat_widget.handle_key_event(key);
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::ChooseCloudEnvironment))
+    );
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first draft");
 
     // Cursor movement remains available while the backend selector is visible.
     let key = app.route_key_chord_event(&mut tui, ctrl('b')).unwrap();

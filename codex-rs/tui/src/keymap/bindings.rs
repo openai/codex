@@ -321,6 +321,7 @@ macro_rules! define_runtime_action_bindings {
 define_runtime_action_bindings! {
     "global" => Global, app, global [
         change_host,
+        choose_cloud_environment,
         open_agents,
         open_transcript,
         find_transcript,

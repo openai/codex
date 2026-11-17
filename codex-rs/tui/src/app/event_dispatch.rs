@@ -655,7 +655,10 @@ impl App {
                     Err(err) => return Err(err),
                 }
             }
-            AppEvent::ResumeBackendSession(_) | AppEvent::CycleNewConversationBackend => {
+            AppEvent::ResumeBackendSession(_)
+            | AppEvent::CycleNewConversationBackend
+            | AppEvent::ChooseCloudEnvironment
+            | AppEvent::StartCloudConversation { .. } => {
                 unreachable!("backend selection is handled by the session manager")
             }
             AppEvent::ArchiveCurrentThread => {

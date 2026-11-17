@@ -1046,6 +1046,12 @@ impl App {
         });
         self.thread_event_channels
             .retain(|id, _| Some(*id) == voice_owner || self.side_threads.contains_key(id));
+        let displayed = self.current_displayed_thread_id();
+        self.agents_overview
+            .draft_cloud_environments
+            .retain(|id, _| {
+                displayed == Some(*id) || self.agents_overview.blank_sessions.contains_key(id)
+            });
         // A retained side can still display its parent even after the parent channel is detached.
         self.side_companions.retain(|id, _| {
             self.side_threads.contains_key(id)

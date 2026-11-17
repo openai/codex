@@ -1184,6 +1184,19 @@ async fn check_retained_draft_handoff(
     if retained_blank {
         app.agents_overview.blank_sessions.insert(thread_id, blank);
     }
+    if !saved_history {
+        app.agents_overview.draft_cloud_environments.insert(
+            thread_id,
+            (
+                destination_id,
+                codex_app_server_client::SavedEnvironment {
+                    id: "asenvcfg_rust".into(),
+                    name: "Saved Rust".into(),
+                    workspace_shared: false,
+                },
+            ),
+        );
+    }
     app.chat_widget
         .restore_user_message_to_composer("draft for the retained task".into());
     let parked_policy = (!saved_history && history_capabilities == HistoryCapabilities::Current)
@@ -1304,6 +1317,16 @@ async fn check_retained_draft_handoff(
             .contains(&destination_id)
     );
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    if !saved_history {
+        let draft = app.backend_draft().expect("restored blank draft");
+        assert_eq!(
+            app.agents_overview
+                .draft_cloud_environments
+                .get(&draft)
+                .map(|(_, env)| env.name.as_str()),
+            Some("Saved Rust"),
+        );
+    }
     if saved_history || parked_policy.is_some() {
         assert_eq!(
             app.chat_widget.effective_collaboration_mode(),
@@ -1637,7 +1660,7 @@ async fn cloud_switch_wait_keeps_draft_editable_without_submitting_to_local() ->
     let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
     app.chat_widget.handle_thread_session(session);
     app.chat_widget
-        .set_new_backend_control(Some("Cloud".into()));
+        .set_new_backend_control(Some("Cloud".into()), /*cloud_environment_name*/ None);
     app.chat_widget
         .apply_external_edit("/review first draft".into());
     app.keymap
@@ -1903,7 +1926,7 @@ async fn cloud_switch_wait_displays_pending_submission_hint() -> Result<()> {
     let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
     app.chat_widget.handle_thread_session(session);
     app.chat_widget
-        .set_new_backend_control(Some("Cloud".into()));
+        .set_new_backend_control(Some("Cloud".into()), /*cloud_environment_name*/ None);
     let mut tui = crate::tui::test_support::make_test_tui()?;
     {
         let wait = wait_for_cloud_switch(

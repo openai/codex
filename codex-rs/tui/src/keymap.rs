@@ -105,6 +105,7 @@ pub(crate) struct RuntimeKeymap {
 pub(crate) struct AppKeymap {
     /// Change where a new conversation runs.
     pub(crate) change_host: Vec<KeyBinding>,
+    pub(crate) choose_cloud_environment: Vec<KeyBinding>,
     pub(crate) focus_main_composer: Vec<KeyBinding>,
     pub(crate) focus_sidebar_content: Vec<KeyBinding>,
     pub(crate) focus_sidebar_tabs: Vec<KeyBinding>,
@@ -774,6 +775,11 @@ impl RuntimeKeymap {
                 keymap.global.change_host.as_ref(),
                 &defaults.app.change_host,
                 "tui.keymap.global.change_host",
+            )?,
+            choose_cloud_environment: resolve_bindings(
+                keymap.global.choose_cloud_environment.as_ref(),
+                &defaults.app.choose_cloud_environment,
+                "tui.keymap.global.choose_cloud_environment",
             )?,
             focus_main_composer: resolve_bindings(
                 keymap.global.focus_main_composer.as_ref(),
@@ -1882,6 +1888,7 @@ impl RuntimeKeymap {
         Self {
             app: AppKeymap {
                 change_host: Vec::new(),
+                choose_cloud_environment: Vec::new(),
                 focus_main_composer: Vec::new(),
                 focus_sidebar_content: Vec::new(),
                 focus_sidebar_tabs: Vec::new(),
@@ -2228,6 +2235,10 @@ impl RuntimeKeymap {
     fn validate_conflicts(&self) -> Result<(), String> {
         for (action, bindings) in [
             ("global.change_host", &self.app.change_host),
+            (
+                "global.choose_cloud_environment",
+                &self.app.choose_cloud_environment,
+            ),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
             ("composer.undo", &self.composer.undo),
@@ -2257,6 +2268,10 @@ impl RuntimeKeymap {
         #[cfg(unix)]
         for (action, bindings) in [
             ("global.change_host", &self.app.change_host),
+            (
+                "global.choose_cloud_environment",
+                &self.app.choose_cloud_environment,
+            ),
             ("global.open_agents", &self.app.open_agents),
             ("global.focus_main_composer", &self.app.focus_main_composer),
             (
@@ -2310,6 +2325,10 @@ impl RuntimeKeymap {
         let divider_right = self.app.move_divider_right.as_slice();
         let main_bindings = [
             ("change_host", self.app.change_host.as_slice()),
+            (
+                "choose_cloud_environment",
+                self.app.choose_cloud_environment.as_slice(),
+            ),
             (
                 "focus_main_composer",
                 self.app.focus_main_composer.as_slice(),

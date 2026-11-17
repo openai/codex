@@ -15,6 +15,7 @@ use futures::TryFutureExt;
 pub(super) enum NewBackendSession {
     Fresh { name: Option<String> },
     CarryDraft,
+    ChangeCloudEnvironment(Option<codex_app_server_client::SavedEnvironment>),
 }
 
 /// Host inputs for the new-thread preference. A cloud thread's cwd and credentials
@@ -171,16 +172,21 @@ impl App {
         }
         let displayed_thread = self.current_displayed_thread_id();
         let outgoing_slot = backends.displayed;
+        let switching_backend = owner != backends.displayed_owner();
         if let Some(thread_id) = displayed_thread
             && self.active_turn_id_for_thread(thread_id).await.is_some()
         {
             return Err("Wait for the current turn to finish before switching.".into());
         }
-        let mut settings = backends
-            .settings
-            .get(&owner)
-            .cloned()
-            .ok_or("Connection settings are unavailable.")?;
+        let mut settings = if !switching_backend {
+            self.backend_settings()
+        } else {
+            backends
+                .settings
+                .get(&owner)
+                .cloned()
+                .ok_or("Connection settings are unavailable.")?
+        };
         if settings.target == AppServerTarget::Cloud && self.chat_widget.thread_id().is_some() {
             self.remember_attached_host_project(backends.session_at(outgoing_slot));
         }
@@ -196,19 +202,28 @@ impl App {
         };
         let user_config_path = self.local_settings.user_config_path.clone();
         let responsive_cloud_switch = settings.target == AppServerTarget::Cloud
-            && matches!(session, NewBackendSession::CarryDraft);
-        let (name, mut draft) = match session {
+            && !matches!(session, NewBackendSession::Fresh { .. });
+        let replacing_cloud_draft = matches!(session, NewBackendSession::ChangeCloudEnvironment(_));
+        let (name, mut draft, saved_environment) = match session {
             NewBackendSession::Fresh { name } => {
                 *fresh_draft = Some(StartupDraftPump::for_new_session(
                     tui,
                     &settings.local_settings,
                     settings.config.cwd.as_path(),
                 ));
-                (name, None)
+                (name, None, None)
             }
             NewBackendSession::CarryDraft => (
                 self.chat_widget.thread_name(),
                 (!responsive_cloud_switch).then(|| self.chat_widget.composer_draft_snapshot()),
+                displayed_thread
+                    .and_then(|id| self.agents_overview.draft_cloud_environments.get(&id))
+                    .cloned(),
+            ),
+            NewBackendSession::ChangeCloudEnvironment(environment) => (
+                self.chat_widget.thread_name(),
+                None,
+                environment.map(|env| (owner, env)),
             ),
         };
         let destination = backends.session_at_mut(slot);
@@ -294,14 +309,20 @@ impl App {
             draft.apply_settings(&local_settings, config.cwd.as_path());
         }
         let host_project_cwd = self.backend_preference_context.local_cwd.clone();
+        let cloud_start = match &saved_environment {
+            Some((backend, env)) if *backend == owner => {
+                crate::app_server_session::CloudThreadStart::Saved(env.id.clone())
+            }
+            _ => crate::app_server_session::CloudThreadStart::Project(host_project_cwd.as_deref()),
+        };
         let start = destination
-            .start_thread_with_session_start_source(
+            .start_thread_with_environment(
                 &local_settings,
                 &config,
                 /*session_start_source*/ None,
                 /*remote_cwd_override*/ None,
                 /*selected_profile*/ None,
-                host_project_cwd.as_deref(),
+                cloud_start,
             )
             .map_err(|error| format!("Failed to start the new conversation: {error}"));
         let Some(started) = if responsive_cloud_switch {
@@ -325,8 +346,8 @@ impl App {
         if responsive_cloud_switch {
             draft = Some(self.chat_widget.composer_draft_snapshot());
         }
-        // Clear before switching so a terminal error leaves the outgoing conversation usable.
-        if let Err(error) = tui.clear_for_thread_switch() {
+        // A same-backend Cloud start already replaced the attachment. Clear on its first draw.
+        if switching_backend && let Err(error) = tui.clear_for_thread_switch() {
             if responsive_cloud_switch {
                 let events = tui.event_stream();
                 if finish_failed_cloud_switch(self, tui, events)
@@ -340,15 +361,17 @@ impl App {
         }
         let destination_thread = started.session.thread_id;
         let outgoing_has_queue = self.chat_widget.has_queued_follow_up_messages();
-        self.switch_backend_context(
-            backends,
-            slot,
-            started.session.thread_id,
-            settings.target,
-            config.cwd.to_path_buf(),
-            bootstrap,
-        )
-        .await;
+        if switching_backend {
+            self.switch_backend_context(
+                backends,
+                slot,
+                started.session.thread_id,
+                settings.target,
+                config.cwd.to_path_buf(),
+                bootstrap,
+            )
+            .await;
+        }
         let destination = backends.session_at_mut(slot);
         self.adopt_fresh_session(
             tui,
@@ -358,12 +381,32 @@ impl App {
                 config,
                 local_settings,
             },
-            ThreadAttachPresentation::FreshAfterClear,
+            if switching_backend {
+                ThreadAttachPresentation::FreshAfterClear
+            } else {
+                ThreadAttachPresentation::FreshWithDraft
+            },
             /*initial_user_message*/ None,
             name,
         )
         .await;
-        backends.switch_displayed(slot, &mut self.agents_overview.input_states);
+        if replacing_cloud_draft
+            && let Some(source) = displayed_thread
+            && self.current_displayed_thread_id() == Some(destination_thread)
+        {
+            destination.move_staged_cloud_settings(source, destination_thread);
+            self.chat_widget.sync_service_tier_commands();
+        }
+        if let Some(environment) = saved_environment
+            && self.current_displayed_thread_id() == Some(destination_thread)
+        {
+            self.agents_overview
+                .draft_cloud_environments
+                .insert(destination_thread, environment);
+        }
+        if switching_backend {
+            backends.switch_displayed(slot, &mut self.agents_overview.input_states);
+        }
         if !backends.session_at_mut(slot).uses_remote_workspace()
             && self.current_displayed_thread_id() == Some(destination_thread)
         {
@@ -381,7 +424,10 @@ impl App {
             } else {
                 self.chat_widget.restore_startup_draft(draft);
             }
+            // Another Cloud client may have started a turn on the source while we
+            // opened this environment. Keep that thread and its local input accessible.
             if let Some(thread_id) = displayed_thread
+                && !replacing_cloud_draft
                 && !outgoing_has_queue
                 && self.current_displayed_thread_id() == Some(destination_thread)
                 && self
@@ -390,7 +436,12 @@ impl App {
                     .remove(&thread_id)
                     .is_some()
             {
-                backends.parked_inputs_mut(outgoing_slot).remove(&thread_id);
+                let input_states = if switching_backend {
+                    backends.parked_inputs_mut(outgoing_slot)
+                } else {
+                    &mut self.agents_overview.input_states
+                };
+                input_states.remove(&thread_id);
                 self.remove_agents_overview_thread(thread_id);
                 if let Err(error) = backends
                     .session_at_mut(outgoing_slot)

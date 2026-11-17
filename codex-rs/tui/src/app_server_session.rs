@@ -614,10 +614,6 @@ pub(crate) struct UnsupportedLegacyPermissionProfile;
 /// The environment choice for a new Cloud thread.
 pub(crate) enum CloudThreadStart<'a> {
     Project(Option<&'a std::path::Path>),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "saved starts are wired by the Cloud picker")
-    )]
     Saved(String),
 }
 

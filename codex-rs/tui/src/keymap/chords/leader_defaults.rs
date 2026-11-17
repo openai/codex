@@ -57,6 +57,7 @@ pub(in crate::keymap) fn register(
         (Global, "sidebar_down", KeyCode::Down, "down"),
         (Global, "sidebar_down", Char('j'), "j"),
         (Pager, "mark_markdown", Char('v'), "v"),
+        (Global, "choose_cloud_environment", Char('e'), "e"),
     ] {
         if remaining == 0 {
             break;

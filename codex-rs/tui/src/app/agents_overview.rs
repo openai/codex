@@ -86,6 +86,9 @@ pub(super) struct AgentsOverviewState {
     pub(super) requested_permission_profiles: HashMap<ThreadId, PermissionProfileSelection>,
     /// Keep new tasks subscribed and reusable until a first turn makes them resumable.
     pub(super) blank_sessions: HashMap<ThreadId, crate::app_server_session::AppServerStartedThread>,
+    /// A host switch carries this choice with the draft, but only its original backend can use it.
+    pub(super) draft_cloud_environments:
+        HashMap<ThreadId, (BackendId, codex_app_server_client::SavedEnvironment)>,
     pub(super) input_states: HashMap<ThreadId, ThreadInputState>,
     pub(super) new_session_draft: Option<Box<StartupDraftPump>>,
     pub(super) dispatched_requests: HashMap<ThreadId, Vec<BufferedServerRequest>>,

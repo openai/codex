@@ -602,6 +602,9 @@ impl App {
             });
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
+        self.agents_overview
+            .draft_cloud_environments
+            .remove(&thread_id);
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
         self.sidebars.remove(&Some(thread_id));

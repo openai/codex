@@ -701,6 +701,15 @@ pub(crate) enum AppEvent {
     /// Move an empty conversation to the next connected backend.
     CycleNewConversationBackend,
 
+    /// Show the saved environments for the empty Cloud draft.
+    ChooseCloudEnvironment,
+
+    /// Move the empty Cloud draft to the selected environment.
+    StartCloudConversation {
+        source: ThreadId,
+        saved_environment: Option<codex_app_server_client::SavedEnvironment>,
+    },
+
     /// Continue a provider-locked conversation in a fresh chat using its saved history.
     ContinueProviderChat {
         thread_id: ThreadId,
