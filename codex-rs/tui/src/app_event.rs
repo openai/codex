@@ -354,6 +354,7 @@ impl CapturedSideWork {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    StatuslineRead(crate::chatwidget::StatuslineReadEvent),
     AccountEmailLoaded {
         request_id: uuid::Uuid,
         email: Option<String>,

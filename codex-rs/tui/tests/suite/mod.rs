@@ -14,7 +14,11 @@ mod resize_reflow;
 mod screen_reader;
 mod status_indicator;
 #[cfg(unix)]
+mod statusline_provider;
+#[cfg(unix)]
 mod thread_title;
+#[cfg(unix)]
+mod unix_daemon;
 mod vt100_history;
 mod vt100_live_commit;
 #[cfg(unix)]

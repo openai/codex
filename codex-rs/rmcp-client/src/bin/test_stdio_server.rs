@@ -53,6 +53,8 @@ struct TestToolServer {
     invalidated_listing: Arc<AtomicBool>,
 }
 
+const STATUSLINE_RECORD: &str = "MCP_TEST_STATUSLINE_RECORD";
+const STATUSLINE_URI: &str = "ui://fixture/footer";
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
@@ -158,6 +160,15 @@ impl TestToolServer {
         );
         encrypted_output_tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
+        if std::env::var_os(STATUSLINE_RECORD).is_some() {
+            sandbox_meta_tool
+                .meta
+                .get_or_insert_with(MetaObject::new)
+                .insert(
+                    "openai/ui".to_owned(),
+                    json!({"entrypoints": [{"type": "statusline", "resourceUri": STATUSLINE_URI}]}),
+                );
+        }
         let mut tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
@@ -699,6 +710,34 @@ impl ServerHandler for TestToolServer {
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
+        if uri == STATUSLINE_URI
+            && let Some(path) = std::env::var_os(STATUSLINE_RECORD)
+        {
+            use std::io::Write;
+            let state = context
+                .meta
+                .0
+                .0
+                .get("com.openai/codex-statusline-state")
+                .ok_or_else(|| McpError::invalid_params("missing statusline state", None))?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| writeln!(file, "{state}"))
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let thread = state["thread"]["id"].as_str().unwrap_or_default();
+            return Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
+                    uri,
+                    mime_type: Some("APPLICATION/JSON; charset=utf-8".into()),
+                    text: json!({"type":"text", "children":[format!("Provider thread {thread}")]})
+                        .to_string(),
+                    meta: None,
+                }])
+                .into(),
+            );
+        }
         if uri == "test://codex/request-metadata" {
             let metadata = serde_json::Value::Object(context.meta.0.0);
             return Ok(ReadResourceResult::new(vec![ResourceContents::text(

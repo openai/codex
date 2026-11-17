@@ -6,12 +6,10 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use app_test_support::create_fake_rollout;
-use std::process::Stdio;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_lists_all_providers_and_fork_keeps_provider_filter() -> Result<()> {
-    let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
     let cwd = codex_utils_cargo_bin::repo_root()?;
     for action in ["resume", "fork"] {
         for (embedded, last, explicit) in [
@@ -45,38 +43,11 @@ async fn resume_lists_all_providers_and_fork_keeps_provider_filter() -> Result<(
                     /*git_info*/ None,
                 )?;
             }
-            let mut daemon = tokio::process::Command::new(&codex)
-                .args([
-                    "app-server",
-                    "--listen",
-                    "unix://",
-                    "-c",
-                    "model_provider=\"server-provider\"",
-                ])
-                .env("CODEX_HOME", home.path())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::inherit())
-                .kill_on_drop(true)
-                .spawn()?;
-            let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
-            tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
-                loop {
-                    if tokio::net::UnixStream::connect(socket.as_path())
-                        .await
-                        .is_ok()
-                    {
-                        return Ok::<(), anyhow::Error>(());
-                    }
-                    ensure!(
-                        daemon.try_wait()?.is_none(),
-                        "app server exited before opening its socket"
-                    );
-                    tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
-                }
-            })
-            .await??;
-            let remote_endpoint = format!("unix://{}", socket.as_path().display());
+            let (mut daemon, remote_endpoint) = super::unix_daemon::start(
+                home.path(),
+                &["-c", "model_provider=\"server-provider\""],
+            )
+            .await?;
             let mut args = vec![action, "--all"];
             if embedded {
                 args.push("--no-daemon");

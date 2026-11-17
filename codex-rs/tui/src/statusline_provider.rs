@@ -65,10 +65,10 @@ pub(crate) struct ProviderId {
     pub(crate) tool: McpToolName,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "staged provider choice"))]
 pub(crate) enum ProviderSelection<'a> {
     Saved(&'a ProviderId),
     /// A provider advertised during the current picker refresh.
+    #[cfg_attr(not(test), expect(dead_code, reason = "staged picker selection"))]
     Discovered(&'a StatuslineProvider),
 }
 
@@ -78,7 +78,6 @@ pub(crate) struct ResolvedStatuslineProvider {
     provider: StatuslineProvider,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "staged resource reader"))]
 impl ResolvedStatuslineProvider {
     pub(crate) async fn lookup(
         client: &AppServerRequestHandle,

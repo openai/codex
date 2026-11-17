@@ -476,6 +476,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::StatuslineRead(event) => {
+                self.chat_widget.handle_statusline_read(event, app_server);
+            }
             AppEvent::TaskToolsAvailable { thread_id } => {
                 app_server.remember_task_tool_thread(thread_id);
             }

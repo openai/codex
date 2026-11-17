@@ -396,18 +396,26 @@ impl ChatWidget {
             )
     }
 
-    fn thread_usage_is_selected(&self) -> bool {
+    pub(super) fn thread_usage_is_selected(&self) -> bool {
         let selected = self.selected_thread_usage();
         selected.credits || selected.estimated_cost
     }
 
     fn selected_thread_usage(&self) -> SelectedThreadUsage {
+        if self.selected_statusline_provider().is_some() {
+            return SelectedThreadUsage {
+                credits: self.plan_type != Some(PlanType::Ent26),
+                estimated_cost: true,
+            };
+        }
         let mut selected = SelectedThreadUsage::default();
-        for item in self.configured_status_line_items() {
-            match item.parse::<StatusLineItem>() {
-                Ok(StatusLineItem::ThreadCredits) => selected.credits = true,
-                Ok(StatusLineItem::EstimatedThreadCost) => selected.estimated_cost = true,
-                Ok(_) | Err(_) => {}
+        if !self.read_only_history {
+            for item in self.configured_status_line_items() {
+                match item.parse::<StatusLineItem>() {
+                    Ok(StatusLineItem::ThreadCredits) => selected.credits = true,
+                    Ok(StatusLineItem::EstimatedThreadCost) => selected.estimated_cost = true,
+                    Ok(_) | Err(_) => {}
+                }
             }
         }
         for item in self.configured_terminal_title_items() {

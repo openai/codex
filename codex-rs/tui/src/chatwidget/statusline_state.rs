@@ -176,7 +176,6 @@ impl ChatWidget {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "staged for provider reads"))]
     pub(crate) fn statusline_state(&self) -> Option<StatuslineState> {
         if self.read_only_history {
             return None;
