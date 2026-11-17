@@ -63,7 +63,7 @@ pub(crate) struct CommandShell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
-    /// Internally admitted cleanup hook, enabled independently of per-hook state.
+    /// Internally admitted bundled hook, enabled independently of per-hook state.
     pub builtin: bool,
     pub plugin_trust: Option<plugin_trust::PluginHookTrust>,
     pub event_name: codex_protocol::protocol::HookEventName,
@@ -153,6 +153,7 @@ pub(crate) enum ConfiguredHandlerKind {
         r#async: bool,
     },
     McpTool {
+        expected_app_connector_id: Option<&'static str>,
         server: String,
         tool: String,
         input: serde_json::Map<String, serde_json::Value>,
@@ -415,6 +416,7 @@ impl ClaudeHooksEngine {
                     source: HookSource::Plugin,
                     display_order,
                     kind: ConfiguredHandlerKind::McpTool {
+                        expected_app_connector_id: None,
                         server,
                         tool,
                         input,

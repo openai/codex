@@ -2671,11 +2671,16 @@ async fn capture_binding_preserves_ready_client_catalog_and_shares_prepared_meta
             .expect("metadata object")
             .clone(),
     ));
+    let mut app_only = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "calendar.read_context");
+    app_only.callable_namespace = "calendar".to_string();
+    app_only.connector_id = Some("calendar".to_string());
+    app_only.tool.meta = hidden_collision.tool.meta.clone();
     let mut ready_client = create_test_managed_client(vec![
         create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "client_local_tool"),
         create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "client_local_blocked"),
         visible_collision,
         hidden_collision,
+        app_only,
     ])
     .await;
     let tool_filter = ToolFilter {
@@ -2723,7 +2728,7 @@ async fn capture_binding_preserves_ready_client_catalog_and_shares_prepared_meta
             tool_approval_modes: HashMap::new(),
         },
     );
-    let manager = Arc::new(manager);
+    let mut manager = Arc::new(manager);
 
     assert_eq!(
         manager
@@ -2783,6 +2788,39 @@ async fn capture_binding_preserves_ready_client_catalog_and_shares_prepared_meta
         )
         .is_none()
     );
+
+    let config = Arc::clone(step.config());
+    let expected = step
+        .tool_info(
+            &McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+            "calendar.read_context",
+        )
+        .expect("app-only tool metadata")
+        .clone();
+    drop(prepared);
+    drop(step);
+    let (unrelated, mut started, _release) =
+        create_gated_async_managed_client(create_test_managed_client(Vec::new()).await);
+    let connections = Arc::get_mut(&mut manager).expect("no retained calls or bindings");
+    connections.insert_test_client("unrelated", unrelated);
+    connections.required_servers = vec![McpServerKey::unscoped("unrelated")];
+
+    // A host hook prepares its hidden tool without starting an unrelated required server.
+    let prepared = tokio::select! {
+        result = manager.prepare_app_hook_call(Arc::clone(&config), "calendar.read_context") => {
+            result.expect("prepare the current Apps call")
+        }
+        _ = &mut started => panic!("App hook preparation started an unrelated server"),
+    };
+    assert_eq!(prepared.tool_info(), &expected);
+    for tool in ["shared_cached_tool", "client_local_blocked", "collision"] {
+        assert!(
+            manager
+                .prepare_app_hook_call(Arc::clone(&config), tool)
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]

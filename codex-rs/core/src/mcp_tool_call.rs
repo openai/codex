@@ -2117,6 +2117,22 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
+/// Connector identity only when this exact App call is enabled and needs no user approval.
+pub(crate) fn bundled_app_hook_connector(call: &PreparedMcpCall) -> Option<&str> {
+    let info = call.tool_info();
+    if !call.is_host_owned_apps() {
+        return None;
+    }
+    let metadata = mcp_tool_metadata(info, call.plugin_id(), /*arguments*/ None).ok()?;
+    let policy = app_tool_policy(call.config(), &metadata, &info.tool.name);
+    if !policy.enabled
+        || requires_mcp_tool_approval_for_mode(metadata.annotations.as_ref(), policy.approval)
+    {
+        return None;
+    }
+    info.connector_id.as_deref()
+}
+
 fn mcp_tool_approval_policy(
     call: &PreparedMcpCall,
     metadata: &McpToolApprovalMetadata,

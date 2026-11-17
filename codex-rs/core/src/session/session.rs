@@ -1690,13 +1690,15 @@ impl Session {
                 &session_configuration.disabled_plugin_ids,
             )
             .await;
+            let hook_mcp_executor = Arc::new(CoreHookMcpExecutor {
+                runtime: Arc::clone(&mcp_runtime),
+                thread_id,
+                session: OnceLock::new(),
+            });
             let (hooks, async_hook_results) = Hooks::new(
                 hooks_config,
                 thread_id,
-                Arc::new(CoreHookMcpExecutor {
-                    runtime: Arc::clone(&mcp_runtime),
-                    thread_id,
-                }),
+                hook_mcp_executor.clone(),
             )?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
@@ -2033,6 +2035,7 @@ impl Session {
                 forked_from_ordinal_exclusive,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            let _ = hook_mcp_executor.session.set(Arc::downgrade(&sess));
             if let Some(startup) = &startup {
                 startup.set_session(Arc::clone(&sess));
             }

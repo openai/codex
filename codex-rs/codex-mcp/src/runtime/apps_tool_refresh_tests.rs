@@ -58,7 +58,13 @@ async fn stale_apps_refresh_does_not_publish() -> anyhow::Result<()> {
         _ = started.notified() => {}
         _ = &mut refresh => panic!("refresh completed before tools/list was released"),
     }
+    let admit_hook = runtime.capture_app_hook_admission();
+    admit_hook()?;
     runtime.invalidate_apps_tool_refresh();
+    assert!(
+        admit_hook().is_err(),
+        "pending config refresh revokes hook admission before publication"
+    );
     release.notify_one();
     assert!(
         refresh.await?.is_none(),
@@ -71,7 +77,10 @@ async fn stale_apps_refresh_does_not_publish() -> anyhow::Result<()> {
         _ = started.notified() => {}
         _ = &mut refresh => panic!("refresh completed before tools/list was released"),
     }
+    let admit_hook = runtime.capture_app_hook_admission();
+    admit_hook()?;
     auth_manager.logout().await?;
+    assert!(admit_hook().is_err(), "logout revokes hook admission");
     release.notify_one();
     assert!(refresh.await?.is_none(), "logout supersedes the fetch");
 

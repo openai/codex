@@ -28,6 +28,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::Context;
 use arc_swap::ArcSwap;
 use async_channel::Sender;
 use codex_config::types::McpServerDisabledReason;
@@ -722,6 +723,22 @@ impl McpRuntime {
             .await
     }
 
+    /// Prepares one host-owned App hook from its client's current catalog, including hidden tools.
+    /// Callable names are normalized for this call without capturing the model's global binding.
+    /// Callers must validate connector identity and current approval policy before dispatch.
+    pub async fn prepare_app_hook_call(&self, tool: &str) -> anyhow::Result<PreparedMcpCall> {
+        let current = self.current.load_full();
+        ensure_host_owned_apps_registration(&current, CODEX_APPS_MCP_SERVER_NAME)?;
+        let config = current
+            .config
+            .as_ref()
+            .context("Apps runtime is unavailable")?;
+        current
+            .connections
+            .prepare_app_hook_call(Arc::clone(config), tool)
+            .await
+    }
+
     /// Captures the current runtime after its selected server has finished startup.
     pub async fn current_binding_for_call(&self, server: &McpServerKey) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();
@@ -778,6 +795,43 @@ impl McpRuntime {
         self.latest_connections()
             .refresh_codex_apps_tools_for_discovery()
             .await
+    }
+
+    /// Capture before refreshing Core's MCP projection; retry preparation if refresh invalidates it.
+    /// Check again at dispatch so an old binding cannot bypass newer App policy.
+    pub fn capture_app_hook_admission(&self) -> impl Fn() -> anyhow::Result<()> + Send + Sync {
+        let (generation, current) = {
+            let generation = self
+                .catalog_publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (*generation, self.current.load_full())
+        };
+        let auth_changes = current.auth_manager.as_ref().map(|manager| {
+            let mut changes = manager.auth_change_state_receiver();
+            if !current.auth_matches(manager.auth_cached().as_ref()) {
+                changes.mark_changed();
+            }
+            changes
+        });
+        move || {
+            let publication = self
+                .catalog_publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _auth = auth_changes
+                .as_ref()
+                .map(tokio::sync::watch::Receiver::borrow);
+            anyhow::ensure!(
+                *publication == generation
+                    && Arc::ptr_eq(&self.current.load(), &current)
+                    && auth_changes
+                        .as_ref()
+                        .is_none_or(|changes| matches!(changes.has_changed(), Ok(false))),
+                "App hook policy changed before dispatch"
+            );
+            Ok(())
+        }
     }
 
     /// Captures the current Apps client under Core's session permit.

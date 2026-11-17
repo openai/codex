@@ -254,6 +254,7 @@ pub(super) async fn execute_handler(
             server,
             tool,
             input,
+            ..
         } => {
             run_mcp_tool(
                 engine.mcp_executor.as_ref(),

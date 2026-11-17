@@ -9,6 +9,8 @@ use serde_json::Value;
 pub struct HookMcpCall {
     /// A bundled REPL cleanup may skip a private local transport whose startup was never requested.
     pub skip_dormant_repl_cleanup: bool,
+    /// Exact bundled App identity; executors must enforce live connector and approval policy.
+    pub expected_app_connector_id: Option<&'static str>,
     pub server: String,
     pub tool: String,
     pub environment_id: Option<String>,
@@ -24,7 +26,7 @@ pub struct HookMcpOutput {
     pub source_tool_namespace: Option<String>,
 }
 
-/// Executes already-connected MCP tools on behalf of hooks without coupling this crate to core.
+/// Executes MCP tools on behalf of hooks without coupling this crate to core.
 ///
 /// Implementations own server readiness, policy enforcement, timeout handling, and elicitation.
 pub trait HookMcpExecutor: Send + Sync {

@@ -107,6 +107,7 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::McpTool {
+            expected_app_connector_id: None,
             server: "security".to_string(),
             tool: "scan".to_string(),
             input: configured_input.clone(),
@@ -135,6 +136,7 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
     assert_eq!(
         *calls.lock().expect("lock calls"),
         vec![HookMcpCall {
+            expected_app_connector_id: None,
             skip_dormant_repl_cleanup: false,
             server: "security".to_string(),
             tool: "scan".to_string(),

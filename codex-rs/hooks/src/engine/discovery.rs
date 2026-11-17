@@ -770,6 +770,7 @@ fn append_matcher_groups(
                     NormalizedHandler {
                         config,
                         kind: ConfiguredHandlerKind::McpTool {
+                            expected_app_connector_id: None,
                             server,
                             tool,
                             input,

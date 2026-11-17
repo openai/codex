@@ -11,6 +11,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use super::HandlerRunResult;
 use super::HandlerSourcePath;
 use crate::mcp::HookMcpCall;
@@ -77,6 +78,13 @@ pub(crate) async fn run_mcp_tool(
                 skip_dormant_repl_cleanup: handler.builtin
                     && is_node_repl_backed_server(server)
                     && tool == "turn_ended",
+                expected_app_connector_id: match &handler.kind {
+                    ConfiguredHandlerKind::McpTool {
+                        expected_app_connector_id,
+                        ..
+                    } => *expected_app_connector_id,
+                    ConfiguredHandlerKind::Command { .. } => None,
+                },
                 server: server.to_string(),
                 tool: tool.to_string(),
                 environment_id,
