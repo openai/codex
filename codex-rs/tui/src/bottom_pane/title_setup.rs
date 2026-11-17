@@ -7,11 +7,7 @@
 //! - Reorder items
 //! - Preview the rendered title
 
-use itertools::Itertools;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::text::Line;
-use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use strum_macros::EnumString;
@@ -19,15 +15,11 @@ use strum_macros::EnumString;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ACTION_REQUIRED_PREVIEW_PREFIX;
-use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::build_action_required_title_text;
-use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::keymap::ListKeymap;
-use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the terminal title.
 ///
@@ -255,180 +247,67 @@ where
         .ok()
 }
 
-/// Interactive view for configuring terminal-title items.
-pub(crate) struct TerminalTitleSetupView {
-    picker: MultiSelectPicker,
-}
-
-impl TerminalTitleSetupView {
-    /// Creates the terminal-title picker, preserving the configured item order first.
-    ///
-    /// Unknown configured ids are skipped here instead of surfaced inline. The
-    /// main TUI still warns about them when rendering the actual title, but the
-    /// picker itself only exposes the selectable items it can meaningfully
-    /// preview and persist.
-    pub(crate) fn new(
-        title_items: Option<&[String]>,
-        preview_data: StatusSurfacePreviewData,
-        app_event_tx: AppEventSender,
-        list_keymap: ListKeymap,
-    ) -> Self {
-        let selected_items = title_items
-            .into_iter()
-            .flatten()
-            .filter_map(|id| id.parse::<TerminalTitleItem>().ok())
-            .unique()
-            .collect_vec();
-        let selected_set = selected_items
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        let items = selected_items
-            .into_iter()
-            .map(|item| Self::title_select_item(item, /*enabled*/ true, &preview_data))
-            .chain(
-                TerminalTitleItem::iter()
-                    .filter(|item| !selected_set.contains(item))
-                    .map(|item| {
-                        Self::title_select_item(item, /*enabled*/ false, &preview_data)
-                    }),
-            )
-            .collect();
-
-        Self {
-            picker: MultiSelectPicker::builder(
-                "Configure Terminal Title".to_string(),
-                Some("Select which items to display in the terminal title.".to_string()),
-                app_event_tx,
-            )
-            .list_keymap(list_keymap)
-            .items(items)
-            .enable_ordering()
-            .on_preview(move |items| {
-                let items = parse_terminal_title_items(
-                    items
-                        .iter()
-                        .filter(|item| item.enabled)
-                        .map(|item| item.id.as_str()),
-                )?;
-                preview_line_for_title_items(&items, &preview_data)
-            })
-            .on_change(|items, app_event| {
-                let Some(items) = parse_terminal_title_items(
-                    items
-                        .iter()
-                        .filter(|item| item.enabled)
-                        .map(|item| item.id.as_str()),
-                ) else {
-                    return;
-                };
-                app_event.send(AppEvent::TerminalTitleSetupPreview { items });
-            })
-            .on_confirm(|ids, app_event| {
-                let Some(items) = parse_terminal_title_items(ids.iter().map(String::as_str)) else {
-                    return;
-                };
-                app_event.send(AppEvent::TerminalTitleSetup { items });
-            })
-            .on_cancel(|app_event| {
-                app_event.send(AppEvent::TerminalTitleSetupCancelled);
-            })
-            .build(),
-        }
-    }
-
-    fn title_select_item(
-        item: TerminalTitleItem,
-        enabled: bool,
-        preview_data: &StatusSurfacePreviewData,
-    ) -> MultiSelectItem {
-        let default_name = item.to_string();
-        let default_description = item.description();
-        let (name, description) = match item.preview_item() {
-            Some(
-                preview_item @ (StatusSurfacePreviewItem::FiveHourLimit
-                | StatusSurfacePreviewItem::WeeklyLimit),
-            ) => (
-                preview_data.rate_limit_item_name(preview_item, &default_name),
-                preview_data.rate_limit_item_description(preview_item, default_description),
-            ),
-            _ => (default_name, default_description.to_string()),
+/// Creates the terminal-title picker, skipping unknown IDs and preserving configured order.
+pub(crate) fn terminal_title_setup(
+    title_items: Option<&[String]>,
+    preview_data: StatusSurfacePreviewData,
+    app_event_tx: AppEventSender,
+    list_keymap: ListKeymap,
+) -> MultiSelectPicker {
+    let items = preview_data.picker_items(
+        title_items,
+        TerminalTitleItem::description,
+        TerminalTitleItem::preview_item,
+    );
+    MultiSelectPicker::builder(
+        "Configure Terminal Title".to_string(),
+        Some("Select which items to display in the terminal title.".to_string()),
+        app_event_tx,
+    )
+    .list_keymap(list_keymap)
+    .items(items)
+    .enable_ordering()
+    .allow_input_when_disconnected()
+    .on_preview(move |items| {
+        let items = parse_terminal_title_items(
+            items
+                .iter()
+                .filter(|item| item.enabled)
+                .map(|item| item.id.as_str()),
+        )?;
+        preview_line_for_title_items(&items, &preview_data)
+    })
+    .on_change(|items, app_event| {
+        let Some(items) = parse_terminal_title_items(
+            items
+                .iter()
+                .filter(|item| item.enabled)
+                .map(|item| item.id.as_str()),
+        ) else {
+            return;
         };
-
-        MultiSelectItem {
-            id: item.to_string(),
-            name,
-            description: Some(description),
-            enabled,
-            orderable: true,
-            section_break_after: false,
-            on_activate: None,
-        }
-    }
-}
-
-impl BottomPaneView for TerminalTitleSetupView {
-    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
-        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
-    }
-
-    fn accepts_input_when_disconnected(&self) -> bool {
-        true
-    }
-
-    fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
-        self.picker.handle_key_event(key_event);
-    }
-
-    fn is_complete(&self) -> bool {
-        self.picker.complete
-    }
-
-    fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.picker.close();
-        CancellationEvent::Handled
-    }
-}
-
-impl Renderable for TerminalTitleSetupView {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.picker.render(area, buf);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.picker.desired_height(width)
-    }
+        app_event.send(AppEvent::TerminalTitleSetupPreview { items });
+    })
+    .on_confirm(|ids, app_event| {
+        let Some(items) = parse_terminal_title_items(ids.iter().map(String::as_str)) else {
+            return;
+        };
+        app_event.send(AppEvent::TerminalTitleSetup { items });
+    })
+    .on_cancel(|app_event| {
+        app_event.send(AppEvent::TerminalTitleSetupCancelled);
+    })
+    .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::bottom_pane_view::BottomPaneView;
+    use crate::bottom_pane::multi_select_picker::tests::render_lines;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
-
-    fn render_lines(view: &TerminalTitleSetupView, width: u16) -> String {
-        let height = view.desired_height(width);
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        view.render(area, &mut buf);
-
-        let lines: Vec<String> = (0..area.height)
-            .map(|row| {
-                let mut line = String::new();
-                for col in 0..area.width {
-                    let symbol = buf[(area.x + col, area.y + row)].symbol();
-                    if symbol.is_empty() {
-                        line.push(' ');
-                    } else {
-                        line.push_str(symbol);
-                    }
-                }
-                line
-            })
-            .collect();
-        lines.join("\n")
-    }
 
     #[test]
     fn renders_title_setup_popup() {
@@ -440,12 +319,13 @@ mod tests {
             "run-state".to_string(),
             "thread-title".to_string(),
         ];
-        let view = TerminalTitleSetupView::new(
+        let view = terminal_title_setup(
             Some(&selected),
             StatusSurfacePreviewData::default(),
             tx,
             crate::keymap::RuntimeKeymap::defaults().list,
         );
+        assert!(view.accepts_input_when_disconnected());
         assert_snapshot!(
             "terminal_title_setup_basic",
             render_lines(&view, /*width*/ 84)

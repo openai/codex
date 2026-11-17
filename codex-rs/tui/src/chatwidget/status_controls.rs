@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::bottom_pane::StatusLine;
+use crate::bottom_pane::terminal_title_setup;
 use crate::status::thread_cost_micros;
 
 impl ChatWidget {
@@ -360,7 +361,7 @@ impl ChatWidget {
         let configured_terminal_title_items = self.configured_terminal_title_items();
         self.terminal_title_setup_original_items =
             Some(self.local_settings.tui.terminal_title.clone());
-        let view = TerminalTitleSetupView::new(
+        let view = terminal_title_setup(
             Some(configured_terminal_title_items.as_slice()),
             self.terminal_title_preview_data(),
             self.app_event_tx.clone(),

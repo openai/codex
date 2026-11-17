@@ -213,9 +213,9 @@ pub(crate) use status_line_setup::StatuslineProviderActions;
 pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
-pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
+pub(crate) use title_setup::terminal_title_setup;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;

@@ -52,7 +52,6 @@ use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
-use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;

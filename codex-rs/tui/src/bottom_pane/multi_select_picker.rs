@@ -202,6 +202,7 @@ pub(crate) struct MultiSelectPicker {
     /// Whether left/right arrow reordering is enabled.
     ordering_enabled: bool,
     require_selection: bool,
+    accepts_input_when_disconnected: bool,
 
     /// Shared list keybindings for navigation and completion.
     keymap: ListKeymap,
@@ -529,6 +530,10 @@ impl BottomPaneView for MultiSelectPicker {
         self.complete
     }
 
+    fn accepts_input_when_disconnected(&self) -> bool {
+        self.accepts_input_when_disconnected
+    }
+
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.close();
         CancellationEvent::Handled
@@ -702,6 +707,7 @@ pub(crate) struct MultiSelectPickerBuilder {
     items: Vec<MultiSelectItem>,
     ordering_enabled: bool,
     require_selection: bool,
+    accepts_input_when_disconnected: bool,
     app_event_tx: AppEventSender,
     keymap: ListKeymap,
     preview_builder: Option<PreviewCallback>,
@@ -720,6 +726,7 @@ impl MultiSelectPickerBuilder {
             items: Vec::new(),
             ordering_enabled: false,
             require_selection: false,
+            accepts_input_when_disconnected: false,
             app_event_tx,
             keymap: RuntimeKeymap::defaults().list,
             preview_builder: None,
@@ -740,6 +747,11 @@ impl MultiSelectPickerBuilder {
     /// Reordering is only active when the search query is empty.
     pub fn enable_ordering(mut self) -> Self {
         self.ordering_enabled = true;
+        self
+    }
+
+    pub fn allow_input_when_disconnected(mut self) -> Self {
+        self.accepts_input_when_disconnected = true;
         self
     }
 
@@ -855,6 +867,7 @@ impl MultiSelectPickerBuilder {
             action_footer_hint: super::popup_consts::picker_hint_line_for_keymap(&self.keymap),
             ordering_enabled: self.ordering_enabled,
             require_selection: self.require_selection,
+            accepts_input_when_disconnected: self.accepts_input_when_disconnected,
             keymap: self.keymap,
             search_query: String::new(),
             filtered_indices: Vec::new(),
@@ -903,11 +916,32 @@ pub(crate) fn match_item(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    pub(in crate::bottom_pane) fn render_lines(view: &impl Renderable, width: u16) -> String {
+        let area = Rect::new(0, 0, width, view.desired_height(width));
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     fn test_picker(items: Vec<MultiSelectItem>) -> MultiSelectPicker {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -946,6 +980,7 @@ mod tests {
                 "branch", /*orderable*/ true, /*section_break_after*/ false,
             ),
         ]);
+        assert!(!picker.accepts_input_when_disconnected());
 
         picker.move_selected_item(Direction::Down);
         assert_eq!(
