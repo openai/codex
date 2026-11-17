@@ -16,6 +16,8 @@ pub struct ProjectEnvironment {
     pub cwd: Option<String>,
 }
 
+pub(super) const DEFAULT_ENVIRONMENT_CONFIG_ID: &str = "asenvcfg_base";
+
 impl std::fmt::Debug for ProjectEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ProjectEnvironment([redacted])")
@@ -51,7 +53,7 @@ impl Client {
                 origin_urls,
                 cwd,
             }) => wire::ManagedEnvironment {
-                environment_config_id: Some("asenvcfg_base".to_owned()),
+                environment_config_id: Some(DEFAULT_ENVIRONMENT_CONFIG_ID.to_owned()),
                 cwd,
                 overrides: Some(wire::EnvironmentOverrides {
                     repositories: Some(wire::RepositoryOverrides {
