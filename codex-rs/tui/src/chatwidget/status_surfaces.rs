@@ -647,7 +647,7 @@ impl ChatWidget {
     }
 
     fn uses_workspace_headline(&self, status_line_items: &[StatusLineItem]) -> bool {
-        self.selected_statusline_provider().is_some()
+        self.provider_needs_snapshot()
             || status_line_items.contains(&StatusLineItem::WorkspaceHeadline)
     }
 

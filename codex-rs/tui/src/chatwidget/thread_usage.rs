@@ -402,7 +402,7 @@ impl ChatWidget {
     }
 
     fn selected_thread_usage(&self) -> SelectedThreadUsage {
-        if self.selected_statusline_provider().is_some() {
+        if self.provider_needs_snapshot() {
             return SelectedThreadUsage {
                 credits: self.plan_type != Some(PlanType::Ent26),
                 estimated_cost: true,

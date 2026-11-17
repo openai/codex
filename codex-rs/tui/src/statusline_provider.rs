@@ -4,7 +4,7 @@ mod descriptor;
 pub(crate) mod discovery;
 mod inventory;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use crate::config_update::read_effective_config_with_layers;
 use codex_app_server_client::AppServerRequestHandle;
@@ -52,6 +52,12 @@ impl From<&str> for McpServerName {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct McpToolName(String);
 
+impl McpToolName {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl From<&str> for McpToolName {
     fn from(name: &str) -> Self {
         Self(name.to_owned())
@@ -65,10 +71,18 @@ pub(crate) struct ProviderId {
     pub(crate) tool: McpToolName,
 }
 
+impl From<&codex_config::types::StatusLineProviderId> for ProviderId {
+    fn from(id: &codex_config::types::StatusLineProviderId) -> Self {
+        Self {
+            server: id.server.as_str().into(),
+            tool: id.tool.as_str().into(),
+        }
+    }
+}
+
 pub(crate) enum ProviderSelection<'a> {
     Saved(&'a ProviderId),
     /// A provider advertised during the current picker refresh.
-    #[cfg_attr(not(test), expect(dead_code, reason = "staged picker selection"))]
     Discovered(&'a StatuslineProvider),
 }
 

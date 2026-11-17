@@ -9,6 +9,7 @@ use crate::backend_id::BackendId;
 use crate::statusline_provider::ProviderId;
 use crate::statusline_provider::ProviderSelection;
 use crate::statusline_provider::ResolvedStatuslineProvider;
+use crate::statusline_provider::StatuslineProvider;
 use crate::ui_tree::UiNode;
 use crate::ui_tree::UiTree;
 use codex_app_server_protocol::McpResourceContent;
@@ -35,7 +36,8 @@ use uuid::Uuid;
 pub(super) struct ActiveStatuslineRead {
     token: Uuid,
     thread: Option<ThreadId>,
-    selection: StatusLineProviderId,
+    selection: ProviderId,
+    provider_from_picker: Option<StatuslineProvider>,
     host_cwd: PathBuf,
     startup: watch::Sender<()>,
     cancel: CancellationToken,
@@ -89,8 +91,14 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn reselect_statusline_provider(&mut self) {
+    pub(crate) fn reselect_statusline_provider(
+        &mut self,
+        provider_from_picker: Option<StatuslineProvider>,
+    ) {
         self.statusline_read = None;
+        if let Some(selection) = self.selected_statusline_provider() {
+            self.start_statusline_read(selection.into(), provider_from_picker);
+        }
         self.refresh_status_line();
     }
 
@@ -106,12 +114,30 @@ impl ChatWidget {
         {
             return true;
         }
+        let selection = ProviderId::from(selection);
+        // An explicit choice may precede the first thread ID for this widget.
+        let provider_from_picker = self
+            .statusline_read
+            .as_mut()
+            .filter(|read| read.thread.is_none() && read.selection == selection)
+            .and_then(|read| read.provider_from_picker.take());
+        self.start_statusline_read(selection, provider_from_picker);
+        true
+    }
+
+    fn start_statusline_read(
+        &mut self,
+        selection: ProviderId,
+        provider_from_picker: Option<StatuslineProvider>,
+    ) {
         let token = Uuid::new_v4();
         let (startup, ready) = watch::channel(());
+        let provider_from_picker = provider_from_picker.filter(|provider| provider.id == selection);
         self.statusline_read = Some(ActiveStatuslineRead {
             token,
             thread: self.thread_id,
-            selection: selection.clone(),
+            selection,
+            provider_from_picker,
             host_cwd: self.status_line_cwd().to_owned(),
             startup,
             cancel: CancellationToken::new(),
@@ -123,7 +149,17 @@ impl ChatWidget {
         if self.thread_id.is_some() {
             StatuslineReadEvent::send(&self.app_event_tx, token, ReadStep::Start(ready));
         }
-        true
+    }
+
+    pub(super) fn provider_needs_snapshot(&self) -> bool {
+        if self
+            .statusline_read
+            .as_ref()
+            .is_some_and(|read| read.cancel.is_cancelled() && read.is_current(self))
+        {
+            return false;
+        }
+        self.selected_statusline_provider().is_some()
     }
 
     pub(crate) fn handle_statusline_read(
@@ -154,9 +190,12 @@ impl ChatWidget {
                 if backend != owner.backend_id() {
                     return;
                 }
-                let tree = result.unwrap_or_else(|name| UiTree(Some(UiNode::String(format!(
-                    "Error loading statusline contents from {name}. Use /statusline to (re)select your provider and try again."
-                )))));
+                let tree = result.unwrap_or_else(|name| {
+                    footer.cancel.cancel();
+                    UiTree(Some(UiNode::String(format!(
+                        "Error loading statusline contents from {name}. Use /statusline to (re)select your provider and try again."
+                    ))))
+                });
                 self.set_status_line(Some(tree.into()));
             }
         }
@@ -166,12 +205,15 @@ impl ChatWidget {
 impl ActiveStatuslineRead {
     fn is_current(&self, chat: &ChatWidget) -> bool {
         self.thread == chat.thread_id
-            && Some(&self.selection) == chat.selected_statusline_provider()
+            && chat.selected_statusline_provider().is_some_and(|id| {
+                self.selection.server.as_str() == id.server
+                    && self.selection.tool.as_str() == id.tool
+            })
             && self.host_cwd == chat.status_line_cwd()
     }
 
     pub(super) fn server_ready(&self, server: &str) {
-        if self.selection.server == server {
+        if self.selection.server.as_str() == server {
             self.startup.send_replace(());
         }
     }
@@ -183,11 +225,12 @@ impl ActiveStatuslineRead {
         mut ready: watch::Receiver<()>,
     ) {
         let Some(thread) = self.thread else { return };
-        let id = ProviderId {
-            server: self.selection.server.as_str().into(),
-            tool: self.selection.tool.as_str().into(),
-        };
-        let mut name = self.selection.tool.clone();
+        let id = self.selection.clone();
+        let provider_from_picker = self.provider_from_picker.clone();
+        let mut name = provider_from_picker.as_ref().map_or_else(
+            || id.tool.as_str().to_owned(),
+            |provider| provider.title.clone(),
+        );
         let token = self.token;
         let events = events.clone();
         let client = owner.request_handle();
@@ -204,7 +247,10 @@ impl ActiveStatuslineRead {
                                 &client,
                                 thread,
                                 &cwd,
-                                ProviderSelection::Saved(&id),
+                                provider_from_picker.as_ref().map_or(
+                                    ProviderSelection::Saved(&id),
+                                    ProviderSelection::Discovered,
+                                ),
                             )
                             .await
                             {

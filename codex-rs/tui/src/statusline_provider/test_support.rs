@@ -1,6 +1,8 @@
 #![cfg(test)]
 //! Drive statusline RPCs through the same request handle a remote TUI uses.
 
+use super::ProviderId;
+use super::StatuslineProvider;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::CloudClient;
@@ -29,10 +31,23 @@ pub(super) async fn reply(commands: &mut Requests, method: &str, params: Value, 
     command.response.send(Ok(Ok(result))).unwrap();
 }
 
-pub(super) fn row(name: &str, tools: Vec<Value>) -> Value {
+pub(crate) fn row(name: &str, tools: Vec<Value>) -> Value {
     let tools = tools
         .into_iter()
         .map(|tool| (tool["name"].as_str().unwrap().to_owned(), tool))
         .collect::<serde_json::Map<_, _>>();
     json!({"name":name,"runtimeStatus":"connected","httpOrigin":null,"tools":tools,"authStatus":"unsupported","resources":[],"resourceTemplates":[]})
+}
+
+pub(crate) fn advertised(server: &str, tool: &str, uri: &str) -> StatuslineProvider {
+    StatuslineProvider {
+        id: ProviderId {
+            server: server.into(),
+            tool: tool.into(),
+        },
+        title: "Calendar".into(),
+        uri: uri.into(),
+        plugin_id: None,
+        plugin_label: None,
+    }
 }

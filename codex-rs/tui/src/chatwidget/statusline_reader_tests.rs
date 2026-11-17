@@ -240,6 +240,10 @@ impl Reader {
     }
 
     async fn resolve(&mut self) {
+        self.resolve_on(&[None, self.chat.thread_id]).await;
+    }
+
+    async fn resolve_on(&mut self, scopes: &[Option<ThreadId>]) {
         let (ClientRequest::ConfigRead { .. }, config) = self.request().await else {
             panic!("expected the selected thread's config");
         };
@@ -249,21 +253,23 @@ impl Reader {
                 json!({"config":layer, "layers":[{"name":{"type":"user"}, "config":layer}]}),
             )))
             .unwrap();
-        for thread in [None, self.chat.thread_id.map(|id| id.to_string())] {
+        for thread in scopes {
             let (ClientRequest::McpServerStatusList { params, .. }, reply) = self.request().await
             else {
                 panic!("expected a selected-server lookup");
             };
             assert_eq!(
                 (params.server_name.as_deref(), params.thread_id),
-                (Some("fixture"), thread)
+                (Some("fixture"), thread.map(|id| id.to_string()))
             );
             let name = &self.chat.selected_statusline_provider().unwrap().tool;
             let tool = json!({"name":name,"title":"Calendar","inputSchema":{},"_meta":{
                 "openai/ui":{"entrypoints":[{"type":"statusline","resourceUri":URI}]}
             }});
-            reply.send(Ok(Ok(json!({"data":[{"name":"fixture","httpOrigin":null,"runtimeStatus":"connected",
-                "tools":{(name):tool},"resources":[],"resourceTemplates":[],"authStatus":"unsupported"}],"nextCursor":null})))).unwrap();
+            let row = crate::statusline_provider::test_support::row("fixture", vec![tool]);
+            reply
+                .send(Ok(Ok(json!({"data":[row],"nextCursor":null}))))
+                .unwrap();
         }
     }
 
@@ -356,6 +362,7 @@ async fn statusline_invalid_content_stops_polling_immediately() {
     reader.dispatch().await;
     assert_eq!(failed.elapsed(), Duration::ZERO);
     insta::assert_snapshot!(footer(&reader.chat).unwrap(), @"Error loading statusline contents from Calendar. Use /statusline to (re)select your provider and try again.");
+    assert!(!reader.chat.provider_needs_snapshot());
     reader.chat.refresh_status_line();
     advance(/*millis*/ 60_000).await;
     reader.assert_idle();
@@ -549,9 +556,18 @@ async fn statusline_explicit_reselection_restarts_a_failed_reader() {
             .contains("Error loading statusline contents from Calendar")
     );
 
-    reader.chat.reselect_statusline_provider();
+    // An explicit choice can arrive while the displayed thread is starting.
+    let thread = reader.chat.thread_id.take();
+    let provider = crate::statusline_provider::test_support::advertised(
+        "fixture",
+        "line",
+        "ui://global/footer",
+    );
+    reader.chat.reselect_statusline_provider(Some(provider));
+    reader.chat.thread_id = thread;
+    reader.chat.refresh_status_line();
     reader.dispatch().await;
-    reader.resolve().await;
+    reader.resolve_on(&[reader.chat.thread_id]).await;
     respond(reader.read(URI).await, r#""restored""#);
     reader.dispatch().await;
     assert_eq!(footer(&reader.chat).as_deref(), Some("restored"));
