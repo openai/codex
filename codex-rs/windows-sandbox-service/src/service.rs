@@ -181,6 +181,7 @@ fn service_main_inner(state: &ServiceState) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("the service status handle was already registered"))?;
 
     state.report_status(SERVICE_START_PENDING, NO_ERROR)?;
+    harden_service_dacl(&service_name)?;
     let package_lifecycle =
         crate::package_lifecycle::PackageLifecycle::new(Arc::clone(&state.uninstalling))?;
     let reason = runtime_lifecycle::run(state, &package_lifecycle)?;
@@ -190,6 +191,58 @@ fn service_main_inner(state: &ServiceState) -> Result<()> {
         "The Codex sandbox service has stopped.",
     );
     state.report_status(SERVICE_STOPPED, NO_ERROR)
+}
+
+fn harden_service_dacl(service_name: &[u16]) -> Result<()> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security as security;
+    use windows_sys::Win32::Security::Authorization as auth;
+
+    // SYSTEM and elevated administrators control the service. Other users can query or start it for setup.
+    let policy = codex_windows_sandbox::to_wide("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWRPLORC;;;AU)");
+    let mut descriptor = ptr::null_mut();
+    if unsafe {
+        auth::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            policy.as_ptr(),
+            auth::SDDL_REVISION_1,
+            &mut descriptor,
+            ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error()).context("create sandbox service permissions");
+    }
+    let result = (|| {
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut acl = ptr::null_mut();
+        if unsafe {
+            security::GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted)
+        } == 0
+            || present == 0
+            || acl.is_null()
+        {
+            return Err(io::Error::last_os_error()).context("read sandbox service policy");
+        }
+        let status = unsafe {
+            auth::SetNamedSecurityInfoW(
+                service_name.as_ptr(),
+                auth::SE_SERVICE,
+                security::DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                acl,
+                ptr::null_mut(),
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32))
+                .context("set sandbox service permissions");
+        }
+        Ok(())
+    })();
+    unsafe { LocalFree(descriptor) };
+    result
 }
 
 fn fatal_error_hresult(error: &anyhow::Error) -> u32 {
