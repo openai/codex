@@ -18,11 +18,13 @@ use codex_extension_api::TurnStopInput;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::MessageBoardHost;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_state::SqliteConfig;
 use tokio::sync::mpsc;
 
+use crate::ActorReviewer;
 use crate::EvidenceCursor;
 use crate::Housekeeper;
 use crate::cutoff::RootEvidence;
@@ -49,7 +51,8 @@ struct Host {
     board_host: Box<dyn Fn(ThreadId) -> Arc<dyn MessageBoardHost> + Send + Sync>,
 }
 
-struct RootWorker {
+pub(super) struct RootWorker {
+    pub(super) reader: Arc<dyn AgentMessageBoard>,
     wake: mpsc::Sender<()>,
     lifetime: Arc<ReviewerTasks>,
 }
@@ -83,6 +86,11 @@ impl Host {
         lifetime
             .tasks
             .spawn(queue.clone().capture_on_activity(wakes));
+        let worker = RootWorker {
+            wake,
+            lifetime: Arc::clone(&lifetime),
+            reader: Arc::clone(&reader),
+        };
         let scope = lifetime.clone();
         let manager = self.manager.clone();
         lifetime.tasks.spawn(async move {
@@ -134,7 +142,7 @@ impl Host {
             }
         });
         input.thread_store.insert_arc(queue);
-        input.thread_store.insert(RootWorker { wake, lifetime });
+        input.thread_store.insert(worker);
         Ok(())
     }
 }
@@ -145,15 +153,29 @@ impl ThreadLifecycleContributor<Config> for Host {
         input: ThreadReadyInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if input.session_source.is_internal()
-                || input.config.ephemeral
-                || input.thread_store.level_id() != input.session_store.level_id()
-            {
+            if input.session_source.is_internal() || input.config.ephemeral {
                 return;
             }
-            let Ok(root) = ThreadId::from_string(input.thread_store.level_id()) else {
+            let (Ok(actor), Ok(root)) = (
+                ThreadId::from_string(input.thread_store.level_id()),
+                ThreadId::from_string(input.session_store.level_id()),
+            ) else {
                 return;
             };
+            // Legacy spawned agents have no board identity and keep their native reviewer.
+            let Some(path) = input
+                .session_source
+                .get_agent_path()
+                .or_else(|| (actor == root).then(AgentPath::root))
+            else {
+                return;
+            };
+            let actor_reviewer =
+                Arc::new(ActorReviewer::new(self.manager.clone(), root, actor, path));
+            input.thread_store.insert_arc(actor_reviewer);
+            if actor != root {
+                return;
+            }
             if let Err(error) = self.activate(root, &input).await {
                 tracing::warn!(%root, error = %error, "Guardian intake unavailable");
             }
@@ -161,6 +183,9 @@ impl ThreadLifecycleContributor<Config> for Host {
     }
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            if let Some(actor) = input.thread_store.remove::<ActorReviewer>() {
+                actor.shutdown().await;
+            }
             if let Some(worker) = input.thread_store.remove::<RootWorker>() {
                 input.thread_store.remove::<RootEvidence>();
                 worker.lifetime.cancellation.cancel();

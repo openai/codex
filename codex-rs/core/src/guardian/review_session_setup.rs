@@ -76,6 +76,16 @@ impl PreparedGuardianContext {
 }
 
 impl PreparedGuardianContext {
+    /// Compares reviewer settings and the parent's history-reset version.
+    /// Callers separately decide whether changes to parent history or the root's
+    /// authorization and review-context revisions allow reuse.
+    pub fn matches_session_configuration(&self, previous: &GuardianReviewSession) -> bool {
+        let mut key = self.key.clone();
+        key.root_review_version = previous.reuse_key.root_review_version;
+        key.parent_history_version = previous.reuse_key.parent_history_version;
+        key == previous.reuse_key
+    }
+
     pub fn reuse_key(
         &self,
         previous: Option<&GuardianReviewSession>,

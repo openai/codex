@@ -8,6 +8,10 @@ use codex_message_board::LocalBoardOptions;
 use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
 
+mod actor;
+mod conversation;
+pub use actor::ActorReviewer;
+pub use actor::PreparedReviewer;
 mod cutoff;
 pub use cutoff::ReviewCutoff;
 pub use cutoff::RootEvidence;

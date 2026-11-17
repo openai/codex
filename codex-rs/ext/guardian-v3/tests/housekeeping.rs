@@ -781,3 +781,86 @@ async fn command_token_rotation_between_batches_reauthenticates_the_housekeeper(
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn retains_only_reusable_reviewer_conversations() -> anyhow::Result<()> {
+    use codex_core::guardian_review::prepare_review_prewarm;
+    use codex_extension_api::ExtensionData;
+    use codex_extension_api::ExtensionRegistryBuilder;
+    use codex_extension_api::ThreadReadyInput;
+    use codex_extension_api::ThreadStopInput;
+    use codex_guardian_reviewer::SessionDisposition;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::User)
+        .build_with_auto_env(&server)
+        .await?;
+    let actor_thread = &test.codex;
+    let root = actor_thread.startup_metadata().thread_id;
+    let mut registry = ExtensionRegistryBuilder::default();
+    codex_guardian_v3::install(
+        &mut registry,
+        Arc::downgrade(&test.thread_manager),
+        test.config.sqlite_config().clone(),
+        |root| board_host(root),
+    );
+    let registry = registry.build();
+    let session = ExtensionData::new(root.to_string());
+    let thread = actor_thread.thread_extension_data();
+    let lifecycle = &registry.thread_lifecycle_contributors()[0];
+    let child = ExtensionData::new(codex_protocol::ThreadId::new().to_string());
+    lifecycle
+        .on_thread_ready(ThreadReadyInput {
+            config: &test.config,
+            session_source: &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            history_initialization: codex_history::HistoryInitialization::New,
+            history_mode: ThreadHistoryMode::Paginated,
+            session_store: &session,
+            thread_store: &child,
+        })
+        .await;
+    assert!(child.get::<codex_guardian_v3::ActorReviewer>().is_none());
+    lifecycle
+        .on_thread_ready(ThreadReadyInput {
+            config: &test.config,
+            session_source: &SessionSource::Exec,
+            history_initialization: codex_history::HistoryInitialization::New,
+            history_mode: ThreadHistoryMode::Paginated,
+            session_store: &session,
+            thread_store: thread,
+        })
+        .await;
+    let actor = thread
+        .get::<codex_guardian_v3::ActorReviewer>()
+        .expect("reviewer installed");
+    let context = prepare_review_prewarm(actor_thread, codex_guardian_v3::BOARD_RETRIEVAL).await?;
+    let cancel = CancellationToken::new();
+    let first = actor.reserve(&context, &cancel).await?;
+    let id = first.thread_id();
+    first.finish(SessionDisposition::Reusable);
+    let second = actor.reserve(&context, &cancel).await?;
+    assert_eq!(id, second.thread_id());
+    drop(second);
+    let third = actor.reserve(&context, &cancel).await?;
+    assert_ne!(id, third.thread_id());
+    third.finish(SessionDisposition::Discard);
+    lifecycle
+        .on_thread_stop(ThreadStopInput {
+            thread_store: thread,
+            session_store: &session,
+        })
+        .await;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
