@@ -156,6 +156,11 @@ pub(crate) use warnings::warning_entries;
 mod tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "DisplayMode")
+)]
 pub(crate) enum HistoryRenderMode {
     #[serde(rename = "standard")]
     Rich,

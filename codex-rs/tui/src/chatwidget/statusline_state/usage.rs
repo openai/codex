@@ -5,6 +5,11 @@ use crate::token_usage::TokenUsage;
 use serde::Serialize;
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", optional_fields)
+)]
 pub(super) struct Usage {
     context: Context,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -14,6 +19,11 @@ pub(super) struct Usage {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", optional_fields)
+)]
 struct Cost {
     #[serde(skip_serializing_if = "Option::is_none")]
     total_cost_usd: Option<f64>,
@@ -22,21 +32,39 @@ struct Cost {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", optional_fields)
+)]
 struct Context {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(as = "Option<f64>"))]
     context_window_size: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(as = "Option<f64>"))]
     used_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(as = "Option<f64>"))]
     used_percentage: Option<i64>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "TokenUsage")
+)]
 struct Counts {
+    #[cfg_attr(test, ts(type = "number"))]
     total_input_tokens: i64,
+    #[cfg_attr(test, ts(type = "number"))]
     cache_read_input_tokens: i64,
+    #[cfg_attr(test, ts(type = "number"))]
     cache_write_input_tokens: i64,
+    #[cfg_attr(test, ts(type = "number"))]
     other_input_tokens: i64,
+    #[cfg_attr(test, ts(type = "number"))]
     output_tokens: i64,
 }
 

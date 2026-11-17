@@ -21,6 +21,7 @@ use serde::Serialize;
 use strum_macros::Display;
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
 pub(crate) struct StatuslineState {
     account: account::Account,
     app: StatuslineStateApp,
@@ -29,20 +30,38 @@ pub(crate) struct StatuslineState {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "App")
+)]
 struct StatuslineStateApp {
     cli_version: &'static str,
     display_mode: crate::history_cell::HistoryRenderMode,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Config")
+)]
 struct StatuslineStateConfig {
+    #[cfg_attr(test, ts(type = "StatuslineItemId[]"))]
     statusline_items: Vec<StatusLineItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     profile: Option<String>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Thread")
+)]
 struct StatuslineStateThread {
+    #[cfg_attr(test, ts(inline))]
     id: codex_protocol::ThreadId,
     name: Option<String>,
     agent: StatuslineStateAgent,
@@ -50,23 +69,41 @@ struct StatuslineStateThread {
     workspace: StatuslineStateWorkspace,
     usage: usage::Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     approval: Option<StatuslineStateApproval>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     permissions: Option<StatuslineStatePermissions>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Workspace")
+)]
 struct StatuslineStateWorkspace {
+    #[cfg_attr(test, ts(inline))]
     cwd: codex_utils_path_uri::LegacyAppPathString,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Agent")
+)]
 struct StatuslineStateAgent {
     state: StatuslineStateRunState,
 }
 
 #[derive(Serialize, Display)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "RunState")
+)]
 pub(super) enum StatuslineStateRunState {
     Starting,
     Ready,
@@ -76,14 +113,21 @@ pub(super) enum StatuslineStateRunState {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Model", optional_fields)
+)]
 struct StatuslineStateModel {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(inline))]
     access_program: Option<CyberAccessProgram>,
     display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     provider: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(inline))]
     reasoning_level: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     service_tier: Option<String>,
@@ -92,6 +136,11 @@ struct StatuslineStateModel {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Approval")
+)]
 struct StatuslineStateApproval {
     policy: StatuslineStateApprovalPolicy,
     reviewer: StatuslineStateApprovalReviewer,
@@ -99,6 +148,11 @@ struct StatuslineStateApproval {
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "ApprovalPolicy")
+)]
 enum StatuslineStateApprovalPolicy {
     Untrusted,
     OnRequest,
@@ -108,15 +162,26 @@ enum StatuslineStateApprovalPolicy {
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "ApprovalReviewer")
+)]
 enum StatuslineStateApprovalReviewer {
     User,
     AutoReview,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Permissions")
+)]
 struct StatuslineStatePermissions {
     display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     profile_id: Option<String>,
     #[serde(flatten)]
     enforcement: StatuslineStateEnforcement,
@@ -124,19 +189,31 @@ struct StatuslineStatePermissions {
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "Enforcement")
+)]
 enum StatuslineStateEnforcement {
     Managed {
         file_system: StatuslineStateFileSystem,
+        #[cfg_attr(test, ts(inline))]
         network: NetworkSandboxPolicy,
     },
     Disabled,
     External {
+        #[cfg_attr(test, ts(inline))]
         network: NetworkSandboxPolicy,
     },
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "FileSystem")
+)]
 enum StatuslineStateFileSystem {
     Restricted,
     Unrestricted,
@@ -265,3 +342,7 @@ impl ChatWidget {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "statusline_contract_tests.rs"]
+mod contract_tests;

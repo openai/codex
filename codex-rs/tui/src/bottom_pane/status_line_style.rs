@@ -20,6 +20,11 @@ const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 85;
 const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "StatusColor")
+)]
 pub(crate) enum StatusLineAccent {
     #[serde(rename = "status-model")]
     Model,

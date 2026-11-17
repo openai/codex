@@ -6,22 +6,36 @@ use codex_protocol::protocol::RateLimitWindow;
 use serde::Serialize;
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
 pub(super) struct Account {
     rate_limits: Vec<RateLimit>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     workspace: Option<Workspace>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "AccountWorkspace")
+)]
 struct Workspace {
     headline: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export_to = "statusline.d.ts", rename = "RateLimitSnapshot")
+)]
 struct RateLimit {
     limit_id: &'static str,
     limit_name: Option<String>,
+    #[cfg_attr(test, ts(type = "RateLimitWindow | null"))]
     primary_limit: Option<RateLimitWindow>,
+    #[cfg_attr(test, ts(type = "RateLimitWindow | null"))]
     secondary_limit: Option<RateLimitWindow>,
 }
 
