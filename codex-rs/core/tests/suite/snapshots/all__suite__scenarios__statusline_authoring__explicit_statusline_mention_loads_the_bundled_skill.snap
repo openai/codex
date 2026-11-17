@@ -1,0 +1,56 @@
+---
+source: core/tests/suite/scenarios_statusline_authoring_tests.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A user requests the bundled statusline skill by name.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A user requests the bundled statusline skill by name.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=e43eac769da0e93e):
+        - namespace/functions; hash=81846de5bc4e7474
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[3]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Use $create-statusline to make a footer showing my current model.
+07:message/user:
+    <skill>
+    <name>create-statusline</name>
+    <path><SKILLS_ROOT>/.system/create-statusline/SKILL.md</path>
+    ---
+    name: create-statusline
+    description: Build and enable a custom MCP statusline for the Codex CLI. Use when someone wants a provider that displays information in the terminal footer.
+    ---
+
+    <OMITTED 9 LINES; ~409 TOKENS; hash=9f5b7f7878d50218>
+
+    ### Enable and verify
+
+    Install the provider through an installed plugin or register the stdio command on the connected app-serv...guration and restart the TUI if you changed the flag. [hash=42c056811162cca2]
+
+    Exercise `tools/list` and `resources/read` with a representative snapshot. After adding the server, star... file, restart its stdio process to load the changes. [hash=0c36ed73eb177796]
+
+    </skill>
+08:configuration_update:reasoning={"effort":"low"}

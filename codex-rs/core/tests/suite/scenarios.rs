@@ -273,6 +273,9 @@ mod frozen_cloud_skills;
 #[path = "scenarios_compaction_tests.rs"]
 mod compaction;
 
+#[path = "scenarios_statusline_authoring_tests.rs"]
+mod statusline_authoring;
+
 #[path = "scenarios_budget_context.rs"]
 mod budget_context;
 
