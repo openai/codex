@@ -1,5 +1,9 @@
 //! Compare model-visible prefixes from two app-server versions using the same client and inputs.
-//! The contract runner supplies a released CLI; ordinary runs check same-version determinism.
+//! The contract runner supplies a released CLI; ordinary runs use the current binary twice.
+//! Resume coverage checks that changed tool declarations leave the retained prefix intact.
+
+#[path = "prompt_prefix/resume_tests.rs"]
+mod resume_tests;
 
 use anyhow::Context;
 use anyhow::Result;
