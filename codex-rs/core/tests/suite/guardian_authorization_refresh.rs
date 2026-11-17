@@ -308,9 +308,28 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
         );
     }
     let requests = streaming.requests().await;
+    let requests = requests
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(request))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if matches!(change, Change::Repeated | Change::RepeatedDenial) {
+        let tool_output = requests
+            .iter()
+            .filter_map(|request| request["input"].as_array())
+            .flatten()
+            .find(|item| {
+                item["type"] == "function_call_output" && item["call_id"] == "write-marker"
+            })
+            .context("worker did not receive the blocked tool output")?;
+        let output = tool_output.to_string();
+        assert!(output.contains("authorization changed before approval could be applied"));
+        assert!(output.contains("retry once through Guardian"));
+        assert!(output.contains("this is not a policy denial"));
+        assert!(output.contains("Do not bypass approval or repeatedly retry a failed review"));
+        assert!(output.contains("The action did not run"));
+    }
     let guardian_requests = requests
         .iter()
-        .map(|request| serde_json::from_slice::<Value>(request).expect("valid Responses request"))
         .filter(|request| request["client_metadata"]["x-openai-subagent"] == "guardian")
         .count();
     assert_eq!(guardian_requests, attempts);
