@@ -20,6 +20,14 @@ pub const MAX_LOG_FILES: usize = 90;
 // Service provisioning never appends to a caller-controlled existing log entry.
 // An initialized but empty slot also prevents falling back after an open failure.
 static SETUP_LOG: OnceLock<Mutex<Option<(File, OwnedHandle)>>> = OnceLock::new();
+static RUNTIME_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set the default sandbox log directory for this launcher process.
+pub fn init_runtime_log(codex_home: &Path) {
+    if codex_home.is_absolute() {
+        let _ = RUNTIME_LOG_DIR.set(crate::sandbox_dir(codex_home));
+    }
+}
 
 fn exe_label() -> &'static str {
     static LABEL: OnceLock<String> = OnceLock::new();
@@ -143,6 +151,13 @@ pub fn debug_log(msg: &str, base_dir: Option<&Path>) {
 pub fn log_note(msg: &str, base_dir: Option<&Path>) {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     append_line(&format!("[{ts} {}] {}", exe_label(), msg), base_dir);
+}
+
+/// Log a note in a launcher process configured with a sandbox log directory.
+pub fn log_runtime_note(msg: &str) {
+    if let Some(dir) = RUNTIME_LOG_DIR.get() {
+        log_note(msg, Some(dir));
+    }
 }
 
 #[cfg(test)]

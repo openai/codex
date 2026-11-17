@@ -331,17 +331,17 @@ pub use ipc_framed::read_frame;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::write_frame;
 #[cfg(target_os = "windows")]
-pub use logging::current_log_file_path;
-#[cfg(target_os = "windows")]
-pub use logging::current_log_file_path_for_codex_home;
-#[cfg(target_os = "windows")]
-pub use logging::log_file_path_for_utc_date;
-#[cfg(target_os = "windows")]
-pub use logging::log_note;
-#[cfg(target_os = "windows")]
-pub use logging::log_writer;
-#[cfg(target_os = "windows")]
-pub use logging::setup_log_writer;
+#[rustfmt::skip]
+pub use logging::{
+    current_log_file_path,
+    current_log_file_path_for_codex_home,
+    init_runtime_log,
+    log_file_path_for_utc_date,
+    log_note,
+    log_runtime_note,
+    log_writer,
+    setup_log_writer,
+};
 #[cfg(target_os = "windows")]
 pub use no_reparse_dir::DirectoryOpenDisposition;
 #[cfg(target_os = "windows")]
