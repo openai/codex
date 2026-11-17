@@ -6,7 +6,6 @@ ignore = [
     "RUSTSEC-2025-0057", # fxhash 0.2.1 via starlark_map/bm25; upstream crate is unmaintained
     "RUSTSEC-2024-0436", # paste 1.0.15 via starlark/v8; upstream crate is unmaintained
     "RUSTSEC-2023-0089", # atomic-polyfill via postcard/heapless/pagable; upstream crate is unmaintained
-    "RUSTSEC-2024-0320", # yaml-rust via syntect; remove when syntect drops or updates it
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
@@ -28,8 +27,6 @@ ignore = [
     "RUSTSEC-2026-0530", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
     "RUSTSEC-2026-0531", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
     "RUSTSEC-2026-0532", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
-    "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
-    "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
     "RUSTSEC-2026-0371", # zbus_names 3.0.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
     "RUSTSEC-2026-0372", # zvariant_derive 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
