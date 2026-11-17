@@ -37,7 +37,6 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_case::test_case;
-use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
 async fn test_processor(
@@ -81,7 +80,7 @@ async fn test_processor(
         Default::default(),
         thread_state_manager,
         thread_watch_manager,
-        Arc::new(Semaphore::new(/*permits*/ 1)),
+        Arc::new(ThreadListState::default()),
         thread_goal_processor,
         /*state_db*/ None,
         /*log_db*/ None,

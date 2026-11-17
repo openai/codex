@@ -514,7 +514,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(crate) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) thread_watch_manager: ThreadWatchManager,
-    pub(super) thread_list_state_permit: Arc<Semaphore>,
+    pub(super) thread_list_state_permit: Arc<ThreadListState>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) log_db: Option<LogDbLayer>,
@@ -555,7 +555,7 @@ impl ThreadRequestProcessor {
         pending_thread_unloads: PendingThreadUnloads,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
-        thread_list_state_permit: Arc<Semaphore>,
+        thread_list_state_permit: Arc<ThreadListState>,
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
@@ -1117,12 +1117,7 @@ impl ThreadRequestProcessor {
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
     ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
-        self.thread_list_state_permit
-            .acquire()
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to acquire thread list state permit: {err}"))
-            })
+        self.thread_list_state_permit.acquire_exclusive().await
     }
 
     async fn set_app_server_client_info(

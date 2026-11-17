@@ -36,8 +36,9 @@ use codex_thread_store::StoredProjectRoot;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateProjectParams as StoreUpdateProjectParams;
-use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
+
+use super::ThreadListState;
 
 use super::thread_processor::THREAD_LIST_DEFAULT_LIMIT;
 use super::thread_processor::THREAD_LIST_MAX_LIMIT;
@@ -50,14 +51,14 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub(crate) struct ProjectRequestProcessor {
     thread_store: Arc<dyn ThreadStore>,
     outgoing: Arc<OutgoingMessageSender>,
-    thread_list_state_permit: Arc<Semaphore>,
+    thread_list_state_permit: Arc<ThreadListState>,
 }
 
 impl ProjectRequestProcessor {
     pub(crate) fn new(
         thread_store: Arc<dyn ThreadStore>,
         outgoing: Arc<OutgoingMessageSender>,
-        thread_list_state_permit: Arc<Semaphore>,
+        thread_list_state_permit: Arc<ThreadListState>,
     ) -> Self {
         Self {
             thread_store,
@@ -291,12 +292,7 @@ impl ProjectRequestProcessor {
     async fn acquire_thread_list_state_permit(
         &self,
     ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
-        self.thread_list_state_permit
-            .acquire()
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to acquire thread list state permit: {err}"))
-            })
+        self.thread_list_state_permit.acquire_exclusive().await
     }
 }
 
