@@ -2115,6 +2115,7 @@ impl App {
                 self.skill_load_warnings.startup_complete = true;
             }
             AppEvent::StartFileSearch(query) => {
+                app_server.task_search.cancel();
                 self.file_search.on_user_query(query.clone());
                 if let Some(thread_id) = self.active_thread_id
                     && app_server.task_tools_available(thread_id)
@@ -2130,12 +2131,12 @@ impl App {
                                 .map(std::path::Path::to_path_buf)
                         })
                         .unwrap_or_else(|| self.config.cwd.to_path_buf());
-                    crate::task_mentions::spawn_search(
-                        app_server.request_handle(),
+                    let handle = app_server.request_handle();
+                    app_server.task_search.spawn(
+                        handle,
                         query,
                         thread_id,
                         cwd,
-                        app_server.task_search_generation(),
                         self.app_event_tx.clone(),
                     );
                 }

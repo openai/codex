@@ -2438,12 +2438,12 @@ async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() ->
         .await?;
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
 
-    crate::task_mentions::spawn_search(
-        restarted_app_server.request_handle(),
+    let handle = restarted_app_server.request_handle();
+    restarted_app_server.task_search.spawn(
+        handle,
         "bbd".to_string(),
         startup.session.thread_id,
         app.config.cwd.to_path_buf(),
-        restarted_app_server.task_search_generation(),
         crate::app_event_sender::AppEventSender::new(sender),
     );
 

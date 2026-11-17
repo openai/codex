@@ -37,6 +37,23 @@ across account switches. Resume and revert preserve that distinction; forks are 
 Scoped requests skip candidates whose rollout header cannot be read. API-key
 logins see all local history. Direct access by thread ID remains available.
 
+# Streaming thread search (experimental)
+
+`thread/search` continues to return a single paginated response. Clients that initialize
+with `experimentalApi: true` can instead call `thread/search/stream` with the same params
+(a maximum of 65,536 UTF-8 bytes for the trimmed search term).
+It emits best-effort `thread/search/partial` notifications containing the original
+`requestId` and a small subset of verified results. Partials may be dropped, may fall
+outside the final page, and use stored thread metadata; replace them with the final
+response, which is authoritative for results, ordering, and cursors.
+
+Send `thread/search/stream/cancel` with `{requestId}` on the same connection to cancel
+the original streaming request. A client can use a UUID string as the search request ID. The cancel RPC has its own ID and returns `{}`; the
+search completes independently with an error if cancellation wins, or may succeed if
+completion races cancellation. Unknown or finished IDs are no-ops. `thread/search/cancel`
+targets only the existing nonstreaming method. A JavaScript client can connect an
+`AbortSignal` listener to the corresponding cancel RPC.
+
 # Thread list ID filters
 
 `thread/list` accepts `includedThreadIds` to list specific saved threads and

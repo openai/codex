@@ -78,6 +78,8 @@ enum RequestCancellationScope {
     Unavailable,
     UserVerification,
     ThreadSample,
+    ThreadSearch,
+    ThreadSearchStream,
 }
 
 impl RequestContext {
@@ -100,6 +102,8 @@ impl RequestContext {
                 | "userVerification/delete"
                 | "userVerification/verify" => RequestCancellationScope::UserVerification,
                 "thread/sample" => RequestCancellationScope::ThreadSample,
+                "thread/search" => RequestCancellationScope::ThreadSearch,
+                "thread/search/stream" => RequestCancellationScope::ThreadSearchStream,
                 _ => RequestCancellationScope::Unavailable,
             },
             span,
@@ -131,6 +135,11 @@ pub(crate) enum OutgoingEnvelope {
     Broadcast {
         message: OutgoingMessage,
     },
+}
+
+pub(crate) enum NotificationTarget {
+    Broadcast,
+    Connection(ConnectionId),
 }
 
 /// Sends messages to the client and manages request callbacks.
@@ -319,6 +328,25 @@ impl OutgoingMessageSender {
         }
     }
 
+    /// Capture the exact target at ordered ingress; cancellation must not resolve a reused ID later.
+    pub(crate) async fn search_cancellation_target(
+        &self,
+        request_id: &ConnectionRequestId,
+        streaming: bool,
+    ) -> Option<tokio_util::sync::CancellationToken> {
+        let scope = if streaming {
+            RequestCancellationScope::ThreadSearchStream
+        } else {
+            RequestCancellationScope::ThreadSearch
+        };
+        self.request_contexts
+            .lock()
+            .await
+            .get(request_id)
+            .filter(|context| context.cancellation_scope == scope)
+            .map(|context| context.cancellation.clone())
+    }
+
     pub(crate) async fn enable_human_approval_connection(&self, connection_id: ConnectionId) {
         self.human_approval_connections
             .lock()
@@ -334,7 +362,19 @@ impl OutgoingMessageSender {
         self.disconnect_user_verification_connection(connection_id)
             .await;
         let mut request_contexts = self.request_contexts.lock().await;
-        request_contexts.retain(|request_id, _| request_id.connection_id != connection_id);
+        request_contexts.retain(|request_id, context| {
+            if request_id.connection_id != connection_id {
+                return true;
+            }
+            if matches!(
+                context.cancellation_scope,
+                RequestCancellationScope::ThreadSearch
+                    | RequestCancellationScope::ThreadSearchStream
+            ) {
+                context.cancellation.cancel();
+            }
+            false
+        });
     }
 
     pub(crate) async fn request_trace_context(
@@ -858,12 +898,35 @@ impl OutgoingMessageSender {
             .await;
     }
 
-    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) {
-        if let Err(error) = self.sender.try_send(OutgoingEnvelope::Broadcast {
-            message: timestamped_server_notification(notification),
-        }) {
-            warn!("failed to queue server notification to clients: {error}");
+    /// Queue an optional notification without delaying the request or other connections.
+    pub(crate) fn try_send_server_notification(
+        &self,
+        target: NotificationTarget,
+        notification: ServerNotification,
+    ) -> bool {
+        let permit = match self.sender.try_reserve() {
+            Ok(permit) => permit,
+            Err(error) => {
+                if matches!(target, NotificationTarget::Broadcast) {
+                    warn!("failed to queue server notification to clients: {error}");
+                }
+                return false;
+            }
+        };
+        // Leave room for the authoritative response when progress fills the queue.
+        if matches!(target, NotificationTarget::Connection(_)) && self.sender.capacity() == 0 {
+            return false;
         }
+        let message = timestamped_server_notification(notification);
+        permit.send(match target {
+            NotificationTarget::Broadcast => OutgoingEnvelope::Broadcast { message },
+            NotificationTarget::Connection(connection_id) => OutgoingEnvelope::ToConnection {
+                connection_id,
+                message,
+                write_complete_tx: None,
+            },
+        });
+        true
     }
 
     pub(crate) async fn send_server_notification_to_connections(
@@ -1408,6 +1471,72 @@ mod tests {
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }
+    }
+
+    /// Search cancellation is scoped to the owning connection, including on disconnect.
+    #[tokio::test]
+    async fn thread_search_cancellation_is_connection_scoped() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing =
+            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+        let request = |connection_id| ConnectionRequestId {
+            connection_id: ConnectionId(connection_id),
+            request_id: RequestId::String("bf76b226-4c49-4394-a28c-3ff976abb756".to_string()),
+        };
+        let first = RequestContext::new(
+            request(1),
+            "thread/search",
+            Span::none(),
+            /*parent_trace*/ None,
+        );
+        let second = RequestContext::new(
+            request(2),
+            "thread/search/stream",
+            Span::none(),
+            /*parent_trace*/ None,
+        );
+        outgoing.register_request_context(first.clone()).await;
+        outgoing.register_request_context(second.clone()).await;
+
+        assert!(
+            outgoing
+                .search_cancellation_target(&request(2), /*streaming*/ false)
+                .await
+                .is_none()
+        );
+        assert!(
+            outgoing
+                .search_cancellation_target(&request(1), /*streaming*/ true)
+                .await
+                .is_none()
+        );
+        assert!(!first.cancellation.is_cancelled());
+        assert!(!second.cancellation.is_cancelled());
+
+        outgoing
+            .search_cancellation_target(&request(2), /*streaming*/ true)
+            .await
+            .expect("stream target")
+            .cancel();
+        assert!(second.cancellation.is_cancelled());
+        assert!(!first.cancellation.is_cancelled());
+
+        let captured = outgoing
+            .search_cancellation_target(&request(1), /*streaming*/ false)
+            .await
+            .expect("original target");
+        let replacement = RequestContext::new(
+            request(1),
+            "thread/search",
+            Span::none(),
+            /*parent_trace*/ None,
+        );
+        outgoing.register_request_context(replacement.clone()).await;
+        captured.cancel();
+        assert!(first.cancellation.is_cancelled());
+        assert!(!replacement.cancellation.is_cancelled());
+        outgoing.connection_closed(ConnectionId(1)).await;
+        assert!(replacement.cancellation.is_cancelled());
     }
 
     #[tokio::test]

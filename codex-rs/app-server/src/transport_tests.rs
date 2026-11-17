@@ -5,6 +5,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerNotificationEnvelope;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_app_server_protocol::ThreadSearchPartialNotification;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -29,6 +30,50 @@ fn app_server_notification(notification: ServerNotification) -> OutgoingMessage 
         notification,
         emitted_at_ms: Some(1_234),
     })
+}
+
+#[tokio::test]
+async fn optional_search_progress_does_not_disconnect_a_slow_connection() {
+    let connection_id = ConnectionId(7);
+    let (writer_tx, mut writer_rx) = mpsc::channel(1);
+    let disconnect = CancellationToken::new();
+    let mut connections = HashMap::from([(
+        connection_id,
+        OutboundConnectionState::new(
+            writer_tx.clone(),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(RwLock::new(HashSet::new())),
+            Some(disconnect.clone()),
+        ),
+    )]);
+    route_outgoing_envelope(
+        &mut connections,
+        OutgoingEnvelope::ToConnection {
+            connection_id,
+            message: app_server_notification(ServerNotification::ThreadSearchPartial(
+                ThreadSearchPartialNotification {
+                    request_id: RequestId::Integer(4),
+                    data: Vec::new(),
+                },
+            )),
+            write_complete_tx: None,
+        },
+    )
+    .await;
+    route_outgoing_envelope(
+        &mut connections,
+        OutgoingEnvelope::ToConnection {
+            connection_id,
+            message: app_server_notification(thread_realtime_started_notification()),
+            write_complete_tx: None,
+        },
+    )
+    .await;
+    assert!(!disconnect.is_cancelled());
+    assert!(connections.contains_key(&connection_id));
+    assert!(writer_rx.try_recv().is_ok());
+    assert!(writer_rx.try_recv().is_err());
 }
 
 #[tokio::test]

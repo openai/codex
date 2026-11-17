@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ThreadItem;
 use pretty_assertions::assert_eq;
@@ -21,6 +22,7 @@ use crate::ListThreadsParams;
 use crate::SearchThreadsParams;
 use crate::SortDirection;
 use crate::ThreadRelationFilter;
+use crate::ThreadSearchSourceKind;
 use crate::ThreadSortKey;
 use crate::ThreadStore;
 
@@ -50,6 +52,65 @@ fn time_sort_cursors_include_thread_id_tie_breaker() {
             format!("\"2026-01-27T12:34:56Z|{thread_id}\"")
         );
     }
+}
+
+#[tokio::test]
+async fn authoritative_search_rechecks_stale_compressed_discovery() {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
+    let id = Uuid::new_v4();
+    let path = write_session_file_with(
+        home.path(),
+        home.path().join("sessions/2025/01/03"),
+        "2025-01-03T12-00-00",
+        id,
+        "changed message",
+        Some("test-provider"),
+        ThreadHistoryMode::Legacy,
+    )
+    .expect("write selected rollout");
+    let contents = std::fs::read(&path).expect("read rollout");
+    let compressed =
+        zstd::stream::encode_all(contents.as_slice(), /*level*/ 3).expect("compress rollout");
+    std::fs::write(path.with_extension("jsonl.zst"), compressed).expect("write compressed rollout");
+    std::fs::remove_file(&path).expect("remove plain rollout");
+    let rollout_config = codex_rollout::RolloutConfig {
+        codex_home: config.codex_home.clone(),
+        sqlite: config.sqlite.clone(),
+        cwd: config.codex_home,
+        model_provider_id: config.default_model_provider_id,
+        generate_memories: false,
+    };
+    let params = SearchThreadsParams {
+        include_attached_threads: false,
+        account: None,
+        page_size: 10,
+        cursor: None,
+        sort_key: ThreadSortKey::CreatedAt,
+        sort_direction: SortDirection::Desc,
+        allowed_sources: vec![SessionSource::Cli],
+        source_kinds: None,
+        archived: false,
+        search_term: "needle".to_string(),
+    };
+    let mut matcher = codex_rollout::RolloutSnippetMatcher::new("needle");
+    let page = super::finish_search(
+        super::SearchContext {
+            store: &store,
+            params: &params,
+            state_db: None,
+            rollout_config: &rollout_config,
+            cursor: None,
+            sort_key: codex_rollout::ThreadSortKey::CreatedAt,
+            sort_direction: codex_rollout::SortDirection::Desc,
+            matcher: &mut matcher,
+        },
+        std::collections::HashSet::from([path]),
+    )
+    .await
+    .expect("finish search");
+    assert_eq!((page.items.len(), page.next_cursor), (0, None));
 }
 
 #[tokio::test]
@@ -155,6 +216,7 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
                             sort_key: ThreadSortKey::CreatedAt,
                             sort_direction: SortDirection::Desc,
                             allowed_sources: vec![SessionSource::Cli],
+                            source_kinds: None,
                             archived: false,
                             search_term: search_term.to_string(),
                         })
@@ -175,6 +237,89 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
             }
         }
     }
+}
+
+#[tokio::test]
+async fn source_kind_filter_applies_before_search_pagination() {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("initialize state database");
+    let mut review_ids = Vec::new();
+    for (age, source) in [
+        (0, SessionSource::SubAgent(SubAgentSource::Review)),
+        (1, SessionSource::Cli),
+        (2, SessionSource::SubAgent(SubAgentSource::Review)),
+    ] {
+        let uuid = Uuid::new_v4();
+        let id = ThreadId::from_u128(uuid.as_u128());
+        let path = write_session_file_with(
+            home.path(),
+            home.path().join("sessions/2025/01/03"),
+            "2025-01-03T12-00-00",
+            uuid,
+            "needle message",
+            Some("test-provider"),
+            ThreadHistoryMode::Legacy,
+        )
+        .expect("write rollout");
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            id,
+            path,
+            Utc::now() - chrono::TimeDelta::days(age),
+            source.clone(),
+        )
+        .build("test-provider");
+        metadata.first_user_message = Some("needle message".to_string());
+        state_db
+            .upsert_thread(&metadata)
+            .await
+            .expect("index rollout");
+        if matches!(source, SessionSource::SubAgent(SubAgentSource::Review)) {
+            review_ids.push(id);
+        }
+    }
+
+    let store = LocalThreadStore::new(config, Some(state_db));
+    let mut params = SearchThreadsParams {
+        include_attached_threads: false,
+        account: None,
+        page_size: 1,
+        cursor: None,
+        sort_key: ThreadSortKey::CreatedAt,
+        sort_direction: SortDirection::Desc,
+        allowed_sources: Vec::new(),
+        source_kinds: Some(vec![ThreadSearchSourceKind::SubAgentReview]),
+        archived: false,
+        search_term: "needle".to_string(),
+    };
+    let first = store
+        .search_threads(params.clone())
+        .await
+        .expect("first page");
+    params.cursor = first.next_cursor.clone();
+    let second = store.search_threads(params).await.expect("second page");
+    assert_eq!(
+        (
+            first
+                .items
+                .into_iter()
+                .map(|item| item.thread.thread_id)
+                .collect::<Vec<_>>(),
+            first.next_cursor.is_some(),
+            second
+                .items
+                .into_iter()
+                .map(|item| item.thread.thread_id)
+                .collect::<Vec<_>>(),
+            second.next_cursor,
+        ),
+        (vec![review_ids[0]], true, vec![review_ids[1]], None),
+    );
 }
 
 #[tokio::test]
@@ -226,6 +371,7 @@ async fn searches_are_independent_across_catalog_refills() -> Result<(), Box<dyn
                 sort_key: ThreadSortKey::CreatedAt,
                 sort_direction: SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
+                source_kinds: None,
                 archived: false,
                 search_term: query.to_owned(),
             })
@@ -331,6 +477,7 @@ async fn title_and_content_search_return_attached_parent_without_state_db() {
             sort_key: ThreadSortKey::CreatedAt,
             sort_direction: SortDirection::Desc,
             allowed_sources: vec![SessionSource::Cli],
+            source_kinds: None,
             archived: false,
             search_term: "searchable message".to_string(),
             include_attached_threads: true,
@@ -405,4 +552,62 @@ async fn inclusive_title_search_finds_unindexed_matches_when_filesystem_scanning
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn streaming_search_never_reports_undiscovered_rows_from_a_shared_database() {
+    let home = TempDir::new().unwrap();
+    let other = TempDir::new().unwrap();
+    let config = test_config(home.path());
+    let db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .unwrap();
+    let uuid = Uuid::new_v4();
+    let path = write_session_file_with(
+        other.path(),
+        other.path().join("sessions/2025/01/03"),
+        "2025-01-03T12-00-00",
+        uuid,
+        "private needle",
+        Some("test-provider"),
+        ThreadHistoryMode::Legacy,
+    )
+    .unwrap();
+    let metadata = codex_state::ThreadMetadataBuilder::new(
+        ThreadId::from_u128(uuid.as_u128()),
+        path,
+        Utc::now(),
+        SessionSource::Cli,
+    )
+    .build("test-provider");
+    db.upsert_thread(&metadata).await.unwrap();
+    let store = LocalThreadStore::new(config, Some(db));
+    let params = SearchThreadsParams {
+        include_attached_threads: false,
+        account: None,
+        page_size: 10,
+        cursor: None,
+        sort_key: ThreadSortKey::CreatedAt,
+        sort_direction: SortDirection::Desc,
+        allowed_sources: vec![SessionSource::Cli],
+        source_kinds: None,
+        archived: false,
+        search_term: "needle".into(),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let page = store
+        .search_threads_observed(
+            params,
+            crate::ThreadSearchObserver {
+                progress: Some(tx),
+                cancelled: Box::pin(std::future::pending()),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
+    assert!(rx.recv().await.is_none());
 }

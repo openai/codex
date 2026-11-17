@@ -1,9 +1,6 @@
 //! Same-host task discovery and bounded task-reference prompt context.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_app_server_client::AppServerRequestHandle;
@@ -13,6 +10,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSearchCancelParams;
+use codex_app_server_protocol::ThreadSearchCancelResponse;
 use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSearchResult;
@@ -22,6 +21,8 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -30,6 +31,8 @@ use crate::thread_label::ThreadLabelStyle;
 
 const MAX_SEARCH_RESULTS: u32 = 50;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(/*millis*/ 100);
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 pub(crate) const MAX_REFERENCED_TASKS: usize = 16;
 pub(crate) const MAX_TASK_TITLE_CHARS: usize = 160;
 const MAX_REFERENCED_THREAD_ID_BYTES: usize = 768;
@@ -44,104 +47,128 @@ pub(crate) struct TaskMention {
     pub(crate) snippet: String,
 }
 
-pub(crate) fn spawn_search(
-    handle: AppServerRequestHandle,
-    query: String,
-    current_thread_id: ThreadId,
-    cwd: PathBuf,
-    generation: Arc<AtomicU64>,
-    app_event_tx: AppEventSender,
-) {
-    let label_style =
-        ThreadLabelStyle::from_is_cloud(matches!(handle, AppServerRequestHandle::Cloud(_)));
-    let request_generation = generation.fetch_add(1, Ordering::Relaxed) + 1;
-    if query.trim().is_empty() {
-        app_event_tx.send(AppEvent::TaskSearchResult {
-            thread_id: current_thread_id,
-            query,
-            matches: Vec::new(),
-        });
-        return;
+/// Owns the pending task search for a session and cancels it when replaced or dropped.
+#[derive(Default)]
+pub(crate) struct TaskSearch {
+    pending: Option<CancellationToken>,
+}
+
+impl Drop for TaskSearch {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+impl TaskSearch {
+    pub(crate) fn cancel(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            pending.cancel();
+        }
     }
 
-    tokio::spawn(async move {
-        tokio::time::sleep(SEARCH_DEBOUNCE).await;
-        if generation.load(Ordering::Relaxed) != request_generation {
+    pub(crate) fn spawn(
+        &mut self,
+        handle: AppServerRequestHandle,
+        query: String,
+        current_thread_id: ThreadId,
+        cwd: PathBuf,
+        app_event_tx: AppEventSender,
+    ) {
+        let label_style =
+            ThreadLabelStyle::from_is_cloud(matches!(handle, AppServerRequestHandle::Cloud(_)));
+        self.cancel();
+        if query.trim().is_empty() {
+            app_event_tx.send(AppEvent::TaskSearchResult {
+                thread_id: current_thread_id,
+                query,
+                matches: Vec::new(),
+            });
             return;
         }
 
-        let timeout = Duration::from_secs(/*secs*/ 10);
-        let (response, titled_threads) = tokio::join!(
-            tokio::time::timeout(
-                timeout,
-                handle.request_typed::<ThreadSearchResponse>(ClientRequest::ThreadSearch {
-                    request_id: RequestId::String(format!("task-search-{request_generation}")),
-                    params: ThreadSearchParams {
-                        include_attached_threads: false,
-                        current_account_only: true,
-                        cursor: None,
-                        limit: Some(MAX_SEARCH_RESULTS),
-                        sort_key: Some(ThreadSearchSortKey::RecencyAt),
-                        sort_direction: Some(SortDirection::Desc),
-                        source_kinds: Some(Vec::new()),
-                        archived: Some(false),
-                        search_term: query.trim().to_string(),
+        let cancellation = CancellationToken::new();
+        self.pending = Some(cancellation.clone());
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return,
+                () = tokio::time::sleep(SEARCH_DEBOUNCE) => {}
+            }
+
+            let request_id = RequestId::String(format!("task-search-{}", Uuid::new_v4()));
+            let (response, titled_threads) = tokio::join!(
+                search_with_cancellation(
+                    &handle,
+                    &cancellation,
+                    ClientRequest::ThreadSearch {
+                        request_id: request_id.clone(),
+                        params: ThreadSearchParams {
+                            include_attached_threads: false,
+                            current_account_only: true,
+                            cursor: None,
+                            limit: Some(MAX_SEARCH_RESULTS),
+                            sort_key: Some(ThreadSearchSortKey::RecencyAt),
+                            sort_direction: Some(SortDirection::Desc),
+                            source_kinds: Some(Vec::new()),
+                            archived: Some(false),
+                            search_term: query.trim().to_string(),
+                        },
                     },
-                })
-            ),
-            tokio::time::timeout(
-                timeout,
-                handle.request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
-                    request_id: RequestId::String(format!(
-                        "task-title-search-{request_generation}"
-                    )),
-                    params: ThreadListParams {
-                        include_attached_threads: false,
-                        current_account_only: true,
-                        included_thread_ids: None,
-                        excluded_thread_ids: None,
-                        attached_to_thread_id: None,
-                        originators: None,
-                        cursor: None,
-                        limit: Some(MAX_SEARCH_RESULTS),
-                        sort_key: Some(ThreadSortKey::UpdatedAt),
-                        sort_direction: Some(SortDirection::Desc),
-                        model_providers: Some(Vec::new()),
-                        source_kinds: Some(Vec::new()),
-                        archived: Some(false),
-                        section_id: None,
-                        project_id: None,
-                        cwd: None,
-                        use_state_db_only: true,
-                        search_term: None,
-                        parent_thread_id: None,
-                        ancestor_thread_id: None,
-                    },
-                })
-            )
-        );
+                    request_id,
+                ),
+                async {
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => None,
+                        result = tokio::time::timeout(SEARCH_TIMEOUT,
+                    handle.request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
+                        request_id: RequestId::String(format!("task-title-search-{}", Uuid::new_v4())),
+                        params: ThreadListParams {
+                            include_attached_threads: false,
+                            current_account_only: true,
+                            included_thread_ids: None,
+                            excluded_thread_ids: None,
+                            attached_to_thread_id: None,
+                            originators: None,
+                            cursor: None,
+                            limit: Some(MAX_SEARCH_RESULTS),
+                            sort_key: Some(ThreadSortKey::UpdatedAt),
+                            sort_direction: Some(SortDirection::Desc),
+                            model_providers: Some(Vec::new()),
+                            source_kinds: Some(Vec::new()),
+                            archived: Some(false),
+                            section_id: None,
+                            project_id: None,
+                            cwd: None,
+                            use_state_db_only: true,
+                            search_term: None,
+                            parent_thread_id: None,
+                            ancestor_thread_id: None,
+                        },
+                    })) => result.ok().and_then(Result::ok),
+                    }
+                }
+            );
 
-        if generation.load(Ordering::Relaxed) != request_generation {
-            return;
-        }
+            if cancellation.is_cancelled() {
+                return;
+            }
 
-        let response = response.ok().and_then(Result::ok);
-        let titled_threads = titled_threads.ok().and_then(Result::ok);
-        if response.is_none() && titled_threads.is_none() {
-            return;
-        }
-        let mut results = response.map(|response| response.data).unwrap_or_default();
-        if let Some(response) = titled_threads {
-            for thread in response.data {
-                if results.iter().all(|result| result.thread.id != thread.id) {
-                    results.push(ThreadSearchResult {
-                        thread,
-                        snippet: String::new(),
-                    });
+            if response.is_none() && titled_threads.is_none() {
+                return;
+            }
+            let mut results = response.map(|response| response.data).unwrap_or_default();
+            if let Some(response) = titled_threads {
+                for thread in response.data {
+                    if results.iter().all(|result| result.thread.id != thread.id) {
+                        results.push(ThreadSearchResult {
+                            thread,
+                            snippet: String::new(),
+                        });
+                    }
                 }
             }
-        }
-        let mut matches = results
+            let mut matches = results
             .into_iter()
             .filter_map(|result| {
                 let thread = result.thread;
@@ -174,22 +201,72 @@ pub(crate) fn spawn_search(
             })
             .take(MAX_SEARCH_RESULTS as usize)
             .collect::<Vec<_>>();
-        let cwd = cwd.to_string_lossy();
-        let windows_cwd = cwd.as_bytes().get(1) == Some(&b':') || cwd.starts_with(r"\\");
-        matches.sort_by_key(|task| {
-            let Some((prefix, suffix)) = task.cwd.get(..cwd.len()).zip(task.cwd.get(cwd.len()..))
-            else {
-                return true;
-            };
-            !(prefix == cwd.as_ref() || windows_cwd && prefix.eq_ignore_ascii_case(cwd.as_ref()))
-                || !(suffix.is_empty() || suffix.starts_with(['/', '\\']))
+            let cwd = cwd.to_string_lossy();
+            let windows_cwd = cwd.as_bytes().get(1) == Some(&b':') || cwd.starts_with(r"\\");
+            matches.sort_by_key(|task| {
+                let Some((prefix, suffix)) =
+                    task.cwd.get(..cwd.len()).zip(task.cwd.get(cwd.len()..))
+                else {
+                    return true;
+                };
+                !(prefix == cwd.as_ref()
+                    || windows_cwd && prefix.eq_ignore_ascii_case(cwd.as_ref()))
+                    || !(suffix.is_empty() || suffix.starts_with(['/', '\\']))
+            });
+            if cancellation.is_cancelled() {
+                return;
+            }
+            app_event_tx.send(AppEvent::TaskSearchResult {
+                thread_id: current_thread_id,
+                query,
+                matches,
+            });
         });
-        app_event_tx.send(AppEvent::TaskSearchResult {
-            thread_id: current_thread_id,
-            query,
-            matches,
+    }
+}
+
+async fn search_with_cancellation(
+    handle: &AppServerRequestHandle,
+    cancellation: &CancellationToken,
+    request: ClientRequest,
+    request_id: RequestId,
+) -> Option<ThreadSearchResponse> {
+    // Native Cloud supports title listing, but does not implement thread/search or its
+    // cancellation method. Avoid queuing an unsupported detached Cloud command.
+    if matches!(handle, AppServerRequestHandle::Cloud(_)) {
+        return None;
+    }
+    tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {},
+        result = tokio::time::timeout(SEARCH_TIMEOUT, handle.request_typed::<ThreadSearchResponse>(request)) => {
+            if let Ok(result) = result {
+                return result.ok();
+            }
+        }
+    }
+    // Dropping the request future cancels an in-process search through the facade. Remote
+    // requests need an explicit connection-scoped cancellation message. Send it in the
+    // background so a slow cancellation reply cannot delay already available title results.
+    if matches!(handle, AppServerRequestHandle::Remote(_)) {
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                CANCEL_TIMEOUT,
+                handle.request_typed::<ThreadSearchCancelResponse>(
+                    ClientRequest::ThreadSearchCancel {
+                        request_id: RequestId::String(format!(
+                            "task-search-cancel-{}",
+                            Uuid::new_v4()
+                        )),
+                        params: ThreadSearchCancelParams { request_id },
+                    },
+                ),
+            )
+            .await;
         });
-    });
+    }
+    None
 }
 
 pub(crate) fn valid_thread_path(path: &str) -> Option<&str> {

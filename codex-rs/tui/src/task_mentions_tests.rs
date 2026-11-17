@@ -3,7 +3,134 @@ use crate::mention_codec::LinkedMention;
 use crate::mention_codec::decode_history_mentions_with_at_mentions;
 use crate::mention_codec::encode_history_mentions_at_elements;
 use codex_protocol::user_input::TextElement;
+use futures::SinkExt;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use tokio_tungstenite::tungstenite::Message;
+
+#[tokio::test]
+async fn remote_task_search_cancels_without_delaying_results() {
+    for timeout in [false, true] {
+        check_remote_task_search_cancellation(timeout).await;
+    }
+}
+
+async fn check_remote_task_search_cancellation(timeout: bool) {
+    use codex_app_server_client::RemoteAppServerClient;
+    use codex_app_server_client::RemoteAppServerConnectArgs;
+    use codex_app_server_client::RemoteAppServerEndpoint;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
+    let (search_started, started) = tokio::sync::oneshot::channel();
+    let (cancel_sent, cancelled) = tokio::sync::oneshot::channel();
+    let rpc = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let mut search_started = Some(search_started);
+        let mut search_id = None;
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let result = match request["method"].as_str() {
+                Some("initialize") => {
+                    json!({"userAgent":"task-search-test", "codexHome":"/unused"})
+                }
+                Some("thread/list") => json!({
+                    "data": [{
+                        "id": "task-123", "sessionId": "task-123", "preview": "needle",
+                        "name": "needle title", "ephemeral": false, "modelProvider": "openai",
+                        "createdAt": 0, "updatedAt": 0, "status": {"type": "notLoaded"},
+                        "cwd": std::env::temp_dir(), "cliVersion": "test", "source": "cli",
+                        "turns": []
+                    }],
+                    "nextCursor": null
+                }),
+                Some("thread/search") => {
+                    search_id = Some(request["id"].clone());
+                    search_started.take().unwrap().send(()).unwrap();
+                    continue;
+                }
+                Some("thread/search/cancel") => {
+                    assert_eq!(Some(&request["params"]["requestId"]), search_id.as_ref());
+                    cancel_sent.send(()).unwrap();
+                    // Leave cancellation unanswered to verify it cannot delay title results.
+                    std::future::pending::<()>().await;
+                    return;
+                }
+                _ => continue,
+            };
+            socket
+                .send(Message::Text(
+                    json!({"jsonrpc":"2.0", "id":request["id"], "result":result})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        panic!("remote disconnected before cancelling the search");
+    });
+    let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        required_human_approval: false,
+        endpoint: RemoteAppServerEndpoint::WebSocket {
+            websocket_url,
+            auth_token: None,
+        },
+        client_name: "task-search-test".into(),
+        client_version: "test".into(),
+        experimental_api: true,
+        mcp_server_openai_form_elicitation: false,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: 8,
+    })
+    .await
+    .unwrap();
+    let handle = AppServerRequestHandle::Remote(remote.request_handle());
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let current = ThreadId::from_u128(/*value*/ 1);
+    let mut search = TaskSearch::default();
+    search.spawn(
+        handle.clone(),
+        "needle".into(),
+        current,
+        PathBuf::from("/tmp"),
+        AppEventSender::new(tx.clone()),
+    );
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), started)
+        .await
+        .unwrap()
+        .unwrap();
+    if timeout {
+        tokio::time::pause();
+        let deadline = tokio::time::Instant::now() + SEARCH_TIMEOUT;
+        tokio::time::advance(SEARCH_TIMEOUT).await;
+        let event = events.recv().await.unwrap();
+        assert!(
+            matches!(event, AppEvent::TaskSearchResult { query, matches, .. }
+                if query == "needle" && matches.len() == 1 && matches[0].title == "needle title")
+        );
+        assert!(tokio::time::Instant::now() < deadline + CANCEL_TIMEOUT / 2);
+        tokio::time::resume();
+    } else {
+        search.spawn(
+            handle,
+            String::new(),
+            current,
+            PathBuf::from("/tmp"),
+            AppEventSender::new(tx),
+        );
+        let event = events.recv().await.unwrap();
+        assert!(
+            matches!(event, AppEvent::TaskSearchResult { query, matches, .. } if query.is_empty() && matches.is_empty())
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), cancelled)
+        .await
+        .unwrap()
+        .unwrap();
+    rpc.abort();
+    let _ = remote.shutdown().await;
+}
 
 #[test]
 fn task_mention_history_round_trips_multiword_and_escaped_titles() {

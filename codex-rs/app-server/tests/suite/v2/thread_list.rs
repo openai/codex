@@ -1291,6 +1291,22 @@ async fn thread_search_filters_by_source_kind() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_search_preserves_large_query_compatibility_on_empty_history() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut server = init_mcp(codex_home.path()).await?;
+    for term in ["s".repeat(65_536), "x".repeat(65_537)] {
+        let request_id = server
+            .send_raw_request("thread/search", Some(json!({"searchTerm": term})))
+            .await?;
+        let response: ThreadSearchResponse =
+            timeout(DEFAULT_READ_TIMEOUT, server.read_response(request_id)).await??;
+        assert!(response.data.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_history()
 -> Result<()> {
     use codex_app_server::in_process;

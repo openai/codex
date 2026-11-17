@@ -177,7 +177,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -410,7 +409,7 @@ pub(crate) struct AppServerSession {
     pub(crate) unread_revisions: HashMap<ThreadId, String>,
     task_tool_threads: HashSet<ThreadId>,
     task_tool_capabilities_dir: Option<AbsolutePathBuf>,
-    task_search_generation: Arc<AtomicU64>,
+    pub(crate) task_search: crate::task_mentions::TaskSearch,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
     /// Explicit CLI provider selection, distinct from resolved configuration defaults.
@@ -663,7 +662,7 @@ impl AppServerSession {
             unread_revisions: HashMap::new(),
             task_tool_threads: HashSet::new(),
             task_tool_capabilities_dir: None,
-            task_search_generation: Arc::new(AtomicU64::new(0)),
+            task_search: crate::task_mentions::TaskSearch::default(),
             remote_cwd_override: None,
             thread_params_mode,
             model_provider_override: None,
@@ -895,10 +894,6 @@ impl AppServerSession {
         {
             tracing::warn!(%error, %thread_id, "failed to persist task-reference capability");
         }
-    }
-
-    pub(crate) fn task_search_generation(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.task_search_generation)
     }
 
     pub(crate) fn codex_home_path(
@@ -2356,7 +2351,8 @@ impl AppServerSession {
         client.resolve_server_request(request_id, result).await
     }
 
-    pub(crate) async fn shutdown(self) -> std::io::Result<()> {
+    pub(crate) async fn shutdown(mut self) -> std::io::Result<()> {
+        self.task_search.cancel();
         match self.connection_owner {
             Some(client) => client.shutdown().await,
             None => Ok(()),

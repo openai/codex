@@ -125,6 +125,7 @@ impl App {
         app_server: &mut AppServerSession,
         destination: Option<ThreadId>,
     ) {
+        app_server.task_search.cancel();
         let thread_ids: Vec<_> = self
             .thread_event_channels
             .iter()

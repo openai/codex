@@ -5542,6 +5542,26 @@
           "type": "object"
         },
         {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/search/partial"
+              ],
+              "title": "Thread/search/partialNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSearchPartialNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/search/partialNotification",
+          "type": "object"
+        },
+        {
           "description": "Final exit notification for a `process/spawn` session.",
           "properties": {
             "method": {
@@ -26454,6 +26474,27 @@
           "threadId"
         ],
         "title": "ThreadRevertedNotification",
+        "type": "object"
+      },
+      "ThreadSearchPartialNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "A best-effort incremental batch for `thread/search/stream`. Match `requestId` to the request on this connection. Only a small subset of verified matches may be emitted; rows are unique and arrive in discovery order, but may be dropped under load or fall outside the final sorted page. Thread fields use stored metadata and the current watched status; live thread settings are enriched in the final response. Replace provisional rows with the authoritative final response. No partials follow it or an error.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadSearchResult"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "$ref": "#/definitions/v2/RequestId"
+          }
+        },
+        "required": [
+          "data",
+          "requestId"
+        ],
+        "title": "ThreadSearchPartialNotification",
         "type": "object"
       },
       "ThreadSearchResult": {

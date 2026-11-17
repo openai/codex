@@ -840,6 +840,16 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { search_threads::search_threads(self, params).await })
     }
 
+    fn search_threads_observed(
+        &self,
+        params: SearchThreadsParams,
+        observer: crate::ThreadSearchObserver,
+    ) -> ThreadStoreFuture<'_, ThreadSearchPage> {
+        Box::pin(search_threads::search_threads_observed(
+            self, params, observer,
+        ))
+    }
+
     fn search_thread_occurrences(
         &self,
         params: SearchThreadOccurrencesParams,

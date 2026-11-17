@@ -19,6 +19,7 @@ use super::TurnStatus;
 use super::UserInput;
 use super::shared::v2_enum_from_core;
 use crate::JsonSchema;
+use crate::RequestId;
 use crate::TS;
 use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
@@ -1573,7 +1574,8 @@ pub struct ThreadSearchParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
-    /// Required substring/full-text query for thread search.
+    /// Required substring/full-text query. `thread/search/stream` limits this to 65,536
+    /// UTF-8 bytes after trimming surrounding whitespace.
     pub search_term: String,
 }
 
@@ -1670,6 +1672,37 @@ pub struct ThreadSearchResponse {
     /// at the start of the page timestamp so same-second updates are not skipped.
     pub backwards_cursor: Option<String>,
 }
+
+/// A best-effort incremental batch for `thread/search/stream`. Match `requestId` to the request
+/// on this connection. Only a small subset of verified matches may be emitted; rows are unique
+/// and arrive in discovery order, but may be dropped under load or fall outside the final sorted
+/// page. Thread fields use stored metadata
+/// and the current watched status; live thread settings are enriched in the final response.
+/// Replace provisional rows with the authoritative final response. No partials follow it or an error.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchPartialNotification {
+    pub request_id: RequestId,
+    pub data: Vec<ThreadSearchResult>,
+}
+
+/// Request cancellation on the same connection. `thread/search/cancel` targets only
+/// `thread/search`; `thread/search/stream/cancel` targets only `thread/search/stream`.
+/// Cancellation is idempotent: the cancel response acknowledges the request, and an interrupted
+/// search completes with an error after its subprocess is stopped and reaped. If completion races
+/// cancellation, the original search may still succeed. An already-completed search is unaffected.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchCancelParams {
+    pub request_id: RequestId,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchCancelResponse {}
 
 /// Parameters for searching visible message occurrences within one paginated thread.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

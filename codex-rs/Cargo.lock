@@ -4899,6 +4899,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-output-truncation",
  "codex-utils-path",
  "codex-utils-process",

@@ -18,6 +18,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -394,6 +395,49 @@ pub struct ListThreadsParams {
     pub use_state_db_only: bool,
 }
 
+/// Source categories accepted by thread content search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadSearchSourceKind {
+    Cli,
+    VsCode,
+    Exec,
+    AppServer,
+    SubAgent,
+    SubAgentReview,
+    SubAgentCompact,
+    SubAgentThreadSpawn,
+    SubAgentOther,
+    Unknown,
+}
+
+impl ThreadSearchSourceKind {
+    /// Determine whether a stored session source belongs to this category.
+    pub fn matches(self, source: &SessionSource) -> bool {
+        match self {
+            Self::Cli => matches!(source, SessionSource::Cli),
+            Self::VsCode => matches!(source, SessionSource::VSCode),
+            Self::Exec => matches!(source, SessionSource::Exec),
+            Self::AppServer => matches!(source, SessionSource::Mcp),
+            Self::SubAgent => matches!(source, SessionSource::SubAgent(_)),
+            Self::SubAgentReview => {
+                matches!(source, SessionSource::SubAgent(SubAgentSource::Review))
+            }
+            Self::SubAgentCompact => {
+                matches!(source, SessionSource::SubAgent(SubAgentSource::Compact))
+            }
+            Self::SubAgentThreadSpawn => matches!(
+                source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ),
+            Self::SubAgentOther => {
+                matches!(source, SessionSource::SubAgent(SubAgentSource::Other(_)))
+            }
+            Self::Unknown => matches!(source, SessionSource::Unknown),
+        }
+    }
+}
+
 /// Parameters for searching thread content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchThreadsParams {
@@ -412,6 +456,9 @@ pub struct SearchThreadsParams {
     pub sort_direction: SortDirection,
     /// Allowed session sources. Empty means implementation default.
     pub allowed_sources: Vec<SessionSource>,
+    /// Exact source categories to apply before pagination. None accepts any allowed source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kinds: Option<Vec<ThreadSearchSourceKind>>,
     /// Whether archived threads should be searched instead of active threads.
     pub archived: bool,
     /// Visible thread content to search for.

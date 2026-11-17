@@ -83,7 +83,8 @@
 //! the Chinese closing book-title bracket (`》`), takes the place of a newly inserted separator.
 //! Existing whitespace stays part of the draft.
 //!
-//! `Esc` records the active token as dismissed. A completed value that begins with `@` or `$` is
+//! `Esc` records the active token as dismissed and resets any pending unified mention search.
+//! A completed value that begins with `@` or `$` is
 //! also re-dismissed before popup synchronization, because separator affinity can still identify
 //! the completed token to the left of the cursor. Synchronization keeps the popup hidden only while
 //! the query, complete token text, and ordinal among matching occurrences remain the same.
@@ -2513,6 +2514,10 @@ impl ChatComposer {
                 if let Some((range, query)) = self.current_mentions_v2_token_range() {
                     self.popups.dismissed_mention_token =
                         Some(DismissedToken::new(&self.draft.textarea, range, query));
+                }
+                if self.popups.current_file_query.take().is_some() {
+                    self.app_event_tx
+                        .send(AppEvent::StartFileSearch(String::new()));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -8055,6 +8060,11 @@ mod tests {
         composer.on_file_search_result("foo".to_string(), Vec::new());
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(composer.popups.active, ActivePopup::None));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartFileSearch(query)) if query.is_empty()
+        ));
+        assert!(composer.popups.current_file_query.is_none());
 
         composer.draft.textarea.set_cursor("@foo @foo".len());
         composer.sync_popups();

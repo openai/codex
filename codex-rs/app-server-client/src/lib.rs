@@ -410,13 +410,15 @@ impl InProcessAppServerClient {
                                 // this loop can keep draining runtime events
                                 // while the request is blocked on client input.
                                 tokio::spawn(async move {
-                                    // Device ceremonies belong to the waiting UI. Preserve
-                                    // its cancellation through this buffering task.
+                                    // Dropping the UI's request must drop the detached runtime
+                                    // future too: its drop guard cancels verification and search.
                                     let cancellable = matches!(*request,
                                         ClientRequest::UserVerificationStatus { .. }
                                         | ClientRequest::UserVerificationEnroll { .. }
                                         | ClientRequest::UserVerificationDelete { .. }
-                                        | ClientRequest::UserVerificationVerify { .. });
+                                        | ClientRequest::UserVerificationVerify { .. }
+                                        | ClientRequest::ThreadSearch { .. }
+                                        | ClientRequest::ThreadSearchStream { .. });
                                     let mut response_tx = response_tx;
                                     tokio::select! {
                                         _ = response_tx.closed(), if cancellable => {}

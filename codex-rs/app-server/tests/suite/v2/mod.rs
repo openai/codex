@@ -172,6 +172,9 @@ mod thread_read_state;
 mod thread_resume;
 mod thread_revert;
 mod thread_sample;
+#[cfg(target_os = "linux")]
+#[path = "thread_search_streaming_tests.rs"]
+mod thread_search_streaming;
 mod thread_sections;
 mod thread_settings_update;
 mod thread_shell_command;

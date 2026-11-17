@@ -302,10 +302,7 @@ async fn search_rollout_matches_uses_logical_path_for_compressed_rollout() -> an
     )
     .await?;
 
-    assert_eq!(
-        matches.get(rollout_path.as_path()),
-        Some(&Some("targeted search term".to_string()))
-    );
+    assert_eq!(matches, std::collections::HashSet::from([rollout_path]));
     Ok(())
 }
 

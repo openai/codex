@@ -1,19 +1,23 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::strip_user_message_prefix;
-use futures::future::join_all;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use futures::future::pending;
 use regex::Regex;
 use regex::RegexBuilder;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
+use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
@@ -21,11 +25,22 @@ use super::compression;
 use crate::ResponseItemEnvelope;
 use crate::RolloutItem;
 
+mod compressed;
+mod snippet_matcher;
+use compressed::scan_compressed_rollout_matches;
+pub use snippet_matcher::RolloutSnippetMatcher;
+
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 
-/// Search matches keyed by the canonical `.jsonl` path for each rollout.
-pub type RolloutSearchMatches = HashMap<PathBuf, Option<String>>;
+/// Logical `.jsonl` paths discovered by search, regardless of physical representation.
+pub type RolloutSearchMatches = HashSet<PathBuf>;
+
+/// A potential match discovered by the rollout scanner.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RolloutSearchCandidate {
+    pub path: PathBuf,
+}
 
 pub async fn search_rollout_paths(
     rg_command: &Path,
@@ -33,12 +48,7 @@ pub async fn search_rollout_paths(
     archived: bool,
     search_term: &str,
 ) -> io::Result<HashSet<PathBuf>> {
-    Ok(
-        search_rollout_matches(rg_command, codex_home, archived, search_term)
-            .await?
-            .into_keys()
-            .collect(),
-    )
+    search_rollout_matches(rg_command, codex_home, archived, search_term).await
 }
 
 pub async fn search_rollout_matches(
@@ -47,34 +57,89 @@ pub async fn search_rollout_matches(
     archived: bool,
     search_term: &str,
 ) -> io::Result<RolloutSearchMatches> {
+    search_rollout_matches_with_progress(
+        rg_command,
+        codex_home,
+        archived,
+        search_term,
+        /*progress*/ None,
+        Box::pin(pending()),
+    )
+    .await
+}
+
+/// Search plain rollouts, then compressed rollouts, reporting candidates without blocking.
+pub async fn search_rollout_matches_with_progress(
+    rg_command: &Path,
+    codex_home: &Path,
+    archived: bool,
+    search_term: &str,
+    progress: Option<mpsc::Sender<RolloutSearchCandidate>>,
+    cancelled: BoxFuture<'_, ()>,
+) -> io::Result<RolloutSearchMatches> {
     let root = codex_home.join(if archived {
         ARCHIVED_SESSIONS_SUBDIR
     } else {
         SESSIONS_SUBDIR
     });
     let json_search_term = json_escaped_search_term(search_term)?;
-    let Some(plain_matches) =
-        ripgrep_rollout_paths(rg_command, root.as_path(), json_search_term.as_str()).await?
-    else {
-        return scan_rollout_matches(root.as_path(), json_search_term.as_str(), search_term).await;
+    let cancelled = cancelled.shared();
+    let mut cancellation: BoxFuture<'_, ()> = Box::pin(cancelled.clone());
+    let mut matches = match ripgrep_rollout_paths(
+        rg_command,
+        &root,
+        &json_search_term,
+        progress.clone(),
+        &mut cancellation,
+    )
+    .await?
+    {
+        Some(paths) => paths,
+        None => tokio::select! {
+            biased;
+            () = cancelled.clone() => return Err(search_cancelled()),
+            result = scan_plain_rollout_matches(&root, &json_search_term, progress.clone()) => result?,
+        },
     };
-    let mut matches: RolloutSearchMatches =
-        plain_matches.into_iter().map(|path| (path, None)).collect();
-    matches.extend(scan_compressed_rollout_matches(root.as_path(), search_term).await?);
+    // Compression publishes the archive before removing its plain sibling. Discover archives
+    // after the plain scan so a transition cannot fall between the two inventories.
+    let compressed = tokio::select! {
+        biased;
+        () = cancelled => return Err(search_cancelled()),
+        result = scan_compressed_rollout_matches(&root, search_term, progress) => result?,
+    };
+    matches.extend(compressed);
     Ok(matches)
+}
+
+fn search_cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "rollout search cancelled")
 }
 
 async fn ripgrep_rollout_paths(
     rg_command: &Path,
     root: &Path,
     search_term: &str,
+    mut progress: Option<mpsc::Sender<RolloutSearchCandidate>>,
+    cancelled: &mut BoxFuture<'_, ()>,
 ) -> io::Result<Option<HashSet<PathBuf>>> {
-    if !tokio::fs::try_exists(root).await.unwrap_or(false) {
+    let exists = tokio::select! {
+        biased;
+        () = &mut *cancelled => return Err(search_cancelled()),
+        exists = tokio::fs::try_exists(root) => exists.unwrap_or(false),
+    };
+    if !exists {
         return Ok(Some(HashSet::new()));
     }
 
-    let output = match Command::from(codex_utils_process::background_command(rg_command))
-        .arg("-l")
+    let mut command = Command::from(codex_utils_process::background_command(rg_command));
+    // A NUL-only file listing does not flush through ripgrep's line buffer. A one-match
+    // count adds a newline after each NUL-delimited path and still stops at the first hit.
+    command.args(["--count", "--max-count", "1", "--null"]);
+    if progress.is_some() {
+        command.arg("--line-buffered");
+    }
+    let mut child = match command
         .arg("--fixed-strings")
         .arg("--ignore-case")
         .arg("--no-ignore")
@@ -84,49 +149,115 @@ async fn ripgrep_rollout_paths(
         .arg(search_term)
         .arg(root)
         .stdin(Stdio::null())
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
     {
-        Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(None);
-        }
+        Ok(child) => child,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    if !output.status.success() {
-        if output.status.code() == Some(1) && output.stderr.is_empty() {
+    let mut stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing ripgrep stdout"))?,
+    );
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing ripgrep stderr"))?;
+    let mut sink = tokio::io::sink();
+    let read_paths = async {
+        let mut paths = HashSet::new();
+        let mut record = Vec::new();
+        let mut count = [0; 2];
+        while stdout.read_until(0, &mut record).await? != 0 {
+            if record.pop() != Some(0) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unterminated ripgrep path",
+                ));
+            }
+            stdout.read_exact(&mut count).await?;
+            if count != *b"1\n" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid ripgrep count",
+                ));
+            }
+            let path = path_from_rg_bytes(&record);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
+            if paths.insert(path.clone()) {
+                report_candidate(&mut progress, RolloutSearchCandidate { path });
+            }
+            record.clear();
+        }
+        Ok::<_, io::Error>(paths)
+    };
+    let (paths, stderr_bytes, status) = tokio::select! {
+        biased;
+        () = &mut *cancelled => {
+            // Cancellation completes only after ripgrep is reaped.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(search_cancelled());
+        }
+        result = async {
+            tokio::try_join!(read_paths, tokio::io::copy(&mut stderr, &mut sink), child.wait())
+        } => result?,
+    };
+    if !status.success() {
+        if status.code() == Some(1) && stderr_bytes == 0 {
             return Ok(Some(HashSet::new()));
         }
-
         return Err(io::Error::other(format!(
             "ripgrep rollout search failed under {}",
             root.display()
         )));
     }
 
-    let mut matches = HashSet::new();
-    for line in String::from_utf8_lossy(output.stdout.as_slice()).lines() {
-        let path = PathBuf::from(line);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        };
-        matches.insert(path);
-    }
-
-    Ok(Some(matches))
+    Ok(Some(paths))
 }
 
-async fn scan_rollout_matches(
+#[cfg(unix)]
+fn path_from_rg_bytes(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    Path::new(std::ffi::OsStr::from_bytes(bytes)).to_path_buf()
+}
+
+#[cfg(not(unix))]
+fn path_from_rg_bytes(bytes: &[u8]) -> PathBuf {
+    String::from_utf8_lossy(bytes).into_owned().into()
+}
+
+fn report_candidate(
+    progress: &mut Option<mpsc::Sender<RolloutSearchCandidate>>,
+    candidate: RolloutSearchCandidate,
+) {
+    if let Some(sender) = progress
+        && matches!(
+            sender.try_send(candidate),
+            Err(mpsc::error::TrySendError::Closed(_))
+        )
+    {
+        *progress = None;
+    }
+}
+
+async fn scan_plain_rollout_matches(
     root: &Path,
     json_search_term: &str,
-    search_term: &str,
+    mut progress: Option<mpsc::Sender<RolloutSearchCandidate>>,
 ) -> io::Result<RolloutSearchMatches> {
-    let mut matches = HashMap::new();
+    let mut matches = HashSet::new();
     let mut dirs = vec![root.to_path_buf()];
     let json_search_term = case_insensitive_literal_regex(json_search_term)?;
-    let mut matcher = RolloutSnippetMatcher::new(search_term);
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -148,27 +279,12 @@ async fn scan_rollout_matches(
                 continue;
             };
             if rollout_file.is_compressed() {
-                if let Some(snippet) = matcher
-                    .first_match(rollout_file.path())
-                    .await
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(
-                            path = %rollout_file.path().display(),
-                            %err,
-                            "Failed to search compressed rollout"
-                        );
-                        None
-                    })
-                {
-                    matches.insert(
-                        compression::plain_rollout_path(rollout_file.path()),
-                        Some(snippet),
-                    );
-                }
                 continue;
             }
             if rollout_contains(rollout_file.path(), &json_search_term).await? {
-                matches.insert(rollout_file.into_path(), None);
+                let path = rollout_file.into_path();
+                report_candidate(&mut progress, RolloutSearchCandidate { path: path.clone() });
+                matches.insert(path);
             }
         }
     }
@@ -184,108 +300,6 @@ async fn rollout_contains(path: &Path, search_term: &Regex) -> io::Result<bool> 
         }
     }
     Ok(false)
-}
-
-/// Finds snippets across rollouts for one search term, compiling only when a file is read.
-pub struct RolloutSnippetMatcher<'a> {
-    search_term: &'a str,
-    patterns: Option<Arc<(Regex, Regex)>>,
-}
-
-impl<'a> RolloutSnippetMatcher<'a> {
-    pub fn new(search_term: &'a str) -> Self {
-        Self {
-            search_term,
-            patterns: None,
-        }
-    }
-
-    /// Returns the first matching conversation excerpt. The file is opened before compiling
-    /// the patterns so per-file I/O errors take precedence even on the first call.
-    pub async fn first_match(&mut self, path: &Path) -> io::Result<Option<String>> {
-        let lines = compression::open_rollout_line_reader(path).await?;
-        let patterns = match &self.patterns {
-            Some(patterns) => patterns,
-            None => self.patterns.insert(Arc::new((
-                case_insensitive_literal_regex(json_escaped_search_term(self.search_term)?)?,
-                case_insensitive_literal_regex(self.search_term)?,
-            ))),
-        };
-        // Share the regexes across file scans to reuse their scratch caches.
-        let patterns = Arc::clone(patterns);
-        lines
-            .find_map(move |line| {
-                let (json_search_term, search_term) = patterns.as_ref();
-                if json_search_term.is_match(line) {
-                    content_match_snippet(line, search_term)
-                } else {
-                    None
-                }
-            })
-            .await
-    }
-}
-
-async fn scan_compressed_rollout_matches(
-    root: &Path,
-    search_term: &str,
-) -> io::Result<RolloutSearchMatches> {
-    let mut matches = HashMap::new();
-    let mut paths = Vec::new();
-    let mut dirs = vec![root.to_path_buf()];
-
-    while let Some(dir) = dirs.pop() {
-        let mut entries = match tokio::fs::read_dir(dir).await {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        };
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let file_type = entry.file_type().await?;
-            if file_type.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
-                continue;
-            };
-            if !rollout_file.is_compressed() {
-                continue;
-            }
-            paths.push(rollout_file.into_path());
-        }
-    }
-
-    const COMPRESSED_SEARCH_WORKERS: usize = 4;
-    let scan = async |paths: &[PathBuf]| {
-        let mut matches = HashMap::new();
-        let mut matcher = RolloutSnippetMatcher::new(search_term);
-        for path in paths {
-            if let Some(snippet) = matcher.first_match(path).await.unwrap_or_else(|err| {
-                tracing::warn!(
-                    path = %path.as_path().display(),
-                    %err,
-                    "Failed to search compressed rollout"
-                );
-                None
-            }) {
-                matches.insert(
-                    compression::plain_rollout_path(path.as_path()),
-                    Some(snippet),
-                );
-            }
-        }
-        matches
-    };
-    let chunk_size = paths.len().div_ceil(COMPRESSED_SEARCH_WORKERS).max(1);
-    for batch in join_all(paths.chunks(chunk_size).map(scan)).await {
-        matches.extend(batch);
-    }
-    Ok(matches)
 }
 
 fn json_escaped_search_term(search_term: &str) -> io::Result<String> {

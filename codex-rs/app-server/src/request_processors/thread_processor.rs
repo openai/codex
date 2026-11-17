@@ -40,6 +40,7 @@ use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadRevertedNotification;
 use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
+use codex_app_server_protocol::ThreadSearchPartialNotification;
 use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionChangedNotification;
@@ -57,13 +58,25 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::LocalHistoryAccount;
 use codex_thread_store::PendingDaybreakPreference;
 use codex_thread_store::PersistContext;
+use codex_thread_store::StoredThreadSearchResult;
+use codex_thread_store::ThreadSearchObserver;
+use codex_thread_store::ThreadSearchSourceKind;
 use std::ops::ControlFlow;
+use tokio::sync::mpsc;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 pub(super) const THREAD_LIST_MAX_LIMIT: usize = 100;
 const THREAD_LIST_MAX_FILTER_IDS: usize = 100;
 const PAGINATED_FULL_HISTORY_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const PAGINATED_THREAD_READ_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
+
+const MAX_STREAM_SEARCH_TERM_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ThreadSearchDelivery {
+    FinalOnly,
+    Streaming,
+}
 
 async fn stage_pending_thread_metadata(
     thread_manager: &ThreadManager,
@@ -967,10 +980,12 @@ impl ThreadRequestProcessor {
     pub(crate) async fn thread_search(
         &self,
         params: ThreadSearchParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_search_response_inner(params)
+        request_id: ConnectionRequestId,
+        cancellation: CancellationToken,
+        delivery: ThreadSearchDelivery,
+    ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
+        self.thread_search_response_inner(params, request_id, cancellation, delivery)
             .await
-            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn thread_search_occurrences(
@@ -2940,6 +2955,9 @@ impl ThreadRequestProcessor {
     async fn thread_search_response_inner(
         &self,
         params: ThreadSearchParams,
+        request_id: ConnectionRequestId,
+        cancellation: CancellationToken,
+        delivery: ThreadSearchDelivery,
     ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
         let ThreadSearchParams {
             include_attached_threads,
@@ -2956,6 +2974,13 @@ impl ThreadRequestProcessor {
         let search_term = (!search_term.is_empty())
             .then_some(search_term)
             .ok_or_else(|| invalid_request("thread/search requires a non-empty searchTerm"))?;
+        if matches!(delivery, ThreadSearchDelivery::Streaming)
+            && search_term.len() > MAX_STREAM_SEARCH_TERM_BYTES
+        {
+            return Err(invalid_params(format!(
+                "thread/search/stream searchTerm exceeds {MAX_STREAM_SEARCH_TERM_BYTES} UTF-8 bytes"
+            )));
+        }
         let requested_page_size = limit
             .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
@@ -2967,66 +2992,117 @@ impl ThreadRequestProcessor {
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
-        let mut cursor_obj = cursor;
-        let mut last_cursor = cursor_obj.clone();
-        let mut remaining = requested_page_size;
-        let account = self.local_history_account(current_account_only);
-        let mut search_results = Vec::with_capacity(requested_page_size);
-        let mut next_cursor = None;
-
-        while remaining > 0 {
-            let page = self
-                .thread_store
-                .search_threads(StoreSearchThreadsParams {
-                    include_attached_threads,
-                    account: account.clone(),
-                    page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
-                    cursor: cursor_obj.clone(),
-                    sort_key: store_sort_key,
-                    sort_direction: match store_sort_direction {
-                        SortDirection::Asc => StoreSortDirection::Asc,
-                        SortDirection::Desc => StoreSortDirection::Desc,
-                    },
-                    allowed_sources: allowed_sources.clone(),
-                    archived: archived.unwrap_or(false),
-                    search_term: search_term.clone(),
+        let source_kinds = source_kind_filter.map(|kinds| {
+            kinds
+                .into_iter()
+                .map(|kind| match kind {
+                    ThreadSourceKind::Cli => ThreadSearchSourceKind::Cli,
+                    ThreadSourceKind::VsCode => ThreadSearchSourceKind::VsCode,
+                    ThreadSourceKind::Exec => ThreadSearchSourceKind::Exec,
+                    ThreadSourceKind::AppServer => ThreadSearchSourceKind::AppServer,
+                    ThreadSourceKind::SubAgent => ThreadSearchSourceKind::SubAgent,
+                    ThreadSourceKind::SubAgentReview => ThreadSearchSourceKind::SubAgentReview,
+                    ThreadSourceKind::SubAgentCompact => ThreadSearchSourceKind::SubAgentCompact,
+                    ThreadSourceKind::SubAgentThreadSpawn => {
+                        ThreadSearchSourceKind::SubAgentThreadSpawn
+                    }
+                    ThreadSourceKind::SubAgentOther => ThreadSearchSourceKind::SubAgentOther,
+                    ThreadSourceKind::Unknown => ThreadSearchSourceKind::Unknown,
                 })
-                .await
-                .map_err(thread_store_list_error)?;
-
-            for result in page.items {
-                let source = with_thread_spawn_agent_metadata(
-                    result.thread.source.clone(),
-                    result.thread.agent_nickname.clone(),
-                    result.thread.agent_role.clone(),
-                );
-                if source_kind_filter
-                    .as_ref()
-                    .is_none_or(|filter| source_kind_matches(&source, filter))
-                {
-                    search_results.push(result);
-                    if search_results.len() >= requested_page_size {
-                        break;
+                .collect()
+        });
+        let account = self.local_history_account(current_account_only);
+        let (progress, mut batches) = if matches!(delivery, ThreadSearchDelivery::Streaming) {
+            let (sender, receiver) = mpsc::channel(2);
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
+        let search = self.thread_store.search_threads_observed(
+            StoreSearchThreadsParams {
+                include_attached_threads,
+                account,
+                page_size: requested_page_size,
+                cursor,
+                sort_key: store_sort_key,
+                sort_direction: match store_sort_direction {
+                    SortDirection::Asc => StoreSortDirection::Asc,
+                    SortDirection::Desc => StoreSortDirection::Desc,
+                },
+                allowed_sources,
+                source_kinds,
+                archived: archived.unwrap_or(false),
+                search_term,
+            },
+            ThreadSearchObserver {
+                progress,
+                cancelled: Box::pin(cancellation.clone().cancelled_owned()),
+            },
+        );
+        tokio::pin!(search);
+        let mut emitted = HashSet::new();
+        let page = loop {
+            tokio::select! {
+                biased;
+                page = &mut search => break page,
+                batch = async {
+                    match &mut batches {
+                        Some(receiver) => receiver.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let Some(batch) = batch else {
+                        batches = None;
+                        continue;
+                    };
+                    let mut batch_ids = HashSet::new();
+                    let mut accepted = Vec::new();
+                    for result in batch {
+                        let id = result.thread.thread_id;
+                        if !emitted.contains(&id) && batch_ids.insert(id) {
+                            accepted.push(result);
+                            if accepted.len() == requested_page_size.saturating_sub(emitted.len()) {
+                                break;
+                            }
+                        }
+                    }
+                    let batch = accepted;
+                    if batch.is_empty() {
+                        continue;
+                    }
+                    let data = tokio::select! {
+                        biased;
+                        page = &mut search => break page,
+                        data = self.thread_search_provisional_rows(batch) => data,
+                    };
+                    if self.outgoing.try_send_server_notification(
+                        crate::outgoing_message::NotificationTarget::Connection(request_id.connection_id),
+                        ServerNotification::ThreadSearchPartial(ThreadSearchPartialNotification {
+                            request_id: request_id.request_id.clone(),
+                            data,
+                        }),
+                    ) {
+                        emitted.extend(batch_ids);
+                    }
+                    if emitted.len() >= requested_page_size {
+                        batches = None;
                     }
                 }
             }
-
-            remaining = requested_page_size.saturating_sub(search_results.len());
-            next_cursor = page.next_cursor;
-            if remaining == 0 {
-                break;
-            }
-
-            let Some(cursor_val) = next_cursor.clone() else {
-                break;
-            };
-            if last_cursor.as_ref() == Some(&cursor_val) {
-                next_cursor = None;
-                break;
-            }
-            last_cursor = Some(cursor_val.clone());
-            cursor_obj = Some(cursor_val);
+        };
+        if cancellation.is_cancelled() {
+            return Err(invalid_request("thread search cancelled"));
         }
+        let page = page.map_err(|err| match err {
+            ThreadStoreError::InvalidRequest { message }
+                if matches!(delivery, ThreadSearchDelivery::Streaming) =>
+            {
+                invalid_params(message)
+            }
+            err => thread_store_list_error(err),
+        })?;
+        let search_results = page.items;
+        let next_cursor = page.next_cursor;
 
         let backwards_cursor = search_results.first().and_then(|result| {
             thread_backwards_cursor_for_sort_key(
@@ -3035,12 +3111,27 @@ impl ThreadRequestProcessor {
                 store_sort_direction,
             )
         });
-        let fallback_provider = self.config.model_provider_id.clone();
+        let data = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(invalid_request("thread search cancelled")),
+            data = self.thread_search_rows(search_results) => data,
+        };
+        Ok(ThreadSearchResponse {
+            data,
+            next_cursor,
+            backwards_cursor,
+        })
+    }
+
+    fn thread_search_stored_rows(
+        &self,
+        search_results: Vec<StoredThreadSearchResult>,
+    ) -> Vec<ThreadSearchResult> {
         let mut data = Vec::with_capacity(search_results.len());
         for result in search_results {
             let (thread, _) = thread_from_stored_thread(
                 result.thread,
-                fallback_provider.as_str(),
+                &self.config.model_provider_id,
                 &self.config.cwd,
             );
             data.push(ThreadSearchResult {
@@ -3049,6 +3140,31 @@ impl ThreadRequestProcessor {
             });
         }
 
+        data
+    }
+
+    async fn thread_search_provisional_rows(
+        &self,
+        search_results: Vec<StoredThreadSearchResult>,
+    ) -> Vec<ThreadSearchResult> {
+        let mut data = self.thread_search_stored_rows(search_results);
+        let statuses = self
+            .thread_watch_manager
+            .loaded_statuses_for_threads(data.iter().map(|result| result.thread.id.clone()))
+            .await;
+        for result in &mut data {
+            if let Some(status) = statuses.get(&result.thread.id) {
+                result.thread.status = status.clone();
+            }
+        }
+        data
+    }
+
+    async fn thread_search_rows(
+        &self,
+        search_results: Vec<StoredThreadSearchResult>,
+    ) -> Vec<ThreadSearchResult> {
+        let mut data = self.thread_search_stored_rows(search_results);
         enrich_loaded_threads(
             &self.thread_manager,
             &self.thread_watch_manager,
@@ -3057,11 +3173,7 @@ impl ThreadRequestProcessor {
         )
         .await;
 
-        Ok(ThreadSearchResponse {
-            data,
-            next_cursor,
-            backwards_cursor,
-        })
+        data
     }
 
     async fn thread_loaded_list_response_inner(

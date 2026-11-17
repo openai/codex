@@ -776,6 +776,7 @@ impl App {
         thread_id: ThreadId,
         selection: Selection,
     ) -> Result<()> {
+        app_server.task_search.cancel();
         let Selection {
             mode,
             cached_session,
