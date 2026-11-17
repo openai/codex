@@ -137,9 +137,19 @@ async fn warmup_includes_interrupted_image_and_generation_adds_injected_image() 
     let _ = release.send(());
     reopen(&mut test, /*base_url*/ None).await?;
     test.codex
-        .inject_response_items(vec![ResponseItem::from(ResponseInputItem::from(vec![
-            image_input("file_injected"),
-        ]))])
+        .inject_response_items(vec![
+            ResponseInputItem::Message {
+                role: "user".into(),
+                content: vec![ContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: "file_injected".into(),
+                    },
+                    detail: Some(ImageDetail::High),
+                }],
+                phase: None,
+            }
+            .into(),
+        ])
         .await?;
     test.submit_text_turn("continue").await?;
 
