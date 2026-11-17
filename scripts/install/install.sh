@@ -991,7 +991,9 @@ classify_existing_codex() {
       ;;
   esac
 
-  if [ -f "$existing_path" ] && grep -F "#!/usr/bin/env node" "$existing_path" >/dev/null 2>&1; then
+  if [ -f "$existing_path" ] &&
+    LC_ALL=C head -n 1 "$existing_path" 2>/dev/null |
+      LC_ALL=C grep -aFx '#!/usr/bin/env node' >/dev/null 2>&1; then
     case "$existing_path" in
       *".bun"*)
         printf 'bun\n'
