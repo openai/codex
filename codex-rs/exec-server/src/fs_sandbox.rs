@@ -130,9 +130,7 @@ impl FileSystemSandboxRunner {
                 workspace_roots: Some(&sandbox.workspace_roots),
                 runtime_readable_paths: Some(&helper_readable_paths),
                 selection,
-                enforce_managed_network: false,
-                network: None,
-                environment_id: None,
+                network: Default::default(),
                 sandbox_policy_cwd: &sandbox.cwd,
                 sandbox_exe: if cfg!(windows) {
                     Some(helper.as_path())

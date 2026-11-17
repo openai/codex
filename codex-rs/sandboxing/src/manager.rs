@@ -143,6 +143,30 @@ pub enum SandboxSelection {
     RequirePlatform,
 }
 
+/// Network enforcement for one launch. A proxy may be required without a live proxy
+/// on this host. The command carries any already-prepared route.
+#[derive(Default)]
+pub struct SandboxNetwork<'a> {
+    enforce_managed_network: bool,
+    /// The caller keeps the proxy listeners alive while the child uses them.
+    proxy: Option<&'a NetworkProxy>,
+    environment_id: Option<&'a str>,
+}
+
+impl<'a> SandboxNetwork<'a> {
+    pub fn new(
+        enforce_managed_network: bool,
+        proxy: Option<&'a NetworkProxy>,
+        environment_id: Option<&'a str>,
+    ) -> Self {
+        Self {
+            enforce_managed_network,
+            proxy,
+            environment_id,
+        }
+    }
+}
+
 /// Bundled arguments for sandbox transformation.
 ///
 /// This keeps call sites self-documenting when several fields are optional.
@@ -155,10 +179,7 @@ pub struct SandboxTransformRequest<'a> {
     /// bundle, if any. With `None`, the sandbox manager looks up the live proxy's CA bundle.
     pub runtime_readable_paths: Option<&'a [AbsolutePathBuf]>,
     pub selection: SandboxSelection,
-    pub enforce_managed_network: bool,
-    pub environment_id: Option<&'a str>,
-    /// Live proxy for this launch. The caller keeps its listeners alive while the child uses them.
-    pub network: Option<&'a NetworkProxy>,
+    pub network: SandboxNetwork<'a>,
     pub sandbox_policy_cwd: &'a PathUri,
     pub sandbox_exe: Option<&'a Path>,
     // TODO(anp): Reconcile these backend inputs with the supplied sandbox context
@@ -415,12 +436,14 @@ impl SandboxManager {
         request: SandboxTransformRequest<'_>,
     ) -> Result<WrappedSandboxCommand, SandboxTransformError> {
         let command = request.command;
-        let network = request.network;
+        let SandboxNetwork {
+            enforce_managed_network,
+            proxy: network,
+            environment_id,
+        } = request.network;
         let is_file_system_helper = matches!(self.operation, SandboxOperation::FileSystemHelper);
         if is_file_system_helper
-            && (network.is_some()
-                || request.enforce_managed_network
-                || command.managed_network.is_some())
+            && (network.is_some() || enforce_managed_network || command.managed_network.is_some())
         {
             return Err(SandboxTransformError::InvalidPolicy(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -453,7 +476,7 @@ impl SandboxManager {
         }
         #[cfg(windows)]
         if backend == SandboxType::WindowsRestrictedToken
-            && request.enforce_managed_network
+            && enforce_managed_network
             && request.windows_sandbox_level != WindowsSandboxLevel::Elevated
         {
             return Err(SandboxTransformError::WindowsSandboxPreparation(
@@ -481,7 +504,7 @@ impl SandboxManager {
         };
         let managed_network = command
             .managed_network
-            .filter(|_| request.enforce_managed_network || backend == SandboxType::MacosSeatbelt);
+            .filter(|_| enforce_managed_network || backend == SandboxType::MacosSeatbelt);
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program.to_string_lossy().into_owned());
         argv.extend(command.args);
@@ -493,7 +516,7 @@ impl SandboxManager {
             sandbox_policy_cwd: request.sandbox_policy_cwd.clone(),
             env: command.env,
             network: network.cloned(),
-            network_environment_id: request.environment_id.map(str::to_owned),
+            network_environment_id: environment_id.map(str::to_owned),
             sandbox: backend,
             windows_sandbox_level: request.windows_sandbox_level,
             permission_profile: policy.permissions,
@@ -521,14 +544,14 @@ impl SandboxManager {
                     ));
                 }
                 let route = match managed_network {
-                    None if request.enforce_managed_network => {
+                    None if enforce_managed_network => {
                         let proxy = network.ok_or_else(|| {
                             SandboxTransformError::WindowsMxcPreparation(
                                 "managed networking requires an executor-local proxy".to_string(),
                             )
                         })?;
                         let prepared = proxy
-                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .prepare_for_optional_environment(exec.env, environment_id)
                             .map_err(|err| {
                                 SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
                             })?;
@@ -572,7 +595,7 @@ impl SandboxManager {
                 let managed_network = match (managed_network, network) {
                     (None, Some(proxy)) => {
                         let prepared = proxy
-                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .prepare_for_optional_environment(exec.env, environment_id)
                             .map_err(|err| {
                                 SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
                             })?;
@@ -597,9 +620,9 @@ impl SandboxManager {
                         file_system_sandbox_policy: &file_system_sandbox_policy,
                         network_sandbox_policy,
                         sandbox_policy_cwd: &pending.native_sandbox_policy_cwd,
-                        enforce_managed_network: request.enforce_managed_network,
+                        enforce_managed_network,
                         managed_network: managed_network.as_ref(),
-                        environment_id: request.environment_id,
+                        environment_id,
                         network,
                         extra_allow_unix_sockets: sockets,
                     },
@@ -626,11 +649,11 @@ impl SandboxManager {
                 let exe = request
                     .sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let route = match (request.enforce_managed_network, managed_network, network) {
+                let route = match (enforce_managed_network, managed_network, network) {
                     (false, _, _) => None,
                     (true, None, Some(proxy)) => {
                         let prepared = proxy
-                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .prepare_for_optional_environment(exec.env, environment_id)
                             .map_err(|err| {
                                 SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
                             })?;
@@ -680,11 +703,8 @@ impl SandboxManager {
                     let session = WindowsSessionPolicy {
                         workspace_roots: policy.workspace_roots,
                         filesystem_overrides,
-                        proxy_enforced: request.enforce_managed_network,
-                        restricting_sid: windows_proxy_restricting_sid(
-                            network,
-                            request.environment_id,
-                        )?,
+                        proxy_enforced: enforce_managed_network,
+                        restricting_sid: windows_proxy_restricting_sid(network, environment_id)?,
                         proxy_settings_mode,
                     };
                     return Ok(wrapped(exec, Some(Box::new(session))));

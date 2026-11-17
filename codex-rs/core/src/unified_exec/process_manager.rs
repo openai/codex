@@ -1318,23 +1318,18 @@ impl UnifiedExecProcessManager {
         tool_ctx: &ToolCtx,
         request: ExecRequest,
         network: Option<&NetworkProxy>,
-        network_proxy_launch: Option<codex_network_proxy::RemoteNetworkProxyLaunchConfig>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         shell_snapshot: Option<codex_exec_server::ShellSnapshotRequest>,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
         tty: bool,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let network_policy_decider = network_proxy_launch
+        let network_policy_decider = request
+            .exec_server_network_proxy
             .as_ref()
             .filter(|launch| launch.policy_decision_timeout_ms.is_some())
             .and_then(|launch| network?.remote_policy_decider(launch.proxy.allow_local_binding));
-        let missing_remote_proxy =
-            environment.is_remote() && network.is_some() && network_proxy_launch.is_none();
         let request = ExecRequest {
-            exec_server_enforce_managed_network: request.exec_server_enforce_managed_network
-                && !missing_remote_proxy,
-            exec_server_network_proxy: network_proxy_launch,
             exec_server_env_config,
             exec_server_shell_snapshot: shell_snapshot,
             ..request

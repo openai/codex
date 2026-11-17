@@ -38,7 +38,6 @@ use tokio::time::Instant;
 use crate::FileSystemSandboxContext;
 use crate::local_process::apply_exec_metadata;
 use crate::local_process::shell_environment_policy;
-use crate::process_sandbox::supports_credential_snapshot;
 use crate::protocol::ExecEnvPolicy;
 use crate::protocol::ExecParams;
 use crate::protocol::ShellSnapshotRequest;
@@ -46,6 +45,7 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::shell_snapshot_process::SnapshotCapture;
 use crate::telemetry::ExecServerTelemetry;
+use codex_network_proxy::ShellStartupCredentials;
 
 const MAX_CACHED_SNAPSHOTS: usize = 16;
 const MAX_SNAPSHOT_BYTES: usize = 512 * 1024;
@@ -144,7 +144,12 @@ impl ShellSnapshotCache {
                 .network_proxy
                 .as_ref()
                 .is_some_and(|launch| launch.proxy.credential_masking_enabled())
-                && supports_credential_snapshot(params)
+                && ShellStartupCredentials::supports_snapshot(
+                    &params.argv,
+                    params.arg0.as_deref(),
+                    &request.shell.name,
+                    &request.shell.path,
+                )
         });
         let protected = proxy.is_some();
 

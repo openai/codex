@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,7 +9,6 @@ use codex_exec_server_protocol::ProcessStartErrorData;
 use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::CHILD_ONLY_CA_ENV_KEYS;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
-use codex_network_proxy::CredentialMaskingFailureMode;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::ManagedProxyRouting;
 use codex_network_proxy::NetworkPolicyAuditObserver;
@@ -17,9 +17,11 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::RemoteCredentialBrokerCache;
+use codex_network_proxy::ShellStartupCredentials;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::WrappedSandboxCommand;
 #[cfg(windows)]
@@ -35,21 +37,6 @@ use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::sandbox_selection::sandbox_selection;
-
-const CREDENTIAL_MASKING_FAILURE_MODE: CredentialMaskingFailureMode =
-    CredentialMaskingFailureMode::Warn;
-
-pub(crate) fn supports_credential_snapshot(params: &ExecParams) -> bool {
-    cfg!(any(target_os = "linux", target_os = "macos"))
-        && params.arg0.is_none()
-        && params.shell_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.shell.name == "zsh"
-                && matches!(params.argv.as_slice(), [program, flag, _]
-                    if program == &snapshot.shell.path
-                        && flag == "-lc"
-                        && Path::new(program).file_name().is_some_and(|name| name == "zsh"))
-        })
-}
 
 #[tracing::instrument(
     name = "codex.exec_server.process_prepare_sandbox",
@@ -201,9 +188,11 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             workspace_roots: Some(&sandbox_context.workspace_roots),
             runtime_readable_paths: Some(&runtime_readable_paths),
             selection,
-            enforce_managed_network,
-            environment_id: None,
-            network: proxy_handle.as_ref().and_then(NetworkProxyHandle::proxy),
+            network: SandboxNetwork::new(
+                enforce_managed_network,
+                proxy_handle.as_ref().and_then(NetworkProxyHandle::proxy),
+                /*environment_id*/ None,
+            ),
             sandbox_policy_cwd: &sandbox_context.cwd,
             sandbox_exe: if cfg!(windows) {
                 Some(runtime_paths.codex_self_exe.as_path())
@@ -320,36 +309,31 @@ async fn prepare_managed_network(
     )
     .await
     .map_err(|err| internal_error(err.to_string()))?;
-    let supported_shell = matches!(params.argv.as_slice(), [program, flag, _]
-        if Path::new(program).file_name().is_some_and(|name| name == "bash") && flag == "-c")
-        && !["BASH_ENV", "ENV", "SSH_CLIENT", "SSH2_CLIENT"]
-            .iter()
-            .any(|key| env.contains_key(*key));
+    let credentials = credential_masking.then(|| {
+        ShellStartupCredentials::for_command(
+            &params.argv,
+            params.arg0.as_deref(),
+            params
+                .shell_snapshot
+                .as_ref()
+                .map(|snapshot| (snapshot.shell.name.as_str(), snapshot.shell.path.as_str())),
+            &env,
+        )
+    });
     let mut prepared = proxy
         .prepare_for_optional_environment(env, /*environment_id*/ None)
         .map_err(|err| {
             internal_error(format!("failed to prepare executor network proxy: {err}"))
         })?;
-    if credential_masking {
-        if supports_credential_snapshot(params) {
-            // Requested snapshots trust startup profiles before masking their captured state.
-            proxy.restore_and_disable_brokered_credentials(&mut prepared.env, &mut []);
-        } else if cfg!(any(target_os = "linux", target_os = "macos"))
-            && supported_shell
-            && params.arg0.is_none()
-            && params.shell_snapshot.is_none()
-        {
-            proxy
-                .handle_unmasked_credentials(&mut prepared.env, CREDENTIAL_MASKING_FAILURE_MODE)
-                .map_err(|err| invalid_params(err.to_string()))?;
-        } else {
+    if let Some(credentials) = credentials {
+        if matches!(credentials, ShellStartupCredentials::UnmaskedCommand) {
             tracing::warn!(
                 "Credential masking is unavailable for this shell startup; preserving shell profiles and snapshots and running with unmasked credentials."
             );
-            // Restore this child's environment without disabling translation of placeholders
-            // issued to earlier commands in the same environment.
-            proxy.restore_and_disable_brokered_credentials(&mut prepared.env, &mut []);
         }
+        credentials
+            .apply(&proxy, &mut prepared.env)
+            .map_err(|err| invalid_params(err.to_string()))?;
     }
     Ok((prepared.env, Some(prepared.sandbox_context), Some(handle)))
 }

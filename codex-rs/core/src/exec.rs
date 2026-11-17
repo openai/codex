@@ -38,6 +38,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
@@ -413,9 +414,11 @@ pub async fn build_exec_request(
             workspace_roots: None,
             runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(sandbox_type),
-            enforce_managed_network,
-            environment_id: network_environment_id.as_deref(),
-            network: network.as_ref(),
+            network: SandboxNetwork::new(
+                enforce_managed_network,
+                network.as_ref(),
+                network_environment_id.as_deref(),
+            ),
             sandbox_policy_cwd: &sandbox_policy_cwd_uri,
             sandbox_exe: if cfg!(windows) {
                 codex_self_exe.as_deref()

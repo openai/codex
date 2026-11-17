@@ -339,7 +339,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                             )
                         })?);
                 }
-                (env, None, launch.proxy.enabled.then_some(launch))
+                (env, None, Some(launch))
             }
             Some(network) => {
                 let child_environment = snapshot_credential_context
@@ -617,6 +617,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                     prepared.cwd.clone(),
                     env,
                     managed_network_context,
+                    network_proxy_launch,
                     additional_permissions.as_ref(),
                     options,
                 )
@@ -647,7 +648,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                 ctx,
                 request,
                 managed_network,
-                network_proxy_launch,
                 req.exec_server_env_config.clone(),
                 req.shell_snapshot.clone(),
                 windows_sandbox_proxy_settings_mode,

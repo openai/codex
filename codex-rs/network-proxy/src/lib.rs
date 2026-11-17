@@ -64,6 +64,7 @@ pub use credential_broker::CredentialBrokerContext;
 pub use credential_broker::CredentialBrokerEnvironment;
 pub use credential_broker::CredentialMaskingFailureMode;
 pub use credential_broker::CredentialProviderConfig;
+pub use credential_broker::ShellStartupCredentials;
 pub use credential_broker::brokered_credential_binding_env_keys;
 pub use credential_broker::brokered_credential_dummy_env_keys;
 pub use credential_broker::brokered_credential_env_keys;
