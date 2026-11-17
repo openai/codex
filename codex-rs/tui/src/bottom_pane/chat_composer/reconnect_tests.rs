@@ -195,7 +195,17 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
     ] {
         let (mut composer, _) = new_test_composer();
         composer.blocks_direct_input = true;
-        composer.set_text_content(format!("/{}", command.command()), Vec::new(), Vec::new());
+        let text = format!("/{}", command.command());
+        if command == SlashCommand::Status {
+            for ch in text.chars() {
+                composer.handle_restricted_key(
+                    KeyCode::Char(ch).into(),
+                    RestrictedInputMode::UnavailableThread,
+                );
+            }
+        } else {
+            composer.set_text_content(text, Vec::new(), Vec::new());
+        }
         assert_eq!(
             composer.handle_restricted_key(
                 KeyEvent::from(KeyCode::Enter),
@@ -204,6 +214,13 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
             InputResult::Command(command),
         );
         assert_eq!(composer.current_text(), "");
+        if command == SlashCommand::Status {
+            composer.handle_restricted_key(
+                KeyCode::F(7).into(),
+                RestrictedInputMode::UnavailableThread,
+            );
+            assert_eq!(composer.current_text(), "");
+        }
     }
 }
 
@@ -395,4 +412,17 @@ fn unavailable_thread_expands_pasted_commands_without_dispatching() {
         InputResult::None
     );
     assert_eq!(composer.current_text(), text);
+}
+
+#[test]
+fn disconnected_edit_invalidates_ordinary_redo() {
+    let (mut composer, _) = new_test_composer();
+    composer.set_disable_paste_burst(/*disabled*/ true);
+    composer.handle_key_event(KeyCode::Char('a').into());
+    let undo = KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE);
+    composer.handle_restricted_key(undo, RestrictedInputMode::Disconnected);
+    assert_eq!(composer.current_text(), "");
+    composer.handle_restricted_key(KeyCode::Char('b').into(), RestrictedInputMode::Disconnected);
+    composer.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    assert_eq!(composer.current_text(), "b");
 }

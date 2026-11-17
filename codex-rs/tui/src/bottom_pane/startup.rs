@@ -104,6 +104,14 @@ impl BottomPane {
         self.composer.sync_popups();
     }
 
+    pub(crate) fn startup_undo_draft(&mut self) -> Option<super::chat_composer::ComposerDraft> {
+        self.composer.capture_startup_undo()
+    }
+
+    pub(crate) fn record_startup_undo(&mut self, destination: super::chat_composer::ComposerDraft) {
+        self.composer.record_startup_undo(destination);
+    }
+
     /// Preserve startup-local history and the newest protected-prompt activity timestamp.
     pub(crate) fn restore_startup_composer_state(
         &mut self,

@@ -1472,6 +1472,12 @@ async fn startup_draft_handoff_preserves_cursor_and_large_paste() {
     chat.restore_startup_draft(startup_draft.clone());
 
     assert_eq!(chat.bottom_pane.composer_draft_snapshot(), startup_draft);
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(7)));
+    assert!(chat.bottom_pane.composer_is_empty());
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    let mut restored = chat.bottom_pane.composer_draft_snapshot();
+    restored.last_composer_activity_at = startup_draft.last_composer_activity_at;
+    assert_eq!(restored, startup_draft);
 }
 
 #[tokio::test]
@@ -1497,6 +1503,8 @@ async fn startup_draft_handoff_merges_existing_prompt_images_and_large_pastes() 
     );
     let initial_paste = "y".repeat(/*n*/ 1_001);
     chat.bottom_pane.handle_paste(initial_paste.clone());
+    chat.bottom_pane
+        .set_composer_cursor(image_placeholder.len() + 1);
     let existing_draft = chat.bottom_pane.composer_draft_snapshot();
     let existing_placeholder = existing_draft.pending_pastes[0].0.clone();
 
@@ -1526,6 +1534,15 @@ async fn startup_draft_handoff_merges_existing_prompt_images_and_large_pastes() 
             }],
         )
     );
+    let merged = chat.bottom_pane.composer_draft_snapshot();
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(7)));
+    let mut undone = chat.bottom_pane.composer_draft_snapshot();
+    undone.last_composer_activity_at = existing_draft.last_composer_activity_at;
+    assert_eq!(undone, existing_draft);
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    let mut redone = chat.bottom_pane.composer_draft_snapshot();
+    redone.last_composer_activity_at = merged.last_composer_activity_at;
+    assert_eq!(redone, merged);
 }
 
 #[tokio::test]

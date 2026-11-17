@@ -635,3 +635,16 @@ fn warning_context_keeps_local_chords_ahead_of_copy_and_hides_unreachable_hints(
     assert!(runtime.list.jump_bottom.is_pressed(event));
     assert!(!runtime.app.copy.is_pressed(event));
 }
+
+#[test]
+fn composer_undo_defaults_yield_without_shadowing_vim_redo() {
+    let mut config = TuiKeymap::default();
+    config.global.leader = Some(binding("f7"));
+    config.composer.history_search_previous = Some(binding("alt-h"));
+    config.composer.redo = Some(binding("ctrl-r f6"));
+    let runtime = RuntimeKeymap::from_config(&config).unwrap();
+    let undo = KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE);
+    let redo = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(!runtime.composer.undo.is_pressed(undo));
+    assert!(runtime.vim_normal.redo.is_pressed(redo));
+}

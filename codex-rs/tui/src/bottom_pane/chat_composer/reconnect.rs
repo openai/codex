@@ -43,6 +43,7 @@ impl ChatComposer {
                 .paste_burst
                 .append_control_char_if_active('\n', now)
         {
+            self.begin_promoted_paste_edit();
             return true;
         }
         if self
@@ -105,6 +106,8 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
         }
         self.set_disable_paste_burst(/*disabled*/ true);
+        let history_handled = matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && self.handle_edit_history_key(key);
         // Expand in reverse order so remaining ranges stay valid. Textarea replacement
         // preserves the cursor and other elements, including images and mentions.
         let pending_pastes = std::mem::take(&mut self.draft.pending_pastes);
@@ -119,6 +122,10 @@ impl ChatComposer {
                         .replace_range(element.byte_range.start..element.byte_range.end, text);
                 }
             }
+        }
+        if history_handled {
+            self.draft.textarea_state.get_mut().follow_cursor();
+            return InputResult::None;
         }
         if mode == RestrictedInputMode::UnavailableThread
             && self.draft.textarea.wants_vim_search_key(key)
@@ -153,6 +160,7 @@ impl ChatComposer {
                         slash_input::SlashPopupInputMode::UnavailableThread,
                     )
                     .0;
+                self.reset_vim_mode_after_successful_dispatch(&result);
                 self.sync_command_popup(/*allow*/ true);
                 return result;
             }
@@ -194,10 +202,12 @@ impl ChatComposer {
                 if matches!(command, SlashCommand::Warnings | SlashCommand::Config | SlashCommand::Quit | SlashCommand::Exit)
                     || mode == RestrictedInputMode::UnavailableThread && command.available_when_thread_unavailable())
             {
-                return self
+                let result = self
                     .try_dispatch_bare_slash_command()
                     .or_else(|| self.try_dispatch_slash_command_with_args())
                     .unwrap_or(InputResult::None);
+                self.reset_vim_mode_after_successful_dispatch(&result);
+                return result;
             }
         }
 
@@ -226,7 +236,11 @@ impl ChatComposer {
             self.draft.textarea_state.get_mut().follow_cursor();
             self.before_sparkle_editor_key(key)
         };
+        self.begin_composer_key_edit(key);
         let (result, _) = self.handle_input_basic(key);
+        if !self.draft.textarea.is_vim_enabled() {
+            self.finish_edit();
+        }
         self.after_sparkle_key(before, &result);
     }
 }

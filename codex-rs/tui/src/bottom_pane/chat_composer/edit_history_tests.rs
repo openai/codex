@@ -873,3 +873,161 @@ fn editor_actions_insert_shell_prefixes() {
         );
     }
 }
+
+#[test]
+fn ordinary_composer_undo_redo_restores_grouped_typing_and_paste() {
+    snapshot_composer_state_with_width(
+        "ordinary_composer_undo",
+        /*width*/ 60,
+        /*enhanced_keys_supported*/ true,
+        |composer| {
+            let undo = KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE);
+            let redo = KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT);
+            for ch in ['d', 'r'] {
+                composer.handle_key_event(KeyCode::Char(ch).into());
+                composer.handle_paste_burst_flush(
+                    std::time::Instant::now() + PasteBurst::recommended_active_flush_delay(),
+                );
+            }
+            composer.set_disable_paste_burst(/*disabled*/ true);
+            keys(composer, "aft");
+            composer.handle_key_event(KeyCode::Backspace.into());
+            composer.handle_key_event(undo);
+            assert_eq!(composer.current_text(), "draft");
+            composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1));
+            composer.handle_key_event(undo);
+            composer.handle_key_event(undo);
+            assert_eq!(composer.current_text(), "");
+            composer.handle_key_event(redo);
+            composer.handle_key_event(redo);
+            composer.clear_for_ctrl_c();
+            composer.handle_key_event(undo);
+            composer.handle_key_event(undo);
+            composer.set_vim_enabled(/*enabled*/ true);
+            keys(composer, "u");
+            assert_eq!(composer.current_text(), "");
+            ctrl_r(composer);
+            composer.set_vim_enabled(/*enabled*/ false);
+        },
+    );
+    let (mut composer, _) = new_test_composer();
+    composer.set_disable_paste_burst(/*disabled*/ true);
+    let original = "a".repeat(70);
+    composer.set_text_content(original.clone(), Vec::new(), Vec::new());
+    composer.set_current_cursor(original.len());
+    for _ in 0..65 {
+        composer.handle_key_event(KeyCode::Backspace.into());
+    }
+    keys(&mut composer, "x");
+    let undo = KeyEvent::from(KeyCode::F(7));
+    let redo = KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT);
+    composer.handle_key_event(undo);
+    assert_eq!(composer.current_text(), "aaaaa");
+    composer.handle_key_event(undo);
+    assert_eq!(composer.current_text(), original);
+    composer.handle_key_event(redo);
+    assert_eq!(composer.current_text(), "aaaaa");
+}
+
+#[test]
+fn detected_paste_is_separate_from_preceding_typing() {
+    for (input, pasted) in [
+        (vec![KeyCode::Char('X'), KeyCode::Char('Y')], "XY"),
+        (
+            vec![KeyCode::Char('X'), KeyCode::Enter, KeyCode::Char('Y')],
+            "X\nY",
+        ),
+        (
+            vec![KeyCode::Char('X'), KeyCode::Tab, KeyCode::Char('Y')],
+            "X\tY",
+        ),
+    ] {
+        let (mut composer, _receiver) = new_test_composer();
+        composer.handle_key_event(KeyCode::Char('a').into());
+        composer.handle_paste_burst_flush(
+            std::time::Instant::now() + PasteBurst::recommended_active_flush_delay(),
+        );
+        for key in input {
+            composer.handle_key_event(key.into());
+        }
+        composer.handle_key_event(KeyEvent::from(KeyCode::F(7)));
+        assert_eq!(composer.current_text(), "a");
+        composer.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+        assert_eq!(composer.current_text(), format!("a{pasted}"));
+    }
+
+    // Non-ASCII input replaces a selection before it can be recognized as a paste.
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+    use ratatui::widgets::StatefulWidgetRef;
+    let (mut composer, _) = new_test_composer();
+    composer.set_text_content("abcdef".into(), Vec::new(), Vec::new());
+    let area = ratatui::layout::Rect::new(0, 0, 40, 4);
+    let mut state = super::super::super::textarea::TextAreaState::default();
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    (&composer.draft.textarea).render_ref(area, &mut buffer, &mut state);
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), 1),
+        (MouseEventKind::Drag(MouseButton::Left), 3),
+    ] {
+        composer.draft.textarea.handle_mouse(
+            MouseEvent {
+                kind,
+                column,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+            state,
+        );
+    }
+    let before = composer.snapshot_draft();
+    keys(&mut composer, "日\u{3000}語");
+    composer.handle_key_event(KeyCode::F(7).into());
+    assert_eq!(composer.snapshot_draft(), before);
+    composer.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    assert_eq!(composer.current_text(), "a日\u{3000}語def");
+}
+
+#[test]
+fn deferred_command_preserves_undo_until_consumed() {
+    for command in ["/review", "/fork"] {
+        let (mut composer, _) = new_test_composer();
+        composer.handle_paste(command.to_owned());
+        assert!(matches!(
+            composer.handle_key_event(KeyCode::Enter.into()).0,
+            InputResult::Command(_)
+        ));
+        composer.handle_key_event(KeyCode::F(7).into());
+        assert_eq!(composer.current_text(), "");
+    }
+}
+
+#[test]
+fn disabling_ordinary_undo_discards_vim_redo_on_mode_change() {
+    let mut composer = vim_composer("abc");
+    composer.config.undo_enabled = false;
+    keys(&mut composer, "x");
+    keys(&mut composer, "u");
+    composer.set_vim_enabled(/*enabled*/ false);
+    keys(&mut composer, "z");
+    let answer = composer.current_text();
+    composer.set_vim_enabled(/*enabled*/ true);
+    ctrl_r(&mut composer);
+    assert_eq!(composer.current_text(), answer);
+}
+
+#[cfg(windows)]
+#[test]
+fn altgr_delete_word_is_an_undoable_deletion() {
+    let (mut composer, _) = new_test_composer();
+    composer.set_disable_paste_burst(/*disabled*/ true);
+    keys(&mut composer, "hello world");
+    composer.handle_key_event(KeyEvent::new(
+        KeyCode::Char('h'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    ));
+    assert_eq!(composer.current_text(), "hello ");
+    composer.handle_key_event(KeyCode::F(7).into());
+    assert_eq!(composer.current_text(), "hello world");
+}

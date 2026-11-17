@@ -852,7 +852,13 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
-    fn is_composer_activity_key(key: KeyEvent) -> bool {
+    fn is_composer_activity_key(&self, key: KeyEvent) -> bool {
+        if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (self.keymap.composer.undo.is_pressed(key)
+                || self.keymap.composer.redo.is_pressed(key))
+        {
+            return true;
+        }
         matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && !key_hint::has_ctrl_or_alt(key.modifiers)
             && matches!(
@@ -873,7 +879,7 @@ impl BottomPane {
     ) -> InputResult {
         if mode == RestrictedInputMode::DraftHandoff {
             let result = self.composer.handle_restricted_key(key, mode);
-            if Self::is_composer_activity_key(key) {
+            if self.is_composer_activity_key(key) {
                 self.record_composer_activity_at(Instant::now());
             }
             self.request_redraw();
@@ -917,7 +923,7 @@ impl BottomPane {
                 view.observe_key_event_while_covered(key_event, routed_key);
             }
         }
-        let records_composer_activity = Self::is_composer_activity_key(key_event);
+        let records_composer_activity = self.is_composer_activity_key(key_event);
         if self.warnings_active() {
             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 self.record_composer_activity_at(Instant::now());
@@ -2345,6 +2351,9 @@ impl BottomPane {
     /// Commit accepted typing before snapshotting the target of an asynchronous paste.
     pub(crate) fn prepare_composer_clipboard_paste(&mut self) {
         self.composer.flush_pending_paste_burst();
+        if !self.composer.is_vim_enabled() {
+            self.composer.finish_edit();
+        }
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
@@ -2764,6 +2773,18 @@ mod tests {
 
     pub(super) fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
         test_pane_with_disable_paste_burst(app_event_tx, /*disable_paste_burst*/ false)
+    }
+
+    #[test]
+    fn clipboard_image_undo_preserves_buffered_typing() {
+        let (tx, _) = unbounded_channel();
+        let mut pane = test_pane(AppEventSender::new(tx));
+        pane.composer.handle_key_event(KeyCode::Char('a').into());
+        pane.prepare_composer_clipboard_paste();
+        pane.attach_image(std::path::PathBuf::from("example.png"));
+        pane.composer.handle_key_event(KeyCode::F(7).into());
+        assert_eq!(pane.composer.current_text(), "a");
+        assert!(pane.composer.local_image_paths().is_empty());
     }
 
     fn test_pane_with_disable_paste_burst(

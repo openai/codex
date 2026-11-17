@@ -92,6 +92,9 @@ impl ChatComposer {
     /// Classify an explicit paste before integrating text shared with the buffered key path.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         self.flush_pending_paste_burst();
+        if !self.draft.textarea.is_vim_enabled() {
+            self.finish_edit();
+        }
         self.note_sparkle_paste(&pasted);
         self.apply_paste(pasted)
     }
@@ -168,6 +171,9 @@ impl ChatComposer {
         match self.draft.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
                 self.apply_paste(pasted);
+                if !self.draft.textarea.is_vim_enabled() {
+                    self.finish_edit();
+                }
                 true
             }
             FlushResult::Typed(ch) => {
@@ -177,7 +183,7 @@ impl ChatComposer {
                     self.draft.textarea.replace_range(space..space + 1, "");
                 }
                 self.insert_str(ch.to_string().as_str());
-                if started_edit {
+                if started_edit || !self.draft.textarea.is_vim_enabled() {
                     self.finish_edit();
                 }
                 true
@@ -294,6 +300,7 @@ impl ChatComposer {
             .paste_burst
             .append_control_char_if_active(separator, now)
         {
+            self.begin_promoted_paste_edit();
             return true;
         }
 

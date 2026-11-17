@@ -64,10 +64,19 @@ const SIDEBAR_CHOOSER: u32 = 1 << 27;
 const SIDEBAR_RESIZE: u32 = 1 << 28;
 const FOCUSED_SIDEBAR: u32 = 1 << 29;
 const TRANSCRIPT_SELECT: u32 = 1 << 30;
+const COMPOSER_EDIT_ONLY: u32 = 1 << 31;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
 impl KeymapContextSet {
+    pub(crate) const fn composer_edit_only() -> Self {
+        Self(COMPOSER_EDIT_ONLY)
+    }
+
+    pub(crate) const fn without_composer_edits(self) -> Self {
+        Self(self.0 | COMPOSER_EDIT_ONLY)
+    }
+
     pub(crate) const fn new(context: KeymapContext) -> Self {
         Self(context_bit(context))
     }
@@ -211,6 +220,13 @@ impl KeymapContextSet {
 
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
+        if self.0 & COMPOSER_EDIT_ONLY != 0 && action.context == KeymapContext::Composer {
+            let edit = matches!(action.action, "undo" | "redo");
+            return edit != self.contains(KeymapContext::Composer);
+        }
+        if action.context == KeymapContext::Composer && matches!(action.action, "undo" | "redo") {
+            return self.contains(KeymapContext::Composer) && self.contains(KeymapContext::Editor);
+        }
         if action.context == KeymapContext::Pager && action.action == "mark_markdown" {
             return self.0 & TRANSCRIPT_SELECT != 0;
         }

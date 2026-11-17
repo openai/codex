@@ -137,6 +137,14 @@ impl KeymapActionId {
         {
             return true;
         }
+        let edit = |id: Self| {
+            id.context == KeymapContext::Composer && matches!(id.action, "undo" | "redo")
+        };
+        if edit(self) && other.context.allows_plain_chord_prefix()
+            || edit(other) && self.context.allows_plain_chord_prefix()
+        {
+            return false;
+        }
         match (self.context, other.context) {
             // Presets cannot open while a list owns input.
             (Chat, List) => self.action != "open_presets",
@@ -362,6 +370,8 @@ define_runtime_action_bindings! {
         toggle_shortcuts,
         history_search_previous,
         history_search_next,
+        undo,
+        redo,
     ],
     "editor" => Editor, editor, editor [
         insert_newline,

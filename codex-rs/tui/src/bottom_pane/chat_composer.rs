@@ -39,6 +39,16 @@
 //! Confirmed `$` picker selections inform future ordering within each match tier.
 //! A cached plugin skill keeps its ranking when its installed version changes.
 //!
+//! Ordinary prompt undo records the complete draft before each edit. Contiguous typing shares a
+//! step until a pause or cursor move; consecutive Backspaces share their own step until a pause
+//! or another edit. Paste bursts stay open until flushing classifies the input.
+//! Detected paste bursts, including those promoted by Enter or Tab, form a separate step from typing.
+//! Retroactive detection reuses the pre-replacement draft when the burst began over a selection.
+//! Clipboard attachments also settle buffered typing first. Undo restores text and attachments together;
+//! Vim retains command-level transactions, and consuming a submitted draft ends its history.
+//! A draft transferred from the provisional startup composer is one ordinary undo step back to
+//! the destination draft, including when the transfer merges with an initial prompt.
+//!
 //! # Key Event Routing
 //!
 //! Plain Left opens agents from an empty, active composer connected to a local daemon or remote App Server.
@@ -599,6 +609,7 @@ pub(crate) struct ChatComposerConfig {
     pub(crate) trim_submission: bool,
     /// Embedded editors reset Vim only when their owner accepts the answer.
     pub(crate) reset_vim_on_submission: bool,
+    pub(crate) undo_enabled: bool,
 }
 
 impl Default for ChatComposerConfig {
@@ -611,6 +622,7 @@ impl Default for ChatComposerConfig {
             blockquote_paste_enabled: true,
             trim_submission: true,
             reset_vim_on_submission: true,
+            undo_enabled: true,
         }
     }
 }
@@ -626,6 +638,7 @@ impl ChatComposerConfig {
             blockquote_paste_enabled: true,
             trim_submission: true,
             reset_vim_on_submission: true,
+            undo_enabled: false,
         }
     }
 }
@@ -684,6 +697,8 @@ pub(crate) struct ChatComposer {
     toggle_shortcuts_keys: Vec<KeyBinding>,
     history_search_previous_keys: Vec<KeyBinding>,
     history_search_next_keys: Vec<KeyBinding>,
+    undo_keys: Vec<KeyBinding>,
+    redo_keys: Vec<KeyBinding>,
     editor_keymap: Arc<EditorKeymap>,
     vim_normal_keymap: VimNormalKeymap,
 }
@@ -702,7 +717,7 @@ pub(crate) enum ShellPrefixHandling {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct ComposerDraft {
+pub(crate) struct ComposerDraft {
     is_bash_mode: bool,
     pub(super) text: String,
     text_elements: Vec<TextElement>,
@@ -872,6 +887,8 @@ impl ChatComposer {
             ],
             history_search_previous_keys: default_keymap.composer.history_search_previous.clone(),
             history_search_next_keys: default_keymap.composer.history_search_next.clone(),
+            undo_keys: default_keymap.composer.undo.clone(),
+            redo_keys: default_keymap.composer.redo.clone(),
             editor_keymap: default_editor_keymap,
             vim_normal_keymap: default_vim_normal_keymap,
         };
@@ -1098,6 +1115,8 @@ impl ChatComposer {
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
         self.history_search_previous_keys = keymap.composer.history_search_previous.clone();
         self.history_search_next_keys = keymap.composer.history_search_next.clone();
+        self.undo_keys = keymap.composer.undo.clone();
+        self.redo_keys = keymap.composer.redo.clone();
         self.editor_keymap = keymap.editor.clone();
         self.vim_normal_keymap = keymap.vim_normal.clone();
         self.draft.textarea.set_keymap_bindings(keymap);
@@ -1139,11 +1158,24 @@ impl ChatComposer {
         if self.history_search.is_some() {
             return KeymapContextSet::new(KeymapContext::Composer);
         }
-        if !self.draft.input_enabled || self.popups.active() {
+        if !self.draft.input_enabled {
             return KeymapContextSet::default();
         }
+        let undo_enabled = self.config.undo_enabled && !self.draft.textarea.is_vim_enabled();
+        if self.popups.active() {
+            return if undo_enabled {
+                KeymapContextSet::composer_edit_only()
+            } else {
+                KeymapContextSet::default()
+            };
+        }
         let contexts = self.draft.textarea.keymap_contexts();
-        contexts.with(KeymapContext::Composer)
+        let contexts = contexts.with(KeymapContext::Composer);
+        if undo_enabled {
+            contexts
+        } else {
+            contexts.without_composer_edits()
+        }
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1402,13 +1434,18 @@ impl ChatComposer {
     /// changes because Vim normal mode treats rapid character sequences as
     /// commands, not as candidate literal paste text. It also resets transient
     /// footer mode so the visible hints match the new editing surface.
+    /// Editors without ordinary undo discard Vim history across mode changes.
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
             self.apply_paste(pasted);
         }
+        self.finish_edit();
         self.draft.textarea.enable_vim_search();
         self.draft.textarea.set_vim_enabled(enabled);
-        self.edit_history = EditHistory::default();
+        self.finish_edit();
+        if !self.config.undo_enabled {
+            self.edit_history = EditHistory::default();
+        }
         self.draft.paste_burst.clear_after_explicit_paste();
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
     }
@@ -1820,6 +1857,12 @@ impl ChatComposer {
         if self.is_empty() {
             return None;
         }
+        let undo_clear = self.config.undo_enabled && !self.draft.textarea.is_vim_enabled();
+        if undo_clear {
+            self.finish_edit();
+            self.begin_edit_transaction();
+        }
+        let edit = undo_clear.then(|| std::mem::take(&mut self.edit_history));
         let previous = self.current_text();
         let text_elements = self.current_text_elements();
         let local_image_paths = self.attachments.local_image_paths();
@@ -1828,6 +1871,10 @@ impl ChatComposer {
         let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.attachments.clear_remote_image_urls();
+        if let Some(history) = edit {
+            self.edit_history = history;
+            self.finish_edit();
+        }
         self.history.reset_navigation();
         self.history.record_local_submission(HistoryEntry {
             text: previous.clone(),
@@ -2055,7 +2102,14 @@ impl ChatComposer {
 
         self.draft.textarea_state.get_mut().follow_cursor();
         let before = self.before_sparkle_key(key_event);
+        if !self.draft.textarea.is_vim_enabled() {
+            self.handle_paste_burst_flush(tokio::time::Instant::now().into_std());
+        }
+        self.begin_composer_key_edit(key_event);
         let result = self.handle_key_event_inner(key_event);
+        if !self.draft.textarea.is_vim_enabled() {
+            self.finish_edit();
+        }
         if is_char && !self.draft.paste_burst.is_active() {
             self.draft.skill_completion_space = None;
         }
@@ -2190,6 +2244,7 @@ impl ChatComposer {
                             if grab.grabbed.is_empty()
                                 || self.draft.textarea.retract_paste_burst(grab.start_byte)
                             {
+                                self.begin_retroactive_paste_edit(grab.start_byte);
                                 self.draft.paste_burst.append_char_to_buffer(ch, now);
                                 return (InputResult::None, true);
                             }
@@ -3263,6 +3318,11 @@ impl ChatComposer {
     }
 
     fn reset_vim_mode_after_successful_dispatch(&mut self, result: &InputResult) {
+        if matches!(result, InputResult::Command(command) | InputResult::CommandWithArgs(command, _, _)
+            if command.requires_dispatch_validation())
+        {
+            return;
+        }
         if matches!(
             result,
             InputResult::Submitted { .. }
@@ -3270,9 +3330,11 @@ impl ChatComposer {
                 | InputResult::Command(_)
                 | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
-        ) && self.config.reset_vim_on_submission
-        {
-            self.reset_vim_mode();
+        ) {
+            self.edit_history = EditHistory::default();
+            if self.config.reset_vim_on_submission {
+                self.reset_vim_mode();
+            }
         }
     }
 
@@ -3820,6 +3882,7 @@ impl ChatComposer {
                             if grab.grabbed.is_empty()
                                 || self.draft.textarea.retract_paste_burst(grab.start_byte)
                             {
+                                self.begin_retroactive_paste_edit(grab.start_byte);
                                 self.draft.paste_burst.append_char_to_buffer(ch, now);
                                 return (InputResult::None, true);
                             }
@@ -3830,6 +3893,7 @@ impl ChatComposer {
                     }
                     CharDecision::BeginBufferFromPending => {
                         // First char was held; now append the current one.
+                        self.begin_detected_paste_edit();
                         self.draft.paste_burst.append_char_to_buffer(ch, now);
                         return (InputResult::None, true);
                     }

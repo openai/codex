@@ -207,6 +207,8 @@ pub(crate) struct ComposerKeymap {
     pub(crate) history_search_previous: Vec<KeyBinding>,
     /// Move to the next match in reverse history search.
     pub(crate) history_search_next: Vec<KeyBinding>,
+    pub(crate) undo: Vec<KeyBinding>,
+    pub(crate) redo: Vec<KeyBinding>,
 }
 
 /// Editor-specific keybindings used by the composer textarea.
@@ -992,6 +994,8 @@ impl RuntimeKeymap {
                 history_search_previous
             ),
             history_search_next: resolve_local!(keymap, defaults, composer, history_search_next),
+            undo: resolve_local!(keymap, defaults, composer, undo),
+            redo: resolve_local!(keymap, defaults, composer, redo),
         };
 
         let editor = Arc::new(EditorKeymap {
@@ -1767,9 +1771,13 @@ impl RuntimeKeymap {
             approval,
         };
 
+        let vim_undo = KeymapActionId {
+            context: KeymapContext::VimNormal,
+            action: "undo",
+        };
         let configured: Vec<_> = runtime_action_bindings(&resolved)
             .filter(|action| {
-                action.id.context.overlaps(KeymapContext::VimNormal)
+                action.id.overlaps(vim_undo)
                     && bindings::configured_binding_for_action(keymap, action.id)
                         .is_some_and(Option::is_some)
             })
@@ -1795,8 +1803,36 @@ impl RuntimeKeymap {
                     let event = KeyEvent::new(code, modifiers);
                     !configured.is_pressed(event)
                         && !resolved.chords.bindings.iter().any(|chord| {
-                            chord.action.context.overlaps(KeymapContext::VimNormal)
-                                && chord.chord.prefix.is_press(event)
+                            chord.action.overlaps(vim_undo) && chord.chord.prefix.is_press(event)
+                        })
+                });
+            }
+        }
+        let undo_action = KeymapActionId {
+            context: KeymapContext::Composer,
+            action: "undo",
+        };
+        let configured: Vec<_> = runtime_action_bindings(&resolved)
+            .filter(|action| {
+                action.id.overlaps(undo_action)
+                    && bindings::configured_binding_for_action(keymap, action.id)
+                        .is_some_and(Option::is_some)
+            })
+            .flat_map(|action| action.bindings.iter().copied())
+            .collect();
+        for (setting, bindings) in [
+            (keymap.composer.undo.as_ref(), &mut resolved.composer.undo),
+            (keymap.composer.redo.as_ref(), &mut resolved.composer.redo),
+        ] {
+            if setting.is_none() {
+                bindings.retain(|binding| {
+                    let (code, modifiers) = binding.parts();
+                    let event = KeyEvent::new(code, modifiers);
+                    !configured.is_pressed(event)
+                        && !(keymap.global.leader.is_some()
+                            && resolved.chords.leader.is_pressed(event))
+                        && !resolved.chords.bindings.iter().any(|chord| {
+                            chord.action.overlaps(undo_action) && chord.chord.prefix.is_press(event)
                         })
                 });
             }
@@ -1826,6 +1862,23 @@ impl RuntimeKeymap {
     /// both `?` and `shift-?`) because terminals disagree on whether SHIFT is
     /// preserved for certain printable/control chords.
     fn built_in_defaults() -> Self {
+        let undo_modifier = if cfg!(windows) {
+            KeyModifiers::CONTROL
+        } else {
+            KeyModifiers::ALT
+        };
+        let mut undo = vec![KeyBinding::new(KeyCode::Char('z'), undo_modifier)];
+        if cfg!(target_os = "macos") {
+            undo.push(KeyBinding::new(KeyCode::Char('z'), KeyModifiers::SUPER));
+        }
+        undo.push(key_hint::plain(KeyCode::F(7)));
+        let redo = undo
+            .iter()
+            .map(|binding| {
+                let (code, modifiers) = binding.parts();
+                KeyBinding::new(code, modifiers | KeyModifiers::SHIFT)
+            })
+            .collect();
         Self {
             app: AppKeymap {
                 change_host: Vec::new(),
@@ -1889,6 +1942,8 @@ impl RuntimeKeymap {
                 ],
                 history_search_previous: default_bindings![ctrl(KeyCode::Char('r'))],
                 history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
+                undo,
+                redo,
             },
             editor: Arc::new(EditorKeymap {
                 insert_newline: default_bindings![
@@ -2175,6 +2230,8 @@ impl RuntimeKeymap {
             ("global.change_host", &self.app.change_host),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
+            ("composer.undo", &self.composer.undo),
+            ("composer.redo", &self.composer.redo),
             (
                 "chat.previous_permission_mode",
                 &self.chat.previous_permission_mode,
@@ -2222,6 +2279,8 @@ impl RuntimeKeymap {
             ("global.sidebar_down", &self.app.sidebar_down),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
+            ("composer.undo", &self.composer.undo),
+            ("composer.redo", &self.composer.redo),
         ] {
             if bindings.contains(&key_hint::ctrl(KeyCode::Char('z'))) {
                 return Err(format!(
@@ -2335,6 +2394,8 @@ impl RuntimeKeymap {
                 "composer.history_search_next",
                 self.composer.history_search_next.as_slice(),
             ),
+            ("composer.undo", self.composer.undo.as_slice()),
+            ("composer.redo", self.composer.redo.as_slice()),
         ];
         validate_unique("app", main_bindings)?;
 
@@ -2504,6 +2565,8 @@ impl RuntimeKeymap {
                 ),
                 ("chat.skip_question", self.chat.skip_question.as_slice()),
                 ("composer.submit", self.composer.submit.as_slice()),
+                ("composer.undo", self.composer.undo.as_slice()),
+                ("composer.redo", self.composer.redo.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
