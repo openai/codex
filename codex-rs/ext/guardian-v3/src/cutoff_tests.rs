@@ -324,7 +324,8 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
 }
 
 #[tokio::test]
-async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
+async fn a_pending_post_survives_unsubscribe_and_is_admitted_once_per_conversation()
+-> anyhow::Result<()> {
     use crate::EvidenceId;
     use crate::inbox::LiveDelivery;
     use codex_message_board::AgentMessageBoard;
@@ -332,8 +333,10 @@ async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
     use codex_message_board::PostDestination;
     use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::TruncationPolicy;
     use codex_state::SqliteConfig;
     use serde_json::json;
+    use std::future::ready;
 
     let root = ThreadId::new();
     let directory = tempfile::tempdir()?;
@@ -390,7 +393,8 @@ async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
 
     assert!(append(1, "before subscription").await?.1.is_empty());
     subscribe(root, SubscriptionChange::Subscribe).await?;
-    let (post, recipients) = append(2, "while subscribed").await?;
+    let large = "é".repeat(20_010);
+    let (post, recipients) = append(2, &large).await?;
     assert_eq!(recipients, [root]);
     let delivery = LiveDelivery::new(root);
     delivery.publish(
@@ -402,7 +406,9 @@ async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
     )?;
     // The subscription was already persisted before anyone attached to this inbox.
     let inbox = delivery.inbox(root);
-    assert_eq!(inbox.len(), 1);
+    let through = inbox.len();
+    assert_eq!(through, 1);
+    let mut wake = inbox.subscribe();
     subscribe(subscriber, SubscriptionChange::Subscribe).await?;
     let (second, recipients) = append(3, "later").await?;
     assert_eq!(recipients.len(), 2);
@@ -413,6 +419,8 @@ async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
             .map(|actor| (actor, second.message_id))
             .collect(),
     )?;
+    wake.changed().await?;
+    assert_eq!(*wake.borrow_and_update(), 2);
     assert_eq!(delivery.inbox(subscriber).len(), 1);
     subscribe(root, SubscriptionChange::Unsubscribe).await?;
     let (post, recipients) = append(4, "after unsubscribe").await?;
@@ -420,6 +428,55 @@ async fn queues_only_posts_written_while_subscribed() -> anyhow::Result<()> {
     assert_eq!(append(4, "after unsubscribe").await?, (post, Vec::new()));
     assert!(host.notifications.lock().unwrap().is_empty());
 
-    assert_eq!(inbox.len(), 2);
+    let mut delivered = 0;
+    let policy = TruncationPolicy::Bytes(64 * 1024);
+    assert!(
+        inbox
+            .deliver(root, &reader, &mut delivered, through, policy, |_| ready(
+                Err(anyhow::anyhow!("reviewer busy"))
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(delivered, 0);
+
+    let mut received: Vec<codex_protocol::models::ResponseItem> = Vec::new();
+    let mut accept = |items| {
+        received.extend(items);
+        ready(Ok(()))
+    };
+    for target in [through, inbox.len(), inbox.len()] {
+        inbox
+            .deliver(root, &reader, &mut delivered, target, policy, &mut accept)
+            .await?;
+    }
+    let mut replacement = 0;
+    inbox
+        .deliver(
+            root,
+            &reader,
+            &mut replacement,
+            inbox.len(),
+            policy,
+            &mut accept,
+        )
+        .await?;
+    let first = json!({"id":{"ordinal":2}, "original":large});
+    let next = json!({"id":{"ordinal":3}, "original":"later"});
+    let expected = |sources| {
+        crate::sampling::context_input(
+            "guardian_original_evidence",
+            &json!({"sources":sources}),
+            policy,
+        )
+    };
+    assert_eq!(
+        received,
+        [
+            expected(vec![&first])?,
+            expected(vec![&next])?,
+            expected(vec![&first, &next])?,
+        ]
+    );
     Ok(())
 }

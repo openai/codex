@@ -257,6 +257,34 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         Box::pin(self.apply_subscriptions(caller, channels))
     }
 
+    fn read_post_texts_by_id<'a>(
+        &'a self,
+        caller: ThreadId,
+        ids: &'a [Uuid],
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(async move {
+            self.host.agent_path(caller).await?;
+            if ids.len() > PageRequest::default().limit.get() as usize {
+                return Err(invalid("requested posts exceed one board page"));
+            }
+            let texts = sqlx::query_scalar::<_, String>(
+                "SELECT json_extract(p.payload, '$.text') FROM json_each(?) AS requested
+                 CROSS JOIN posts AS p WHERE p.board=? AND p.id=requested.value AND p.seq<=?
+                 ORDER BY requested.key",
+            )
+            .bind(serde_json::to_string(ids).map_err(storage_error)?)
+            .bind(self.identity.to_string())
+            .bind(self.mode.view().map_or(i64::MAX, |view| view.post_cutoff))
+            .fetch_all(self.pool.as_ref())
+            .await
+            .map_err(storage_error)?;
+            if texts.len() != ids.len() {
+                return Err(invalid("post not found in this board"));
+            }
+            Ok(texts)
+        })
+    }
+
     fn read_post(
         &self,
         caller: ThreadId,

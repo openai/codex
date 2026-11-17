@@ -130,6 +130,16 @@ pub trait AgentMessageBoard: Send + Sync {
         request: ReadPostRequest,
     ) -> BoxFuture<'_, Result<PostContent>>;
 
+    /// Load original post bodies in caller-supplied ID order, bounded to one board page.
+    /// Trusted host consumers can batch evidence reads without reconstructing paged previews.
+    fn read_post_texts_by_id<'a>(
+        &'a self,
+        _caller: ThreadId,
+        _ids: &'a [Uuid],
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        unsupported("reading a page of post bodies")
+    }
+
     /// Channel subscriptions concern new roots; thread subscriptions concern
     /// replies. Changing one does not change the other. Any member may change
     /// another member's subscription. Posting subscribes its author to the thread

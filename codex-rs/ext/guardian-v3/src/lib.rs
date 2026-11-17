@@ -3,6 +3,8 @@
 //! and manages its own subscriptions.
 //! Hosts invoke permanent-deletion cleanup only when Guardian V3 is enabled.
 
+#![recursion_limit = "256"]
+
 use codex_message_board::LocalBoard;
 use codex_message_board::LocalBoardOptions;
 use codex_protocol::SessionId;
@@ -25,8 +27,6 @@ pub use host::install;
 mod retrieval_tools;
 mod sampling;
 mod subscription_tools;
-pub use delivery::DeliveryPlan;
-pub use delivery::DeliveryState;
 pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;

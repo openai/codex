@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use crate::LiveRetrievalBinding;
+use crate::inbox::ActorInbox;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
@@ -14,22 +15,54 @@ use codex_extension_api::SessionIsolation;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPolicy;
 use codex_guardian_reviewer::ReviewerTasks;
+use codex_message_board::AgentMessageBoard;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TruncationPolicy;
+use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 
 pub(super) struct Conversation {
     pub(super) thread: Arc<CodexThread>,
     _stop: DropGuard,
+    pub(super) inbox: Arc<ActorInbox>,
+    delivered: usize,
+    policy: TruncationPolicy,
     pub(super) runtime: GuardianReviewSession,
 }
 
 impl Conversation {
+    /// Record only the prefix observed when this drain began. Later arrivals can wait for the next drain.
+    pub(super) async fn deliver(
+        &mut self,
+        actor: ThreadId,
+        board: &dyn AgentMessageBoard,
+    ) -> anyhow::Result<()> {
+        let through = self.inbox.len();
+        if self.delivered >= through {
+            return Ok(());
+        }
+        let thread = &self.thread;
+        self.inbox
+            .deliver(
+                actor,
+                board,
+                &mut self.delivered,
+                through,
+                self.policy,
+                |items| async move { Ok(thread.inject_response_items(items).await?) },
+            )
+            .await
+    }
+
     pub(super) async fn start(
         manager: &Arc<ThreadManager>,
         prepared: &PreparedGuardianContext,
         owner: &ReviewerTasks,
         binding: LiveRetrievalBinding,
+        inbox: Arc<ActorInbox>,
+        stop: CancellationToken,
     ) -> anyhow::Result<Self> {
         let key = prepared.reuse_key(/*previous*/ None);
         let (mut options, state) = prepared
@@ -61,7 +94,6 @@ impl Conversation {
             .insert(codex_core::guardian_review::reviewer_headers(
                 &options.config,
             ));
-        let stop = owner.cancellation.child_token();
         let stop_guard = stop.clone().drop_guard();
         let until = stop.clone();
         let reset = prepared.history_reset.clone();
@@ -69,17 +101,29 @@ impl Conversation {
             .start_thread_until(
                 options,
                 async move {
-                    tokio::select! { _ = until.cancelled() => (), _ = reset.cancelled() => () }
+                    tokio::select! {
+                        _ = until.cancelled() => (),
+                        _ = reset.cancelled() => until.cancel(),
+                    }
                 },
                 &owner.tasks,
             )
             .await?;
+        let policy = spawned
+            .thread
+            .selected_model_info()
+            .await
+            .truncation_policy
+            .into();
         let runtime = prepared
             .bind_thread(&spawned.thread, key, state, stop)
             .await;
         Ok(Self {
             thread: spawned.thread,
             _stop: stop_guard,
+            delivered: 0,
+            inbox,
+            policy,
             runtime,
         })
     }

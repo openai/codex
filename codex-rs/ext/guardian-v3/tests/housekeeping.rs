@@ -1,6 +1,7 @@
 //! Original evidence is routed by a retained housekeeper conversation into a real board.
 
 #![allow(clippy::expect_used)]
+#![recursion_limit = "256"]
 
 use chrono::Utc;
 use codex_guardian_v3::EvidenceCursor;
@@ -796,20 +797,29 @@ async fn command_token_rotation_between_batches_reauthenticates_the_housekeeper(
 }
 
 #[tokio::test]
-async fn retains_only_reusable_reviewer_conversations() -> anyhow::Result<()> {
+async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle()
+-> anyhow::Result<()> {
     use codex_core::guardian_review::prepare_review_prewarm;
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::ThreadReadyInput;
     use codex_extension_api::ThreadStopInput;
     use codex_guardian_reviewer::SessionDisposition;
+    use codex_message_board::SubscriptionChange;
+    use codex_message_board::SubscriptionRequest;
+    use codex_message_board::SubscriptionTarget;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::turn_input::TurnInputRequest;
+    use codex_protocol::user_input::UserInput;
+    use core_test_support::wait_for_successful_turn;
 
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
         .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_model_info_override("gpt-5.6-luna", |_| {})
         .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::User)
         .build_with_auto_env(&server)
         .await?;
@@ -861,9 +871,103 @@ async fn retains_only_reusable_reviewer_conversations() -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let first = actor.reserve(&context, &cancel).await?;
     let id = first.thread_id();
+    let reviewer = test
+        .thread_manager
+        .get_thread_with_extension::<codex_guardian_v3::LiveRetrievalBinding>(id, |_| true)
+        .await?;
+    let board = local_board(test.config.sqlite_config().clone(), root.into())
+        .read_write()
+        .open(board_host(root))
+        .await?;
+    board
+        .upsert_channel(
+            root,
+            UpsertChannelRequest {
+                channel_name: "release".into(),
+                description: "Release policy".to_owned().try_into()?,
+            },
+        )
+        .await?;
+    board
+        .set_subscription(
+            root,
+            SubscriptionRequest {
+                target: SubscriptionTarget::Channel("release".into()),
+                target_agent: None,
+                change: SubscriptionChange::Subscribe,
+            },
+        )
+        .await?;
+    let model = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("route", r#"{"routes":[["release"]],"descriptions":{}}"#),
+                ev_completed("route"),
+            ]),
+            sse(vec![
+                ev_assistant_message("verdict", "Deny the release."),
+                ev_completed("verdict"),
+            ]),
+        ],
+    )
+    .await;
+    test.thread_store
+        .persist_thread(root, PersistContext::Standard)
+        .await?;
+    test.thread_store
+        .append_items(AppendThreadItemsParams {
+            thread_id: root,
+            items: vec![RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: user_message_item("Stop the release."),
+                metadata: Some(CodexHarnessMetadata {
+                    user_input_order: Some(1),
+                    ..Default::default()
+                }),
+            })],
+        })
+        .await?;
+    let evidence = thread
+        .get::<codex_guardian_v3::RootEvidence>()
+        .expect("root intake");
+    evidence.request_catch_up().await?.await?;
+    let has_delivery = |items: &dyn codex_extension_api::ConversationHistorySnapshot| {
+        items.items().any(|item| matches!(item, ResponseItem::FunctionCallOutput { name: Some(name), output, .. }
+            if name == "guardian_original_evidence" && output.text_content().is_some_and(|text| text.contains("Stop the release."))))
+    };
+    assert!(!has_delivery(
+        reviewer.conversation_history_snapshot().await.as_ref()
+    ));
     first.finish(SessionDisposition::Reusable);
+    // Observe the reviewer directly. Reserving it again here would hide a lazy-delivery regression.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !has_delivery(reviewer.conversation_history_snapshot().await.as_ref()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert_eq!(model.requests().len(), 1, "only the housekeeper sampled");
     let second = actor.reserve(&context, &cancel).await?;
     assert_eq!(id, second.thread_id());
+    reviewer
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Assess the release.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_successful_turn(&reviewer).await;
+    let [_, request] = &model.requests()[..] else {
+        anyhow::bail!("expected one routing request and one reviewer request");
+    };
+    assert!(request.body_contains_text("Stop the release."));
+    insta::assert_snapshot!(
+        "guardian_reviewer_routed_original",
+        context_snapshot::format_request_history_snapshot(
+            "The retained reviewer receives the subscribed original before assessing the action.",
+            std::slice::from_ref(request),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
     drop(second);
     let third = actor.reserve(&context, &cancel).await?;
     assert_ne!(id, third.thread_id());

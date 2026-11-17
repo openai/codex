@@ -37,15 +37,6 @@ impl EvidenceId {
             /*max_bytes*/ 512,
         )?)
     }
-
-    pub(crate) fn from_request_id(request: &str, channel: &str) -> anyhow::Result<Self> {
-        let (ordinal, destination): (u64, String) = serde_json::from_str(request)?;
-        ensure!(
-            destination == channel,
-            "evidence request ID channel mismatch"
-        );
-        Ok(Self { ordinal })
-    }
 }
 
 /// Original model-visible evidence, with roles, call IDs and verified source order.
