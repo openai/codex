@@ -1,5 +1,7 @@
 //! Verifies that confirmed Code Mode messaging invalidates cached approvals in both root and worker.
 
+use crate::async_scorer::conversation::ConversationBackend;
+
 use super::*;
 use codex_core::TurnInputRequest;
 use codex_protocol::user_input::UserInput;
@@ -126,7 +128,9 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
     wait_for_mcp_server(&test.codex, "codex_apps").await?;
     allow_messaging_guardian_review(&thread_server).await;
     let root_store = test.codex.thread_extension_data();
-    let root_progress = root_store.get::<GuardianV2ScoreProgress>().unwrap();
+    let root_progress = ConversationBackend::for_turn(root_store, root_store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while cached_score(root_store).is_none() || root_progress.inspect(/*call_id*/ None).lag > 0
         {
@@ -232,7 +236,9 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
         let store = thread.thread_extension_data();
         let turn_store = ExtensionData::new("approval-turn");
         turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
-        let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+        let progress = ConversationBackend::for_turn(store, store)
+            .map(|cache| Arc::clone(&cache.progress))
+            .unwrap();
         seed_cached_score(&progress, store, /*index*/ 1_000, before.clone());
         assert_eq!(
             cached_approval(
@@ -314,7 +320,9 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
     let store = worker.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let authorization = ScoreAuthorization::current(&worker, &Default::default()).await;
     assert!(authorization.local.retained_context_complete);
     seed_cached_score(&progress, store, /*index*/ 1_000, authorization);

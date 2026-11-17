@@ -1,7 +1,8 @@
 //! Exercises lag expiry through tool admission and real classifier transports.
 
-use super::*;
 use crate::async_scorer::conversation::ConversationBackend;
+
+use super::*;
 use crate::async_scorer::sampler::tests::RecordingMetrics;
 use crate::async_scorer::sampler::tests::sampler_config;
 use pretty_assertions::assert_eq;
@@ -50,8 +51,18 @@ async fn stale_classifications_close_the_transport_without_invalidating_scores()
         store.insert(LunaSampler::new(config));
         let sampler = store.get::<LunaSampler>().unwrap();
         sampler.prewarm().await;
-        store.insert(ConversationBackend::new(Arc::clone(&sampler)));
-        let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+        store.remove::<ConversationBackend>();
+        ConversationBackend::install(
+            store,
+            ConversationBackend::new(
+                Arc::clone(&sampler),
+                /*revision*/ 0,
+                /*metrics*/ None,
+            ),
+        );
+        let progress = ConversationBackend::for_turn(store, store)
+            .map(|cache| Arc::clone(&cache.progress))
+            .unwrap();
         let mut updates = progress.updates.subscribe();
         fixture.score_tool(ToolName::plain("read_file")).await;
         if early_score {

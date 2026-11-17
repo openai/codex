@@ -145,6 +145,7 @@ impl Classification {
             score_authorization,
         } = self;
         let generation = reservation.generation.clone();
+        let active = Arc::clone(&reservation.active);
         let pending_score = PendingScore {
             progress: Arc::clone(&score_progress),
             index: tool_call_index,
@@ -266,7 +267,7 @@ impl Classification {
         let evidence = match transcript {
             Ok(transcript) => transcript,
             Err(error) => {
-                score_progress.fail_closed(sampled_at);
+                score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
                     context_mode,
@@ -393,6 +394,7 @@ impl Classification {
                 sampled_at: Some(sampled_at.into()),
             };
             if !score_authorization.is_current(&thread).await
+                || !active.load(std::sync::atomic::Ordering::Acquire)
                 || generation.strong_count() == 0
             {
                 return Ok(ClassificationOutcome::Superseded);
@@ -433,7 +435,7 @@ impl Classification {
         }
         .await;
         if result.is_err() {
-            score_progress.fail_closed(sampled_at);
+            score_progress.fail_closed(sampled_at, tool_call_index);
         }
         let duration = classification_finished_at
             .map(|finished_at: Instant| finished_at.duration_since(classification_started_at))

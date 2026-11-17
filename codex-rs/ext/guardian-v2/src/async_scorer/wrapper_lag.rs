@@ -1,6 +1,6 @@
 //! Tracks action order and discounts an approval's own unscored code-mode wrapper.
 //! Missing provenance keeps the full lag; bounded history never changes scoring or failure order.
-//! The score owner's state lock protects this history.
+//! The thread's action-state lock protects this history.
 //! Active nested actions retain their wrapper allowance when expiring pending scores.
 
 use std::collections::VecDeque;

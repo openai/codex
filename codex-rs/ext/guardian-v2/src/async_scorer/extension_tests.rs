@@ -1,3 +1,4 @@
+use crate::async_scorer::conversation::ConversationBackend;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -344,8 +345,8 @@ async fn installed_extension_keeps_parent_program_out_of_websocket_and_http_revi
         .expect("Guardian v2 should initialize")
         .wait_for_prewarm(PREWARM_TIMEOUT)
         .await?;
-    let progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should initialize");
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
@@ -631,8 +632,8 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     let mut score = cached_score(thread_store).expect("fixture should publish a score");
     score.scores.insert("action_risk".to_owned(), 0.0);
     set_cached_score(thread_store, score);
-    let score_progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let score_progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     let mut expected = score_progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
@@ -677,6 +678,8 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     expected.lag += 2;
     expected.has_unscored_failure = true;
     assert_eq!(score_progress.inspect(/*call_id*/ None), expected);
+    fixture.assert_fails_closed("scoring_failure").await?;
+    score_progress.clear_score();
     fixture.assert_fails_closed("scoring_failure").await?;
     Ok(())
 }
@@ -731,8 +734,8 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         },
     );
     thread_store.insert(RecordingMetrics::default());
-    let progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     // The seeded low score belongs to the model selected above.
     let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
@@ -900,6 +903,113 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         );
     }
 
+    // Retain a cell under an allowlist that disables adaptive review, then relax it.
+    let mut old_config = thread_store.get::<Config>().unwrap().as_ref().clone();
+    old_config.guardian_policy_revision += 1;
+    let mut requirements = old_config.config_layer_stack.requirements().clone();
+    *requirements.approvals_reviewer =
+        codex_config::Constrained::allow_only(ApprovalsReviewer::AutoReview);
+    old_config.config_layer_stack =
+        codex_config::ConfigLayerStack::new(Vec::new(), requirements, Default::default())?;
+    let old_turn = ExtensionData::new("restricted-turn");
+    old_turn.insert(old_config);
+    let old_backend = ConversationBackend::for_turn(thread_store, &old_turn).unwrap();
+    let ignored_calls = thread_store
+        .get::<GuardianV2Config>()
+        .unwrap()
+        .max_tool_call_lag
+        + 1;
+    for _ in 0..ignored_calls {
+        observe_unscored_call(&old_backend.progress, thread_store);
+    }
+    let failed_index = observe_unscored_call(&old_backend.progress, thread_store);
+    old_backend.progress.invalidate(failed_index);
+    let mut config = thread_store.get::<Config>().unwrap().as_ref().clone();
+    config.guardian_policy_revision =
+        old_turn.get::<Config>().unwrap().guardian_policy_revision + 1;
+    thread_store.insert(config.clone());
+    let new_turn = ExtensionData::new("relaxed-turn");
+    new_turn.insert(config);
+    let current = ConversationBackend::for_turn(thread_store, &new_turn).unwrap();
+    let action =
+        r#"{"id":"unscored","tool":"mcp_tool_call","server":"node_repl","tool_name":"js"}"#;
+    let metrics = Arc::new(RecordingMetrics::default());
+    assert_eq!(
+        cached_approval(
+            &fixture.registry,
+            thread_store,
+            &new_turn,
+            action,
+            Some(metrics.clone())
+        )
+        .await,
+        None
+    );
+    assert!(
+        metrics
+            .0
+            .lock()
+            .unwrap()
+            .contains(&fast_decision_metric("deferred", "missing_score"))
+    );
+
+    let index = observe_unscored_call(&current.progress, thread_store);
+    seed_cached_score(
+        &current.progress,
+        thread_store,
+        index,
+        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
+    );
+    assert_eq!(
+        cached_approval(
+            &fixture.registry,
+            thread_store,
+            &new_turn,
+            action,
+            /*metrics*/ None
+        )
+        .await,
+        Some(ReviewDecision::Approved)
+    );
+    for _ in 0..ignored_calls {
+        fixture.registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                serving_assessment: None,
+                permissions: Box::pin(async { Some(Default::default()) }),
+                session_store: &fixture.session_store,
+                thread_store,
+                turn_store: &old_turn,
+                turn_id: old_turn.level_id(),
+                root_turn_id: None,
+                call_id: "old-js",
+                originating_item_id: None,
+                tool_name: &ToolName::namespaced("mcp__node_repl__", "js"),
+                mcp_tool: None,
+                payload: &payload,
+                conversation_history: fixture.test.codex.conversation_history_snapshot().await,
+                source: ToolCallSource::CodeMode {
+                    cell_id: "old-cell".to_owned(),
+                    runtime_tool_call_id: "old-js".to_owned(),
+                },
+            })
+            .await;
+    }
+    observe_unscored_call(&current.progress, thread_store);
+    assert_eq!(
+        current.progress.inspect(Some("unscored")).lag,
+        ignored_calls + 1
+    );
+    assert_eq!(
+        cached_approval(
+            &fixture.registry,
+            thread_store,
+            &new_turn,
+            action,
+            /*metrics*/ None
+        )
+        .await,
+        None
+    );
     Ok(())
 }
 
@@ -1207,8 +1317,8 @@ async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
     thread_store.insert(model);
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
-    let progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("score progress");
     let mut expected = progress.inspect(/*call_id*/ None);
     expected.action_risk = Some(0.25);
@@ -1259,8 +1369,8 @@ impl GuardianFailureFixture {
         )
         .await?;
         let thread_store = test.codex.thread_extension_data();
-        let score_progress = thread_store
-            .get::<GuardianV2ScoreProgress>()
+        let score_progress = ConversationBackend::for_turn(thread_store, thread_store)
+            .map(|cache| Arc::clone(&cache.progress))
             .expect("Guardian v2 should track score progress per thread");
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
             while cached_score(thread_store).is_none()
@@ -1320,8 +1430,8 @@ impl GuardianFailureFixture {
         let thread_store = self.test.codex.thread_extension_data();
         let turn_store = ExtensionData::new("approval-turn");
         turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
-        let score_progress = thread_store
-            .get::<GuardianV2ScoreProgress>()
+        let score_progress = ConversationBackend::for_turn(thread_store, thread_store)
+            .map(|cache| Arc::clone(&cache.progress))
             .expect("Guardian v2 should track score progress per thread");
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
             while cached_score(thread_store)
@@ -1404,7 +1514,7 @@ async fn contributor_fails_closed_when_model_configuration_is_invalid() -> Resul
         .insert_arc(parent_model.model);
 
     fixture.score_tool(ToolName::plain("read_file")).await;
-    fixture.assert_fails_closed("elevated_risk").await
+    fixture.assert_fails_closed("scoring_failure").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1425,6 +1535,11 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
         server.uri().trim_start_matches("ws://")
     )));
     config.features.enable(Feature::GuardianV2)?;
+    fixture
+        .test
+        .codex
+        .thread_extension_data()
+        .remove::<ConversationBackend>();
     fixture.registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -1447,7 +1562,122 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
         .await?;
 
     fixture.score_tool(ToolName::plain("read_file")).await;
-    fixture.assert_fails_closed("elevated_risk").await
+    fixture.assert_fails_closed("scoring_failure").await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn late_turn_actions_invalidate_the_current_policy_score() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::new().await?;
+    let server = responses::start_mock_server().await;
+    let responses = ["low", "high", "invalid"].map(|risk| {
+        responses::sse(vec![
+            responses::ev_assistant_message("score", risk),
+            responses::ev_completed("score"),
+        ])
+    });
+    let mock = responses::mount_sse_sequence(&server, responses.to_vec()).await;
+    let store = fixture.test.codex.thread_extension_data();
+    store.insert(LunaSampler::new(
+        crate::async_scorer::sampler::tests::sampler_config(server.uri()),
+    ));
+    ConversationBackend::install(
+        store,
+        ConversationBackend::new(
+            store.get::<LunaSampler>().unwrap(),
+            /*revision*/ 0,
+            /*metrics*/ None,
+        ),
+    );
+    let old_turn = ExtensionData::new("old-turn");
+    old_turn.insert_arc(store.get::<Config>().unwrap());
+    let old_backend = ConversationBackend::for_turn(store, &old_turn).unwrap();
+    old_backend.progress.observe_js_execution();
+    let executions = old_backend.progress.inspect(/*call_id*/ None).js_executions;
+    let mut config = store.get::<Config>().unwrap().as_ref().clone();
+    config.guardian_policy_revision = 1;
+    config.guardian_extra_policy = Some("Changed policy".to_owned());
+    store.insert(config);
+    let new_turn = ExtensionData::new("new-turn");
+    new_turn.insert_arc(store.get::<Config>().unwrap());
+    let new_backend = ConversationBackend::for_turn(store, &new_turn).unwrap();
+    assert!(!Arc::ptr_eq(&old_backend, &new_backend));
+    assert_eq!(
+        new_backend.progress.inspect(/*call_id*/ None).js_executions,
+        executions
+    );
+    old_backend.progress.observe_js_execution();
+    assert_eq!(
+        new_backend.progress.inspect(/*call_id*/ None).js_executions,
+        executions + 1
+    );
+    let mut expected: Option<crate::async_scorer::score::CachedScore> = None;
+    for (turn, call_id, risk, expected_approval) in [
+        (&new_turn, "new-score", 0.0, Some(ReviewDecision::Approved)),
+        (
+            &old_turn,
+            "late-old-score",
+            1.0,
+            Some(ReviewDecision::Approved),
+        ),
+        (&old_turn, "late-old-failure", 1.0, None),
+    ] {
+        let backend = ConversationBackend::for_turn(store, turn).unwrap();
+        let mut updates = backend.progress.updates.subscribe();
+        fixture.registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                serving_assessment: None,
+                permissions: Box::pin(async { Some(Default::default()) }),
+                session_store: &fixture.session_store,
+                thread_store: store,
+                turn_store: turn,
+                turn_id: turn.level_id(),
+                root_turn_id: None,
+                call_id,
+                originating_item_id: Some(&ResponseItemId::from_server(turn.level_id().to_owned())),
+                tool_name: &ToolName::plain("read_file"),
+                mcp_tool: None,
+                payload: &ToolPayload::Function {
+                    arguments: "{}".to_owned(),
+                },
+                conversation_history: fixture.test.codex.conversation_history_snapshot().await,
+                source: ToolCallSource::CodeMode {
+                    cell_id: turn.level_id().to_owned(),
+                    runtime_tool_call_id: call_id.to_owned(),
+                },
+            })
+            .await;
+        tokio::time::timeout(ASYNC_TEST_TIMEOUT, updates.changed()).await??;
+        assert_eq!(
+            backend.progress.inspect(/*call_id*/ None).action_risk,
+            Some(risk)
+        );
+        let current = new_backend.progress.inspect(/*call_id*/ None);
+        if let Some(expected) = expected.as_mut() {
+            expected.lag += 1;
+            expected.has_unscored_failure = expected_approval.is_none();
+        } else {
+            assert_eq!(current.action_risk, Some(0.0));
+            expected = Some(current);
+        }
+        assert_eq!(
+            cached_approval(
+                &fixture.registry,
+                store,
+                &new_turn,
+                r#"{"id":"new-score","tool":"read_file"}"#,
+                /*metrics*/ None
+            )
+            .await,
+            expected_approval
+        );
+    }
+    assert_eq!(
+        new_backend.progress.inspect(/*call_id*/ None),
+        expected.unwrap()
+    );
+    assert_eq!(mock.requests().len(), responses.len());
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1495,7 +1725,9 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
     let store = test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let mut updates = progress.updates.subscribe();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while progress.inspect(/*call_id*/ None).authorization.is_none() {
@@ -1682,8 +1914,8 @@ max_recent_non_user_entries = 8
     let thread_store = test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
-    let score_progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let score_progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
@@ -2417,7 +2649,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         Some(ReviewDecision::Approved)
     );
 
-    let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     for permissions in [
         codex_guardian_context::PermissionContext {
             environment_id: Some("other-computer".to_owned()),
@@ -2607,8 +2841,8 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     // A late prewarm preview must leave the active model's review requirements intact.
     let _ = codex_core::guardian_review::prepare_review_prewarm(&test.codex).await?;
     let authorization = ScoreAuthorization::current(&test.codex, &Default::default()).await;
-    let progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
     set_cached_score(
@@ -2711,7 +2945,9 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
     let thread_store = test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
-    let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while progress.inspect(/*call_id*/ None).authorization.is_none() {
             tokio::task::yield_now().await;
@@ -2791,7 +3027,9 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
     let store = fixture.test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("captured-turn");
     turn_store.insert_arc(store.get::<Config>().expect("captured turn config"));
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let mut score = cached_score(store).unwrap();
     score.scores.insert("action_risk".to_owned(), 0.25);
     set_cached_score(store, score);
@@ -2895,8 +3133,8 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
     );
     let score_authorization =
         ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
-    let progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("score progress");
     seed_cached_score(
         &progress,
@@ -2955,8 +3193,8 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
     let thread_store = test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
-    let score_progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
+    let score_progress = ConversationBackend::for_turn(thread_store, thread_store)
+        .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while score_progress
@@ -3722,7 +3960,9 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
     let store = fixture.test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let mut score = cached_score(store).unwrap();
     score.scores.insert("action_risk".to_owned(), 0.0);
     set_cached_score(store, score);
@@ -3975,12 +4215,14 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
     skip_if_no_network!(Ok(()));
     let fixture = GuardianFailureFixture::new().await?;
     let store = fixture.test.codex.thread_extension_data();
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
     seed_cached_score(&progress, store, /*index*/ 1, authorization.clone());
     let score = cached_score(store).unwrap();
     observe_unscored_call(&progress, store);
-    observe_unscored_call(&progress, store);
+    let failed_index = observe_unscored_call(&progress, store);
     let cached = progress.inspect(/*call_id*/ None);
     let mut outdated_authorization = authorization.clone();
     outdated_authorization.local.user_message_revision += 1;
@@ -3990,7 +4232,7 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
     assert_eq!(cached_score(store).as_ref(), Some(&score));
 
     let failed_at = std::time::SystemTime::now() + Duration::from_secs(1);
-    progress.fail_closed(failed_at);
+    progress.fail_closed(failed_at, failed_index);
     let mut delayed_score = score;
     delayed_score.sampled_at = Some(failed_at.into());
     assert!(!progress.publish(
@@ -3999,24 +4241,34 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
         /*index*/ 2
     ));
 
-    delayed_score.sampled_at = Some((failed_at + Duration::from_secs(1)).into());
+    let refreshed_at = failed_at + Duration::from_secs(1);
+    delayed_score.sampled_at = Some(refreshed_at.into());
+    let refreshed_index = observe_unscored_call(&progress, store);
     delayed_score.scores.insert("action_risk".to_owned(), 0.0);
     progress.mark_oversized("active-overflow", /*index*/ 2);
     assert!(progress.publish(
         delayed_score.clone(),
         authorization.clone(),
-        /*index*/ 3
+        refreshed_index
     ));
     assert_eq!(cached_score(store).as_ref(), Some(&delayed_score));
     let mut expected = cached;
     expected.lag = 0;
     expected.action_risk = Some(0.0);
     expected.sampled_at = delayed_score.sampled_at.map(std::time::SystemTime::from);
-    expected.authorization = Some(authorization);
+    expected.authorization = Some(authorization.clone());
     assert_eq!(progress.inspect(/*call_id*/ None), expected);
     assert!(progress.inspect(Some("active-overflow")).oversized);
     progress.finish("active-overflow");
     assert!(!progress.inspect(Some("active-overflow")).oversized);
+
+    // A newer timestamp can replace the score with an earlier action's LOW.
+    // Its source must still cover the failure, even though the coverage high-water is newer.
+    delayed_score.sampled_at = Some((refreshed_at + Duration::from_secs(1)).into());
+    assert!(progress.publish(delayed_score.clone(), authorization, /*index*/ 1));
+    expected.sampled_at = delayed_score.sampled_at.map(std::time::SystemTime::from);
+    expected.has_unscored_failure = true;
+    assert_eq!(progress.inspect(/*call_id*/ None), expected);
     Ok(())
 }
 

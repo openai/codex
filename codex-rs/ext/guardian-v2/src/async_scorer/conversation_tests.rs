@@ -53,10 +53,14 @@ async fn pending_request(
     let (ready, score) = tokio::sync::oneshot::channel();
     let authorization = ScoreAuthorization::current(&thread, &Default::default()).await;
     let pending_score = PendingScore {
-        progress: thread
-            .thread_extension_data()
-            .get::<GuardianV2ScoreProgress>()
-            .unwrap(),
+        progress: Arc::clone(
+            &ConversationBackend::for_turn(
+                thread.thread_extension_data(),
+                thread.thread_extension_data(),
+            )
+            .unwrap()
+            .progress,
+        ),
         index: 0,
         max_lag: config.max_tool_call_lag,
     };
@@ -101,12 +105,17 @@ async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidenc
         .await?;
         let store = fixture.test.codex.thread_extension_data();
         let metrics = Arc::new(RecordingMetrics::default());
-        store.insert(GuardianV2ScoreProgress::new(Some(metrics.clone())));
         store.insert(LunaSampler::new(sampler_config(server.uri())));
-        store.insert(ConversationBackend::new(
-            store.get::<LunaSampler>().unwrap(),
-        ));
-        let backend = store.get::<ConversationBackend>().unwrap();
+        store.remove::<ConversationBackend>();
+        ConversationBackend::install(
+            store,
+            ConversationBackend::new(
+                store.get::<LunaSampler>().unwrap(),
+                /*revision*/ 0,
+                Some(metrics.clone()),
+            ),
+        );
+        let backend = ConversationBackend::for_turn(store, store).unwrap();
         let events = responses::sse(vec![
             ev_assistant_message("score", "low"),
             ev_completed("score"),
@@ -236,51 +245,54 @@ async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidenc
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn earlier_observation_keeps_the_last_available_slot() -> Result<()> {
-    let sampler = Arc::new(LunaSampler::new(sampler_config(
-        "http://localhost".to_owned(),
-    )));
-    let backend = Arc::new(ConversationBackend::new(sampler));
-    let occupied = (0..15)
-        .map(|index| backend.reserve(|| index).1.expect("available slot"))
-        .collect::<Vec<_>>();
-    let (observed, first_observed) = tokio::sync::oneshot::channel();
-    let (release_first, release) = std::sync::mpsc::channel();
-    let first_backend = Arc::clone(&backend);
-    let first = tokio::task::spawn_blocking(move || {
-        first_backend.reserve(|| {
-            observed.send(()).expect("first observation receiver");
-            release.recv().expect("release first observation");
-            15
-        })
-    });
-    first_observed.await?;
+async fn policy_revisions_keep_separate_classifier_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const OLD_SCORE: &str = "old-policy-score";
+    const NEW_SCORE: &str = "new-policy-score";
+    const RESUMED_SCORE: &str = "resumed-policy-score";
 
-    let (started, later_started) = tokio::sync::oneshot::channel();
-    let (admitted, later_admitted) = tokio::sync::oneshot::channel();
-    let later = tokio::task::spawn_blocking(move || {
-        started.send(()).expect("later admission receiver");
-        let reservation = backend.reserve(|| 16);
-        let _ = admitted.send(());
-        reservation
-    });
-    later_started.await?;
-    // The later admission must wait for the earlier observation to reserve its slot.
-    let later_waited = tokio::time::timeout(Duration::from_millis(250), later_admitted)
-        .await
-        .is_err();
-    // Always release the blocking task before assertions, even if admission was reordered.
-    release_first.send(())?;
-    let (first_index, first_reservation) = first.await?;
-    let (later_index, later_reservation) = later.await?;
-    assert!(later_waited);
-    assert_eq!((first_index, later_index), (15, 16));
-    assert!(first_reservation.is_ok());
-    assert!(matches!(
-        later_reservation,
-        Err(LunaSamplerError::QueueFull)
-    ));
-    drop(occupied);
+    let fixture = GuardianFailureFixture::new().await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let server = responses::start_mock_server().await;
+    let outputs = [OLD_SCORE, NEW_SCORE, RESUMED_SCORE];
+    let events =
+        outputs.map(|id| responses::sse(vec![ev_assistant_message(id, "low"), ev_completed(id)]));
+    let mock = responses::mount_sse_sequence(&server, Vec::from(events)).await;
+    let previous = ConversationBackend::new(
+        Arc::new(LunaSampler::new(sampler_config(server.uri()))),
+        /*revision*/ 0,
+        /*metrics*/ None,
+    );
+    let classify = async |backend: &ConversationBackend, label| -> Result<()> {
+        let (mut request, score) = pending_request(&fixture, label).await?;
+        let (index, reservation) =
+            backend.reserve(|| observe_unscored_call(&backend.progress, store));
+        request.pending_score.progress = Arc::clone(&backend.progress);
+        request.pending_score.index = index;
+        reservation?.prepare(request).await.unwrap().run().await;
+        assert_eq!(score.await??, "low");
+        Ok(())
+    };
+
+    // Each sample commits before the next starts, with the same instructions and authorization.
+    classify(&previous, OLD_SCORE).await?;
+    let current = previous.for_policy(/*revision*/ 1);
+    classify(&current, NEW_SCORE).await?;
+    classify(&previous, RESUMED_SCORE).await?;
+
+    let retained_outputs = mock
+        .requests()
+        .into_iter()
+        .map(|request| {
+            request
+                .input()
+                .into_iter()
+                .filter_map(|item| outputs.into_iter().find(|id| item["id"] == *id))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(retained_outputs, [vec![], vec![], vec![OLD_SCORE]]);
+    fixture.test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
@@ -297,7 +309,11 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
         .test
         .codex
         .thread_extension_data()
-        .insert(ConversationBackend::new(sampler));
+        .remove::<ConversationBackend>();
+    ConversationBackend::install(
+        fixture.test.codex.thread_extension_data(),
+        ConversationBackend::new(sampler, /*revision*/ 0, /*metrics*/ None),
+    );
     let events = ["C", "B", "A", "D"].map(|label| {
         responses::sse(vec![
             ev_assistant_message(&format!("score-{label}"), "low"),
@@ -305,16 +321,15 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
         ])
     });
     let mock = responses::mount_sse_sequence(&server, events.to_vec()).await;
-    let backend = fixture
-        .test
-        .codex
-        .thread_extension_data()
-        .get::<ConversationBackend>()
-        .unwrap();
+    let backend = ConversationBackend::for_turn(
+        fixture.test.codex.thread_extension_data(),
+        fixture.test.codex.thread_extension_data(),
+    )
+    .unwrap();
     let store = fixture.test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("approval-turn");
     turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = &backend.progress;
     let mut reservations = (0..16)
         .map(|index| backend.reserve(|| index).1.unwrap())
         .collect::<Vec<_>>();
@@ -322,7 +337,7 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
     let reservation = reservations.pop().unwrap();
     let prepared = reservation.prepare(request).await.unwrap();
     assert!(matches!(
-        backend.reserve(|| 16).1,
+        backend.for_policy(/*revision*/ 1).reserve(|| 0).1,
         Err(LunaSamplerError::QueueFull)
     ));
     drop(prepared);
@@ -413,9 +428,13 @@ async fn stale_authorization_expiry_and_stopped_generations_reject_preparation()
         .test
         .codex
         .thread_extension_data()
-        .insert(ConversationBackend::new(sampler));
+        .remove::<ConversationBackend>();
+    ConversationBackend::install(
+        fixture.test.codex.thread_extension_data(),
+        ConversationBackend::new(sampler, /*revision*/ 0, /*metrics*/ None),
+    );
     let thread_store = fixture.test.codex.thread_extension_data();
-    let backend = thread_store.get::<ConversationBackend>().unwrap();
+    let backend = ConversationBackend::for_turn(thread_store, thread_store).unwrap();
     let (mut request, score) = pending_request(&fixture, "expired").await?;
     request.pending_score.max_lag = 0;
     let progress = Arc::clone(&request.pending_score.progress);
@@ -478,9 +497,13 @@ async fn prepared_reviews_recheck_expiry_authorization_and_stopped_generations()
         .test
         .codex
         .thread_extension_data()
-        .insert(ConversationBackend::new(sampler));
+        .remove::<ConversationBackend>();
+    ConversationBackend::install(
+        fixture.test.codex.thread_extension_data(),
+        ConversationBackend::new(sampler, /*revision*/ 0, /*metrics*/ None),
+    );
     let thread_store = fixture.test.codex.thread_extension_data();
-    let backend = thread_store.get::<ConversationBackend>().unwrap();
+    let backend = ConversationBackend::for_turn(thread_store, thread_store).unwrap();
     let (mut request, score) = pending_request(&fixture, "expired").await?;
     request.pending_score.max_lag = 0;
     let progress = Arc::clone(&request.pending_score.progress);
@@ -564,8 +587,11 @@ async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result
             ]));
         }
         let mock = responses::mount_sse_sequence(&server, events).await;
-        let backend =
-            ConversationBackend::new(Arc::new(LunaSampler::new(sampler_config(server.uri()))));
+        let backend = ConversationBackend::new(
+            Arc::new(LunaSampler::new(sampler_config(server.uri()))),
+            /*revision*/ 0,
+            /*metrics*/ None,
+        );
         let (request, older_score) = pending_request(&fixture, "older").await?;
         let older = backend
             .reserve(|| 0)
@@ -586,7 +612,9 @@ async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result
             .run()
             .await;
         assert_eq!(newer_score.await??, "low");
-        let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+        let progress = ConversationBackend::for_turn(store, store)
+            .map(|cache| Arc::clone(&cache.progress))
+            .unwrap();
         if publish_newer {
             seed_cached_score(&progress, store, /*index*/ 1, authorization);
         }
@@ -657,16 +685,22 @@ async fn delayed_classification_skips_after_newer_score_and_history_complete() -
     .await;
     let store = fixture.test.codex.thread_extension_data();
     store.insert(LunaSampler::new(sampler_config(server.uri())));
-    store.insert(ConversationBackend::new(
-        store.get::<LunaSampler>().unwrap(),
-    ));
-    let backend = store.get::<ConversationBackend>().unwrap();
+    store.remove::<ConversationBackend>();
+    ConversationBackend::install(
+        store,
+        ConversationBackend::new(
+            store.get::<LunaSampler>().unwrap(),
+            /*revision*/ 0,
+            Some(store.get::<RecordingMetrics>().unwrap()),
+        ),
+    );
+    let backend = ConversationBackend::for_turn(store, store).unwrap();
     // Leave two slots for real classifications. The newer request releases its slot
     // only after committing history, so admission below provides a completion barrier.
     let held = (0..14)
         .map(|_| backend.reserve(|| 0).1.unwrap())
         .collect::<Vec<_>>();
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = &backend.progress;
     let mut updates = progress.updates.subscribe();
     let metrics = store.get::<RecordingMetrics>().unwrap();
     let turn_store = ExtensionData::new("turn-1");
@@ -802,7 +836,7 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
         let mut config = sampler_config(format!("{}/v1", server.uri()));
         config.metrics = Some(metrics.clone());
         let sampler = Arc::new(LunaSampler::new(config));
-        let backend = ConversationBackend::new(sampler);
+        let backend = ConversationBackend::new(sampler, /*revision*/ 0, /*metrics*/ None);
         let (request, score) = pending_request(&fixture, "seed").await?;
         let reservation = backend.reserve(|| 0).1.unwrap();
         let prepared = reservation.prepare(request).await.unwrap();
@@ -953,7 +987,9 @@ async fn expiry_preserves_the_completed_checkpoint_and_transcript_cursor() -> Re
     )
     .await?;
     let store = fixture.test.codex.thread_extension_data();
-    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let progress = ConversationBackend::for_turn(store, store)
+        .map(|cache| Arc::clone(&cache.progress))
+        .unwrap();
     let (release_expired, finish_expired) = tokio::sync::oneshot::channel();
     let (server, _completions) = start_streaming_sse_server(vec![
         vec![StreamingSseChunk {
@@ -986,10 +1022,14 @@ async fn expiry_preserves_the_completed_checkpoint_and_transcript_cursor() -> Re
         }],
     ])
     .await;
-    let backend = ConversationBackend::new(Arc::new(LunaSampler::new(sampler_config(format!(
-        "{}/v1",
-        server.uri()
-    )))));
+    let backend = ConversationBackend::new(
+        Arc::new(LunaSampler::new(sampler_config(format!(
+            "{}/v1",
+            server.uri()
+        )))),
+        /*revision*/ 0,
+        /*metrics*/ None,
+    );
     let (mut request, score) = pending_request(&fixture, "checkpoint").await?;
     let (index, reservation) = backend.reserve(|| observe_unscored_call(&progress, store));
     request.pending_score.index = index;
@@ -1079,7 +1119,11 @@ async fn expiry_discards_a_queued_score_without_recording_success() -> Result<()
     let metrics = Arc::new(crate::async_scorer::sampler::tests::RecordingMetrics::default());
     let mut config = sampler_config(server.uri());
     config.metrics = Some(metrics.clone());
-    let backend = ConversationBackend::new(Arc::new(LunaSampler::new(config)));
+    let backend = ConversationBackend::new(
+        Arc::new(LunaSampler::new(config)),
+        /*revision*/ 0,
+        /*metrics*/ None,
+    );
     let (mut request, score) = pending_request(&fixture, "queued").await?;
     request.pending_score.max_lag = 0;
     let (index, reservation) =

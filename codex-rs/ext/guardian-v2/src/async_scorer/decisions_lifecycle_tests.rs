@@ -1,4 +1,5 @@
 //! Decisions outcomes cannot affect the real baseline score/publication path.
+
 use super::*;
 use crate::async_scorer::conversation::ConversationBackend;
 use crate::async_scorer::decisions::DecisionsCredential;
@@ -45,6 +46,7 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
         let mut initial_model = adaptive_model.as_ref().clone();
         initial_model.guardian = Some(Default::default());
         store.insert(initial_model);
+        store.remove::<ConversationBackend>();
         registry.thread_lifecycle_contributors()[0]
             .on_thread_start(ThreadStartInput {
                 config: &config,
@@ -212,14 +214,19 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
         let server = responses::start_mock_server().await;
         let store = fixture.test.codex.thread_extension_data();
         let metrics = Arc::new(RecordingMetrics::default());
-        store.insert(GuardianV2ScoreProgress::new(Some(metrics.clone())));
         // Replace the conversation backend to force the budget failure.
         let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
         sampler_config.max_input_tokens = 256;
         store.insert(LunaSampler::new(sampler_config));
-        store.insert(ConversationBackend::new(
-            store.get::<LunaSampler>().unwrap(),
-        ));
+        store.remove::<ConversationBackend>();
+        ConversationBackend::install(
+            store,
+            ConversationBackend::new(
+                store.get::<LunaSampler>().unwrap(),
+                /*revision*/ 0,
+                Some(metrics.clone()),
+            ),
+        );
         if enabled {
             store.insert(DecisionsSampler::new(
                 HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -229,7 +236,7 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
             )?);
         }
         fixture.score_tool(ToolName::plain("read_file")).await;
-        fixture.assert_fails_closed("elevated_risk").await?;
+        fixture.assert_fails_closed("scoring_failure").await?;
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
             loop {
                 let completed = {

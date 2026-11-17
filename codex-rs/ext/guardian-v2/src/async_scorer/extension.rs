@@ -30,7 +30,6 @@ use codex_protocol::protocol::has_full_access;
 use super::config::GuardianV2Config;
 use super::conversation::ConversationBackend;
 use super::sampler::LunaSampler;
-use super::score::GuardianV2ScoreProgress;
 use super::trusted_skills::TrustedSkillRoots;
 
 #[derive(Clone)]
@@ -76,14 +75,18 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     .get_or_init(NodeReplReviewEvidence::default)
                     .enable_image_capture();
             }
-            input.thread_store.remove::<ConversationBackend>();
             input.thread_store.remove::<LunaSampler>();
             let sampler = input
                 .thread_store
                 .get_or_init(|| LunaSampler::new(sampler_config));
-            input
-                .thread_store
-                .insert(ConversationBackend::new(Arc::clone(&sampler)));
+            ConversationBackend::install(
+                input.thread_store,
+                ConversationBackend::new(
+                    Arc::clone(&sampler),
+                    input.config.guardian_policy_revision,
+                    input.extension_metrics.clone(),
+                ),
+            );
             input
                 .thread_store
                 .remove::<super::decisions::DecisionsSampler>();
@@ -97,9 +100,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 input.thread_store.insert(decisions_sampler);
             }
             input.thread_store.insert(guardian_config);
-            input.thread_store.insert(GuardianV2ScoreProgress::new(
-                input.extension_metrics.clone(),
-            ));
+
             // Preserve the answer path selected by the host for this thread.
             input
                 .thread_store
@@ -132,7 +133,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
     }
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            input.thread_store.remove::<ConversationBackend>();
+            ConversationBackend::stop(input.thread_store);
         })
     }
 }
@@ -168,8 +169,8 @@ impl ToolLifecycleContributor for GuardianV2Extension {
 
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
-            if let Some(progress) = input.thread_store.get::<GuardianV2ScoreProgress>() {
-                progress.finish(input.call_id);
+            if let Some(cache) = input.turn_store.get::<ConversationBackend>() {
+                cache.progress.finish(input.call_id);
             }
         })
     }

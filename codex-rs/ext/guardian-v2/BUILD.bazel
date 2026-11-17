@@ -11,4 +11,5 @@ codex_rust_crate(
     crate_name = "codex_guardian_v2",
     extra_binaries = ["//codex-rs/code-mode-host:codex-code-mode-host"],
     test_data_extra = glob(["src/**/snapshots/**"]),
+    unit_test_srcs = ["src/async_scorer/conversation_admission_tests.rs"],
 )
