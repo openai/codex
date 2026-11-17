@@ -6,6 +6,7 @@ use super::compose_requirements_for_hostname_and_hook_directory;
 use super::compose_requirements_with_hostname_resolver;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
+use crate::OtelHeadersHelperTargets;
 use crate::RequirementSource;
 use crate::Sourced;
 use codex_protocol::protocol::AskForApproval;
@@ -448,6 +449,89 @@ tracestate = { shared = { tenant = "replacement", region = "us" }, lower = { ten
             compose(vec![layer("empty", "Empty", empty)]),
             Ok(None),
             "{empty}",
+        );
+    }
+}
+
+#[test]
+fn otel_managed_headers_follow_each_exporters_owning_layer() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let system_command = if cfg!(windows) {
+        "C:/company/headers.exe"
+    } else {
+        "/opt/company/headers"
+    };
+    let mdm_command = if cfg!(windows) {
+        "C:/company/mdm-headers.exe"
+    } else {
+        "/opt/company/mdm-headers"
+    };
+    let system = RequirementsLayerEntry::from_toml(
+        RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::try_from(dir.path().join("requirements.toml"))?,
+        },
+        r#"[otel]
+headers_helper = "$HELPER"
+exporter = { otlp-http = { endpoint = "https://collector.example/logs", protocol = "binary" } }
+trace_exporter = { otlp-http = { endpoint = "https://collector.example/traces", protocol = "binary" } }
+metrics_exporter = { otlp-http = { endpoint = "https://collector.example/metrics", protocol = "binary" } }
+"#.replace("$HELPER", system_command),
+    );
+    let cloud = layer(
+        "cloud",
+        "Cloud",
+        r#"[otel]
+trace_exporter = { otlp-http = { endpoint = "https://other.example/traces", protocol = "binary" } }
+"#,
+    );
+    let mdm = RequirementsLayerEntry::from_toml(
+        RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".into(),
+            key: "requirements".into(),
+        },
+        r#"[otel]
+headers_helper = "$HELPER"
+metrics_exporter = { otlp-http = { endpoint = "https://mdm.example/metrics", protocol = "binary" } }
+exporter = { otlp-http = { endpoint = "", protocol = "binary" } }
+"#
+        .replace("$HELPER", mdm_command),
+    );
+
+    for (layers, command, logs, traces, metrics) in [
+        (vec![system.clone()], system_command, true, true, true),
+        (
+            vec![system.clone(), cloud.clone()],
+            system_command,
+            true,
+            false,
+            true,
+        ),
+        (vec![system, cloud, mdm], mdm_command, false, false, true),
+    ] {
+        let otel = compose(layers)?.unwrap().otel.unwrap();
+        assert_eq!(otel.headers_helper.as_deref(), Some(command));
+        assert_eq!(
+            otel.headers_helper_targets(),
+            OtelHeadersHelperTargets {
+                logs,
+                traces,
+                metrics
+            }
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn otel_cloud_requirements_cannot_install_or_reschedule_a_helper() {
+    for setting in [
+        "headers_helper = 'headers'",
+        "headers_helper_refresh_interval_ms = 1",
+    ] {
+        let err =
+            compose(vec![layer("cloud", "Cloud", &format!("[otel]\n{setting}"))]).unwrap_err();
+        assert!(
+            matches!(err, RequirementsCompositionError::Parse { message, .. } if message.contains("local managed requirements"))
         );
     }
 }

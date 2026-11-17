@@ -57,6 +57,26 @@ impl JsonLogCapture {
         }
     }
 
+    pub(crate) async fn wait_for_stderr_line(&self, text: &str, timeout: Duration) -> Result<()> {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let updated = self.updated.notified();
+                if self
+                    .lines
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .iter()
+                    .any(|line| line.contains(text))
+                {
+                    break;
+                }
+                updated.await;
+            }
+        })
+        .await
+        .with_context(|| format!("timed out waiting for stderr containing {text:?}"))
+    }
+
     pub(crate) fn events(&self) -> Result<Vec<Value>> {
         let lines = self
             .lines

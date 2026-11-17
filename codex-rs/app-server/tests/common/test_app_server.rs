@@ -251,6 +251,11 @@ impl TestAppServer {
         })
     }
 
+    /// Waits for a substring in the child's captured stderr, including plain-text warnings.
+    pub async fn wait_for_stderr_line(&self, text: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.json_logs.wait_for_stderr_line(text, timeout).await
+    }
+
     /// Waits up to `timeout` for a JSON stderr event whose structured `event.name` field matches.
     pub async fn wait_for_json_log_event(
         &self,

@@ -31,6 +31,7 @@ async fn restricted_policy_skips_command_until_a_refresh_is_permitted() {
     );
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            managed: false,
             command: format!("echo invocation >> calls && {}", read_command()),
             refresh_interval: Duration::from_millis(20),
             apply_to_logs: true,
@@ -66,6 +67,7 @@ async fn concurrent_exports_share_one_helper_execution() {
     .unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            managed: false,
             command: format!("echo invocation >> calls && {}", read_command()),
             refresh_interval: Duration::from_secs(3600),
             apply_to_logs: true,
@@ -101,6 +103,7 @@ async fn periodic_refresh_replaces_credentials_and_recovers_after_failure() {
     std::fs::write(&path, r#"{"Authorization":"first","X-Old":"old"}"#).unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            managed: false,
             command: read_command().to_string(),
             refresh_interval: Duration::from_millis(20),
             apply_to_logs: true,
@@ -139,6 +142,27 @@ async fn periodic_refresh_replaces_credentials_and_recovers_after_failure() {
 }
 
 #[tokio::test]
+async fn missing_managed_executable_reports_path_and_os_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing-helper.exe");
+    let helper = OtelHeadersHelper {
+        command: path.to_str().unwrap().to_owned(),
+        managed: true,
+        refresh_interval: Duration::from_secs(60),
+        apply_to_logs: true,
+        apply_to_traces: true,
+        apply_to_metrics: true,
+    };
+    let error = run_configured_helper(&helper, dir.path())
+        .await
+        .unwrap_err();
+    assert!(error.contains(path.to_str().unwrap()), "{error}");
+    let os_error = std::fs::metadata(&path).unwrap_err();
+    assert_eq!(os_error.kind(), std::io::ErrorKind::NotFound);
+    assert!(error.contains(&os_error.to_string()), "{error}");
+}
+
+#[tokio::test]
 async fn helper_failure_is_an_export_error_and_output_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
     assert!(run_helper("exit 1", dir.path()).await.is_err());
@@ -157,6 +181,7 @@ async fn failed_helper_prevents_http_export_even_with_static_credentials() {
     listener.set_nonblocking(true).unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            managed: false,
             command: "exit 1".to_string(),
             refresh_interval: Duration::from_secs(3600),
             apply_to_logs: true,
@@ -193,6 +218,7 @@ async fn failed_helper_prevents_http_export_even_with_static_credentials() {
 async fn grpc_and_builtin_metrics_do_not_start_the_helper() {
     use crate::config::OtelExporter;
     let helper = OtelHeadersHelper {
+        managed: false,
         command: String::new(),
         refresh_interval: Duration::ZERO,
         apply_to_logs: true,

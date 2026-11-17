@@ -139,6 +139,7 @@ pub use config_requirements::NetworkRequirementsToml;
 pub use config_requirements::NetworkUnixSocketPermissionToml;
 pub use config_requirements::NetworkUnixSocketPermissionsToml;
 pub use config_requirements::NewThreadModelDefaultsToml;
+pub use config_requirements::OtelHeadersHelperTargets;
 pub use config_requirements::OtelRequirementsToml;
 pub use config_requirements::RemoteSandboxConfigToml;
 pub use config_requirements::RequirementSource;

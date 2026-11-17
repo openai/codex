@@ -965,6 +965,28 @@ managed fields. Configuration writes that overlap managed settings are rejected.
 Exporter header values are redacted in effective config, source layers, managed
 requirements, and write-override metadata. Runtime exporters retain the original values.
 
+A system `requirements.toml` file or MDM requirements payload can set
+`otel.headers_helper` and its optional `otel.headers_helper_refresh_interval_ms`.
+Put the helper and each OTLP HTTP exporter that should receive its headers in
+the same requirements layer. If another layer replaces an exporter, that
+exporter uses its own configured headers.
+
+Set the managed helper to the absolute path of an executable, for example
+`/opt/company/bin/otel-auth`. Install it in a directory controlled by the
+administrator and grant Codex users permission to execute it. Codex launches
+the executable directly with its parent as the working directory. A relative
+path makes the managed requirements invalid. If the executable is missing or
+cannot run, Codex warns and pauses exports that depend on its headers until a
+refresh succeeds.
+
+**Rollout.** Install the helper and upgrade targeted clients to a release that
+supports both keys in managed requirements before enabling either key in policy.
+Older clients can reject the requirements at startup even if they support the
+helper in ordinary config. For a mixed fleet, target only upgraded devices.
+
+**Rollback.** Remove both managed keys and confirm each device has received the
+updated policy before downgrading its client or uninstalling the helper.
+
 Managed span attributes and tracestate metadata are included in effective config
 and requirements reads. Unmanaged metadata remains writable.
 

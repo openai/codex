@@ -9874,6 +9874,8 @@ class OtelRequirements(BaseModel):
     )
     environment: str | None = None
     exporter: OtelExporter | None = None
+    headers_helper: str | None = None
+    headers_helper_refresh_interval_ms: Annotated[int | None, Field(ge=1)] = None
     log_agent_responses: bool | None = None
     log_guardian_assessments: bool | None = None
     log_sse_deltas: bool | None = None

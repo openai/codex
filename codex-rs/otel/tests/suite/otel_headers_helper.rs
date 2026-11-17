@@ -64,6 +64,7 @@ fn check_all_signals(protocol: OtelHttpProtocol, managed_logs: bool) {
         "cat headers.json"
     };
     let helper = OtelHeadersHelper {
+        managed: false,
         command: format!("echo invocation >> calls && {command}"),
         refresh_interval: Duration::from_secs(3600),
         apply_to_logs: !managed_logs,

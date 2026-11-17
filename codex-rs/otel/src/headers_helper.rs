@@ -106,7 +106,7 @@ async fn refresh_headers(
         // permit as an SDK that cannot enforce individual destinations.
         let result = match policy.acquire_for_unsupported_sdk() {
             Ok(permit) => permit
-                .run(run_helper(&config.command, cwd))
+                .run(run_configured_helper(config, cwd))
                 .await
                 .unwrap_or_else(|error| Err(error.to_string())),
             Err(error) => Err(error.to_string()),
@@ -130,6 +130,22 @@ async fn refresh_headers(
         }
         tokio::time::sleep(config.refresh_interval).await;
     }
+}
+
+async fn run_configured_helper(config: &OtelHeadersHelper, cwd: &Path) -> HeaderResult {
+    if !config.managed {
+        return run_helper(&config.command, cwd).await;
+    }
+    let executable = Path::new(&config.command);
+    let parent = executable
+        .parent()
+        .filter(|_| executable.is_absolute())
+        .ok_or("managed OTel helper requires an absolute executable path")?;
+    let mut process = codex_utils_process::background_command(executable);
+    process.current_dir(parent);
+    codex_http_headers_helper::run(process)
+        .await
+        .map_err(|error| format!("managed OTel helper {}: {error}", executable.display()))
 }
 
 async fn run_helper(command: &str, cwd: &Path) -> HeaderResult {

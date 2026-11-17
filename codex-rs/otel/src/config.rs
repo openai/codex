@@ -67,13 +67,15 @@ pub struct OtelSettings {
 }
 
 /// A shared command for explicit OTLP HTTP exporters; never used by built-in analytics.
-/// The command runs from `OtelSettings::codex_home` and prints a JSON object of strings.
+/// The command prints a JSON object of strings.
 /// Its headers override static headers. A failed run suspends exports until recovery.
 #[derive(Clone)]
 pub struct OtelHeadersHelper {
     pub command: String,
+    /// A managed executable runs directly from its parent directory. User commands run from Codex home.
+    pub managed: bool,
     pub refresh_interval: Duration,
-    /// Exporters set by admin requirements ignore the headers helper.
+    /// Signals whose exporter is authorized to receive this helper's headers.
     pub apply_to_logs: bool,
     pub apply_to_traces: bool,
     pub apply_to_metrics: bool,

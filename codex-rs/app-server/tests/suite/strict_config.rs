@@ -101,6 +101,31 @@ foo = "bar"
     Ok(())
 }
 
+#[test_case::test_case("otel-auth"; "bare_name")]
+#[test_case::test_case("./otel-auth"; "relative_path")]
+fn relative_managed_otel_helper_fails_startup(command: &str) -> Result<()> {
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("requirements.toml"),
+        format!("[otel]\nheaders_helper = '{command}'"),
+    )?;
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex-app-server")?)
+        .env("CODEX_HOME", home.path())
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            home.path().join("managed_config.toml"),
+        )
+        .args(["--listen", "off"])
+        .output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("otel.headers_helper must be an absolute executable path"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn managed_auth_requirements_fail_closed_for_standalone_app_server() -> Result<()> {
     for (requirements, config) in [

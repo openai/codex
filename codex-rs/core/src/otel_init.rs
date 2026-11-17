@@ -87,20 +87,23 @@ pub fn build_provider(
     let service_name = service_name_override.unwrap_or(originator.value.as_str());
     let runtime_metrics = config.features.enabled(Feature::RuntimeMetrics);
 
-    let managed = config
+    let managed_otel = config
         .config_layer_stack
         .requirements_toml()
         .otel
         .as_deref();
+    let helper_targets =
+        managed_otel.map(codex_config::OtelRequirementsToml::headers_helper_targets);
     let headers_helper = config
         .otel
         .headers_helper
         .as_ref()
         .map(|command| OtelHeadersHelper {
             command: command.clone(),
-            apply_to_logs: managed.is_none_or(|otel| otel.exporter.is_none()),
-            apply_to_traces: managed.is_none_or(|otel| otel.trace_exporter.is_none()),
-            apply_to_metrics: managed.is_none_or(|otel| otel.metrics_exporter.is_none()),
+            managed: managed_otel.is_some_and(|otel| otel.headers_helper.is_some()),
+            apply_to_logs: helper_targets.is_none_or(|targets| targets.logs),
+            apply_to_traces: helper_targets.is_none_or(|targets| targets.traces),
+            apply_to_metrics: helper_targets.is_none_or(|targets| targets.metrics),
             refresh_interval: Duration::from_millis(
                 config
                     .otel

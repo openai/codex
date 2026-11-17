@@ -15,6 +15,8 @@ use std::collections::HashMap;
 
 pub(crate) fn map_otel_requirements_to_api(otel: OtelRequirementsToml) -> OtelRequirements {
     OtelRequirements {
+        headers_helper: otel.headers_helper,
+        headers_helper_refresh_interval_ms: otel.headers_helper_refresh_interval_ms,
         tool_result: otel.tool_result.map(|value| OtelToolResultLogConfig {
             max_bytes: value.max_bytes,
         }),
