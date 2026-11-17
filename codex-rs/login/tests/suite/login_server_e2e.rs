@@ -658,9 +658,10 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
     let actual_port = server.actual_port;
     let auth_url = server.auth_url.clone();
     server.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(2), server.block_until_done())
+    server
+        .block_until_done()
         .await
-        .expect("login server should shut down after cancel");
+        .expect_err("cancelling the fallback login should not report success");
 
     assert_eq!(actual_port, FALLBACK_LOGIN_PORT);
     assert!(auth_url.contains(&format!(

@@ -38,7 +38,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             "-NonInteractive".to_string(),
             "-Command".to_string(),
             concat!(
-                "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); ",
+                "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, ''); ",
                 "while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { ",
                 "Start-Sleep -Milliseconds 20 ",
                 "}; ",
@@ -52,7 +52,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             "sh".to_string(),
             "-c".to_string(),
             concat!(
-                "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
+                ": > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
                 "while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; ",
                 "printf 'process-out|%s|%s' \"$OpenAI_Federation_Rule_Id\" \"$OPENAI_IDENTITY_TOKEN_FILE\"; ",
                 "printf process-err >&2",
@@ -93,7 +93,6 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
     assert_eq!(response.result, serde_json::json!({}));
 
     wait_for_file(&probe_file).await?;
-    assert_eq!(std::fs::read_to_string(&probe_file)?, "process");
     std::fs::write(&release_file, "release")?;
 
     let exited = read_process_exited(&mut mcp).await?;

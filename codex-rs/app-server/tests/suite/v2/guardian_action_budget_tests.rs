@@ -129,18 +129,26 @@ with urllib.request.urlopen(request, timeout=30) as response:
         ))
         .enable_feature(Feature::GuardianApproval)
         .write(codex_home.path())?;
+    // The permission hooks run on the host and call back to its loopback server.
+    // Their working directory must exist on that host even in remote-executor CI.
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR, None)])
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
-    let thread = app_server
-        .start_thread(ThreadStartParams::default())
-        .await?
-        .thread;
+    let start = app_server
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(codex_home.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(TIMEOUT, app_server.read_response(start)).await??;
     state.allow_guardian_review.notify_one();
     let id = app_server
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.thread.id,
             input: vec![UserInput::Text {
                 text: USER_CONTEXT.to_owned(),
                 text_elements: Vec::new(),

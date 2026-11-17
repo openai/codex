@@ -64,9 +64,7 @@ async fn config_server_settings_survive_openai_login_and_logout() -> Result<()> 
     let started = app.start_thread(ThreadStartParams::default()).await?;
     setup
         .assert_turn_uses_managed_instructions(&mut app, &started.thread.id)
-        .await?;
-    app.shutdown_gracefully().await?;
-    Ok(())
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
