@@ -98,6 +98,8 @@ pub struct LunaSamplingRequest {
     pub root_turn_id: Option<String>,
     /// Sampling expiry remains active until its response finishes draining.
     pub(super) pending_score: Option<PendingScore>,
+    /// Responses turn ID for this classifier execution.
+    pub(super) turn_id: Uuid,
 }
 
 /// Admitted retained input and Luna settings consumed together at execution.
@@ -257,8 +259,7 @@ impl LunaSampler {
             config: Arc::clone(&self.config),
             connections: Arc::clone(&self.connections),
             request: api_request,
-            // Retries keep the classification's inference turn identity.
-            turn_id: Uuid::now_v7().to_string(),
+            turn_id: request.turn_id.to_string(),
             parent_response_id: request.parent_response_id.clone(),
             parent_turn_id: request.parent_turn_id.clone(),
             root_turn_id: request.root_turn_id.clone(),

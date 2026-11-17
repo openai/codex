@@ -2141,11 +2141,14 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         });
         assert_eq!(classification.is_some(), classifier_in_scope);
         if let Some(event) = classification {
+            let params = &event["event_params"];
+            let requests = responses_state.luna_requests.lock().expect("Luna requests");
+            let request_turn_id = requests[0]["client_metadata"]["turn_id"]
+                .as_str()
+                .expect("classifier request turn ID");
+            assert_eq!(params["classifier_turn_id"], request_turn_id);
             assert_eq!(
-                json!([
-                    event["event_params"]["outcome"],
-                    event["event_params"]["risk_level"]
-                ]),
+                json!([params["outcome"], params["risk_level"]]),
                 match risk {
                     GuardianRisk::Low | GuardianRisk::LowWithStreamFailure =>
                         json!(["success", "low"]),
