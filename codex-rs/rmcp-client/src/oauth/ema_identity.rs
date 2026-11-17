@@ -8,13 +8,15 @@ use anyhow::anyhow;
 use anyhow::bail;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use oauth2::TokenResponse;
 use tracing::instrument::WithSubscriber;
 
 use crate::ema_auth_policy::EmaAuthFailure;
 use crate::ema_auth_policy::EmaErrorDetail;
 use crate::ema_auth_policy::ema_reauthentication_required;
-use crate::ema_claims::OidcClaims;
 use crate::ema_claims::oidc_identity;
+use crate::ema_claims::validate_oidc_identity_assertion;
+use crate::ema_exchange::EmaSubjectToken;
 use crate::oauth::EnterpriseOAuthGeneration;
 use crate::oauth::EnterpriseOAuthGenerationFile;
 use crate::oauth::EnterpriseOAuthGenerationKind;
@@ -52,7 +54,7 @@ impl std::fmt::Debug for EmaCredentialLease {
     }
 }
 
-pub(crate) fn stored_oidc_identity(tokens: &StoredOAuthTokens) -> Result<OidcClaims> {
+pub(crate) fn stored_ema_subject(tokens: &StoredOAuthTokens) -> Result<EmaSubjectToken> {
     let assertion = tokens
         .token_response
         .0
@@ -65,12 +67,26 @@ pub(crate) fn stored_oidc_identity(tokens: &StoredOAuthTokens) -> Result<OidcCla
                 "enterprise IdP session has no OIDC ID token; sign in again",
             )
         })?;
-    // The ID token binds the login identity. Its expiry does not determine
-    // whether the IdP will accept the independently valid refresh token.
-    oidc_identity(assertion, &tokens.url, &tokens.client_id).map_err(|error| {
+    let invalid_identity = || {
         ema_reauthentication_required("stored enterprise IdP identity is invalid; sign in again")
-            .context(error.to_string())
-    })
+    };
+    if let Some(refresh_token) = tokens
+        .token_response
+        .0
+        .refresh_token()
+        .filter(|token| !token.secret().trim().is_empty())
+    {
+        // An expired ID token still corroborates the binding of a separate refresh token.
+        oidc_identity(assertion, &tokens.url, &tokens.client_id).map_err(|_| invalid_identity())?;
+        return Ok(EmaSubjectToken::RefreshToken(refresh_token.clone()));
+    }
+    // When the assertion itself is the exchange credential, it must still be live.
+    validate_oidc_identity_assertion(assertion, &tokens.url, &tokens.client_id).map_err(|_| {
+        ema_reauthentication_required(
+            "enterprise IdP ID token is expired or invalid; sign in again",
+        )
+    })?;
+    Ok(EmaSubjectToken::IdToken(assertion.to_owned()))
 }
 
 impl StoredOAuthCredentialSnapshot {
@@ -261,15 +277,12 @@ impl StoredOAuthCredentialSnapshot {
         // There is no refresh-token rotation writer in the supported EMA profile.
         // Pin the whole atomic login record, not just the claims of its ID token.
         latest.token_response.0.set_expires_in(None);
-        if latest != *previous
-            || previous.bound_issuer() != Some(previous.url.as_str())
-            || !latest.has_refresh_token()
-        {
+        if latest != *previous || previous.bound_issuer() != Some(previous.url.as_str()) {
             return Err(ema_reauthentication_required(
                 "enterprise IdP identity changed; sign in again and reconnect",
             ));
         }
-        stored_oidc_identity(&latest)?;
+        stored_ema_subject(&latest)?;
         Ok(latest)
     }
 }

@@ -106,7 +106,7 @@ pub async fn exchange_ema_auth_token<L: Send, R: Send>(
         .ok_or_else(|| anyhow!("MCP authorization metadata is missing an issuer"))?;
     let EmaIdpIdentity {
         token_endpoint,
-        refresh_token,
+        subject_token,
         credentials,
         client_authentication: idp_client_authentication,
     } = request.idp_identity.await?;
@@ -122,7 +122,7 @@ pub async fn exchange_ema_auth_token<L: Send, R: Send>(
             idp_client_id: request.idp_client_id,
             idp_client_authentication,
             resource_client_authentication,
-            refresh_token,
+            subject_token,
             idp_http_client: request.idp_http_client,
             resource_http_client: request.resource_http_client,
         },

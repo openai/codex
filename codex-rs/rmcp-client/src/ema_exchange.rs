@@ -42,6 +42,12 @@ impl std::fmt::Debug for EmaAccessToken {
     }
 }
 
+/// An issuer-bound exchange subject. The IdP verifies the credential during exchange.
+pub(crate) enum EmaSubjectToken {
+    RefreshToken(RefreshToken),
+    IdToken(String),
+}
+
 /// The caller supplies trusted authorization-server metadata and an IdP credential.
 /// This primitive does not perform resource discovery or interactive login.
 pub(crate) struct EmaIdJagExchangeRequest<'a> {
@@ -55,7 +61,7 @@ pub(crate) struct EmaIdJagExchangeRequest<'a> {
     pub idp_client_id: &'a str,
     pub idp_client_authentication: EmaClientAuthentication,
     pub resource_client_authentication: EmaClientAuthentication,
-    pub refresh_token: String,
+    pub subject_token: EmaSubjectToken,
     pub idp_http_client: Arc<dyn HttpClient>,
     pub resource_http_client: Arc<dyn HttpClient>,
 }
@@ -80,31 +86,35 @@ pub(crate) async fn exchange_id_jag<L: Send, R: Send>(
         /*has_configured_headers*/ false,
         StreamableHttpRedirectMode::Legacy,
     )?;
-    let refresh_token = RefreshToken::new(request.refresh_token);
     // Discovery has already verified each registration's authentication method. The SDK owns
     // token validation and the two exchanges; Codex retains routing and credential policy.
-    let assertion = EmaExchangeRequest::new(
-        EmaAuthorizationServer::new(
-            request.idp_issuer,
-            request.idp_token_endpoint,
-            request.idp_client_id,
-        )
-        .with_client_authentication(request.idp_client_authentication),
-        EmaAuthorizationServer::new(
-            request.authorization_server_issuer,
-            request.authorization_server_token_endpoint,
-            request.mcp_client_id,
-        )
-        .with_client_authentication(request.resource_client_authentication),
-        request.resource,
-        &refresh_token,
+    let idp = EmaAuthorizationServer::new(
+        request.idp_issuer,
+        request.idp_token_endpoint,
+        request.idp_client_id,
     )
-    .with_scopes(request.scopes.iter().cloned())
-    .exchange_id_jag(&idp_http)
-    .await
-    .map_err(exchange_error)?;
-    drop(refresh_token);
-    // Only the IdP uses the refresh token. Release its lease before resource-AS I/O.
+    .with_client_authentication(request.idp_client_authentication);
+    let resource_as = EmaAuthorizationServer::new(
+        request.authorization_server_issuer,
+        request.authorization_server_token_endpoint,
+        request.mcp_client_id,
+    )
+    .with_client_authentication(request.resource_client_authentication);
+    let exchange = match &request.subject_token {
+        EmaSubjectToken::RefreshToken(token) => {
+            EmaExchangeRequest::new(idp, resource_as, request.resource, token)
+        }
+        EmaSubjectToken::IdToken(token) => {
+            EmaExchangeRequest::new_with_id_token(idp, resource_as, request.resource, token)
+        }
+    };
+    let assertion = exchange
+        .with_scopes(request.scopes.iter().cloned())
+        .exchange_id_jag(&idp_http)
+        .await
+        .map_err(exchange_error)?;
+    drop(request.subject_token);
+    // Only the IdP uses the subject token. Release its lease before resource-AS I/O.
     let receipt = finish_idp(credentials);
     let token = assertion
         .exchange(&resource_http)

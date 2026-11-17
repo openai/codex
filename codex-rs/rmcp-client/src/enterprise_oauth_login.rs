@@ -330,9 +330,6 @@ pub(crate) fn enterprise_callback_settings(
 }
 
 fn validate_enterprise_credentials(stored: &StoredOAuthTokens) -> Result<()> {
-    if !stored.has_refresh_token() {
-        bail!("enterprise IdP login did not return a refresh token");
-    }
     let assertion = stored
         .token_response
         .0

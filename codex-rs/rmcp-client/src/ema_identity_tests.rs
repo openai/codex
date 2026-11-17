@@ -259,11 +259,56 @@ async fn refresh_subject_rereads_pinned_credentials_after_id_token_expiry() -> R
     store.save(&keyring, &stored.server_name, &stored)?;
 
     let identity = resolve_ema_idp_identity_in(request(&issuer, &snapshot), &keyring).await?;
-    assert_eq!(
-        (&identity.token_endpoint, identity.refresh_token.as_str()),
-        (&format!("{issuer}/token"), "stored-refresh")
-    );
+    assert_eq!(identity.token_endpoint, format!("{issuer}/token"));
+    let EmaSubjectToken::RefreshToken(token) = identity.subject_token else {
+        panic!("expected the refresh token to take precedence");
+    };
+    assert_eq!(token.secret(), "stored-refresh");
     let _released = RefreshCredentialLock::acquire_for_server(&stored.server_name, &issuer).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn id_token_subject_requires_a_current_bound_assertion() -> Result<()> {
+    let _home = TempCodexHome::new();
+    let (_server, issuer) = discovery().await;
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
+    let keyring = MockKeyringStore::default();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    for (asserted_issuer, expires_at) in [
+        (issuer.as_str(), now + 300),
+        (issuer.as_str(), 0),
+        ("https://other.example", now + 300),
+    ] {
+        let mut stored = credentials(asserted_issuer, "user", expires_at);
+        stored.url = issuer.clone();
+        stored.issuer = Some(issuer.clone());
+        stored.token_response.0.set_refresh_token(None);
+        store.save(&keyring, &stored.server_name, &stored)?;
+        let snapshot = StoredOAuthCredentialSnapshot::new(stored.clone(), store);
+        let identity = resolve_ema_idp_identity_in(request(&issuer, &snapshot), &keyring).await;
+        let valid = asserted_issuer == issuer && expires_at > now;
+        assert_eq!(
+            stored_ema_identity_is_usable(&stored, &issuer, "idp-client"),
+            valid
+        );
+        if valid {
+            let EmaSubjectToken::IdToken(token) = identity?.subject_token else {
+                panic!("expected the login's ID token");
+            };
+            assert_eq!(
+                Some(token.as_str()),
+                stored.token_response.0.extra_fields().0["id_token"].as_str()
+            );
+        } else {
+            assert!(matches!(
+                identity
+                    .err()
+                    .and_then(|error| error.downcast::<EmaAuthFailure>().ok()),
+                Some(EmaAuthFailure::ReauthenticationRequired)
+            ));
+        }
+    }
     Ok(())
 }
 

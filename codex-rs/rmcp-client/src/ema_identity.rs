@@ -1,4 +1,4 @@
-//! Shared enterprise IdP discovery and stored refresh-token resolution.
+//! Shared enterprise IdP discovery and stored exchange-subject resolution.
 //! Login and token exchange require published metadata bound to the configured issuer.
 
 use std::sync::Arc;
@@ -11,7 +11,6 @@ use codex_config::McpEmaTokenEndpointAuthMethod;
 use codex_exec_server::HttpClient;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
-use oauth2::TokenResponse;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthHttpClient;
@@ -24,11 +23,12 @@ use crate::ema_auth_policy::ema_reauthentication_required;
 use crate::ema_auth_policy::resolve_ema_client_auth;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
 use crate::ema_claims::ID_JAG_TOKEN_TYPE;
+use crate::ema_exchange::EmaSubjectToken;
 use crate::ema_exchange::TOKEN_EXCHANGE_GRANT_TYPE;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::RefreshCredentialLock;
 use crate::oauth::StoredOAuthTokens;
-use crate::oauth::stored_oidc_identity;
+use crate::oauth::stored_ema_subject;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::utils::build_default_headers;
 use rmcp::transport::auth::enterprise::EmaClientAuthentication;
@@ -43,10 +43,10 @@ pub struct EmaIdpIdentityRequest<'a> {
     pub redirect_mode: StreamableHttpRedirectMode,
 }
 
-/// An opaque IdP refresh token paired with the credentials admitted for its exchange.
+/// An opaque IdP exchange subject paired with the credentials admitted for its exchange.
 pub struct EmaIdpIdentity<L = EmaCredentialLease> {
     pub(crate) token_endpoint: String,
-    pub(crate) refresh_token: String,
+    pub(crate) subject_token: EmaSubjectToken,
     pub(crate) credentials: L,
     pub(crate) client_authentication: EmaClientAuthentication,
 }
@@ -57,7 +57,7 @@ impl<L> EmaIdpIdentity<L> {
     pub fn map_credentials<U>(self, map: impl FnOnce(L) -> U) -> EmaIdpIdentity<U> {
         EmaIdpIdentity {
             token_endpoint: self.token_endpoint,
-            refresh_token: self.refresh_token,
+            subject_token: self.subject_token,
             credentials: map(self.credentials),
             client_authentication: self.client_authentication,
         }
@@ -103,7 +103,7 @@ pub async fn resolve_ema_account_idp_identity<L: Send>(
     ))?;
     Ok(EmaIdpIdentity {
         token_endpoint,
-        refresh_token,
+        subject_token: EmaSubjectToken::RefreshToken(oauth2::RefreshToken::new(refresh_token)),
         credentials,
         client_authentication,
     })
@@ -119,7 +119,7 @@ pub fn account_oidc_issuer_hint(id_token: &str, issuer: &str) -> bool {
     crate::ema_claims::oidc_issuer_hint(id_token, issuer)
 }
 
-/// Returns whether stored credentials contain a refresh token bound to the configured login.
+/// Returns whether stored credentials contain an exchange subject bound to the configured login.
 pub fn stored_ema_identity_is_usable(
     tokens: &StoredOAuthTokens,
     issuer: &str,
@@ -128,8 +128,7 @@ pub fn stored_ema_identity_is_usable(
     tokens.url == issuer
         && tokens.bound_issuer() == Some(issuer)
         && tokens.client_id == client_id
-        && tokens.has_refresh_token()
-        && stored_oidc_identity(tokens).is_ok()
+        && stored_ema_subject(tokens).is_ok()
 }
 
 pub(crate) async fn resolve_ema_idp_authorization_manager(
@@ -177,7 +176,7 @@ pub(crate) async fn resolve_ema_idp_authorization_manager(
     Ok((manager, metadata, authentication))
 }
 
-/// Resolve a stored refresh-token subject against the configured enterprise IdP metadata.
+/// Resolve a stored exchange subject against the configured enterprise IdP metadata.
 pub async fn resolve_ema_idp_identity(
     request: EmaIdpIdentityRequest<'_>,
 ) -> Result<EmaIdpIdentity> {
@@ -198,7 +197,7 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
     {
         bail!("stored enterprise IdP credentials do not match the configured issuer and client");
     }
-    stored_oidc_identity(credentials)?;
+    stored_ema_subject(credentials)?;
     let (token_endpoint, client_authentication) = resolve_ema_idp_token_endpoint(
         request.issuer,
         request.client_secret,
@@ -225,19 +224,9 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         let latest = credentials
             .credentials
             .load_ema_credentials(&keyring_store)?;
-        let refresh_token = latest
-            .token_response
-            .0
-            .refresh_token()
-            .filter(|token| !token.secret().trim().is_empty())
-            .ok_or_else(|| {
-                ema_reauthentication_required(
-                    "enterprise IdP session has no refresh token; sign in again",
-                )
-            })?;
         Ok(EmaIdpIdentity {
             token_endpoint,
-            refresh_token: refresh_token.secret().to_string(),
+            subject_token: stored_ema_subject(&latest)?,
             credentials,
             client_authentication,
         })

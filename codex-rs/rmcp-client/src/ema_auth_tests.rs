@@ -459,7 +459,9 @@ async fn rejected_grants_preserve_their_source_and_release_the_credential_lease(
             Ok(EmaIdpIdentity {
                 client_authentication: EmaClientAuthentication::None,
                 token_endpoint: format!("{idp}/token"),
-                refresh_token: "old-grant".to_string(),
+                subject_token: crate::ema_exchange::EmaSubjectToken::RefreshToken(
+                    oauth2::RefreshToken::new("old-grant".to_string()),
+                ),
                 credentials: crate::EmaCredentialLease { credentials },
             })
         });

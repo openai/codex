@@ -256,6 +256,91 @@ fn enterprise_callback_requires_loopback() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn enterprise_login_keeps_offline_access_with_incomplete_metadata() -> Result<()> {
+    if isolated_process(
+        "enterprise_oauth_login::tests::enterprise_login_keeps_offline_access_with_incomplete_metadata",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    let keyring = TestKeyring::default();
+    keyring::set_default_credential_builder(Box::new(keyring));
+    // RFC 8414 permits metadata to omit supported scopes. Both issuers
+    // accept offline_access, but only one issues a refresh token.
+    for refresh_token in [None, Some(SECRET)] {
+        let server = MockServer::start().await;
+        let issuer = format!("{}/idp", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server/idp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{issuer}/authorize"),
+                "token_endpoint": format!("{issuer}/token"),
+                "token_endpoint_auth_methods_supported": ["none"],
+                "scopes_supported": ["openid"],
+            })))
+            .mount(&server)
+            .await;
+        let assertion = format!(
+            "{}.{}.signature",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256"}"#),
+            URL_SAFE_NO_PAD.encode(
+                json!({"iss":issuer,"sub":"user","aud":"enterprise-client","exp":4102444800_u64})
+                    .to_string()
+            )
+        );
+        let mut token_response = json!({
+            "access_token":SECRET,"id_token":assertion,"token_type":"Bearer",
+        });
+        if let Some(refresh_token) = refresh_token {
+            token_response["refresh_token"] = json!(refresh_token);
+        }
+        Mock::given(method("POST"))
+            .and(path("/idp/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token_response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let login = login(
+            &issuer, /*callback_url*/ None, /*auth_method*/ None,
+        )
+        .await?;
+        let authorization_url = login.authorization_url();
+        let url = Url::parse(&authorization_url)?;
+        let scopes = url
+            .query_pairs()
+            .find(|(key, _)| key == "scope")
+            .expect("authorization scope")
+            .1;
+        assert_eq!(
+            scopes.split_ascii_whitespace().collect::<Vec<_>>(),
+            vec!["openid", "offline_access"]
+        );
+        callback(&authorization_url, &issuer, /*provider_error*/ false).await?;
+        login.wait().await?.commit_if(|| async { Some(()) }).await?;
+
+        let stored = crate::stored_oauth_credentials(
+            CREDENTIAL_NAME,
+            &issuer,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("stored grant");
+        use crate::ema_exchange::EmaSubjectToken;
+        match (refresh_token, crate::oauth::stored_ema_subject(&stored)?) {
+            (None, EmaSubjectToken::IdToken(token)) => assert_eq!(token, assertion),
+            (Some(expected), EmaSubjectToken::RefreshToken(token)) => {
+                assert_eq!(token.secret(), expected);
+            }
+            _ => panic!("selected the wrong enterprise exchange subject"),
+        }
+    }
+    Ok(())
+}
+
 #[traced_test]
 #[tokio::test]
 async fn enterprise_public_api_storage_and_privacy() -> Result<()> {

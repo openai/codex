@@ -86,7 +86,7 @@ use codex_utils_home_dir::find_codex_home;
 pub(crate) use self::credential_store::OAuthCredentialStore;
 pub use self::ema_identity::EmaCredentialLease;
 pub use self::ema_identity::EmaCredentialSnapshot;
-pub(crate) use self::ema_identity::stored_oidc_identity;
+pub(crate) use self::ema_identity::stored_ema_subject;
 pub(crate) use self::enterprise_generation::EnterpriseOAuthGeneration;
 pub(crate) use self::enterprise_generation::EnterpriseOAuthGenerationFile;
 pub(crate) use self::enterprise_generation::EnterpriseOAuthGenerationKind;

@@ -206,7 +206,7 @@ pub enum McpServerAuth {
     /// still fall back to stored OAuth credentials.
     #[serde(rename = "chatgpt")]
     ChatGpt,
-    /// Exchange an enterprise IdP refresh token for resource-specific authorization.
+    /// Exchange an enterprise IdP refresh token or, if none was issued, a current ID token for resource-specific authorization.
     /// Alternate credentials and ordinary OAuth fallback are not permitted.
     #[serde(rename = "ema_auth")]
     EmaAuth,

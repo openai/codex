@@ -90,7 +90,9 @@ async fn exchange(server: &MockServer, refresh_token: &str) -> Result<EmaAccessT
             idp_token_endpoint: &format!("{issuer}/token"),
             idp_issuer: &issuer,
             idp_client_id: "idp-client",
-            refresh_token: refresh_token.to_string(),
+            subject_token: EmaSubjectToken::RefreshToken(RefreshToken::new(
+                refresh_token.to_string(),
+            )),
             idp_http_client: http_client(),
             resource_http_client: http_client(),
         },
@@ -107,17 +109,37 @@ async fn client_round_trip_preserves_signed_narrowing() -> Result<()> {
     let client = http_client();
     use codex_config::McpEmaTokenEndpointAuthMethod::ClientSecretBasic;
     use codex_config::McpEmaTokenEndpointAuthMethod::ClientSecretPost;
-    for (scopes, echo_scope, refresh_token, idp_method) in [
+    for (scopes, echo_scope, subject_token, subject_type, idp_method) in [
         (
             requested_scopes.as_slice(),
             true,
             "opaque-refresh-token",
+            "refresh_token",
             None,
         ),
-        (&[], true, "opaque-refresh-token", Some(ClientSecretBasic)),
-        (&[], false, "opaque-refresh-token", Some(ClientSecretPost)),
-        (requested_scopes.as_slice(), true, "", None),
-        (requested_scopes.as_slice(), true, " \t", None),
+        (
+            &[],
+            true,
+            "opaque-refresh-token",
+            "refresh_token",
+            Some(ClientSecretBasic),
+        ),
+        (
+            &[],
+            false,
+            "opaque-refresh-token",
+            "refresh_token",
+            Some(ClientSecretPost),
+        ),
+        (&[], true, "test-id-token", "id_token", None),
+        (requested_scopes.as_slice(), true, "", "refresh_token", None),
+        (
+            requested_scopes.as_slice(),
+            true,
+            " \t",
+            "refresh_token",
+            None,
+        ),
     ] {
         let server = MockServer::start().await;
         let issuer = format!("{}/idp", server.uri());
@@ -129,7 +151,7 @@ async fn client_round_trip_preserves_signed_narrowing() -> Result<()> {
                 .expect("ID-JAG response")
                 .remove("scope");
         }
-        let valid = !refresh_token.trim().is_empty();
+        let valid = !subject_token.trim().is_empty();
         for (endpoint, response) in [("/idp/token", jag.clone()), ("/as/token", token_response())] {
             Mock::given(method("POST"))
                 .and(path(endpoint))
@@ -138,7 +160,7 @@ async fn client_round_trip_preserves_signed_narrowing() -> Result<()> {
                 .mount(&server)
                 .await;
         }
-        let expected_subject = refresh_token.to_string();
+        let expected_subject = subject_token.to_string();
         let resource_method = idp_method.map(|method| match method {
             ClientSecretBasic => ClientSecretPost,
             ClientSecretPost => ClientSecretBasic,
@@ -169,7 +191,11 @@ async fn client_round_trip_preserves_signed_narrowing() -> Result<()> {
                 idp_token_endpoint: &format!("{issuer}/token"),
                 idp_issuer: &issuer,
                 idp_client_id: "idp-client",
-                refresh_token: refresh_token.to_string(),
+                subject_token: if subject_type == "id_token" {
+                    EmaSubjectToken::IdToken(subject_token.to_owned())
+                } else {
+                    EmaSubjectToken::RefreshToken(RefreshToken::new(subject_token.to_owned()))
+                },
                 idp_http_client: Arc::clone(&client),
                 resource_http_client: Arc::clone(&client),
             },
@@ -254,7 +280,7 @@ async fn client_round_trip_preserves_signed_narrowing() -> Result<()> {
                 ("subject_token".to_string(), expected_subject),
                 (
                     "subject_token_type".to_string(),
-                    "urn:ietf:params:oauth:token-type:refresh_token".to_string(),
+                    format!("urn:ietf:params:oauth:token-type:{subject_type}"),
                 ),
                 ("audience".to_string(), audience.clone()),
                 ("resource".to_string(), resource.clone()),
