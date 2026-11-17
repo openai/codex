@@ -21,18 +21,16 @@ const INVENTORY_HEAD_START: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROBES: usize = 4;
 
 #[derive(Debug)]
-#[cfg_attr(not(test), expect(dead_code, reason = "staged picker"))]
 pub(crate) enum DiscoveryUpdate {
     Server(
         McpServerName,
         Result<Vec<StatuslineProvider>, ProviderLookupError>,
     ),
+    #[cfg_attr(not(test), expect(dead_code, reason = "picker diagnostics are staged"))]
     InventoryFailed(ProviderLookupError),
 }
 
-/// Pass the saved and previously observed server names. Dropping the stream stops the TUI's
-/// outstanding waits. The host may finish requests it already received.
-#[cfg_attr(not(test), expect(dead_code, reason = "staged picker"))]
+/// Probe known servers by name if inventory stalls. Dropping the stream stops the TUI's waits.
 pub(crate) fn refresh_statusline_providers(
     client: AppServerRequestHandle,
     known: Vec<McpServerName>,

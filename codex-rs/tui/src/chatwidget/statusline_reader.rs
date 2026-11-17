@@ -85,6 +85,10 @@ impl ChatWidget {
         {
             return None;
         }
+        self.configured_statusline_provider()
+    }
+
+    pub(crate) fn configured_statusline_provider(&self) -> Option<&StatusLineProviderId> {
         match self.local_settings.tui.status_line_provider.as_deref()? {
             StatusLineSelection::Builtin(_) => None,
             StatusLineSelection::Mcp(id) => Some(id),

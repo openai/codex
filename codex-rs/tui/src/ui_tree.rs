@@ -5,6 +5,7 @@ mod render;
 mod theme;
 
 pub(crate) use render::PreparedUiTree;
+pub(crate) use render::sanitize_leaf;
 use theme::Color;
 use theme::TextWeight;
 

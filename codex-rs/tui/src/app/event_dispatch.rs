@@ -64,6 +64,10 @@ impl App {
                 AppEvent::OpenDaemonMenu
                     | AppEvent::OpenWarnings
                     | AppEvent::StatusLineSetup { .. }
+                    | AppEvent::OpenStatuslinePicker(_)
+                    | AppEvent::CloseStatuslinePicker(_)
+                    | AppEvent::ChooseStatuslineProvider { .. }
+                    | AppEvent::StatuslinePicker { .. }
                     | AppEvent::StatusLineSetupCancelled
                     | AppEvent::TerminalTitleSetup { .. }
                     | AppEvent::TerminalTitleSetupPreview { .. }
@@ -476,6 +480,23 @@ impl App {
                     }
                 }
             }
+            AppEvent::OpenStatuslinePicker(key) => {
+                if self.chat_widget.active_view_is(crate::bottom_pane::StatusLineSetupView::VIEW_ID) {
+                    self.open_statusline_picker(app_server);
+                    self.chat_widget.suppress_current_view_key_until_release(
+                        key,
+                        Instant::now(),
+                        crate::activation_key_guard::ActivationKeySuppression::ViewTransition,
+                    );
+                }
+            }
+            AppEvent::CloseStatuslinePicker(scan) => {
+                if self.statusline_picker.as_ref().is_some_and(|picker| picker.id == scan) {
+                    self.statusline_picker = None;
+                }
+            }
+            AppEvent::ChooseStatuslineProvider { scan, id, key } => self.choose_statusline_provider(scan, id, key, app_server).await,
+            AppEvent::StatuslinePicker { scan, updates } => self.finish_statusline_discovery(scan, updates, app_server),
             AppEvent::StatuslineRead(event) => {
                 self.chat_widget.handle_statusline_read(event, app_server);
             }

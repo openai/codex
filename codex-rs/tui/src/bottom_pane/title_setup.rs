@@ -362,6 +362,7 @@ impl TerminalTitleSetupView {
             enabled,
             orderable: true,
             section_break_after: false,
+            on_activate: None,
         }
     }
 }

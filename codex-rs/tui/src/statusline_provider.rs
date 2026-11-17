@@ -80,6 +80,15 @@ impl From<&codex_config::types::StatusLineProviderId> for ProviderId {
     }
 }
 
+impl From<&ProviderId> for codex_config::types::StatusLineProviderId {
+    fn from(id: &ProviderId) -> Self {
+        Self {
+            server: id.server.0.clone(),
+            tool: id.tool.0.clone(),
+        }
+    }
+}
+
 pub(crate) enum ProviderSelection<'a> {
     Saved(&'a ProviderId),
     /// A provider advertised during the current picker refresh.

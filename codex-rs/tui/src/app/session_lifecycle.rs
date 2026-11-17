@@ -573,6 +573,7 @@ impl App {
         mut chat_widget: ChatWidget,
         thread_provider: Option<&str>,
     ) {
+        self.statusline_picker = None;
         chat_widget.inherit_view_transition_key_guard(&mut self.chat_widget);
         chat_widget.fork_in_progress = self.chat_widget.fork_in_progress;
         self.pending_right_click_paste = None;

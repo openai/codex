@@ -7,14 +7,14 @@ expression: status_line_popup_snapshot(&mut chat)
 
   Type to search
 
-› [x] Use theme colors      Apply colors from the active /theme
+› Choose a statusline plugin
   ───────────────────────
-  [x] project-name          Project name (omitted when unavailable)
-  [x] git-branch            Current Git branch (omitted when unavailable)
-  [x] thread-title          Current thread title, or thread identifier when unnamed
-  [ ] model                 Current model name
-  [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
+  [x] Use theme colors        Apply colors from the active /theme
+  ───────────────────────
+  [x] project-name            Project name (omitted when unavailable)
+  [x] git-branch              Current Git branch (omitted when unavailable)
+  [x] thread-title            Current thread title, or thread identifier when unnamed
+  [ ] model                   Current model name
 ↓
   preview-live-root · feature/live-preview-branch · Live preview thread
-  space toggle · ←/→ reorder · enter save · esc cancel
+  enter select · esc back

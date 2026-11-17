@@ -274,7 +274,7 @@ fn layout_band<'a>(
     ends.len()
 }
 
-fn sanitize_leaf(mut raw: String) -> String {
+pub(crate) fn sanitize_leaf(mut raw: String) -> String {
     // Directly constructed trees can bypass the wire decoder's text limit.
     if raw.len() > MAX_TEXT_BYTES {
         raw.truncate(raw.floor_char_boundary(MAX_TEXT_BYTES));

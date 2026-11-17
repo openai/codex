@@ -20,7 +20,7 @@ pub(super) fn test_client() -> (AppServerRequestHandle, Requests) {
     (AppServerClient::Cloud(cloud).request_handle(), commands)
 }
 
-pub(super) async fn reply(commands: &mut Requests, method: &str, params: Value, result: Value) {
+pub(crate) async fn reply(commands: &mut Requests, method: &str, params: Value, result: Value) {
     let command = commands.recv().await.unwrap();
     let CloudOperation::Request(request) = command.operation else {
         panic!("expected {method}");

@@ -1,0 +1,14 @@
+---
+source: tui/src/app/statusline_picker_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 67)"
+---
+  Select a status line provider
+
+
+  1. Calendar (current)   work / calendar
+› 2. Default status line
+  3. Alerts               health / alerts
+  4. Quota                health / quota
+  5. Usage                usage / limits
+
+  enter select · esc back

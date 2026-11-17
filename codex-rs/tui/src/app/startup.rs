@@ -987,6 +987,7 @@ See the Codex keymap documentation for supported actions and examples."
         let agents_overview =
             agents_overview::AgentsOverviewState::new(local_settings.tui.agents_overview_grouping);
         let mut app = Self {
+            statusline_picker: None,
             provider_writes,
             feature_write_lock: Arc::default(),
             config_notification_test_generation: 0,

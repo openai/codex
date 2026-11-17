@@ -332,6 +332,9 @@ impl ChatWidget {
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
             self.local_settings.tui.status_line_use_colors,
+            self.config
+                .features
+                .enabled(codex_features::Feature::TuiExtensionsStatusLine),
             self.status_surface_preview_data(),
             self.app_event_tx.clone(),
             self.bottom_pane.list_keymap(),

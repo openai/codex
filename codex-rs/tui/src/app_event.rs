@@ -1903,6 +1903,17 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+    OpenStatuslinePicker(crate::key_hint::KeyBinding),
+    CloseStatuslinePicker(uuid::Uuid),
+    ChooseStatuslineProvider {
+        scan: uuid::Uuid,
+        id: Option<crate::statusline_provider::ProviderId>,
+        key: crate::key_hint::KeyBinding,
+    },
+    StatuslinePicker {
+        scan: uuid::Uuid,
+        updates: Vec<crate::statusline_provider::discovery::DiscoveryUpdate>,
+    },
 
     /// Apply a user-confirmed terminal-title item ordering/selection.
     TerminalTitleSetup {

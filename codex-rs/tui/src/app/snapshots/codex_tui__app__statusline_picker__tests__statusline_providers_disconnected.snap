@@ -1,0 +1,12 @@
+---
+source: tui/src/app/statusline_picker_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 67)"
+---
+  Select a status line provider
+  Plugin providers are unavailable while disconnected.
+
+
+     calendar (Unavailable) (current)  work / calendar
+› 1. Default status line
+
+  enter select · esc back
