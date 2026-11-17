@@ -795,15 +795,18 @@ toggle_pin = 'z p'
 #[tokio::test]
 async fn live_center_search_row_appears_only_while_editing() {
     let app = make_test_app().await;
-    let mut view = app.agents_overview_view(
-        vec![overview_thread(
-            ThreadId::from_u128(/*value*/ 42),
-            /*parent_thread_id*/ None,
-            "Task to find",
-            ThreadStatus::Idle,
-        )],
-        /*selected_thread_id*/ None,
+    let mut thread = overview_thread(
+        ThreadId::from_u128(/*value*/ 0xabcdef),
+        /*parent_thread_id*/ None,
+        "Task to find",
+        ThreadStatus::Idle,
     );
+    thread.git_info = Some(codex_app_server_protocol::GitInfo {
+        sha: None,
+        branch: Some("Fix/Resume".to_string()),
+        origin_url: None,
+    });
+    let mut view = app.agents_overview_view(vec![thread], /*selected_thread_id*/ None);
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 88, /*height*/ 16,
     );
@@ -827,6 +830,13 @@ async fn live_center_search_row_appears_only_while_editing() {
         );
         view.handle_key_event(KeyCode::Esc.into());
         assert_eq!(screen(&view, area.width, area.height), idle);
+    }
+
+    for query in ["FIX/RES", "ABCDEF", "find Task"] {
+        view.handle_key_event(KeyCode::Char('/').into());
+        view.handle_paste(query.into());
+        assert!(screen(&view, area.width, area.height).contains("Task to find"));
+        view.handle_key_event(KeyCode::Esc.into());
     }
 }
 

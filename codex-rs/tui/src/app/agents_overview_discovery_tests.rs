@@ -103,13 +103,14 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
             )
         })
         .collect();
+    let reopened_pin_id =
+        ThreadId::from_u128(/*value*/ 0xda7aba5e_0000_4000_8000_000000000001);
     let reopened_pin = overview_thread(
-        ThreadId::new(),
+        reopened_pin_id,
         /*parent_thread_id*/ None,
         "Pinned after reopen",
         ThreadStatus::NotLoaded,
     );
-    let reopened_pin_id = ThreadId::from_string(&reopened_pin.id).unwrap();
     let show_reopened_pin = Arc::new(AtomicBool::new(false));
     let expected_first_twenty: HashSet<_> = rows[1..21]
         .iter()
@@ -393,12 +394,15 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     // Another CLI inserts a matching session ahead of the exhausted browse cursor.
     show_reopened_pin.store(true, Ordering::SeqCst);
     view.handle_key_event(KeyCode::Char('/').into());
-    view.handle_paste("Pinned after reopen".into());
+    view.handle_paste("DA7ABA5E-0000-4000".into());
     finish_history_search(&mut app, &mut tui, &mut session, &mut rx).await?;
-    assert!(
+    assert_eq!(
         app.agents_overview
             .search_matches
-            .contains_key(&reopened_pin_id)
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        [reopened_pin_id],
     );
     view.handle_key_event(KeyCode::Esc.into());
     app.agents_overview.threads.clear();

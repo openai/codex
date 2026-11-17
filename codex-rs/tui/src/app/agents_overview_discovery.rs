@@ -274,6 +274,12 @@ pub(super) fn matches_query(thread: &Thread, query: &str) -> bool {
     format!("{name} {} {cwd}", thread.preview)
         .to_lowercase()
         .contains(query)
+        || thread.id.to_lowercase().contains(query)
+        || thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.branch.as_deref())
+            .is_some_and(|branch| branch.to_lowercase().contains(query))
 }
 
 impl App {
