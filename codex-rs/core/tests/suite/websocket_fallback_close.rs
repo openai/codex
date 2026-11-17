@@ -35,6 +35,7 @@ enum Rejection {
     GoingAway,
 }
 
+/// Transient closes can retry. A classifier rejection ends the turn and the next turn uses WebSocket.
 #[test_case::test_case(Rejection::AdvertisedLimit, 0, 1; "advertised_limit_skips_websocket_upload")]
 #[test_case::test_case(Rejection::Oversized, 1, 1; "size_rejection_before_any_text")]
 #[test_case::test_case(Rejection::OversizedWarmup, 0, 1; "size_rejection_during_prewarm")]

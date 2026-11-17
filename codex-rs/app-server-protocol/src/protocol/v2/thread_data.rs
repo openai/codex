@@ -451,6 +451,18 @@ pub struct TurnError {
     pub misalignment: Option<MisalignmentErrorDetails>,
 }
 
+impl From<codex_protocol::protocol::ErrorEvent> for TurnError {
+    fn from(error: codex_protocol::protocol::ErrorEvent) -> Self {
+        let additional_details = None;
+        Self {
+            message: error.message,
+            codex_error_info: error.codex_error_info.map(Into::into),
+            additional_details,
+            misalignment: error.misalignment.map(Into::into),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

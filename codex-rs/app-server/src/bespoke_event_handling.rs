@@ -1093,12 +1093,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 return;
             }
 
-            let turn_error = TurnError {
-                misalignment: ev.misalignment.map(Into::into),
-                message: ev.message,
-                codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
-                additional_details: None,
-            };
+            let turn_error = TurnError::from(ev);
             handle_error_notification(
                 conversation_id,
                 &event_turn_id,
@@ -1239,12 +1234,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     TurnCompletionMetadata {
                         status: TurnStatus::Interrupted,
                         root_turn_id: aborted.root_turn_id,
-                        error: aborted.error.map(|error| TurnError {
-                            message: error.message,
-                            codex_error_info: error.codex_error_info.map(Into::into),
-                            misalignment: error.misalignment.map(Into::into),
-                            additional_details: None,
-                        }),
+                        error: aborted.error.map(TurnError::from),
                         last_agent_message: None,
                         started_at: aborted.started_at,
                         completed_at: aborted.completed_at,
@@ -1635,12 +1625,7 @@ async fn handle_turn_interrupted(
         TurnCompletionMetadata {
             status: TurnStatus::Interrupted,
             root_turn_id: turn_aborted_event.root_turn_id,
-            error: turn_aborted_event.error.map(|error| TurnError {
-                message: error.message,
-                codex_error_info: error.codex_error_info.map(Into::into),
-                misalignment: error.misalignment.map(Into::into),
-                additional_details: None,
-            }),
+            error: turn_aborted_event.error.map(TurnError::from),
             last_agent_message: None,
             started_at: turn_summary.started_at,
             completed_at: turn_aborted_event.completed_at,
