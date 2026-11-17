@@ -1654,10 +1654,10 @@ impl App {
                         elicitation_target: None,
                     });
             }
-            AppEvent::AccountEmailLoaded { request_id, email, workspace } => {
+            AppEvent::AccountEmailLoaded { request_id, email, workspace, plan_type } => {
                 if self.account_email_request_id == Some(request_id) {
                     self.account_email_request_id = None;
-                    self.chat_widget.on_account_email_loaded(email, workspace);
+                    self.chat_widget.on_account_email_loaded(email, workspace, plan_type);
                 }
             }
             AppEvent::SecuritySetupLoaded { request_id, identity, notice } => {
@@ -2217,7 +2217,12 @@ impl App {
                         self.chat_widget.apply_usage_notice_read(request_id);
                         self.chat_widget.update_backend_banner(&response);
                         self.apply_backend_banner_fallback(app_server).await;
-                        app_server_rate_limit_snapshots(response)
+                        let snapshots = app_server_rate_limit_snapshots(response);
+                        // The account can outlive the popup or chat that requested this read.
+                        for snapshot in &snapshots {
+                            self.chat_widget.observe_quota_plan(snapshot);
+                        }
+                        snapshots
                     } else {
                         Vec::new()
                     };

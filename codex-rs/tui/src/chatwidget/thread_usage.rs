@@ -56,6 +56,25 @@ pub(super) struct ThreadUsageState {
 }
 
 impl ChatWidget {
+    pub(super) fn refresh_billing_plan(&mut self) {
+        // A full quota read reflects the current subscription; account/read can use a cached token.
+        let plan = self.quota_plan.or(self.account_plan);
+        if self.plan_type == plan {
+            return;
+        }
+        let previously_available = self.thread_usage_is_available();
+        self.plan_type = plan;
+        if !self.thread_usage_is_available() {
+            self.clear_thread_usage_state();
+        } else if !previously_available {
+            // A pending /status can learn that the account is billable from its own quota read.
+            for (_, handle) in self.refreshing_status_outputs.clone() {
+                handle.reserve_thread_usage_label_width();
+                self.request_thread_usage_for_status(handle);
+            }
+        }
+    }
+
     pub(super) fn clear_thread_usage_state(&mut self) {
         self.thread_usage = ThreadUsageState::default();
     }
@@ -299,7 +318,7 @@ impl ChatWidget {
         }
         if usage_updated && !self.thread_usage.status_history_handles.is_empty() {
             for handle in &self.thread_usage.status_history_handles {
-                handle.set_thread_usage(self.thread_usage.estimate.clone());
+                handle.set_thread_usage(self.thread_usage.estimate.clone(), self.plan_type);
             }
             if self
                 .thread_usage

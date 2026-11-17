@@ -173,6 +173,7 @@ async fn security_setup_fetch_with_default_features_uses_authenticated_codex_end
                 request_id: uuid::Uuid::new_v4(),
                 email: Some("stale@example.com".into()),
                 workspace: Some("stale-account".into()),
+                plan_type: codex_protocol::account::PlanType::Plus,
             },
         )
         .await?;

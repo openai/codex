@@ -119,8 +119,9 @@ impl StatusHistoryHandle {
     pub(crate) fn set_thread_usage(
         &self,
         estimate: Option<codex_app_server_protocol::ThreadUsage>,
+        plan: Option<PlanType>,
     ) {
-        self.card.thread_usage.set_estimate(estimate);
+        self.card.thread_usage.set_estimate(estimate, plan);
     }
 }
 
@@ -142,7 +143,6 @@ struct StatusHistoryCell {
     token_usage: StatusTokenUsageData,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
     thread_usage: StatusThreadUsage,
-    plan_type: Option<PlanType>,
 }
 
 #[cfg(test)]
@@ -422,7 +422,6 @@ impl StatusHistoryCell {
             agents_summary,
             rate_limit_state,
             thread_usage,
-            plan_type: _plan_type,
         }
     }
 
@@ -897,9 +896,7 @@ impl StatusHistoryCell {
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_width, &formatter));
-        let thread_usage_lines = self
-            .thread_usage
-            .lines(&formatter, value_width, self.plan_type);
+        let thread_usage_lines = self.thread_usage.lines(&formatter, value_width);
         if !thread_usage_lines.is_empty() {
             lines.push(Line::from(Vec::<Span<'static>>::new()));
             lines.extend(thread_usage_lines);

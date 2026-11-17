@@ -599,6 +599,8 @@ pub(crate) struct ChatWidget {
     pending_rate_limit_reset_hint: Option<PlainHistoryCell>,
     available_rate_limit_reset_credits: Option<i64>,
     next_rate_limit_reset_request_id: u64,
+    pub(crate) account_plan: Option<PlanType>,
+    quota_plan: Option<PlanType>,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     codex_spend_control_reached: Option<bool>,

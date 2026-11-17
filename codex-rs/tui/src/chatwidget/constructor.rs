@@ -171,6 +171,8 @@ impl ChatWidget {
             pending_rate_limit_reset_hint: None,
             available_rate_limit_reset_credits: None,
             next_rate_limit_reset_request_id: 0,
+            account_plan: initial_plan_type,
+            quota_plan: None,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             codex_spend_control_reached: None,

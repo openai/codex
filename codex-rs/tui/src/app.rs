@@ -859,7 +859,7 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
-            initial_plan_type: self.chat_widget.current_plan_type(),
+            initial_plan_type: self.chat_widget.account_plan,
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),

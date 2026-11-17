@@ -12,7 +12,6 @@ use ratatui::prelude::Line;
 use ratatui::style::Stylize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -43,10 +42,16 @@ pub(crate) fn thread_cost_micros(usage: &ThreadUsage, plan_type: Option<PlanType
 }
 
 /// Shared state updates a committed `/status` card when its asynchronous estimate arrives.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct StatusThreadUsage {
-    estimate: Arc<RwLock<Option<ThreadUsage>>>,
-    reserve_label_width: Arc<AtomicBool>,
+    billing: RwLock<CardBilling>,
+    reserve_label_width: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct CardBilling {
+    estimate: Option<ThreadUsage>,
+    plan: Option<PlanType>,
 }
 
 impl StatusThreadUsage {
@@ -55,13 +60,13 @@ impl StatusThreadUsage {
             .store(/*val*/ true, Ordering::Relaxed);
     }
 
-    pub(crate) fn set_estimate(&self, estimate: Option<ThreadUsage>) {
+    pub(crate) fn set_estimate(&self, estimate: Option<ThreadUsage>, plan: Option<PlanType>) {
         #[expect(clippy::expect_used)]
-        let mut stored_estimate = self
-            .estimate
+        let mut billing = self
+            .billing
             .write()
             .expect("status history thread-usage state poisoned");
-        *stored_estimate = estimate;
+        *billing = CardBilling { estimate, plan };
     }
 
     pub(crate) fn push_labels(&self, labels: &mut Vec<String>, seen: &mut BTreeSet<String>) {
@@ -71,11 +76,11 @@ impl StatusThreadUsage {
             push_label(labels, seen, BILLED_TOKENS_LABEL);
         }
         #[expect(clippy::expect_used)]
-        let stored_estimate = self
-            .estimate
+        let billing = self
+            .billing
             .read()
             .expect("status history thread-usage state poisoned");
-        let Some(estimate) = stored_estimate.as_ref() else {
+        let Some(estimate) = billing.estimate.as_ref() else {
             return;
         };
         push_label(labels, seen, "Thread usage");
@@ -97,20 +102,19 @@ impl StatusThreadUsage {
         &self,
         formatter: &FieldFormatter,
         value_width: usize,
-        plan_type: Option<PlanType>,
     ) -> Vec<Line<'static>> {
         #[expect(clippy::expect_used)]
-        let stored_estimate = self
-            .estimate
+        let billing = self
+            .billing
             .read()
             .expect("status history thread-usage state poisoned");
-        let Some(estimate) = stored_estimate.as_ref() else {
+        let Some(estimate) = billing.estimate.as_ref() else {
             return Vec::new();
         };
 
-        if plan_type == Some(PlanType::Ent26) {
+        if billing.plan == Some(PlanType::Ent26) {
             // Credit-weighted breakdowns do not describe native dollar usage.
-            return thread_cost_micros(estimate, plan_type)
+            return thread_cost_micros(estimate, billing.plan)
                 .and_then(format_estimated_usd_micros)
                 .map(|cost| vec![formatter.line("Thread usage", vec![cost.into()])])
                 .unwrap_or_default();

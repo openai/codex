@@ -358,6 +358,7 @@ pub(crate) enum AppEvent {
         request_id: uuid::Uuid,
         email: Option<String>,
         workspace: Option<String>,
+        plan_type: codex_protocol::account::PlanType,
     },
     SecuritySetupLoaded {
         request_id: uuid::Uuid,

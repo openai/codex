@@ -87,6 +87,7 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
             /*spend_control_reached*/ None,
         );
         snapshot.credits = None;
+        snapshot.plan_type = Some(codex_protocol::account::PlanType::Business);
         app.chat_widget
             .on_rate_limit_snapshot(Some(snapshot.clone()));
         if provider == "alt" {

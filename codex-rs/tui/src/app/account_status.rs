@@ -34,12 +34,13 @@ impl App {
                     if let Some(Account::Chatgpt {
                         email,
                         workspace_name,
-                        ..
+                        plan_type,
                     }) = response.account
                     {
                         app_event_tx.send(AppEvent::AccountEmailLoaded {
                             request_id,
                             email,
+                            plan_type,
                             workspace: crate::app_server_session::workspace_display(
                                 workspace_name,
                                 response.workspace_routing,

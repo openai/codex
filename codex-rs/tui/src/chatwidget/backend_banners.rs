@@ -302,6 +302,8 @@ impl ChatWidget {
         self.inherited_quota_provider = Some(previous.quota_provider_id().to_owned());
         self.rate_limit_snapshots_by_limit_id =
             std::mem::take(&mut previous.rate_limit_snapshots_by_limit_id);
+        self.quota_plan = previous.quota_plan.take();
+        self.refresh_billing_plan();
         self.usage_notice_state = std::mem::take(&mut previous.usage_notice_state);
         self.codex_rate_limit_reached_type = previous.codex_rate_limit_reached_type;
         self.codex_spend_control_reached = previous.codex_spend_control_reached;

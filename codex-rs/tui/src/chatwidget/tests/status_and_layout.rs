@@ -1333,6 +1333,10 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
+
+    let unknown = serde_json::from_value(serde_json::json!({"planType": "unknown"})).unwrap();
+    chat.on_rate_limit_snapshot(Some(unknown));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
 
 #[tokio::test]
