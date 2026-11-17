@@ -9,6 +9,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
@@ -61,9 +62,6 @@ async fn yielded_code_mode_spawn_preserves_metadata_and_plaintext() -> Result<()
     let start_barrier = r#"await tools.test_sync_tool({barrier: {
         id: "spawn-origin", participants: 2, timeout_ms: 60000
     }});"#;
-    let done_barrier = r#"await tools.test_sync_tool({barrier: {
-        id: "spawn-finished", participants: 2, timeout_ms: 60000
-    }});"#;
 
     mount_sse_once_match(
         &server,
@@ -75,8 +73,7 @@ async fn yielded_code_mode_spawn_preserves_metadata_and_plaintext() -> Result<()
                 "exec",
                 &format!(r#"yield_control();
 {start_barrier}
-text(await tools.collaboration__spawn_agent({{task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}}));
-{done_barrier}"#),
+text(await tools.collaboration__spawn_agent({{task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}}));"#),
             ),
             ev_completed("spawn"),
         ]),
@@ -111,12 +108,19 @@ text(await tools.collaboration__spawn_agent({{task_name: "worker", message: "Sum
         &server,
         header("thread-id", root_header.as_str()),
         sse(vec![
-            ev_custom_tool_call(
-                "release-worker",
-                "exec",
-                &format!("{start_barrier}\n{done_barrier}"),
-            ),
+            ev_custom_tool_call("release-worker", "exec", start_barrier),
             ev_completed("release-worker"),
+        ]),
+    )
+    .await;
+    // Wait outside nested tool dispatch: another test_sync_tool barrier could
+    // hold shared admission while the spawn needs exclusive admission.
+    mount_sse_once_match(
+        &server,
+        header("thread-id", root_header.as_str()),
+        sse(vec![
+            ev_function_call("wait-worker", "wait", r#"{"cell_id":"1"}"#),
+            ev_completed("wait-worker"),
         ]),
     )
     .await;
