@@ -13,13 +13,13 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
         (
             "mantle",
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            "openai.gpt-6.1-sol",
+            "openai.gpt-6.2-sol",
             "openai.gpt-6-astra",
         ),
         (
             "runtime",
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
-            "global.openai.gpt-6.1-sol",
+            "global.openai.gpt-6.2-sol",
             "global.openai.gpt-6-astra",
         ),
     ] {
@@ -156,6 +156,24 @@ async fn bedrock_ultrafast_slash_command_selects_and_clears_tier() {
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
             "us.openai.gpt-6.1-sol",
             "us.openai.gpt-6.1-terra",
+        ),
+        (
+            "mantle_astra62",
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            "openai.gpt-6.2-astra",
+            "openai.gpt-6.2-sol",
+        ),
+        (
+            "runtime_global_astra62",
+            ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
+            "global.openai.gpt-6.2-astra",
+            "global.openai.gpt-6.2-sol",
+        ),
+        (
+            "runtime_us_astra62",
+            ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
+            "us.openai.gpt-6.2-astra",
+            "us.openai.gpt-6.2-sol",
         ),
     ] {
         let presets = create_model_provider(provider_info.clone(), /*auth_manager*/ None)
