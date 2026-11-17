@@ -164,6 +164,7 @@ workspace_root_test = rule(
         "env": attr.string_dict(),
         "env_inherit": attr.string_list(),
         "runfile_env": attr.label_keyed_string_dict(
+            allow_files = True,
             cfg = "target",
         ),
         "test_bin": attr.label(

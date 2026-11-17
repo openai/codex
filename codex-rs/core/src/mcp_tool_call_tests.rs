@@ -293,15 +293,8 @@ print({hook_output:?})
     );
 
     std::fs::write(&script_path, script).expect("write MCP permission hook script");
-    let python = if cfg!(windows) { "python" } else { "python3" };
-    let script_path_arg = if cfg!(windows) {
-        script_path.display().to_string()
-    } else {
-        format!(
-            "'{}'",
-            script_path.display().to_string().replace('\'', "'\\''")
-        )
-    };
+    let python = std::env::var("CARGO_BIN_EXE_python3")
+        .unwrap_or_else(|_| if cfg!(windows) { "python" } else { "python3" }.to_owned());
     std::fs::write(
         turn_context.config.codex_home.join("hooks.json"),
         serde_json::json!({
@@ -310,7 +303,7 @@ print({hook_output:?})
                     "matcher": matcher,
                     "hooks": [{
                         "type": "command",
-                        "command": format!("{python} {script_path_arg}"),
+                        "command": script_path.to_str().expect("UTF-8 hook script path"),
                         "timeout_sec": 5,
                     }]
                 }]
@@ -334,12 +327,7 @@ print({hook_output:?})
     let hooks = session.hooks().reconfigured(HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(trusted_config_layer_stack),
-        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
-        shell_args: if cfg!(windows) {
-            Vec::new()
-        } else {
-            vec!["-c".to_string()]
-        },
+        shell_program: Some(python),
         ..HooksConfig::default()
     });
     session.services.hooks.store(Arc::new(hooks));
@@ -3154,22 +3142,26 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         openai_file_input_optional_fields: None,
     };
 
-    let decision = maybe_request_mcp_tool_approval(
-        &session,
-        &StepContext::for_test(Arc::clone(&turn_context)),
-        &CancellationToken::new(),
-        "call-mcp-hook",
-        &invocation,
-        &ToolName::namespaced(&invocation.server, &invocation.tool),
-        &HookToolName::new("mcp__memory__create_entities"),
-        &metadata,
-        &approval_config(&turn_context),
-        thread_permission_source(&turn_context),
-        test_environment_id(&turn_context),
-        &McpServerKey::unscoped(&invocation.server),
-        McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+    let decision = tokio::time::timeout(
+        Duration::from_secs(15),
+        maybe_request_mcp_tool_approval(
+            &session,
+            &StepContext::for_test(Arc::clone(&turn_context)),
+            &CancellationToken::new(),
+            "call-mcp-hook",
+            &invocation,
+            &ToolName::namespaced(&invocation.server, &invocation.tool),
+            &HookToolName::new("mcp__memory__create_entities"),
+            &metadata,
+            &approval_config(&turn_context),
+            thread_permission_source(&turn_context),
+            test_environment_id(&turn_context),
+            &McpServerKey::unscoped(&invocation.server),
+            McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        ),
     )
-    .await;
+    .await
+    .expect("permission hook should resolve approval without waiting for a reviewer");
 
     assert_eq!(
         decision,
@@ -3235,22 +3227,26 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         /*tool_description*/ None,
     );
 
-    let decision = maybe_request_mcp_tool_approval(
-        &session,
-        &StepContext::for_test(Arc::clone(&turn_context)),
-        &CancellationToken::new(),
-        "call-mcp-hook-no-metadata",
-        &invocation,
-        &ToolName::namespaced(&invocation.server, &invocation.tool),
-        &HookToolName::new("mcp__memory__create_entities"),
-        &metadata,
-        &approval_config(&turn_context),
-        thread_permission_source(&turn_context),
-        test_environment_id(&turn_context),
-        &McpServerKey::unscoped(&invocation.server),
-        McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+    let decision = tokio::time::timeout(
+        Duration::from_secs(15),
+        maybe_request_mcp_tool_approval(
+            &session,
+            &StepContext::for_test(Arc::clone(&turn_context)),
+            &CancellationToken::new(),
+            "call-mcp-hook-no-metadata",
+            &invocation,
+            &ToolName::namespaced(&invocation.server, &invocation.tool),
+            &HookToolName::new("mcp__memory__create_entities"),
+            &metadata,
+            &approval_config(&turn_context),
+            thread_permission_source(&turn_context),
+            test_environment_id(&turn_context),
+            &McpServerKey::unscoped(&invocation.server),
+            McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        ),
     )
-    .await;
+    .await
+    .expect("permission hook should resolve approval without waiting for a reviewer");
 
     assert_eq!(
         decision,

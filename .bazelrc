@@ -13,6 +13,9 @@ startup --experimental_remote_repo_contents_cache
 # rules_python 2.x requires symlink support for Windows Python launchers.
 startup --windows_enable_symlinks
 
+# Start Python launchers with their declared interpreter on lean workers.
+common --@rules_python//python/config_settings:bootstrap_impl=script
+
 common --experimental_platform_in_output_dir
 
 # Match Cargo's MSVC static CRT policy and V8's allocator linkage. Only the
