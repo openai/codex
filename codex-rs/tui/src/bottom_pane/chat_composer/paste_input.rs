@@ -30,7 +30,7 @@ impl ChatComposer {
         if !text.is_empty() && self.sparkle.draft.get() == sparkle::SparkleDraft::Untouched {
             self.dismiss_sparkle();
         }
-        let started_vim_edit = self.begin_direct_vim_edit();
+        let started_edit = self.begin_direct_edit();
         let elements_before = target
             .replaces_text()
             .then(|| self.draft.textarea.element_payloads());
@@ -45,8 +45,8 @@ impl ChatComposer {
             self.sync_bash_mode_from_text();
         }
         self.sync_popups();
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
     }
 
@@ -172,13 +172,13 @@ impl ChatComposer {
             }
             FlushResult::Typed(ch) => {
                 let completion_space = self.draft.skill_completion_space_for_char(ch);
-                let started_vim_edit = completion_space.is_some() && self.begin_direct_vim_edit();
+                let started_edit = completion_space.is_some() && self.begin_direct_edit();
                 if let Some(space) = completion_space {
                     self.draft.textarea.replace_range(space..space + 1, "");
                 }
                 self.insert_str(ch.to_string().as_str());
-                if started_vim_edit {
-                    self.finish_vim_edit();
+                if started_edit {
+                    self.finish_edit();
                 }
                 true
             }
@@ -228,7 +228,7 @@ impl ChatComposer {
             return true;
         }
         self.draft.textarea_state.get_mut().follow_cursor();
-        let started_vim_edit = self.begin_direct_vim_edit();
+        let started_edit = self.begin_direct_edit();
         let elements_before = self.draft.textarea.element_payloads();
         let target = self.draft.textarea.edit_target();
         let before_cursor = &self.draft.textarea.text()[..target.start()];
@@ -271,8 +271,8 @@ impl ChatComposer {
         self.draft.paste_burst.clear_after_explicit_paste();
         self.reconcile_deleted_elements(elements_before);
         self.sync_popups();
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
         true
     }

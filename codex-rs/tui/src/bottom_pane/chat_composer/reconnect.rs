@@ -71,7 +71,7 @@ impl ChatComposer {
                 self.popups.active = ActivePopup::None;
                 if self.draft.textarea.wants_vim_search_key(key) {
                     self.edit_restricted_draft(key);
-                } else if self.handle_vim_history_key(key) {
+                } else if self.handle_edit_history_key(key) {
                     self.draft.textarea_state.get_mut().follow_cursor();
                 } else {
                     // Enter cannot submit here. Preserve a possible legacy paste

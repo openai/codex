@@ -25,12 +25,12 @@ impl ChatComposer {
         if self.draft.textarea.is_vim_operator_pending() {
             self.draft.textarea.enter_vim_normal_mode();
         }
-        self.finish_vim_edit();
+        self.finish_edit();
         let mut vim_state = VimPersistentState::default();
         self.draft
             .textarea
             .swap_vim_persistent_state(&mut vim_state);
-        let started_vim_edit = self.begin_direct_vim_edit();
+        let started_edit = self.begin_direct_edit();
         // Recovered answers turn the draft into a prompt, so escape any command prefix
         // before appending them. Shell mode stores its `!` outside the textarea.
         let text = self.draft.textarea.text();
@@ -60,8 +60,8 @@ impl ChatComposer {
         self.draft
             .textarea
             .swap_vim_persistent_state(&mut vim_state);
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
     }
 
@@ -79,7 +79,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn reset_vim_mode(&mut self) {
-        self.vim_history = VimHistory::default();
+        self.edit_history = EditHistory::default();
         self.draft.textarea.enter_vim_insert_mode();
     }
 

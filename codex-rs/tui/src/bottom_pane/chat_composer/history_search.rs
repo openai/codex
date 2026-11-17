@@ -45,7 +45,7 @@ use super::ActivePopup;
 use super::ChatComposer;
 use super::ComposerDraft;
 use super::InputResult;
-use super::vim_history::VimHistory;
+use super::edit_history::EditHistory;
 use crate::app_event::AppEvent;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -65,7 +65,7 @@ pub(super) struct HistorySearchSession {
     /// Freeze the fallback only when background edits diverge from the saved draft.
     preview_draft: Option<ComposerDraft>,
     /// Same-draft Vim edits to restore when a temporary preview is canceled.
-    original_vim_history: VimHistory,
+    original_edit_history: EditHistory,
     /// Active and completed Vim commands suspended during temporary draft replacement.
     original_vim_state: VimPersistentState,
     /// Footer-owned query text typed or pasted while Ctrl+R search is active.
@@ -139,7 +139,7 @@ impl ChatComposer {
         self.popups.active = ActivePopup::None;
         self.attachments.clear_remote_image_selection();
         let original_draft = self.snapshot_draft();
-        let original_vim_history = std::mem::take(&mut self.vim_history);
+        let original_edit_history = std::mem::take(&mut self.edit_history);
         let mut original_vim_state = VimPersistentState::default();
         self.draft
             .textarea
@@ -147,7 +147,7 @@ impl ChatComposer {
         self.history_search = Some(HistorySearchSession {
             preview_draft: None,
             original_draft,
-            original_vim_history,
+            original_edit_history,
             original_vim_state,
             query: String::new(),
             status: HistorySearchStatus::Idle,
@@ -326,7 +326,7 @@ impl ChatComposer {
         self.history.reset_navigation();
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
         self.with_sparkle_history_preview(|composer| composer.restore_draft(search.original_draft));
-        self.vim_history = search.original_vim_history;
+        self.edit_history = search.original_edit_history;
         self.draft
             .textarea
             .swap_vim_persistent_state(&mut search.original_vim_state);

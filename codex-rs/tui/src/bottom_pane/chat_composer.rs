@@ -415,10 +415,10 @@ mod paste_input;
 mod popup_state;
 mod reconnect;
 pub(crate) use reconnect::RestrictedInputMode;
+mod edit_history;
 mod slash_input;
 mod sparkle;
 mod status_surface;
-mod vim_history;
 mod vim_register;
 mod vim_search;
 mod warning_notice;
@@ -426,6 +426,7 @@ mod warning_notice;
 use self::attachment_state::AttachmentState;
 use self::draft_state::ComposerMentionBinding;
 use self::draft_state::DraftState;
+use self::edit_history::EditHistory;
 pub(crate) use self::footer_state::CommandPopupPlacement;
 use self::footer_state::ComposerLayout;
 pub(crate) use self::footer_state::ComposerRenderOptions;
@@ -438,7 +439,6 @@ use self::popup_state::PopupState;
 use self::slash_input::SlashInput;
 use self::slash_input::SlashValidation;
 use self::slash_input::SubmissionValidation;
-use self::vim_history::VimHistory;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
@@ -677,7 +677,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     history_search: Option<HistorySearchSession>,
-    vim_history: VimHistory,
+    edit_history: EditHistory,
     vim_register: vim_register::VimRegister,
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
@@ -862,7 +862,7 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             history_search: None,
-            vim_history: VimHistory::default(),
+            edit_history: EditHistory::default(),
             vim_register: vim_register::VimRegister::default(),
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
             queue_keys: vec![key_hint::plain(KeyCode::Tab)],
@@ -1318,7 +1318,7 @@ impl ChatComposer {
     /// remote images). Cursor is placed at the end after rebuilding elements.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.note_sparkle_replaced_text(&text);
-        self.vim_history = VimHistory::default();
+        self.edit_history = EditHistory::default();
         self.draft.pending_pastes.clear();
         let (text, _) = self.imported_text_for_textarea(text, Vec::new());
 
@@ -1408,7 +1408,7 @@ impl ChatComposer {
         }
         self.draft.textarea.enable_vim_search();
         self.draft.textarea.set_vim_enabled(enabled);
-        self.vim_history = VimHistory::default();
+        self.edit_history = EditHistory::default();
         self.draft.paste_burst.clear_after_explicit_paste();
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
     }
@@ -1625,7 +1625,7 @@ impl ChatComposer {
         }
         // Clear any existing content, placeholders, and attachments first.
         self.footer.flash = None;
-        self.vim_history = VimHistory::default();
+        self.edit_history = EditHistory::default();
         self.draft.textarea_state.get_mut().follow_cursor();
         self.draft.textarea.set_text_clearing_elements("");
         self.draft.is_bash_mode = false;
@@ -1923,13 +1923,13 @@ impl ChatComposer {
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         self.dismiss_sparkle();
-        let started_vim_edit = self.begin_direct_vim_edit();
+        let started_edit = self.begin_direct_edit();
         let elements_before = self.draft.textarea.element_payloads();
         self.attachments
             .attach_image(&mut self.draft.textarea, path);
         self.reconcile_deleted_elements(elements_before);
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
     }
 
@@ -2075,7 +2075,7 @@ impl ChatComposer {
             return self.handle_history_search_key(key_event);
         }
 
-        if self.handle_vim_history_key(key_event) {
+        if self.handle_edit_history_key(key_event) {
             return (InputResult::None, true);
         }
 
@@ -2593,7 +2593,7 @@ impl ChatComposer {
     }
 
     fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
-        let started_vim_edit = self.begin_direct_vim_edit();
+        let started_edit = self.begin_direct_edit();
         let token_range = self.separate_completion_from_adjacent_element(token_range);
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
@@ -2614,8 +2614,8 @@ impl ChatComposer {
         } else {
             self.insert_selected_path(token_range, selected_path);
         }
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
     }
 
@@ -3576,12 +3576,12 @@ impl ChatComposer {
         }
         let removes_remote_image = matches!(key_event.code, KeyCode::Delete | KeyCode::Backspace)
             && self.attachments.selected_remote_image_index.is_some();
-        let started_vim_edit = removes_remote_image && self.begin_direct_vim_edit();
+        let started_edit = removes_remote_image && self.begin_direct_edit();
         let result = self
             .attachments
             .handle_remote_image_selection_key(key_event, &mut self.draft.textarea);
-        if started_vim_edit {
-            self.finish_vim_edit();
+        if started_edit {
+            self.finish_edit();
         }
         result
     }
@@ -3873,13 +3873,13 @@ impl ChatComposer {
             && self.draft.textarea.is_delete_backward_key(input)
             && self.draft.textarea.cursor() == 0
         {
-            let started_vim_edit = self.begin_direct_vim_edit();
+            let started_edit = self.begin_direct_edit();
             if self.draft.textarea.is_vim_replace_mode() {
                 self.draft.textarea.input(input);
             }
             self.draft.is_bash_mode = false;
-            if started_vim_edit {
-                self.finish_vim_edit();
+            if started_edit {
+                self.finish_edit();
             }
             return (InputResult::None, true);
         }
@@ -3930,7 +3930,7 @@ impl ChatComposer {
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
         }
-        self.finish_vim_edit();
+        self.finish_edit();
 
         // Update the paste-burst heuristic for text, shortcut, and non-char events.
         match input.code {

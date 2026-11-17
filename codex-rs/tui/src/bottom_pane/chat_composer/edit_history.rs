@@ -1,4 +1,4 @@
-//! Bounded Vim undo/redo history for the complete composer-owned draft.
+//! Bounded composer undo/redo history for the complete composer-owned draft.
 //!
 //! A textarea does not own pending paste payloads, image attachments, or mention targets. Keeping
 //! edit transactions here lets one snapshot restore those values together with visible text. Keys
@@ -14,18 +14,23 @@ use super::ComposerDraft;
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyEvent;
 
-const MAX_VIM_UNDO_STEPS: usize = 64;
-const MAX_VIM_UNDO_BYTES: usize = 1024 * 1024;
+const MAX_UNDO_STEPS: usize = 64;
+const MAX_UNDO_BYTES: usize = 1024 * 1024;
+
+enum EditDirection {
+    Undo,
+    Redo,
+}
 
 #[derive(Debug, Default)]
-pub(super) struct VimHistory {
+pub(super) struct EditHistory {
     undo: VecDeque<ComposerDraft>,
     redo: VecDeque<ComposerDraft>,
     pending: Option<ComposerDraft>,
 }
 
 impl ComposerDraft {
-    fn vim_history_bytes(&self) -> usize {
+    fn history_bytes(&self) -> usize {
         let mut bytes = self.text.len()
             + self.text_elements.len()
                 * std::mem::size_of::<codex_protocol::user_input::TextElement>();
@@ -46,16 +51,31 @@ impl ComposerDraft {
     }
 }
 
-impl VimHistory {
+impl EditHistory {
+    fn step(
+        &mut self,
+        direction: EditDirection,
+        current: impl FnOnce() -> ComposerDraft,
+    ) -> Option<ComposerDraft> {
+        let (from, to) = match direction {
+            EditDirection::Undo => (&mut self.undo, &mut self.redo),
+            EditDirection::Redo => (&mut self.redo, &mut self.undo),
+        };
+        let snapshot = from.pop_back()?;
+        to.push_back(current());
+        self.trim();
+        Some(snapshot)
+    }
+
     fn trim(&mut self) {
-        while self.undo.len() > MAX_VIM_UNDO_STEPS
+        while self.undo.len() > MAX_UNDO_STEPS
             || self
                 .undo
                 .iter()
                 .chain(self.redo.iter())
-                .map(ComposerDraft::vim_history_bytes)
+                .map(ComposerDraft::history_bytes)
                 .sum::<usize>()
-                > MAX_VIM_UNDO_BYTES
+                > MAX_UNDO_BYTES
         {
             if self.undo.pop_front().is_none() {
                 self.redo.pop_front();
@@ -65,7 +85,7 @@ impl VimHistory {
 }
 
 impl ChatComposer {
-    pub(super) fn wants_vim_history_key(&self, event: KeyEvent) -> bool {
+    pub(super) fn wants_edit_history_key(&self, event: KeyEvent) -> bool {
         self.draft.textarea.is_vim_normal_mode()
             && !self.draft.textarea.is_vim_operator_pending()
             && !self.popups.active()
@@ -74,25 +94,19 @@ impl ChatComposer {
     }
 
     /// Consume undo and redo before normal-mode commands, even when their history is empty.
-    pub(super) fn handle_vim_history_key(&mut self, event: KeyEvent) -> bool {
-        if !self.wants_vim_history_key(event) {
+    pub(super) fn handle_edit_history_key(&mut self, event: KeyEvent) -> bool {
+        if !self.wants_edit_history_key(event) {
             return false;
         }
 
-        let redo = self.vim_normal_keymap.redo.is_pressed(event);
-        let snapshot = if redo {
-            self.vim_history.redo.pop_back()
+        let direction = if self.vim_normal_keymap.redo.is_pressed(event) {
+            EditDirection::Redo
         } else {
-            self.vim_history.undo.pop_back()
+            EditDirection::Undo
         };
+        let mut history = std::mem::take(&mut self.edit_history);
+        let snapshot = history.step(direction, || self.snapshot_draft());
         if let Some(snapshot) = snapshot {
-            let current = self.snapshot_draft();
-            if redo {
-                self.vim_history.undo.push_back(current);
-            } else {
-                self.vim_history.redo.push_back(current);
-            }
-            let history = std::mem::take(&mut self.vim_history);
             let mut vim_state = VimPersistentState::default();
             self.draft
                 .textarea
@@ -101,17 +115,16 @@ impl ChatComposer {
             self.draft
                 .textarea
                 .swap_vim_persistent_state(&mut vim_state);
-            self.vim_history = history;
             self.draft.textarea.enter_vim_normal_mode();
-            self.vim_history.trim();
         }
+        self.edit_history = history;
         true
     }
 
     /// Snapshot only keys that can begin or complete a Vim edit transaction.
     pub(super) fn begin_vim_edit(&mut self, event: KeyEvent) {
         if !self.draft.textarea.is_vim_enabled()
-            || self.vim_history.pending.is_some()
+            || self.edit_history.pending.is_some()
             || self.draft.textarea.is_vim_operator_pending()
         {
             return;
@@ -139,21 +152,21 @@ impl ChatComposer {
             return;
         }
 
-        self.begin_vim_edit_transaction();
+        self.begin_edit_transaction();
     }
 
     /// Start one standalone draft edit without splitting an active Vim command.
-    pub(super) fn begin_direct_vim_edit(&mut self) -> bool {
+    pub(super) fn begin_direct_edit(&mut self) -> bool {
         if !self.draft.textarea.is_vim_enabled()
             || self.draft.textarea.is_vim_operator_pending()
-            || self.vim_history.pending.is_some()
+            || self.edit_history.pending.is_some()
             || self.history_search.is_some()
         {
             return false;
         }
 
-        self.begin_vim_edit_transaction();
-        if self.vim_history.pending.is_none() {
+        self.begin_edit_transaction();
+        if self.edit_history.pending.is_none() {
             return false;
         }
         let mut vim_state = VimPersistentState::default();
@@ -167,7 +180,7 @@ impl ChatComposer {
         true
     }
 
-    fn begin_vim_edit_transaction(&mut self) {
+    fn begin_edit_transaction(&mut self) {
         let visible_bytes = self.draft.textarea.text().len();
         let paste_bytes = self
             .draft
@@ -175,29 +188,29 @@ impl ChatComposer {
             .iter()
             .map(|(placeholder, pasted)| placeholder.len() + pasted.len())
             .sum::<usize>();
-        if visible_bytes.saturating_add(paste_bytes) > MAX_VIM_UNDO_BYTES {
-            self.vim_history = VimHistory::default();
+        if visible_bytes.saturating_add(paste_bytes) > MAX_UNDO_BYTES {
+            self.edit_history = EditHistory::default();
             return;
         }
 
         let snapshot = self.snapshot_draft();
-        if snapshot.vim_history_bytes() <= MAX_VIM_UNDO_BYTES {
-            self.vim_history.pending = Some(snapshot);
-            self.vim_history.trim();
+        if snapshot.history_bytes() <= MAX_UNDO_BYTES {
+            self.edit_history.pending = Some(snapshot);
+            self.edit_history.trim();
         } else {
-            self.vim_history = VimHistory::default();
+            self.edit_history = EditHistory::default();
         }
     }
 
     /// Commit a complete normal-mode command or one insert-mode session.
-    pub(super) fn finish_vim_edit(&mut self) {
+    pub(super) fn finish_edit(&mut self) {
         if !self.draft.textarea.is_vim_normal_mode()
             || self.draft.textarea.is_vim_operator_pending()
         {
             return;
         }
 
-        let Some(snapshot) = self.vim_history.pending.take() else {
+        let Some(snapshot) = self.edit_history.pending.take() else {
             return;
         };
         if snapshot.text == self.current_text() {
@@ -208,12 +221,12 @@ impl ChatComposer {
             }
         }
 
-        self.vim_history.redo.clear();
-        self.vim_history.undo.push_back(snapshot);
-        self.vim_history.trim();
+        self.edit_history.redo.clear();
+        self.edit_history.undo.push_back(snapshot);
+        self.edit_history.trim();
     }
 }
 
 #[cfg(test)]
-#[path = "vim_history_tests.rs"]
+#[path = "edit_history_tests.rs"]
 mod tests;
