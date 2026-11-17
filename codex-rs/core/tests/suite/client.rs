@@ -73,6 +73,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -254,6 +255,97 @@ async fn responses_request_uses_implicit_default_tier_for_bedrock() -> anyhow::R
             "provider={provider_id}",
         );
     }
+    Ok(())
+}
+
+#[test_case::test_case(AMAZON_BEDROCK_PROVIDER_ID; "mantle")]
+#[test_case::test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID; "runtime")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bedrock_function_continuation_replays_assistant_commentary(
+    provider_id: &'static str,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mut commentary = ev_assistant_message("msg_progress", "Checking.");
+    commentary["item"]["phase"] = json!("commentary");
+    commentary["item"]["content"] = json!([
+        {"type": "output_text", "text": "Checking.", "annotations": [], "logprobs": []},
+        {"type": "output_text", "text": "Source", "annotations": [{
+            "type": "url_citation", "url": "https://example.org", "title": "Source",
+            "start_index": 0, "end_index": 6
+        }]}
+    ]);
+    let mut expected_content = commentary["item"]["content"].clone();
+    if provider_id == AMAZON_BEDROCK_PROVIDER_ID {
+        expected_content[0]
+            .as_object_mut()
+            .expect("output text part")
+            .remove("annotations");
+    }
+    let reasoning = ev_reasoning_item("rs_plan", &[], &[]);
+    let mut answer = ev_assistant_message("msg_answer", "Checked.");
+    answer["item"]["phase"] = json!("final_answer");
+    answer["item"]["content"][0]["annotations"] = json!([]);
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                commentary,
+                reasoning.clone(),
+                ev_function_call(
+                    "plan",
+                    "update_plan",
+                    r#"{"plan":[{"step":"Check","status":"completed"}]}"#,
+                ),
+                ev_completed("tool"),
+            ]),
+            sse(vec![answer.clone(), ev_completed("answer")]),
+            sse(vec![ev_completed("next")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "dummy".to_string(),
+            region: "us-east-1".to_string(),
+        }))
+        .with_config(move |config| {
+            let base_url = config.model_provider.base_url.clone();
+            config.model_provider_id = provider_id.to_string();
+            config.model_provider = built_in_model_providers(/*openai_base_url*/ None)
+                .remove(provider_id)
+                .expect("built-in Bedrock provider");
+            config.model_provider.base_url = base_url;
+            config.model_provider.supports_websockets = false;
+            config.update_plan_enabled = true;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("Check the plan.").await?;
+    test.submit_text_turn("Continue.").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    for request in &requests[1..] {
+        let input = request.input();
+        let progress = input
+            .iter()
+            .position(|item| item["id"] == "msg_progress")
+            .expect("replayed commentary");
+        assert_eq!(input[progress]["content"], expected_content);
+        assert_eq!(
+            input[progress + 1]["encrypted_content"],
+            reasoning["item"]["encrypted_content"]
+        );
+        assert_eq!(input[progress + 2]["type"], "function_call");
+        assert_eq!(input[progress + 3]["type"], "function_call_output");
+    }
+    let input = requests[2].input();
+    let replayed_answer = input
+        .iter()
+        .find(|item| item["id"] == "msg_answer")
+        .expect("replayed final answer");
+    assert_eq!(replayed_answer["content"], answer["item"]["content"]);
     Ok(())
 }
 
