@@ -442,6 +442,12 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     let fresh_id = ThreadId::from_string(&fresh_uuid.to_string())?;
     let fresh_path = rollout_path(home.path(), "2025-01-05T12-00-00", fresh_uuid);
     write_rollout(&fresh_path, fresh_id, "fresh active")?;
+    // Reading this recently modified file would advance its old access time on relatime mounts.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&fresh_path)?
+        .set_times(FileTimes::new().set_accessed(SystemTime::UNIX_EPOCH))?;
+    let fresh_accessed = fs::metadata(&fresh_path)?.accessed()?;
 
     let stale_temp = active_path.with_file_name("rollout-stale.jsonl.zst.tmp");
     fs::write(&stale_temp, "stale temp")?;
@@ -469,6 +475,7 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     assert!(compressed_rollout_path(&archived_path).exists());
     assert!(fresh_path.exists());
     assert!(!compressed_rollout_path(&fresh_path).exists());
+    assert_eq!(fs::metadata(&fresh_path)?.accessed()?, fresh_accessed);
     assert!(!stale_temp.exists());
     assert!(fresh_temp.exists());
     let materialized_path = home.path().join("materialized.jsonl");
@@ -560,6 +567,7 @@ async fn worker_skips_unreadable_metadata_without_blocking_other_compression() -
 
     let unreadable_path = rollout_path(home.path(), "2025-01-03T12-00-01", Uuid::from_u128(21));
     fs::write(unreadable_path.as_path(), "{not json}\n")?;
+    set_old_mtime(&unreadable_path)?;
 
     worker::run(home.path().to_path_buf(), Startup).await?;
 
