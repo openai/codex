@@ -26,6 +26,7 @@ use transcript::ConversationTranscriptSection;
 mod native_tool_call;
 
 pub use action::ActionPresentation;
+pub use action::EnclosingCall;
 pub use action::PlannedAction;
 pub use action::PlannedActionKind;
 pub use action::action_for_review;

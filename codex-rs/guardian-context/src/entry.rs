@@ -17,6 +17,8 @@ pub enum ConversationTranscriptEntryKind {
     ProtectedAssistant,
     /// Named tool invocation, including shell and web-search calls.
     ToolCall(String),
+    /// The textual tool call verified by the host to enclose the current approval.
+    EnclosingToolCall(String),
     /// Tool result with a call-derived, explicit, or generic fallback label.
     ToolOutput(String),
     /// Whole Code Mode exec output selected by its host-recorded nested tool calls.
@@ -34,9 +36,10 @@ impl ConversationTranscriptEntryKind {
             Self::User => "user",
             Self::Developer => "developer",
             Self::Assistant | Self::ProtectedAssistant => "assistant",
-            Self::ToolCall(role) | Self::ToolOutput(role) | Self::NodeReplToolOutput(role) => {
-                role.as_str()
-            }
+            Self::ToolCall(role)
+            | Self::EnclosingToolCall(role)
+            | Self::ToolOutput(role)
+            | Self::NodeReplToolOutput(role) => role.as_str(),
             Self::SelectedExecOutput => "tool exec result",
             Self::Reasoning => "reasoning",
         }

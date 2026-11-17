@@ -118,6 +118,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     let planned_action = codex_guardian_reviewer::build_guardian_planned_action(
         &request,
         reasons.retry.or(reasons.approval),
+        parent_context.and_then(|context| context.enclosing_invocation_id.as_deref()),
     )?;
     let permissions = super::permissions::for_request(&request, parent_context)?;
     let node_repl_snapshot = if node_repl_transcripts_enabled {

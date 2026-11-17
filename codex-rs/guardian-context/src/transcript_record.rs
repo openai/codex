@@ -61,6 +61,7 @@ impl TranscriptRecord {
             ConversationTranscriptEntryKind::Assistant
             | ConversationTranscriptEntryKind::ProtectedAssistant
             | ConversationTranscriptEntryKind::ToolCall(_)
+            | ConversationTranscriptEntryKind::EnclosingToolCall(_)
             | ConversationTranscriptEntryKind::Reasoning => "assistant",
             ConversationTranscriptEntryKind::SelectedExecOutput
             | ConversationTranscriptEntryKind::ToolOutput(_)

@@ -3068,6 +3068,28 @@ async fn subagent_browser_auth_resolves_user_prompt() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_nested_elicitation_request_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "the MCP fixture requires a host Python interpreter");
+
+    let requests = super::guardian_mcp_elicitation::nested_elicitation_request_history().await?;
+    assert_eq!(requests.len(), 5);
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "A Node REPL invocation waits for two independent Guardian reviews. The follow-up review uses a transcript delta and receives the same live enclosing call.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    let snapshot = regex_lite::Regex::new(r"Wall time: [0-9]+(?:\.[0-9]+)? seconds")?
+        .replace_all(&snapshot, "Wall time: <DURATION> seconds");
+    let snapshot = regex_lite::Regex::new(
+        r#"(The active permission profile for environment )"(?:local|remote)""#,
+    )?
+    .replace_all(&snapshot, "$1\"<ENVIRONMENT>\"");
+    insta::assert_snapshot!("guardian_nested_elicitation", snapshot);
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn guardian_elastic_budgeting_request_history() -> Result<()> {

@@ -32,7 +32,8 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new()
+            truncations: Vec::new(),
+            enclosing_call: None,
         }
         .into_messages(),
         vec![
@@ -53,7 +54,8 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new()
+            truncations: Vec::new(),
+            enclosing_call: None,
         }
         .into_user_inputs(),
         Err(SectionError::UnsupportedDelivery {
@@ -80,6 +82,7 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
             ]),
         }],
         truncations: Vec::new(),
+        enclosing_call: None,
     };
     let estimated = context.estimated_tokens();
     let messages = context.clone().into_messages();

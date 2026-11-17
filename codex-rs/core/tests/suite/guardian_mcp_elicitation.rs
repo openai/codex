@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_features::Feature;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -23,6 +24,7 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_requests;
@@ -105,7 +107,7 @@ for line in sys.stdin:
         else:
             result = approval_results if multiple else request.get("result")
             send({"id": pending_call, "result": {"content": [
-                {"type": "text", "text": json.dumps(result)}]}})
+                {"type": "text", "text": json.dumps(result, sort_keys=multiple)}]}})
         continue
     elif method == "resources/list":
         result = {"resources": []}
@@ -418,9 +420,13 @@ enum CallIdSource {
     PreviousTurn,
 }
 
+enum NestedApprovalContext {
+    Default,
+    Enabled,
+}
+
 #[test_case("codex_apps", false, CallIdSource::Host; "browser_connector")]
 #[test_case("codex_apps", true, CallIdSource::Host; "strict_browser_connector")]
-#[test_case("node_repl", false, CallIdSource::Host; "ordinary_node_repl")]
 #[test_case("node_repl", true, CallIdSource::Host; "strict_node_repl")]
 #[test_case("cua_repl", false, CallIdSource::Host; "ordinary_cua_repl")]
 #[test_case("cua_repl", true, CallIdSource::Host; "strict_cua_repl")]
@@ -437,8 +443,49 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     strict_auto_review: bool,
     call_id_source: CallIdSource,
 ) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    skip_if_wine_exec!(Ok(()), "the MCP fixture requires a host Python interpreter");
+    assert_nested_elicitation_reviews(
+        server_name,
+        strict_auto_review,
+        call_id_source,
+        NestedApprovalContext::Enabled,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn strict_browser_nested_review_omits_enclosing_call_by_default() -> Result<()> {
+    assert_nested_elicitation_reviews(
+        "codex_apps",
+        /*strict_auto_review*/ true,
+        CallIdSource::Host,
+        NestedApprovalContext::Default,
+    )
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn nested_elicitation_request_history() -> Result<Vec<ResponsesRequest>> {
+    assert_nested_elicitation_reviews(
+        "node_repl",
+        /*strict_auto_review*/ false,
+        CallIdSource::Host,
+        NestedApprovalContext::Enabled,
+    )
+    .await
+}
+
+async fn assert_nested_elicitation_reviews(
+    server_name: &str,
+    strict_auto_review: bool,
+    call_id_source: CallIdSource,
+    nested_approval_context: NestedApprovalContext,
+) -> Result<Vec<ResponsesRequest>> {
+    skip_if_no_network!(Ok(Vec::new()));
+    skip_if_wine_exec!(
+        Ok(Vec::new()),
+        "the MCP fixture requires a host Python interpreter"
+    );
 
     let browser = server_name == "codex_apps";
     let actions = [
@@ -507,6 +554,7 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     } else {
         test_codex()
     };
+    let include_enclosing_call = matches!(nested_approval_context, NestedApprovalContext::Enabled);
     let mut builder = builder.with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = if strict_auto_review {
@@ -514,6 +562,12 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
         } else {
             ApprovalsReviewer::AutoReview
         };
+        if include_enclosing_call {
+            config
+                .features
+                .enable(Feature::GuardianNestedApprovalContext)
+                .expect("enable nested approval context");
+        }
         config
             .mcp_servers
             .set(mcp_servers)
@@ -521,10 +575,14 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, server_name).await?;
-    if matches!(
-        call_id_source,
-        CallIdSource::WrongServer | CallIdSource::PreviousTurn
-    ) {
+    let attributed = call_id_source == CallIdSource::Host && server_name != "elicitation";
+    let capture_history = attributed && server_name == "node_repl" && !strict_auto_review;
+    if capture_history
+        || matches!(
+            call_id_source,
+            CallIdSource::WrongServer | CallIdSource::PreviousTurn
+        )
+    {
         let seed_server = if call_id_source == CallIdSource::WrongServer {
             "cua_repl"
         } else {
@@ -537,7 +595,7 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
                     "seed-invocation",
                     &format!("mcp__{seed_server}"),
                     "js",
-                    r#"{"seed":true}"#,
+                    r#"{"code":"await browser.doEarlierAction()","seed":true}"#,
                 ),
                 responses::ev_completed("seed-call"),
             ]),
@@ -554,6 +612,8 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
         }
     }
     let parent_arguments = json!({"code": "await browser.doTwoActions()"});
+    let parent_argument_text = parent_arguments.to_string();
+    let parent_tool_name = if browser { "_js" } else { "js" };
     responses::mount_sse_once(
         &server,
         responses::sse(vec![
@@ -563,8 +623,8 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
                     "mcp__{server_name}{}",
                     if browser { "__browser" } else { "" }
                 ),
-                if browser { "_js" } else { "js" },
-                &parent_arguments.to_string(),
+                parent_tool_name,
+                &parent_argument_text,
             ),
             responses::ev_completed("parent-tool"),
         ]),
@@ -572,19 +632,18 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     .await;
     let mut guardian = Vec::new();
     for outcome in ["allow", "deny"] {
+        // Keep the fixture text stable across serde_json map-order features.
+        let mut verdict = json!({
+            "risk_level": "low", "user_authorization": "high",
+            "outcome": outcome, "rationale": "Independent inner action decision.",
+        });
+        verdict.sort_all_objects();
         guardian.push(
             responses::mount_sse_once_match(
                 &server,
                 wiremock::matchers::header("x-openai-subagent", "guardian"),
                 responses::sse(vec![
-                    responses::ev_assistant_message(
-                        "review-result",
-                        &json!({
-                            "risk_level": "low", "user_authorization": "high",
-                            "outcome": outcome, "rationale": "Independent inner action decision.",
-                        })
-                        .to_string(),
-                    ),
+                    responses::ev_assistant_message("review-result", &verdict.to_string()),
                     responses::ev_completed(outcome),
                 ]),
             )
@@ -628,7 +687,6 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     }
     assert_eq!(assessments.len(), 2);
     assert_ne!(assessments[0].id, assessments[1].id);
-    let attributed = call_id_source == CallIdSource::Host && server_name != "elicitation";
     for (index, (assessment, status)) in assessments
         .iter()
         .zip([
@@ -666,14 +724,38 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
                 text.contains("Browser connector (`connector_openai_browser` on `codex_apps`)")
             }));
         }
-        let prompt = request.message_input_texts("user").join("\n");
-        let action_text = prompt
-            .rsplit_once("Planned action JSON:\n")
-            .context("Guardian planned action")?
+        let prompt = request
+            .message_input_text_groups("user")
+            .pop()
+            .context("latest Guardian review")?
+            .concat();
+        let approval_block = prompt
+            .rsplit_once(">>> APPROVAL REQUEST START\n")
+            .context("Guardian approval start")?
             .1
             .split_once("\n>>> APPROVAL REQUEST END")
             .context("Guardian action end")?
             .0;
+        let enclosing_call = approval_block
+            .lines()
+            .find_map(|line| line.strip_prefix("Enclosing call for this review: "));
+        assert_eq!(
+            enclosing_call.is_some(),
+            attributed && include_enclosing_call
+        );
+        if let Some(record) = enclosing_call {
+            assert_eq!(
+                serde_json::from_str::<Value>(record)?,
+                json!({
+                    "tool": format!("tool {parent_tool_name} call"),
+                    "arguments": parent_argument_text,
+                })
+            );
+        }
+        let action_text = approval_block
+            .split_once("Planned action JSON:\n")
+            .context("Guardian planned action")?
+            .1;
         assert_eq!(
             serde_json::from_str::<Value>(action_text)?,
             json!({
@@ -730,7 +812,11 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
             .contains("Independent inner action decision.")
     );
     test.codex.shutdown_and_wait().await?;
-    Ok(())
+    Ok(if capture_history {
+        responses::received_responses_requests(&server).await
+    } else {
+        Vec::new()
+    })
 }
 
 #[test_case("connector_openai_browser", None; "missing_correlation")]

@@ -46,10 +46,32 @@ impl std::fmt::Debug for PlannedAction {
 #[derive(Clone, PartialEq)]
 pub enum PlannedActionKind {
     ToolCall(Box<codex_protocol::models::ResponseItem>),
-    Command { json: String },
-    TerminalInput { json: String },
-    Network { json: String, has_trigger: bool },
+    Command {
+        json: String,
+    },
+    Nested {
+        json: String,
+        enclosing_invocation_id: String,
+        enclosing_call: Option<EnclosingCall>,
+    },
+    TerminalInput {
+        json: String,
+    },
+    Network {
+        json: String,
+        has_trigger: bool,
+    },
 }
+
+/// Verified enclosing tool evidence awaiting final budget admission.
+#[derive(Clone, PartialEq)]
+pub struct EnclosingCall {
+    pub(crate) tool: String,
+    pub(crate) arguments: String,
+    pub(crate) max_bytes: usize,
+}
+
+pub(crate) const APPROVAL_REQUEST_START: &str = ">>> APPROVAL REQUEST START\n";
 
 // Native call arguments may contain credentials or ciphertext.
 impl std::fmt::Debug for PlannedActionKind {
@@ -57,6 +79,7 @@ impl std::fmt::Debug for PlannedActionKind {
         formatter.write_str(match self {
             Self::ToolCall(_) => "ToolCall(..)",
             Self::Command { .. } => "Command",
+            Self::Nested { .. } => "Nested",
             Self::TerminalInput { .. } => "TerminalInput",
             Self::Network { .. } => "Network",
         })
@@ -95,6 +118,7 @@ impl PlannedAction {
             ).into())];
         }
         let (PlannedActionKind::Command { json }
+        | PlannedActionKind::Nested { json, .. }
         | PlannedActionKind::TerminalInput { json }
         | PlannedActionKind::Network { json, .. }) = &self.kind
         else {
@@ -105,7 +129,7 @@ impl PlannedAction {
                 "The Codex agent has requested the following action:\n"
                     .to_owned()
                     .into(),
-                ">>> APPROVAL REQUEST START\n".to_owned().into(),
+                APPROVAL_REQUEST_START.to_owned().into(),
                 "Planned action JSON:\n".to_owned().into(),
                 SectionContent::Other(ContentItem::InputText {
                     text: format!("{json}\n"),
@@ -121,7 +145,7 @@ impl PlannedAction {
         match &self.kind {
             PlannedActionKind::ToolCall(_) => unreachable!("native calls use message delivery"),
             PlannedActionKind::Network { has_trigger, .. } => {
-                items.push(protected_text(">>> APPROVAL REQUEST START\n".to_string()));
+                items.push(protected_text(APPROVAL_REQUEST_START.to_owned()));
                 items.push(protected_text(
                     "Below is a proposed network access request under review.\n".to_string(),
                 ));
@@ -136,7 +160,9 @@ impl PlannedAction {
                     .to_string()));
                 items.push(protected_text("Network access JSON:\n".to_string()));
             }
-            PlannedActionKind::Command { .. } | PlannedActionKind::TerminalInput { .. } => {
+            PlannedActionKind::Command { .. }
+            | PlannedActionKind::Nested { .. }
+            | PlannedActionKind::TerminalInput { .. } => {
                 items.push(protected_text(
                     match presentation {
                         ActionPresentation::SyncDelta => {
@@ -148,7 +174,7 @@ impl PlannedAction {
                     }
                     .to_string(),
                 ));
-                items.push(protected_text(">>> APPROVAL REQUEST START\n".to_string()));
+                items.push(protected_text(APPROVAL_REQUEST_START.to_owned()));
                 if let Some(reason) = &self.reason {
                     items.push(protected_text("Retry reason:\n".to_string()));
                     items.push(Budgeted::required(format!("{reason}\n\n").into()));

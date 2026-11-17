@@ -121,7 +121,9 @@ fn build_guardian_prompt_items(
     mode: GuardianPromptMode,
 ) -> anyhow::Result<GuardianPromptItems> {
     let profile = ContextProfile::synchronous();
-    let action = build_guardian_planned_action(&request, /*reason*/ None)?;
+    let action = build_guardian_planned_action(
+        &request, /*reason*/ None, /*enclosing_invocation_id*/ None,
+    )?;
     let sections = default_registry().prepare(&SectionInput {
         target: profile.target,
         history,

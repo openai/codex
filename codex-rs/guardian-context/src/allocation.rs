@@ -281,6 +281,10 @@ impl PreparedElasticContext<'_> {
         if context.estimated_tokens() > remaining {
             return Err(REQUEST_BUDGET_EXCEEDED);
         }
+        context.admit_enclosing_call(
+            remaining,
+            Some(self.config.section_limits(ElasticSection::PlannedAction)),
+        );
         Ok(context)
     }
 }

@@ -39,6 +39,7 @@ fn reserves_escaped_ids_for_user_messages_and_native_call_outputs() {
         context: ComposedContext {
             sections: sections.to_vec(),
             truncations: Vec::new(),
+            enclosing_call: None,
         },
         config: &ElasticBudgetConfig::default(),
         delivered_omissions: None,
@@ -225,6 +226,7 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
         })
         .into(),
         truncations: Vec::new(),
+        enclosing_call: None,
     };
     {
         let mut future = std::pin::pin!(crate::prepare_sync_images(

@@ -232,6 +232,7 @@ impl ComposedContext {
                 .cloned()
                 .collect(),
             truncations: Vec::new(),
+            enclosing_call: None,
         }
     }
 

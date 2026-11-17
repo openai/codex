@@ -10,6 +10,7 @@ use codex_guardian_context::PlannedActionKind;
 pub fn build_guardian_planned_action(
     request: &GuardianApprovalRequest,
     reason: Option<String>,
+    enclosing_invocation_id: Option<&str>,
 ) -> serde_json::Result<PlannedAction> {
     Ok(PlannedAction {
         tool_descriptions: if let GuardianApprovalRequest::McpToolCall {
@@ -36,9 +37,19 @@ pub fn build_guardian_planned_action(
             GuardianApprovalRequest::WriteStdin { .. } => PlannedActionKind::TerminalInput {
                 json: format_guardian_action_pretty(request)?,
             },
+            GuardianApprovalRequest::McpToolCall { .. } => {
+                let json = format_guardian_action_pretty(request)?;
+                match enclosing_invocation_id {
+                    Some(call_id) => PlannedActionKind::Nested {
+                        json,
+                        enclosing_invocation_id: call_id.to_owned(),
+                        enclosing_call: None,
+                    },
+                    None => PlannedActionKind::Command { json },
+                }
+            }
             GuardianApprovalRequest::ExecCommand { .. }
             | GuardianApprovalRequest::ApplyPatch { .. }
-            | GuardianApprovalRequest::McpToolCall { .. }
             | GuardianApprovalRequest::RequestPermissions { .. } => PlannedActionKind::Command {
                 json: format_guardian_action_pretty(request)?,
             },

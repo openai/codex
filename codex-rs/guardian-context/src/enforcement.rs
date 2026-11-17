@@ -15,12 +15,14 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 
 use crate::ComposedContext;
+use crate::ElasticSectionLimits;
 use crate::RequestBudget;
 use crate::SectionError;
 use crate::TruncationObservation;
 use crate::budget::content_framing_tokens;
 use crate::budget::section_content_tokens;
 use crate::budget::section_tokens;
+use crate::composition::PendingEnclosingCall;
 use crate::composition::SectionContent;
 use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
@@ -135,6 +137,91 @@ pub enum HistoryTruncation {
 }
 
 impl ComposedContext {
+    fn planned_action_content(&mut self) -> Option<&mut Vec<Budgeted<SectionContent>>> {
+        self.sections.iter_mut().find_map(|section| {
+            if section.id == "planned_action"
+                && let SectionDelivery::UserContent(items) = &mut section.delivery
+            {
+                Some(items)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The optional parent can use spare space without displacing ordinary
+    /// transcript evidence or changing whether the approval fits.
+    pub(crate) fn admit_enclosing_call(
+        &mut self,
+        remaining: usize,
+        limits: Option<ElasticSectionLimits>,
+    ) {
+        let Some(PendingEnclosingCall {
+            call:
+                crate::EnclosingCall {
+                    arguments,
+                    tool,
+                    max_bytes,
+                },
+            fixed_image_budget,
+        }) = self.enclosing_call.take()
+        else {
+            return;
+        };
+        let call = serde_json::json!({ "arguments": arguments, "tool": tool });
+        let text = format!("Enclosing call for this review: {call}\n");
+        if text.len() > max_bytes {
+            return;
+        }
+        let item = Budgeted::optional(SectionContent::from(text), BudgetPriority::ToolDescription);
+        let available = remaining.saturating_sub(self.estimated_tokens());
+        let Some(items) = self.planned_action_content() else {
+            return;
+        };
+        let tokens = section_content_tokens(&item.content);
+        let framing = |count| content_framing_tokens(count + 1) - content_framing_tokens(count);
+        if tokens.saturating_add(framing(items.len())) <= available
+            && limits.is_none_or(|limits| {
+                let supporting = items.iter().filter(|item| !item.protected);
+                let supporting_tokens = supporting
+                    .clone()
+                    .map(|item| section_content_tokens(&item.content))
+                    .sum::<usize>();
+                let supporting_count = supporting.count();
+                // Elastic allocation charges supporting rows from a shared wrapper.
+                let combined = supporting_tokens
+                    .saturating_add(tokens)
+                    .saturating_add(content_framing_tokens(supporting_count + 2))
+                    .saturating_sub(content_framing_tokens(/*item_count*/ 1));
+                tokens.saturating_add(content_framing_tokens(/*item_count*/ 1))
+                    <= limits.max_section_entry_tokens()
+                    && limits
+                        .max_total_section_tokens()
+                        .is_none_or(|maximum| combined <= maximum)
+            }) && let Some(index) = items.iter().position(|item| {
+            item.protected
+                && matches!(&item.content, SectionContent::Other(ContentItem::InputText { text })
+                        if text == crate::action::APPROVAL_REQUEST_START)
+        }) {
+            items.insert(index + 1, item);
+            // Fixed image admission uses the host estimator, independently of the
+            // aggregate budget. Check the delivered prompt after ordinary selection.
+            if let Some(budget) = fixed_image_budget
+                && self.section_costs().any(|(_, cost)| cost.image_count > 0)
+                && self
+                    .clone()
+                    .into_messages()
+                    .iter()
+                    .map(budget.estimate_tokens)
+                    .fold(0i64, i64::saturating_add)
+                    > budget.max_prompt_tokens
+                && let Some(items) = self.planned_action_content()
+            {
+                items.remove(index + 1);
+            }
+        }
+    }
+
     /// Omits native messages and tool calls already present in the effective reviewer history
     /// or another pending copy, preferring required and protected copies.
     /// Hosts repeat this check after compaction; missing evidence may be delivered again.
@@ -266,6 +353,7 @@ impl ComposedContext {
             })?;
         let current = self.estimated_tokens();
         if current <= remaining {
+            self.admit_enclosing_call(remaining, /*limits*/ None);
             return Ok(self);
         }
         let notice = SectionOutput {
@@ -415,6 +503,7 @@ impl ComposedContext {
                 section: "request_budget",
             });
         }
+        self.admit_enclosing_call(remaining, /*limits*/ None);
         Ok(self)
     }
 }

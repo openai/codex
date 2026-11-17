@@ -131,11 +131,19 @@ impl SectionContributor for ConversationTranscriptSection {
         } else {
             None
         };
+        let enclosing_invocation_id = match input.planned_action.map(|action| &action.kind) {
+            Some(PlannedActionKind::Nested {
+                enclosing_invocation_id,
+                ..
+            }) => Some(enclosing_invocation_id.as_str()),
+            _ => None,
+        };
         Ok(Some(ContextSection::ConversationTranscript {
             items: collect_transcript_for_review(
                 input.history,
                 input.transcript,
                 proposed_call_id,
+                enclosing_invocation_id,
                 input.is_selected_exec_output,
             ),
         }))
@@ -151,7 +159,8 @@ pub fn collect_transcript(
     config: &ConversationTranscriptConfig,
 ) -> Vec<ConversationTranscriptEntry> {
     collect_transcript_for_review(
-        history, config, /*proposed_call_id*/ None, /*is_selected_exec_output*/ None,
+        history, config, /*proposed_call_id*/ None, /*enclosing_invocation_id*/ None,
+        /*is_selected_exec_output*/ None,
     )
 }
 
@@ -159,9 +168,12 @@ fn collect_transcript_for_review(
     history: &dyn SectionHistory,
     config: &ConversationTranscriptConfig,
     proposed_call_id: Option<&str>,
+    enclosing_invocation_id: Option<&str>,
     is_selected_exec_output: Option<&crate::SelectedExecOutputPredicate<'_>>,
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
+    let mut enclosing_invocation_entry = None;
+    let mut enclosing_invocations = 0;
     let mut tool_names_by_call_id = HashMap::new();
     // Positional legacy labels cannot establish reusable delivery proof, including
     // through transcript copies. The separate retained section stays authoritative.
@@ -170,6 +182,13 @@ fn collect_transcript_for_review(
         .filter(|context| !crate::retained_instructions::has_legacy_order(context));
 
     for (item, source) in history.items_with_sources() {
+        let is_enclosing_call = matches!(
+            item,
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::CustomToolCall { call_id, .. }
+                if enclosing_invocation_id == Some(call_id.as_str())
+        );
+        enclosing_invocations += usize::from(is_enclosing_call);
         let (kind, text) = match item {
             ResponseItem::Message {
                 role,
@@ -431,6 +450,9 @@ fn collect_transcript_for_review(
         if text.trim().is_empty() {
             continue;
         }
+        if is_enclosing_call && text != TRANSCRIPT_OMISSION_NOTICE {
+            enclosing_invocation_entry = Some(entries.len());
+        }
         let original_bytes = text.len();
         let scheduled = codex_history::UserInputOrigin::from_message(item)
             == codex_history::UserInputOrigin::Heartbeat;
@@ -478,6 +500,13 @@ fn collect_transcript_for_review(
         });
     }
 
+    // Ambiguous or omitted source evidence cannot identify a particular wrapper.
+    if enclosing_invocations == 1
+        && let Some(index) = enclosing_invocation_entry
+        && let ConversationTranscriptEntryKind::ToolCall(label) = &entries[index].kind
+    {
+        entries[index].kind = ConversationTranscriptEntryKind::EnclosingToolCall(label.clone());
+    }
     entries
 }
 

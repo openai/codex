@@ -155,6 +155,7 @@ impl ContextProfile {
                     | ConversationTranscriptEntryKind::Reasoning => TranscriptEntryKind::Message,
                     ConversationTranscriptEntryKind::SelectedExecOutput
                     | ConversationTranscriptEntryKind::ToolCall(_)
+                    | ConversationTranscriptEntryKind::EnclosingToolCall(_)
                     | ConversationTranscriptEntryKind::ToolOutput(_)
                     | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
                         TranscriptEntryKind::Tool
@@ -384,6 +385,7 @@ fn prepare_fixed_content<'a>(
     };
     let tokens = match &entry.kind {
         ConversationTranscriptEntryKind::ToolCall(_)
+        | ConversationTranscriptEntryKind::EnclosingToolCall(_)
         | ConversationTranscriptEntryKind::ToolOutput(_) => limits.tool_tokens,
         ConversationTranscriptEntryKind::Assistant
         | ConversationTranscriptEntryKind::ProtectedAssistant

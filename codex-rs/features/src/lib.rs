@@ -455,6 +455,8 @@ pub enum Feature {
     GuardianRootHandoffContext,
     /// Review state-changing MAv2 calls and preserve native calls in Guardian history.
     GuardianNativeMultiAgentHistory,
+    /// Include the verified enclosing invocation in nested Guardian approvals.
+    GuardianNestedApprovalContext,
     /// Include completed node_repl or cua_repl Code Mode responses in Guardian reviews.
     GuardianEnhancedNodeReplTranscripts,
     /// Include completed node_repl or cua_repl Code Mode response images in Guardian reviews.
@@ -2209,6 +2211,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianNativeMultiAgentHistory,
         key: "guardian_native_multi_agent_history",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianNestedApprovalContext,
+        key: "guardian_nested_approval_context",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

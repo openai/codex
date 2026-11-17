@@ -1066,14 +1066,17 @@ async fn review_guardian_mcp_elicitation(
     let approval_context = call_id
         .and_then(|call_id| session.mcp_tool_approval_metadata(&request.server_key, call_id));
 
+    let is_js_preflight = request.elicitation.meta().is_some_and(|meta| {
+        metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY) == Some("js")
+            && metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY) == Some("node_repl")
+    });
     // User approval skips ordinary CUA checks, not separate sensitive requests.
     let user_cua_execution = step_settings.approvals_reviewer() == ApprovalsReviewer::User
         && is_node_repl_backed_server(&request.server_name)
+        && is_js_preflight
         && request.elicitation.meta().is_some_and(|meta| {
-            metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY) == Some("js")
-                && metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY) == Some("node_repl")
-                && metadata_str(meta, MCP_ELICITATION_APPROVAL_KIND_KEY)
-                    == Some(MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL)
+            metadata_str(meta, MCP_ELICITATION_APPROVAL_KIND_KEY)
+                == Some(MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL)
                 && meta.get(MCP_ELICITATION_SENSITIVE_ACTION_KEY) != Some(&Value::Bool(true))
                 && meta.get("codex_requires_user_input") != Some(&Value::Bool(true))
         });
@@ -1334,6 +1337,20 @@ async fn review_guardian_mcp_elicitation(
         }
     };
     guardian_request.category = guardian_scope;
+    if !is_js_preflight
+        && review_context
+            .turn()
+            .config
+            .features
+            .enabled(Feature::GuardianNestedApprovalContext)
+        && let Some(call_id) = originating_call_id
+        && matches!(
+            &guardian_request.request,
+            Ok(crate::guardian::GuardianApprovalRequest::McpToolCall { .. })
+        )
+    {
+        review_context.enclosing_invocation_id = Some(call_id.to_owned());
+    }
     // Keep the action the server asked about, but use its owner's rules from the original call.
     if let Ok(crate::guardian::GuardianApprovalRequest::McpToolCall {
         prompt_permissions, ..
