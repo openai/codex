@@ -1,0 +1,133 @@
+---
+source: core/tests/suite/scenarios_reserved_spawn.rs
+assertion_line: 264
+expression: "context_snapshot::format_request_history_snapshot(\"Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=2dea6cdae5007237):
+        - namespace/functions; hash=99cb31e479060441
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    Keep the custom base instructions.
+02:message/developer[3]:
+    [01] Explain the reasoning behind your findings.
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [03] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+        </collaboration_mode>
+03:message/developer:
+    <multi_agent_mode>
+    Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-ag...k for sub-agents, delegation, or parallel agent work. [hash=6e1e1baf5a87faf5]
+
+    Before calling any multi-agent tool, read the full multi-agent skill using its listed package locator. S...context. If the read fails, make note of the blocker. [hash=104096cdd6a881da]
+    </multi_agent_mode>
+04:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+05:message/user:
+    Prepare a worker with my instructions.
+06:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+07:function_call/host_spawn:{}
+08:function_call_output:Done.
+
+## Window 2 (after request 2: input diverged at item 00)
+Settings: relative to window 1
+  model: "gpt-5.6-terra"
+  prompt_cache_key: "<PROMPT_CACHE_KEY 2>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+-- request 3 (turn) --
+00:additional_tools/developer (1; hash=60e22890380a03a6):
+        - namespace/functions; hash=501aefb2ebd05682
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    Keep the custom base instructions.
+02:message/developer[2]:
+    [01] Report worker findings concisely.
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+03:message/developer:
+    <multi_agent_mode>
+    Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-ag...k for sub-agents, delegation, or parallel agent work. [hash=6e1e1baf5a87faf5]
+
+    Before calling any multi-agent tool, read the full multi-agent skill using its listed package locator. S...context. If the read fails, make note of the blocker. [hash=104096cdd6a881da]
+    </multi_agent_mode>
+04:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+05:message/user:
+    Report your findings.

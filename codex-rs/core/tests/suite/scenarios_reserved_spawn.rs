@@ -24,6 +24,8 @@ use codex_http_client::NetworkPolicy;
 use codex_http_client::NetworkPolicyController;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
+use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -162,6 +164,115 @@ fn create_request(name: &str, fork_history: bool) -> ThreadCreateRequest {
         model: None,
         reasoning_effort: None,
     }
+}
+
+#[test_case::test_case(Some("Keep the custom base instructions."), None; "custom")]
+#[test_case::test_case(Some("Keep the custom base instructions."), Some("Report worker findings concisely."); "subagent override")]
+#[test_case::test_case(None, None; "model owned")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepared_child_instructions_preserve_native_inheritance(
+    custom_base: Option<&'static str>,
+    subagent_developer: Option<&'static str>,
+) -> Result<()> {
+    const PARENT_DEVELOPER: &str = "Explain the reasoning behind your findings.";
+    const CHILD_MODEL: &str = "gpt-5.6-terra";
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let (test, parent, _) = host_spawn_fixture(
+        &server,
+        test_codex().with_config(move |config| {
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.base_instructions = custom_base.map(str::to_owned);
+            config.developer_instructions = Some(PARENT_DEVELOPER.into());
+            config.multi_agent_v2.subagent_developer_instructions =
+                subagent_developer.map(str::to_owned);
+            config
+                .features
+                .enable(Feature::IncrementalTools)
+                .expect("test config should allow incremental tools");
+        }),
+        NetworkPolicy::unmanaged(),
+        /*thread_instructions_provider*/ None,
+    )
+    .await?;
+    let invocation = host_spawn_invocation(
+        &server,
+        &parent,
+        "prepare-worker",
+        TurnInputRequest::user_input(vec![text("Prepare a worker with my instructions.")]),
+    )
+    .await?;
+    let context = parent.tool_invocation(&invocation.turn_id, &invocation.call_id)?;
+    let prepared = parent.prepare_child(&context).await?;
+    let catalog = bundled_models_response()?;
+    let parent_model = catalog
+        .models
+        .iter()
+        .find(|model| model.slug == "gpt-6-astra")
+        .context("parent model")?;
+    assert_eq!(
+        prepared.base_instructions,
+        BaseInstructions {
+            text: custom_base
+                .map(str::to_owned)
+                .unwrap_or_else(|| codex_prompts::render_model_instructions(parent_model)),
+            provenance: Some(match custom_base {
+                Some(_) => BaseInstructionsProvenance::Custom,
+                None => BaseInstructionsProvenance::Model {
+                    model: parent_model.slug.clone(),
+                },
+            }),
+        }
+    );
+
+    // A portable host forwards prepared instructions into its destination config, then applies
+    // the requested child model. Model-owned instructions must still resolve for that model.
+    let mut options = test.start_thread_options().await;
+    options.config.base_instructions = Some(prepared.base_instructions.text);
+    options.config.base_instructions_provenance = prepared.base_instructions.provenance;
+    options.config.developer_instructions = prepared.developer_instructions;
+    options.config.model = Some(CHILD_MODEL.into());
+    options.environments = Some(prepared.environments);
+    let child = test.thread_manager.start_thread(options).await?.thread;
+    finish_spawn_tool(&server, &parent, &invocation).await?;
+    let mock = responses::mount_sse_once(&server, sse(vec![ev_completed("worker-done")])).await;
+    child
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Report your findings.",
+        )]))
+        .await?;
+    wait_for_successful_turn(&child).await;
+    let request = mock.single_request();
+    let child_model = catalog
+        .models
+        .iter()
+        .find(|model| model.slug == CHILD_MODEL)
+        .context("child model")?;
+    let expected_base = custom_base
+        .map(str::to_owned)
+        .unwrap_or_else(|| codex_prompts::render_model_instructions(child_model));
+    assert!(request.body_contains_text(&expected_base));
+    assert!(request.body_contains_text(subagent_developer.unwrap_or(PARENT_DEVELOPER)));
+    assert_eq!(
+        request.body_contains_text(PARENT_DEVELOPER),
+        subagent_developer.is_none()
+    );
+    let requests = responses::received_responses_requests(&server).await;
+    assert_eq!(requests.len(), 3);
+    // One complete history shows both inherited fields; the assertions above cover every case.
+    if custom_base.is_some() && subagent_developer.is_some() {
+        insta::assert_snapshot!(
+            "prepared_child_instructions_subagent_override",
+            context_snapshot::format_request_history_snapshot(
+                "Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.",
+                &requests,
+                &ContextSnapshotOptions::default().include_request_settings(),
+            )
+        );
+    }
+    child.shutdown_and_wait().await?;
+    parent.shutdown_and_wait().await?;
+    Ok(())
 }
 
 #[test_case::test_case(false; "fresh")]

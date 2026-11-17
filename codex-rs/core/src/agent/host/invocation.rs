@@ -3,6 +3,7 @@
 use super::spawn::create_spawn;
 use super::types::HostThreadSpawnReservation;
 use super::types::PreparedChildContext;
+use crate::agent::child_config::inherited_developer_instructions;
 use crate::agent::control::inherited_dynamic_tools;
 use crate::codex_thread::CodexThread;
 use crate::function_tool::FunctionCallError;
@@ -229,6 +230,8 @@ pub(crate) async fn prepare(
             thread.session.services.exec_policy.snapshot();
         Ok(PreparedChildContext {
             originator: turn.originator.clone(),
+            base_instructions: thread.session.get_base_instructions().await,
+            developer_instructions: inherited_developer_instructions(turn),
             user_instructions: instructions
                 .and_then(|md| md.user_instructions.as_ref())
                 .map(|entry| entry.text.clone()),
