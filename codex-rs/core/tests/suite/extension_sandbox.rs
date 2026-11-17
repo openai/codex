@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_attachment_store::UploadContent;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -172,12 +173,28 @@ async fn generated_image_ui_item_is_file_backed_in_rollout() -> Result<()> {
             test.session_configured.thread_id.to_string()
         );
         assert!(!item_upload.ephemeral);
+        let UploadContent::Image {
+            file_name,
+            tags,
+            data,
+        } = &item_upload.content
+        else {
+            panic!("expected generated image upload");
+        };
+        assert!(file_name.is_none());
         assert_eq!(
-            item_upload.tags,
-            HashMap::from([("usage".to_string(), "image_gen".to_string())])
+            tags,
+            &HashMap::from([("usage".to_string(), "image_gen".to_string())])
         );
-        assert_eq!(item_upload.data, TINY_PNG_BYTES);
-        assert_eq!(model_upload.tags, HashMap::new());
+        assert_eq!(data, TINY_PNG_BYTES);
+        let UploadContent::Image {
+            file_name, tags, ..
+        } = &model_upload.content
+        else {
+            panic!("expected model image upload");
+        };
+        assert!(file_name.is_none());
+        assert_eq!(tags, &HashMap::new());
     }
 
     let rollout_path = test.codex.rollout_path().context("rollout path")?;

@@ -3,6 +3,8 @@
 use super::super::audio_duration_store::TestAudioDurationStore;
 use super::*;
 use anyhow::Context as _;
+use codex_attachment_store::UploadContent;
+use codex_attachment_store::UploadRequest;
 use codex_protocol::models::AudioReference;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -328,11 +330,18 @@ async fn tool_audio_store_id_survives_rollout_and_next_request(
             .tool_uploads
             .lock()
             .map_err(|_| anyhow::anyhow!("upload recorder poisoned"))?;
-        let [upload] = uploads.as_slice() else {
-            panic!("expected one upload across execution and resume");
-        };
-        assert_eq!(upload.tags["usage"], "tool_audio");
-        assert_eq!(upload.data, codex_utils_audio::decode_audio(&wav)?.1);
+        assert_eq!(
+            uploads.as_slice(),
+            &[UploadRequest {
+                thread_id: test.session_configured.thread_id.to_string(),
+                ephemeral: false,
+                content: UploadContent::ToolAudio {
+                    declared_mime_type: "audio/wav".into(),
+                    data: codex_utils_audio::decode_audio(&wav)?.1,
+                },
+            }],
+            "expected one upload across execution and resume",
+        );
     }
     insta::assert_snapshot!(
         format!("file_backed_{output}_trace"),

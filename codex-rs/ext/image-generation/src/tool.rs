@@ -9,6 +9,7 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageOutput;
 use codex_api::ImageQuality;
+use codex_attachment_store::UploadContent;
 use codex_attachment_store::UploadRequest;
 use codex_attachment_store::UploadResult;
 use codex_exec_server::CreateDirectoryOptions;
@@ -278,9 +279,11 @@ impl ImageGenerationTool {
                 let request = UploadRequest {
                     thread_id: self.thread_id.clone(),
                     ephemeral: call.ephemeral,
-                    file_name: None,
-                    tags: HashMap::from([("usage".to_string(), "image_gen".to_string())]),
-                    data,
+                    content: UploadContent::Image {
+                        file_name: None,
+                        tags: HashMap::from([("usage".to_string(), "image_gen".to_string())]),
+                        data,
+                    },
                 };
                 match call.attachment_store.upload(request).await {
                     Ok(UploadResult::File { file_id }) => GeneratedImageRef::File { file_id },

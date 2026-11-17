@@ -10,6 +10,7 @@ use crate::original_image_detail::can_request_original_image_detail;
 use codex_analytics::ImageDetailSetting;
 use codex_analytics::ImagePreparationMetadata;
 use codex_attachment_store::AttachmentStore;
+use codex_attachment_store::UploadContent;
 use codex_attachment_store::UploadRequest;
 use codex_attachment_store::UploadResult;
 use codex_context_fragments::AnnotatedContent;
@@ -449,9 +450,11 @@ async fn prepare_image(
     let request = UploadRequest {
         thread_id: origin.thread_id.to_owned(),
         ephemeral: origin.ephemeral,
-        file_name: None,
-        tags: HashMap::new(),
-        data: prepared.encoded.bytes.to_vec(),
+        content: UploadContent::Image {
+            file_name: None,
+            tags: HashMap::new(),
+            data: prepared.encoded.bytes.to_vec(),
+        },
     };
     let prepared_image = match preparation.image_store.upload(request).await {
         Ok(UploadResult::Inline { bytes }) => ImageReference::Inline {

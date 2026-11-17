@@ -11,6 +11,7 @@ use std::time::Duration;
 use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::FormatSpecificMetadata;
 use codex_attachment_store::ResolveRequest;
+use codex_attachment_store::UploadContent;
 use codex_attachment_store::UploadRequest;
 use codex_attachment_store::UploadResult;
 use codex_history::ResponseItemEnvelope;
@@ -184,18 +185,14 @@ async fn store_tool_audio(
             };
         }
     };
-    // These tags come from Core. MCP servers and Code Mode never supply attachment IDs or policy tags.
-    let tags = HashMap::from([
-        ("usage".to_string(), "tool_audio".to_string()),
-        ("mime_type".to_string(), mime.to_string()),
-    ]);
     let result = store
         .upload(UploadRequest {
             thread_id: thread_id.to_owned(),
             ephemeral,
-            file_name: None,
-            tags,
-            data,
+            content: UploadContent::ToolAudio {
+                declared_mime_type: mime.to_owned(),
+                data,
+            },
         })
         .await;
     tool_audio_after_upload(result, mime, inline_url)

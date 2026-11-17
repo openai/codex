@@ -9,6 +9,7 @@ mod multi_environment_mcp;
 use super::image_rollout::RecordingFileAttachmentStore;
 use super::permissions_messages::PermissionPathScenario;
 use codex_attachment_store::AttachmentStoreErrorKind;
+use codex_attachment_store::UploadContent;
 use codex_core::RequestCountry;
 use codex_protocol_test_support::ContentItemTestExt;
 use std::collections::HashMap;
@@ -492,10 +493,23 @@ async fn gif_generation_preserves_animation_and_replays_a_still_preview() -> Res
     let [animation, preview] = uploads.as_slice() else {
         panic!("expected an animated artifact and a separate model preview");
     };
-    assert_eq!(animation.data, BASE64_STANDARD.decode(gif)?);
-    assert_eq!(image::guess_format(&preview.data)?, image::ImageFormat::Png);
+    let UploadContent::Image {
+        data: animation_data,
+        ..
+    } = &animation.content
+    else {
+        panic!("expected animation image upload");
+    };
+    let UploadContent::Image {
+        data: preview_data, ..
+    } = &preview.content
+    else {
+        panic!("expected preview image upload");
+    };
+    assert_eq!(*animation_data, BASE64_STANDARD.decode(gif)?);
+    assert_eq!(image::guess_format(preview_data)?, image::ImageFormat::Png);
     assert_eq!(
-        image::load_from_memory(&preview.data)?
+        image::load_from_memory(preview_data)?
             .to_rgba8()
             .get_pixel(0, 0)
             .0,

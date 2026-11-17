@@ -10,6 +10,7 @@ use codex_attachment_store::ImageMetadata;
 use codex_attachment_store::InlineAttachmentStore;
 use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
+use codex_attachment_store::UploadContent;
 use codex_attachment_store::UploadFuture;
 use codex_attachment_store::UploadRequest;
 use codex_attachment_store::UploadResult;
@@ -29,11 +30,11 @@ pub(super) struct TestAudioDurationStore {
 
 impl AttachmentStore for TestAudioDurationStore {
     fn upload(&self, request: UploadRequest) -> UploadFuture<'_> {
-        if request
-            .tags
-            .get("usage")
-            .is_some_and(|usage| usage == "tool_audio")
-        {
+        let is_tool_audio = match &request.content {
+            UploadContent::Image { .. } => false,
+            UploadContent::ToolAudio { .. } => true,
+        };
+        if is_tool_audio {
             self.tool_uploads
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

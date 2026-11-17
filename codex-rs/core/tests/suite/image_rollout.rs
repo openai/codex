@@ -8,6 +8,7 @@ use codex_attachment_store::AttachmentStoreErrorKind;
 use codex_attachment_store::IsResolvableFuture;
 use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
+use codex_attachment_store::UploadContent;
 use codex_attachment_store::UploadFuture;
 use codex_attachment_store::UploadRequest;
 use codex_attachment_store::UploadResult;
@@ -726,10 +727,17 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
             upload.thread_id,
             resumed.session_configured.thread_id.to_string(),
         );
-        assert_eq!(
-            image::load_from_memory(&upload.data)?.dimensions(),
-            (6000, 240)
-        );
+        let UploadContent::Image {
+            file_name,
+            tags,
+            data,
+        } = &upload.content
+        else {
+            panic!("expected image upload");
+        };
+        assert!(file_name.is_none());
+        assert!(tags.is_empty());
+        assert_eq!(image::load_from_memory(data)?.dimensions(), (6000, 240));
     }
 
     let request = resumed_mock.single_request();

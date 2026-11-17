@@ -8,18 +8,29 @@ fn attachment_debug_output_redacts_bytes() {
     let request = UploadRequest {
         thread_id: "thread-1".to_string(),
         ephemeral: false,
-        file_name: Some("image.png".to_string()),
-        tags: HashMap::new(),
-        data: b"secret".to_vec(),
+        content: UploadContent::Image {
+            file_name: Some("image.png".to_string()),
+            tags: HashMap::new(),
+            data: b"secret".to_vec(),
+        },
     };
     let result = UploadResult::Inline {
         bytes: b"secret".to_vec(),
     };
+    let tool_audio = UploadContent::ToolAudio {
+        declared_mime_type: "audio/wav".to_string(),
+        data: b"secret".to_vec(),
+    };
 
     assert_eq!(
-        (format!("{request:?}"), format!("{result:?}")),
         (
-            r#"UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), tags: {}, data: "<redacted>" }"#.to_string(),
+            format!("{request:?}"),
+            format!("{tool_audio:?}"),
+            format!("{result:?}"),
+        ),
+        (
+            r#"UploadRequest { thread_id: "thread-1", ephemeral: false, content: Image { file_name: Some("image.png"), tags: {}, data: "<redacted>" } }"#.to_string(),
+            r#"ToolAudio { declared_mime_type: "audio/wav", data: "<redacted>" }"#.to_string(),
             r#"Inline { bytes: "<redacted>" }"#.to_string(),
         )
     );
@@ -52,9 +63,11 @@ async fn inline_store_preserves_image_bytes() {
             .upload(UploadRequest {
                 thread_id: "thread-1".to_string(),
                 ephemeral: false,
-                file_name: Some(file_name.to_string()),
-                tags: HashMap::new(),
-                data: data.to_vec(),
+                content: UploadContent::Image {
+                    file_name: Some(file_name.to_string()),
+                    tags: HashMap::new(),
+                    data: data.to_vec(),
+                },
             })
             .await
             .expect("inline attachment");
@@ -64,6 +77,28 @@ async fn inline_store_preserves_image_bytes() {
 
         assert_eq!(bytes, data);
     }
+}
+
+/// The inline store preserves tool audio bytes without interpreting them.
+#[tokio::test]
+async fn inline_store_preserves_tool_audio_bytes() {
+    let data = b"RIFF\x04\x00\x00\x00WAVE";
+    let attachment = InlineAttachmentStore
+        .upload(UploadRequest {
+            thread_id: "thread-1".to_string(),
+            ephemeral: false,
+            content: UploadContent::ToolAudio {
+                declared_mime_type: "audio/wav".to_string(),
+                data: data.to_vec(),
+            },
+        })
+        .await
+        .expect("inline attachment");
+    let UploadResult::Inline { bytes } = attachment else {
+        panic!("inline store returned a file reference");
+    };
+
+    assert_eq!(bytes, data);
 }
 
 /// The inline store preserves opaque file references even though it cannot resolve them.
