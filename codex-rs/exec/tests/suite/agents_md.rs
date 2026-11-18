@@ -8,7 +8,7 @@ async fn exec_includes_workspace_agents_md_in_request() -> anyhow::Result<()> {
     let test = test_codex_exec();
     std::fs::write(test.cwd_path().join("AGENTS.md"), "workspace instructions")?;
 
-    let server = responses::start_mock_server().await;
+    let server = responses::start_sse_server().await;
     let body = responses::sse(vec![
         responses::ev_response_created("resp1"),
         responses::ev_assistant_message("m1", "fixture hello"),
@@ -42,7 +42,7 @@ async fn exec_prefers_workspace_agents_override_md() -> anyhow::Result<()> {
         "override instructions",
     )?;
 
-    let server = responses::start_mock_server().await;
+    let server = responses::start_sse_server().await;
     let body = responses::sse(vec![
         responses::ev_response_created("resp1"),
         responses::ev_assistant_message("m1", "fixture hello"),

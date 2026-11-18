@@ -34,6 +34,7 @@ use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::http::HeaderName;
 use wiremock::http::HeaderValue;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
@@ -1270,6 +1271,19 @@ pub async fn start_mock_server() -> MockServer {
     // Provide a default `/models` response so tests remain hermetic when the client queries it.
     let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
+    server
+}
+
+/// Start a server for tests that serve Responses over HTTP/SSE only.
+/// A 404 on WebSocket upgrade triggers retries; 426 selects the HTTP fallback immediately.
+pub async fn start_sse_server() -> MockServer {
+    let server = start_mock_server().await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/responses$"))
+        .and(header("upgrade", "websocket"))
+        .respond_with(ResponseTemplate::new(426))
+        .mount(&server)
+        .await;
     server
 }
 

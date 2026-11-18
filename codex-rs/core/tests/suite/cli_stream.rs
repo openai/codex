@@ -122,6 +122,8 @@ fn run_cli_command(command: &mut Command) -> io::Result<Output> {
     command.process_group(0);
 
     command
+        // Each CLI has its own runtime; keep parallel tests from starting a worker per host CPU.
+        .env("TOKIO_WORKER_THREADS", "2")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -148,7 +150,7 @@ fn run_cli_command(command: &mut Command) -> io::Result<Output> {
 async fn responses_mode_stream_cli_supports_personal_access_tokens() {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     mount_personal_access_token_startup(&server).await;
     let resp_mock = responses::mount_sse_once(&server, cli_sse_response()).await;
     let home = TempDir::new().unwrap();
@@ -180,7 +182,7 @@ async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_for_personal_a
  {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     mount_personal_access_token_startup(&server).await;
     Mock::given(method("POST"))
         .and(path("/api/codex/responses"))
@@ -214,8 +216,8 @@ async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_for_personal_a
 async fn responses_mode_stream_cli() {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
-    let repo_root = repo_root();
+    let server = responses::start_sse_server().await;
+    let cwd = TempDir::new().unwrap();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "hi"),
@@ -236,8 +238,7 @@ async fn responses_mode_stream_cli() {
         .arg(&provider_override)
         .arg("-c")
         .arg("model_provider=\"mock\"")
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
@@ -260,8 +261,8 @@ async fn responses_mode_stream_cli() {
 async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
-    let repo_root = repo_root();
+    let server = responses::start_sse_server().await;
+    let cwd = TempDir::new().unwrap();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "hi"),
@@ -276,8 +277,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
@@ -298,7 +298,7 @@ async fn exec_cli_applies_model_instructions_file() {
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
@@ -321,7 +321,7 @@ async fn exec_cli_applies_model_instructions_file() {
     );
 
     let home = TempDir::new().unwrap();
-    let repo_root = repo_root();
+    let cwd = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = Command::new(bin);
     cmd.arg("exec")
@@ -334,8 +334,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg("model_provider=\"mock\"")
         .arg("-c")
         .arg(format!("model_instructions_file=\"{custom_path_str}\""))
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
@@ -363,7 +362,7 @@ async fn exec_cli_applies_model_instructions_file() {
 async fn exec_cli_profile_applies_model_instructions_file() {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
@@ -388,7 +387,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     )
     .unwrap();
 
-    let repo_root = repo_root();
+    let cwd = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = Command::new(bin);
     cmd.arg("exec")
@@ -401,8 +400,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&provider_override)
         .arg("-c")
         .arg("model_provider=\"mock\"")
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
@@ -426,9 +424,9 @@ async fn exec_cli_profile_applies_model_instructions_file() {
 async fn responses_api_stream_cli() {
     skip_if_no_network!();
 
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     let resp_mock = responses::mount_sse_once(&server, cli_sse_response()).await;
-    let repo_root = repo_root();
+    let cwd = TempDir::new().unwrap();
 
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
@@ -437,8 +435,7 @@ async fn responses_api_stream_cli() {
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
@@ -466,10 +463,10 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let prompt = format!("echo {marker}");
 
     // 3. Serve two hermetic SSE responses, one for the initial run and one for resume.
-    let server = MockServer::start().await;
+    let server = responses::start_sse_server().await;
     let resp_mock =
         responses::mount_sse_sequence(&server, vec![cli_sse_response(), cli_sse_response()]).await;
-    let repo_root = repo_root();
+    let cwd = TempDir::new().unwrap();
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
@@ -478,8 +475,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy");
@@ -594,8 +590,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
-        .arg("-C")
-        .arg(&repo_root)
+        .current_dir(cwd.path())
         .arg(&prompt2)
         .arg("resume")
         .arg("--last");

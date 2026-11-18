@@ -3,6 +3,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::start_sse_server;
 use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::json;
 use wiremock::Mock;
@@ -14,7 +15,7 @@ use wiremock::matchers::path;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let server = start_mock_server().await;
+    let server = start_sse_server().await;
     let repo_root = codex_utils_cargo_bin::repo_root()?;
 
     mount_sse_once_match(
@@ -39,7 +40,7 @@ async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
 async fn exec_api_key_cannot_discard_stored_workspace_network_policy() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let policy_server = start_mock_server().await;
-    let inference_server = start_mock_server().await;
+    let inference_server = start_sse_server().await;
     let token = concat!(
         "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.",
         "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJlbnRlcnByaXNlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoid29ya3NwYWNlIn19.",
@@ -101,7 +102,7 @@ async fn exec_bootstrap_rejects_redirected_oauth_and_cloud_policy() -> anyhow::R
         let test = test_codex_exec();
         let origin = start_mock_server().await;
         let destination = start_mock_server().await;
-        let inference = start_mock_server().await;
+        let inference = start_sse_server().await;
         let token = concat!(
             "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.",
             "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJlbnRlcnByaXNlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoid29ya3NwYWNlIn19.",
