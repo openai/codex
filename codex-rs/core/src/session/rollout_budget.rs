@@ -89,9 +89,9 @@ impl Session {
         turn: &TurnContext,
         phase: codex_analytics::CompactionPhase,
     ) -> bool {
-        !matches!(phase, codex_analytics::CompactionPhase::StandaloneTurn)
-            && !turn.session_source.is_non_root_agent()
-            && self.work_budget().can_force_root_final()
+        self.services
+            .budget_policy
+            .defer_compaction_start(&turn.session_source, phase)
     }
 
     pub(crate) fn finish_compaction(

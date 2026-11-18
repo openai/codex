@@ -191,4 +191,6 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
-ignored-paths = ["tests/remote_env_windows/*.rs"]
+ignored-paths = [
+    "tests/remote_env_windows/*.rs",
+]
