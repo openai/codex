@@ -55,8 +55,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
-// Bytes conservatively bound tokens, including for byte-fallback tokenizers.
-const MAX_PROMPT_BYTES: usize = 4_000;
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const THREAD_SNAPSHOT_NOTE: &str = concat!(
     "\nThis snapshot is a copy of the source thread’s history taken while its turn was still running. ",
@@ -85,13 +83,10 @@ pub(crate) async fn generate_sample(
     rpc_gate: Arc<ConnectionRpcGate>,
 ) -> SampleResult {
     let deadline = Instant::now() + SAMPLE_TIMEOUT;
-    if task.params.expected_turn_id.trim().is_empty()
-        || task.params.prompt.trim().is_empty()
-        || task.params.prompt.len() > MAX_PROMPT_BYTES
-    {
-        return Err(invalid_request(format!(
-            "thread/sample requires expectedTurnId and a prompt of at most {MAX_PROMPT_BYTES} bytes",
-        )));
+    if task.params.expected_turn_id.trim().is_empty() || task.params.prompt.trim().is_empty() {
+        return Err(invalid_request(
+            "thread/sample requires a nonblank expectedTurnId and prompt",
+        ));
     }
     let (sender, receiver) = oneshot::channel();
     let originator = AuthStorageOriginator::current();

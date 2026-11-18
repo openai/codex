@@ -1319,13 +1319,7 @@ async fn sample_rejects_invalid_sources_and_prompts() -> Result<()> {
             "Predict".to_string(),
             "latest finished turn",
         ),
-        (parent.clone(), turn.clone(), String::new(), "prompt"),
-        (
-            parent.clone(),
-            turn.clone(),
-            "x".repeat(4_001),
-            "at most 4000 bytes",
-        ),
+        (parent, turn, String::new(), "prompt"),
     ] {
         let id = client
             .send_raw_request(
