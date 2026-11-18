@@ -710,6 +710,7 @@ async fn process_sse_with_treatment(
                         | ApiError::ContextWindowExceeded
                         | ApiError::InvalidRequest { .. }
                         | ApiError::SessionBudgetExceeded
+                        | ApiError::SpendLimitExceeded(_)
                         | ApiError::InferenceHookDenied { .. }
                         | ApiError::AccessProgramNotEnabled { .. }
                         | ApiError::ContentPolicyViolation { .. }

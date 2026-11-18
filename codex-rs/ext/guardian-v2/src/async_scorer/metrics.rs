@@ -49,7 +49,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::WebsocketMessageTooLarge => "websocket_message_too_large",
             ApiError::ResponseIncomplete(_) => "incomplete_response",
             ApiError::ContextWindowExceeded => "context_window_exceeded",
-            ApiError::QuotaExceeded => "quota_exceeded",
+            ApiError::SpendLimitExceeded(_) | ApiError::QuotaExceeded => "quota_exceeded",
             ApiError::UsageNotIncluded => "usage_not_included",
             ApiError::SessionBudgetExceeded => "session_budget_exceeded",
             ApiError::Retryable { .. } => "retryable_api_error",

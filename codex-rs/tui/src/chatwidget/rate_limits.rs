@@ -172,7 +172,12 @@ pub(super) fn app_server_rate_limit_error_kind(
         | AppServerCodexErrorInfo::PolicyCapacityUnavailable => {
             Some(RateLimitErrorKind::ServerOverloaded)
         }
-        AppServerCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        AppServerCodexErrorInfo::UsageLimitExceeded
+        | AppServerCodexErrorInfo::ApiKeySpendLimitExceeded
+        | AppServerCodexErrorInfo::ProjectSpendLimitExceeded
+        | AppServerCodexErrorInfo::OrganizationSpendLimitExceeded => {
+            Some(RateLimitErrorKind::UsageLimit)
+        }
         AppServerCodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(429),
         } => Some(RateLimitErrorKind::Generic),

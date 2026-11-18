@@ -87,7 +87,7 @@ pub fn telemetry_api_error_message(error: &ApiError) -> String {
         }
         ApiError::ResponseIncomplete(_) => "incomplete response".to_string(),
         ApiError::ContextWindowExceeded => "context window exceeded".to_string(),
-        ApiError::QuotaExceeded => "quota exceeded".to_string(),
+        ApiError::SpendLimitExceeded(_) | ApiError::QuotaExceeded => "quota exceeded".to_string(),
         ApiError::UsageNotIncluded => "usage not included".to_string(),
         ApiError::SessionBudgetExceeded => "session budget exceeded".to_string(),
         ApiError::Retryable { .. } => "retryable error".to_string(),

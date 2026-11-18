@@ -52,6 +52,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -2865,17 +2866,24 @@ async fn thread_items_read_validates_ids_before_history_access() -> Result<()> {
     Ok(())
 }
 
-#[test_case::test_case("model_not_found", CodexErrorInfo::ModelNotFound, "Access to this deployment ended."; "model_not_found")]
-#[test_case::test_case("inference_hook_denied", CodexErrorInfo::InferenceHookDenied, "Blocked by the workspace hook."; "inference_hook_denied")]
+#[test_case::test_case("api_key_spend_limit_exceeded", CodexErrorInfo::ApiKeySpendLimitExceeded, "Request denied", "Your API key has reached its spend limit."; "api_key_spend_limit_exceeded")]
+#[test_case::test_case("project_spend_limit_exceeded", CodexErrorInfo::ProjectSpendLimitExceeded, "Request denied", "Your API project has reached its spend limit."; "project_spend_limit_exceeded")]
+#[test_case::test_case("organization_spend_limit_exceeded", CodexErrorInfo::OrganizationSpendLimitExceeded, "Request denied", "Your API organization has reached its spend limit."; "organization_spend_limit_exceeded")]
+#[test_case::test_case("model_not_found", CodexErrorInfo::ModelNotFound, "Access to this deployment ended.", "Access to this deployment ended."; "model_not_found")]
+#[test_case::test_case("inference_hook_denied", CodexErrorInfo::InferenceHookDenied, "Blocked by the workspace hook.", "Blocked by the workspace hook."; "inference_hook_denied")]
 #[tokio::test]
 async fn thread_read_preserves_provider_error_after_failed_turn(
     code: &str,
     expected: CodexErrorInfo,
-    message: &str,
+    provider_message: &str,
+    expected_message: &str,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
-    let response_mock =
-        responses::mount_sse_once(&server, responses::sse_failed("resp-1", code, message)).await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse_failed("resp-1", code, provider_message),
+    )
+    .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
@@ -2908,12 +2916,14 @@ async fn thread_read_preserves_provider_error_after_failed_turn(
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("error")).await??;
     assert!(!live.will_retry);
     assert_eq!(live.error.codex_error_info, Some(expected));
-    assert_eq!(live.error.message, message);
-    timeout(
+    assert_eq!(live.error.message, expected_message);
+    let completed: TurnCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
+        mcp.read_notification("turn/completed"),
     )
     .await??;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    assert_eq!(completed.turn.error.as_ref(), Some(&live.error));
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -2931,6 +2941,27 @@ async fn thread_read_preserves_provider_error_after_failed_turn(
     );
     assert_eq!(response_mock.requests().len(), 1);
 
+    let recovered = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("recovered"),
+            responses::ev_completed("recovered"),
+        ]),
+    )
+    .await;
+    let next = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "try again".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_ne!(next.turn.id, completed.turn.id);
+    assert_eq!(next.turn.status, TurnStatus::Completed);
+    recovered.single_request();
     Ok(())
 }
 

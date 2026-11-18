@@ -947,7 +947,7 @@ pub(crate) async fn run_turn(
                                 return Err(err);
                             }
                             let error = err.to_codex_protocol_error();
-                            if matches!(error, CodexErrorInfo::UsageLimitExceeded) {
+                            if error.is_usage_limit() {
                                 // Preserve the completed answer while stopping automatic work.
                                 sess.emit_turn_error_lifecycle(
                                     turn_context.as_ref(),

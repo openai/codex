@@ -584,23 +584,52 @@ fn map_api_error_keeps_other_400_errors_generic() {
 
 #[test]
 fn map_api_error_distinguishes_http_quota_errors_from_rate_limits() {
-    for error in [
-        serde_json::json!({"type": "insufficient_quota"}),
-        serde_json::json!({"code": "insufficient_quota"}),
-        serde_json::json!({"code": "credit_balance_exhausted"}),
-        serde_json::json!({"code": "organization_spend_limit_exceeded"}),
-        serde_json::json!({"code": "project_spend_limit_exceeded"}),
-        serde_json::json!({"code": "organization_usage_limit_exceeded"}),
-        serde_json::json!({"type": "rate_limit_error", "code": "rate_limit_exceeded"}),
-        serde_json::json!({"type": "rate_limit_error", "code": "slow_down"}),
+    use CodexErrorInfo::ApiKeySpendLimitExceeded;
+    use CodexErrorInfo::OrganizationSpendLimitExceeded;
+    use CodexErrorInfo::ProjectSpendLimitExceeded;
+    use CodexErrorInfo::UsageLimitExceeded;
+
+    let rate_limit = CodexErrorInfo::ResponseTooManyFailedAttempts {
+        http_status_code: Some(429),
+    };
+    for (error, expected) in [
+        (
+            serde_json::json!({"type": "insufficient_quota"}),
+            UsageLimitExceeded,
+        ),
+        (
+            serde_json::json!({"code": "insufficient_quota"}),
+            UsageLimitExceeded,
+        ),
+        (
+            serde_json::json!({"code": "credit_balance_exhausted"}),
+            UsageLimitExceeded,
+        ),
+        (
+            serde_json::json!({"type": "insufficient_quota", "code": "api_key_spend_limit_exceeded"}),
+            ApiKeySpendLimitExceeded,
+        ),
+        (
+            serde_json::json!({"type": "insufficient_quota", "code": "organization_spend_limit_exceeded"}),
+            OrganizationSpendLimitExceeded,
+        ),
+        (
+            serde_json::json!({"type": "insufficient_quota", "code": "project_spend_limit_exceeded"}),
+            ProjectSpendLimitExceeded,
+        ),
+        (
+            serde_json::json!({"code": "organization_usage_limit_exceeded"}),
+            UsageLimitExceeded,
+        ),
+        (
+            serde_json::json!({"type": "rate_limit_error", "code": "rate_limit_exceeded"}),
+            rate_limit.clone(),
+        ),
+        (
+            serde_json::json!({"type": "rate_limit_error", "code": "slow_down"}),
+            rate_limit,
+        ),
     ] {
-        let expected = if error["type"] == "rate_limit_error" {
-            CodexErrorInfo::ResponseTooManyFailedAttempts {
-                http_status_code: Some(429),
-            }
-        } else {
-            CodexErrorInfo::UsageLimitExceeded
-        };
         let err = map_api_error(ApiError::Transport(TransportError::Http {
             retry_after: None,
             status: http::StatusCode::TOO_MANY_REQUESTS,

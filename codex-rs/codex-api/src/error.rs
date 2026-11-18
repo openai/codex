@@ -2,6 +2,7 @@ use crate::rate_limits::RateLimitError;
 use codex_client::TransportError;
 use codex_http_client::RetryAfter;
 use codex_protocol::error::ResponseIncompleteError;
+use codex_protocol::error::SpendLimitScope;
 use codex_protocol::protocol::MisalignmentErrorDetails;
 use http::StatusCode;
 use serde_json::Value;
@@ -25,6 +26,8 @@ pub enum ApiError {
     ContextWindowExceeded,
     #[error("quota exceeded")]
     QuotaExceeded,
+    #[error("spend limit exceeded")]
+    SpendLimitExceeded(SpendLimitScope),
     #[error("usage not included")]
     UsageNotIncluded,
     #[error("session budget exceeded")]
@@ -100,6 +103,16 @@ pub(crate) fn parse_terminal_provider_error(
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        ("api_key_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::ApiKey))
+        }
+        ("project_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::Project))
+        }
+        ("organization_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::Organization))
+        }
+
         ("inference_hook_denied", None | Some(StatusCode::FORBIDDEN)) => {
             Some(ApiError::InferenceHookDenied {
                 message: message

@@ -75,6 +75,14 @@ pub enum SandboxErr {
     LandlockRestrict,
 }
 
+/// Which customer-configured spend limit prevented inference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpendLimitScope {
+    ApiKey,
+    Project,
+    Organization,
+}
+
 pub struct CodexErr {
     details: CodexErrorDetails,
     retry_after: Option<RetryAfter>,
@@ -222,6 +230,12 @@ pub enum CodexErrorDetails {
     ConnectionFailed(ConnectionFailedError),
     #[error("Quota exceeded. Check your plan and billing details.")]
     QuotaExceeded,
+    #[error("Your API {} has reached its spend limit.", match .0 {
+        SpendLimitScope::ApiKey => "key",
+        SpendLimitScope::Project => "project",
+        SpendLimitScope::Organization => "organization",
+    })]
+    APISpendLimitExceeded(SpendLimitScope),
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
     )]
@@ -494,6 +508,7 @@ impl CodexErr {
             | CodexErrorDetails::UsageAccountingFailed(_)
             | CodexErrorDetails::UsageNotIncluded
             | CodexErrorDetails::QuotaExceeded
+            | CodexErrorDetails::APISpendLimitExceeded(_)
             | CodexErrorDetails::InvalidImageRequest()
             | CodexErrorDetails::InvalidRequest(_)
             | CodexErrorDetails::InvalidAudioInput { .. }
@@ -573,6 +588,15 @@ impl CodexErr {
         match &self.details {
             CodexErrorDetails::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CodexErrorDetails::SessionBudgetExceeded => CodexErrorInfo::SessionBudgetExceeded,
+            CodexErrorDetails::APISpendLimitExceeded(SpendLimitScope::ApiKey) => {
+                CodexErrorInfo::ApiKeySpendLimitExceeded
+            }
+            CodexErrorDetails::APISpendLimitExceeded(SpendLimitScope::Project) => {
+                CodexErrorInfo::ProjectSpendLimitExceeded
+            }
+            CodexErrorDetails::APISpendLimitExceeded(SpendLimitScope::Organization) => {
+                CodexErrorInfo::OrganizationSpendLimitExceeded
+            }
             CodexErrorDetails::RateLimitExceeded(_) => CodexErrorInfo::RateLimitExceeded,
             CodexErrorDetails::UsageLimitReached(_)
             | CodexErrorDetails::QuotaExceeded

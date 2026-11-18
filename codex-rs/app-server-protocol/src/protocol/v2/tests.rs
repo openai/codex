@@ -4958,6 +4958,22 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (
+            CoreCodexErrorInfo::ApiKeySpendLimitExceeded,
+            json!("apiKeySpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::ProjectSpendLimitExceeded,
+            json!("projectSpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::OrganizationSpendLimitExceeded,
+            json!("organizationSpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::UsageLimitExceeded,
+            json!("usageLimitExceeded"),
+        ),
+        (
             CoreCodexErrorInfo::PolicyCapacityUnavailable,
             json!("policyCapacityUnavailable"),
         ),

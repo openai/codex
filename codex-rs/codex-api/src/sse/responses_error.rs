@@ -45,12 +45,7 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
     };
 
     match error.code.as_deref() {
-        Some(
-            "insufficient_quota"
-            | "credit_balance_exhausted"
-            | "organization_spend_limit_exceeded"
-            | "project_spend_limit_exceeded",
-        ) => ApiError::QuotaExceeded,
+        Some("insufficient_quota" | "credit_balance_exhausted") => ApiError::QuotaExceeded,
         Some("usage_not_included") => ApiError::UsageNotIncluded,
         Some("cyber_policy") => ApiError::CyberPolicy {
             message: cyber_policy_message(error.message),
