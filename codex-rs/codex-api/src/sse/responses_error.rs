@@ -47,18 +47,6 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
     match error.code.as_deref() {
         Some("insufficient_quota" | "credit_balance_exhausted") => ApiError::QuotaExceeded,
         Some("usage_not_included") => ApiError::UsageNotIncluded,
-        Some("cyber_policy") => ApiError::CyberPolicy {
-            message: cyber_policy_message(error.message),
-        },
-        Some("bio_policy") => {
-            let message = error
-                .message
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or_else(|| {
-                    "This content was flagged for possible biological risk.".to_string()
-                });
-            ApiError::BioPolicy { message }
-        }
         Some("misalignment_policy_violation") => {
             let message = error
                 .message
@@ -119,16 +107,6 @@ fn try_parse_retry_delay(err: &Error) -> Option<Duration> {
         }
     }
     None
-}
-
-fn cyber_policy_fallback_message() -> String {
-    "This request has been flagged for possible cybersecurity risk.".to_string()
-}
-
-fn cyber_policy_message(message: Option<String>) -> String {
-    message
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or_else(cyber_policy_fallback_message)
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {

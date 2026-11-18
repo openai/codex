@@ -139,6 +139,16 @@ pub(crate) fn parse_terminal_provider_error(
                 status,
             })
         }
+        ("cyber_policy", None) => Some(ApiError::CyberPolicy {
+            message: message
+                .unwrap_or("This request has been flagged for possible cybersecurity risk.")
+                .to_owned(),
+        }),
+        ("bio_policy", None) => Some(ApiError::BioPolicy {
+            message: message
+                .unwrap_or("This content was flagged for possible biological risk.")
+                .to_owned(),
+        }),
         // HTTP 403s retain their request ID and headers in the API bridge.
         ("access_program_not_enabled", None) => Some(ApiError::AccessProgramNotEnabled {
             message: message

@@ -714,6 +714,8 @@ async fn process_sse_with_treatment(
                         | ApiError::InferenceHookDenied { .. }
                         | ApiError::AccessProgramNotEnabled { .. }
                         | ApiError::ContentPolicyViolation { .. }
+                        | ApiError::BioPolicy { .. }
+                        | ApiError::CyberPolicy { .. }
                         | ApiError::ResponseIncomplete(_)
                 ) {
                     let _ = tx_event.send(Err(error)).await;
@@ -1249,6 +1251,60 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         assert_matches!(events[0], Err(ApiError::QuotaExceeded));
+    }
+
+    #[tokio::test]
+    async fn statusless_policy_error_events_are_terminal() {
+        for code in ["bio_policy", "cyber_policy"] {
+            let event = json!({
+                "type": "error",
+                "sequence_number": 0,
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": code,
+                    "message": "policy rejection",
+                },
+            });
+            let sse = format!("event: error\ndata: {event}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+            match (code, events.as_slice()) {
+                ("bio_policy", [Err(ApiError::BioPolicy { message })])
+                | ("cyber_policy", [Err(ApiError::CyberPolicy { message })]) => {
+                    assert_eq!(message, "policy rejection");
+                }
+                other => panic!("unexpected policy error event: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn statusless_policy_errors_exit_before_sse_idle_timeout() {
+        for code in ["bio_policy", "cyber_policy"] {
+            let event = json!({
+                "type": "error",
+                "error": { "code": code, "message": "policy rejection" },
+            });
+            let sse = format!("event: error\ndata: {event}\n\n");
+            let stream = stream::iter([Ok(Bytes::from(sse))]).chain(stream::pending());
+            let (tx, mut rx) = mpsc::channel(1);
+            let started = tokio::time::Instant::now();
+            tokio::spawn(process_sse(
+                Box::pin(stream),
+                tx,
+                idle_timeout(),
+                /*telemetry*/ None,
+            ));
+
+            let result = rx.recv().await.expect("expected a policy error");
+            match (code, result) {
+                ("bio_policy", Err(ApiError::BioPolicy { message }))
+                | ("cyber_policy", Err(ApiError::CyberPolicy { message })) => {
+                    assert_eq!(message, "policy rejection");
+                }
+                other => panic!("unexpected policy error: {other:?}"),
+            }
+            assert_eq!(started.elapsed(), Duration::ZERO);
+        }
     }
 
     #[tokio::test]

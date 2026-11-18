@@ -2724,6 +2724,14 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     json!({"type": "error", "status": 400, "error": {"code": "budget_reached"}}),
     CodexErrorInfo::SessionBudgetExceeded; "budget HTTP envelope"
 )]
+#[test_case::test_case(
+    json!({"type": "error", "sequence_number": 0, "error": {"code": "bio_policy", "message": "policy rejection"}}),
+    CodexErrorInfo::BioPolicy; "bio policy without status"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "sequence_number": 0, "error": {"code": "cyber_policy", "message": "policy rejection"}}),
+    CodexErrorInfo::CyberPolicy; "cyber policy without status"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     failure: serde_json::Value,
