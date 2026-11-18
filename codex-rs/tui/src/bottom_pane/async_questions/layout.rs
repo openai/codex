@@ -13,6 +13,7 @@ pub(super) struct LayoutSections {
     pub(super) question_area: Rect,
     pub(super) question_lines: Vec<HyperlinkLine>,
     pub(super) options_area: Rect,
+    pub(super) option_lines: Vec<Vec<HyperlinkLine>>,
     /// Layout already measured the wrapped choices, so the footer can use this flag
     /// without parsing and wrapping their Markdown again.
     pub(super) show_option_tip: bool,
@@ -24,7 +25,8 @@ pub(super) struct LayoutSections {
 impl AsyncQuestions {
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
         let has_options = self.has_options();
-        let full_options_height = self.options_required_height(area.width);
+        let option_lines = self.option_rows(area.width);
+        let full_options_height = self.answer_height(area.width, &option_lines);
         let mut question_lines = self.wrapped_question_lines(area.width);
         let mut footer_pref = self.footer_lines(area.width, /*option_tip*/ None).len() as u16;
         if has_options
@@ -112,6 +114,7 @@ impl AsyncQuestions {
             question_area,
             question_lines,
             options_area,
+            option_lines,
             show_option_tip: options_height > 0 && options_height < full_options_height,
             notes_area,
             footer_lines,

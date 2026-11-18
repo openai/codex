@@ -447,17 +447,14 @@ fn render_rows_inner(
             break;
         }
 
-        let mut wrapped =
-            wrap_row_lines(row, desc_col, area.width, column_width.description_layout);
+        let wrapped = styled_row_lines(
+            row,
+            Some(i) == state.selected_idx,
+            desc_col,
+            area.width,
+            column_width.description_layout,
+        );
         clipped |= wrapped.len() > usize::from(area.bottom().saturating_sub(cur_y));
-        for line in &mut wrapped {
-            apply_row_state_style(
-                std::slice::from_mut(&mut line.line),
-                Some(i) == state.selected_idx && !row.is_disabled,
-                row.is_disabled,
-                row.selection_style,
-            );
-        }
 
         // Render the wrapped lines.
         let mut rendered_item = false;
@@ -489,6 +486,26 @@ fn render_rows_inner(
         has_above: start_idx > 0,
         has_below: clipped || start_idx + rendered_items < rows_all.len(),
     }
+}
+
+/// Wrap one row with the same selection styling used by the shared picker renderer.
+pub(crate) fn styled_row_lines(
+    row: &GenericDisplayRow,
+    selected: bool,
+    desc_col: usize,
+    width: u16,
+    description_layout: SelectionDescriptionLayout,
+) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+    let mut lines = wrap_row_lines(row, desc_col, width, description_layout);
+    for line in &mut lines {
+        apply_row_state_style(
+            std::slice::from_mut(&mut line.line),
+            selected && !row.is_disabled,
+            row.is_disabled,
+            row.selection_style,
+        );
+    }
+    lines
 }
 
 /// Render a list of rows using the provided ScrollState, with shared styling

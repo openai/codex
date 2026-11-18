@@ -16,7 +16,6 @@ use crate::terminal_hyperlinks::HyperlinkParagraph;
 
 use super::AsyncQuestions;
 use super::TIP_SEPARATOR;
-use crate::bottom_pane::request_user_input::render::render_rows_bottom_aligned;
 use crate::bottom_pane::request_user_input::render::truncate_line_word_boundary_with_ellipsis;
 use crate::keymap::KeymapContext;
 
@@ -26,26 +25,23 @@ impl Renderable for AsyncQuestions {
     }
     fn desired_height(&self, width: u16) -> u16 {
         let width = menu_surface_inset(Rect::new(/*x*/ 0, /*y*/ 0, width, u16::MAX)).width;
-        let extra_height = self.options_required_height(width)
-            + if !self.has_options() {
-                self.composer.inline_input_height(width).clamp(1, 8)
-            } else {
-                0
-            }
-            + 2
+        let answer_height = self.answer_height(width, &self.option_rows(width));
+        let chrome = 2
             + u16::from(!self.has_options() && self.unanswered_count() > 1)
             + self.footer_lines(width, /*option_tip*/ None).len() as u16
             + u16::from(self.unanswered_count() > 1)
             + menu_surface_padding_height();
-        u16::try_from(self.wrapped_question_lines(width).len() + usize::from(extra_height))
+        u16::try_from(self.wrapped_question_lines(width).len())
             .unwrap_or(u16::MAX)
+            .saturating_add(answer_height)
+            .saturating_add(chrome)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.visible_options.set((0, 0));
         ratatui::widgets::Clear.render(area, buf);
         let content_area = render_menu_surface(area, buf);
         if content_area.is_empty() {
+            self.option_viewport.take();
             return;
         }
         let sections = self.layout_sections(content_area);
@@ -57,48 +53,9 @@ impl Renderable for AsyncQuestions {
         .render(sections.question_area, buf);
 
         if self.other_selected() {
-            self.render_inline_options(sections.options_area, buf);
-        } else if self.has_options() && sections.options_area.height > 0 {
-            let option_rows = self.option_rows(sections.options_area.width);
-            let mut options_state = self.state.pending[self.state.current_idx].options_state;
-            let selected = options_state.selected_idx.unwrap_or(0);
-            let heights: Vec<_> = option_rows
-                .iter()
-                .map(|row| {
-                    super::measure_rows_height(
-                        std::slice::from_ref(row),
-                        &super::ScrollState::default(),
-                        /*max_results*/ 1,
-                        sections.options_area.width,
-                    )
-                })
-                .collect();
-            let available = sections.options_area.height;
-            if heights.iter().sum::<u16>() <= available {
-                options_state.scroll_top = 0;
-            }
-            let mut first = options_state.scroll_top.min(selected);
-            while first < selected && heights[first..=selected].iter().sum::<u16>() > available {
-                first += 1;
-            }
-            let mut used = 0;
-            let visible = heights[first..]
-                .iter()
-                .take_while(|&&height| {
-                    used += height;
-                    used <= available
-                })
-                .count();
-            options_state.scroll_top = first;
-            self.visible_options.set((first, visible));
-            render_rows_bottom_aligned(
-                sections.options_area,
-                buf,
-                &option_rows,
-                &options_state,
-                option_rows.len().max(1),
-                "No options",
-            );
+            self.render_inline_options(sections.options_area, buf, &sections.option_lines);
+        } else if self.has_options() {
+            self.render_scrollable_options(sections.options_area, buf, &sections.option_lines);
         }
 
         if !self.has_options() {

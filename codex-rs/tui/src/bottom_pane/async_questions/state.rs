@@ -61,6 +61,9 @@ impl AsyncQuestions {
 
     pub(crate) fn set_expanded(&mut self, expanded: bool) {
         self.save_current_draft();
+        if !expanded {
+            self.option_viewport.take();
+        }
         self.expanded = expanded && !self.state.pending.is_empty();
         if self.expanded {
             self.snooze_auto_resolution();
@@ -77,7 +80,6 @@ impl AsyncQuestions {
             return false;
         };
         self.save_current_draft();
-        self.visible_options.set((0, 0));
         self.state.current_idx = next;
         self.restore_current_draft();
         true
@@ -118,12 +120,11 @@ impl AsyncQuestions {
             .and_then(|index| answer.question.options.as_ref()?.get(index))
             .map(String::as_str)
             .unwrap_or_default();
-        // Only a fully displayed model-authored option may become user authorization.
-        let (first, count) = self.visible_options.get();
+        // Only model-authored content that has been painted may become user authorization.
         let index = self.selected_option_index().unwrap_or(0);
-        if !self.focus_is_notes() && !(first..first + count).contains(&index) {
+        if !self.focus_is_notes() && !self.option_fully_seen(index) {
             self.composer.show_footer_flash(
-                "Expand terminal to read the entire option".into(),
+                "Scroll to read the entire option".into(),
                 Duration::from_secs(5),
             );
             return;
@@ -182,7 +183,6 @@ impl AsyncQuestions {
             0
         };
         self.expanded &= !self.state.pending.is_empty();
-        self.visible_options.set((0, 0));
         if current_answered {
             self.restore_current_draft();
             self.composer.reset_vim_mode();
@@ -195,7 +195,6 @@ impl AsyncQuestions {
             return;
         }
         self.composer.flush_pending_input();
-        self.visible_options.set((0, 0));
         self.state.pending.remove(self.state.current_idx);
         if self.state.current_idx >= self.state.pending.len() {
             self.state.current_idx = 0;
@@ -211,7 +210,6 @@ impl AsyncQuestions {
         self.state.current_idx = 0;
         self.expanded = false;
         self.submission = None;
-        self.visible_options.set((0, 0));
         self.restore_current_draft();
         self.composer.reset_vim_mode();
     }
@@ -237,7 +235,6 @@ impl AsyncQuestions {
     }
 
     pub(crate) fn restore(&mut self, saved: QuestionState) {
-        self.visible_options.set((0, 0));
         let incoming = std::mem::replace(&mut self.state, saved);
         let mut answered_ids = incoming.answered_ids;
         answered_ids.extend(self.state.answered_ids.iter().cloned());
