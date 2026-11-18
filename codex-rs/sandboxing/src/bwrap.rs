@@ -6,6 +6,8 @@ use std::ffi::CString;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -101,6 +103,24 @@ fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path, timeout: Dur
     };
 
     let deadline = Instant::now() + timeout;
+    // A pidfd becomes readable when this child exits, even if a descendant retains its stderr.
+    // Older kernels and restricted hosts can still use the bounded try_wait loop below.
+    // SAFETY: pidfd_open takes the live child's PID and zero flags, and returns an owned fd.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id(), 0_u32) };
+    if fd >= 0 {
+        // SAFETY: the successful syscall returned a new file descriptor owned by this scope.
+        let pidfd = unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) };
+        let mut event = libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let timeout_ms = libc::c_int::try_from(remaining.as_nanos().div_ceil(1_000_000))
+            .unwrap_or(libc::c_int::MAX);
+        // SAFETY: event is one writable pollfd and pidfd remains open for the duration of poll.
+        unsafe { libc::poll(&mut event, 1, timeout_ms) };
+    }
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
