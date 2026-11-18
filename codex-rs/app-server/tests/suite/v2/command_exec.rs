@@ -20,6 +20,7 @@ use codex_core::exec_env::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -380,7 +381,7 @@ async fn command_exec_enforces_managed_deny_read_requirements() -> Result<()> {
     for sandbox_policy in [
         SandboxPolicy::DangerFullAccess,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![nested_root.try_into()?],
+            writable_roots: vec![LegacyAppPathString::from_path(&nested_root)],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

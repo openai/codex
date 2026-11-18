@@ -815,7 +815,8 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
 
     let inherited_sandbox = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![
-            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())?,
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())?
+                .into(),
         ],
         network_access: true,
         exclude_tmpdir_env_var: true,

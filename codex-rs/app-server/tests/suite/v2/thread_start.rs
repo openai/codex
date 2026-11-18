@@ -585,7 +585,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
             panic!("expected workspace-write sandbox");
         };
         assert!(
-            writable_roots.contains(&extra_root.abs().canonicalize()?),
+            writable_roots.contains(&extra_root.abs().canonicalize()?.into()),
             "legacy sandbox projection should include the runtime workspace root"
         );
     }
@@ -616,7 +616,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
             panic!("expected workspace-write sandbox");
         };
         assert!(
-            writable_roots.contains(&environment_root.abs().canonicalize()?),
+            writable_roots.contains(&environment_root.abs().canonicalize()?.into()),
             "legacy sandbox projection should include the environment workspace root"
         );
     }

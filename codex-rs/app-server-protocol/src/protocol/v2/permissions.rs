@@ -556,7 +556,9 @@ pub enum SandboxPolicy {
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        #[schemars(with = "Vec<AbsolutePathBuf>")]
+        #[ts(as = "Vec<AbsolutePathBuf>")]
+        writable_roots: Vec<LegacyAppPathString>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -585,7 +587,7 @@ enum SandboxPolicyDeserialize {
     #[serde(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        writable_roots: Vec<LegacyAppPathString>,
         #[serde(default)]
         read_only_access: Option<LegacyReadOnlyAccess>,
         #[serde(default)]
@@ -649,8 +651,67 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
-        match self {
+    /// Projects a server policy without resolving cwd-dependent permissions on the client.
+    pub fn permission_profile_template(
+        &self,
+    ) -> io::Result<codex_protocol::models::PermissionProfile> {
+        self.permission_profile(/*cwd*/ None)
+    }
+
+    /// Projects the server policy into a permission profile for display in a client.
+    pub fn permission_profile_for_cwd(
+        &self,
+        cwd: &PathUri,
+    ) -> io::Result<codex_protocol::models::PermissionProfile> {
+        self.permission_profile(Some(cwd))
+    }
+
+    fn permission_profile(
+        &self,
+        cwd: Option<&PathUri>,
+    ) -> io::Result<codex_protocol::models::PermissionProfile> {
+        use codex_protocol::models::PermissionProfile;
+        use codex_protocol::permissions::NetworkSandboxPolicy;
+        if let Self::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } = self
+        {
+            let roots = writable_roots
+                .iter()
+                .cloned()
+                .map(PathUri::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(io::Error::other)?;
+            if cwd.is_none_or(|cwd| cwd.to_abs_path().is_err())
+                || roots.iter().any(|root| root.to_abs_path().is_err())
+            {
+                return Ok(PermissionProfile::workspace_write_with_path_uris(
+                    &roots,
+                    if *network_access {
+                        NetworkSandboxPolicy::Enabled
+                    } else {
+                        NetworkSandboxPolicy::Restricted
+                    },
+                    *exclude_tmpdir_env_var,
+                    *exclude_slash_tmp,
+                ));
+            }
+        }
+        let policy = self.try_to_core()?;
+        Ok(match cwd {
+            Some(cwd) => {
+                PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, &cwd.to_path_buf())
+            }
+            None => PermissionProfile::from_legacy_sandbox_policy_template(&policy),
+        })
+    }
+
+    /// Converts the policy for enforcement on this host, validating every writable root.
+    pub fn try_to_core(&self) -> io::Result<codex_protocol::protocol::SandboxPolicy> {
+        Ok(match self {
             SandboxPolicy::DangerFullAccess => {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
@@ -673,12 +734,24 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: writable_roots.clone(),
+                writable_roots: writable_roots
+                    .iter()
+                    .map(|root| {
+                        let path = root.as_path();
+                        if !path.is_absolute() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                format!("writable root is not absolute: {}", path.display()),
+                            ));
+                        }
+                        AbsolutePathBuf::from_absolute_path_checked(path)
+                    })
+                    .collect::<io::Result<_>>()?,
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             },
-        }
+        })
     }
 }
 
@@ -705,7 +778,7 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
-                writable_roots,
+                writable_roots: writable_roots.into_iter().map(Into::into).collect(),
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,

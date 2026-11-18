@@ -2015,7 +2015,7 @@ fn sandbox_policy_round_trips_external_sandbox_network_access() {
         network_access: NetworkAccess::Enabled,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
@@ -2033,7 +2033,7 @@ fn sandbox_policy_round_trips_read_only_network_access() {
         network_access: true,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ReadOnly {
@@ -2889,13 +2889,13 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
     std::fs::create_dir(root.join(".git")).expect("git metadata");
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![root.clone(), root.clone()],
+        writable_roots: vec![root.clone().into(), root.clone().into()],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
@@ -2907,7 +2907,7 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     );
 
     let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy_template(
-        &v2_policy.to_core(),
+        &core_policy,
     );
     assert!(
         !profile
@@ -2934,6 +2934,43 @@ fn sandbox_policy_round_trips_workspace_write_access() {
 
     let back_to_v2 = SandboxPolicy::from(core_policy);
     assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn sandbox_policy_template_preserves_foreign_writable_roots() {
+    let root = if cfg!(windows) { "/extra" } else { r"C:\extra" };
+    let policy: SandboxPolicy = serde_json::from_value(json!({
+        "type": "workspaceWrite",
+        "writableRoots": [root],
+    }))
+    .expect("workspace-write policy");
+    let root = PathUri::try_from(LegacyAppPathString::from_string(root)).expect("foreign root");
+    let file_system = policy
+        .permission_profile_template()
+        .expect("permission profile template")
+        .file_system_sandbox_policy();
+    assert!(file_system.entries.iter().any(|entry| {
+        entry.access.can_write()
+            && matches!(&entry.path, codex_protocol::permissions::FileSystemPath::Path { path } if path == &root)
+    }));
+}
+
+#[test]
+fn sandbox_policy_rejects_home_relative_writable_roots_for_enforcement() {
+    let policy: SandboxPolicy = serde_json::from_value(json!({
+        "type": "workspaceWrite",
+        "writableRoots": ["~/extra"],
+    }))
+    .expect("workspace-write policy");
+    let home = std::env::current_dir().expect("current directory");
+    let result =
+        codex_utils_absolute_path::AbsolutePathBufGuard::with_home_directory(&home, || {
+            policy.try_to_core()
+        });
+    assert_eq!(
+        result.expect_err("writable roots must be absolute").kind(),
+        std::io::ErrorKind::InvalidInput
+    );
 }
 
 #[test]
@@ -2971,7 +3008,7 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
     assert_eq!(
         policy,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![absolute_path("/workspace")],
+            writable_roots: vec![absolute_path("/workspace").into()],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -5194,7 +5231,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "cwd": cwd,
         "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
-        "sandbox": { "type": "dangerFullAccess" },
+        "sandbox": { "type": "workspaceWrite", "writableRoots": [cwd] },
         "reasoningEffort": null
     });
 
@@ -5208,6 +5245,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     for encoded in [json!(start), json!(resume), json!(fork)] {
         assert_eq!(encoded["thread"]["cwd"], cwd);
         assert_eq!(encoded["cwd"], cwd);
+        assert_eq!(encoded["sandbox"]["writableRoots"], json!([cwd]));
     }
     assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());
     assert_eq!(start.thread.parent_thread_id, None);

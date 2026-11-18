@@ -545,6 +545,13 @@ impl ChatWidget {
             tracing::warn!("Invalid cwd in thread settings");
             return;
         };
+        let permission_profile = match settings.sandbox_policy.permission_profile_for_cwd(&cwd) {
+            Ok(profile) => profile,
+            Err(err) => {
+                tracing::warn!(%err, "Invalid sandbox policy in thread settings");
+                return;
+            }
+        };
         let cwd_changed = self.current_cwd != cwd;
         self.status_line_project_root_name_cache = None;
         if let Ok(local) = cwd.to_abs_path() {
@@ -566,10 +573,6 @@ impl ChatWidget {
         }
         self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
 
-        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-            &settings.sandbox_policy.to_core(),
-            settings.cwd.as_path(),
-        );
         let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
             permission_profile,
             settings.active_permission_profile.take().map(Into::into),

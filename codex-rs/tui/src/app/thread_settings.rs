@@ -284,6 +284,13 @@ pub(super) fn apply_thread_settings_to_session(
     settings: &ThreadSettings,
     cwd: &codex_utils_path_uri::PathUri,
 ) {
+    let permission_profile = match settings.sandbox_policy.permission_profile_for_cwd(cwd) {
+        Ok(profile) => profile,
+        Err(err) => {
+            tracing::warn!(%err, "Invalid sandbox policy in thread settings");
+            return;
+        }
+    };
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
         session.reasoning_effort = settings.effort.clone();
@@ -292,10 +299,7 @@ pub(super) fn apply_thread_settings_to_session(
     session.service_tier = settings.service_tier.clone();
     session.approval_policy = settings.approval_policy;
     session.approvals_reviewer = settings.approvals_reviewer.to_core();
-    session.permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-        &settings.sandbox_policy.to_core(),
-        settings.cwd.as_path(),
-    );
+    session.permission_profile = permission_profile;
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     if let Some(environments) = &settings.environments {
         session.primary_environment_cwd =

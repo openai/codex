@@ -3534,7 +3534,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
                 approvals_reviewer: None,
                 sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![first_writable_root],
+                    writable_roots: vec![first_writable_root.into()],
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
