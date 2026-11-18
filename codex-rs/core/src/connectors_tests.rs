@@ -371,6 +371,7 @@ approvals_reviewer = "{app}"
             assert_eq!(
                 mcp_approvals_reviewer_from_layers(
                     &config.config_layer_stack,
+                    config.config_layer_stack.requirements(),
                     config.approvals_reviewer,
                     config.model.as_deref(),
                     CODEX_APPS_MCP_SERVER_NAME,
@@ -384,6 +385,7 @@ approvals_reviewer = "{app}"
             assert_eq!(
                 mcp_approvals_reviewer_from_layers(
                     &config.config_layer_stack,
+                    config.config_layer_stack.requirements(),
                     config.approvals_reviewer,
                     config.model.as_deref(),
                     CODEX_APPS_MCP_SERVER_NAME,
@@ -396,6 +398,7 @@ approvals_reviewer = "{app}"
         assert_eq!(
             mcp_approvals_reviewer_from_layers(
                 &config.config_layer_stack,
+                config.config_layer_stack.requirements(),
                 config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
@@ -407,6 +410,7 @@ approvals_reviewer = "{app}"
         assert_eq!(
             mcp_approvals_reviewer_from_layers(
                 &config.config_layer_stack,
+                config.config_layer_stack.requirements(),
                 config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
@@ -418,6 +422,7 @@ approvals_reviewer = "{app}"
         assert_eq!(
             mcp_approvals_reviewer_from_layers(
                 &config.config_layer_stack,
+                config.config_layer_stack.requirements(),
                 config.approvals_reviewer,
                 config.model.as_deref(),
                 "custom_server",
@@ -456,7 +461,8 @@ approvals_reviewer = "user"
     assert_eq!(
         mcp_approvals_reviewer_from_layers(
             &config.config_layer_stack,
-            config.approvals_reviewer,
+            config.config_layer_stack.requirements(),
+            ApprovalsReviewer::User,
             config.model.as_deref(),
             CODEX_APPS_MCP_SERVER_NAME,
             Some("calendar"),
@@ -497,6 +503,7 @@ approvals_reviewer = "user"
         assert_eq!(
             mcp_approvals_reviewer_from_layers(
                 &config.config_layer_stack,
+                config.config_layer_stack.requirements(),
                 config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,

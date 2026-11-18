@@ -3,9 +3,15 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudConfigBundlePolicy;
+use codex_config::CloudConfigBundleSnapshot;
 use codex_config::ConfigLayerSource;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core_plugins::PluginLoadOutcome;
+use codex_exec_server::LOCAL_FS;
 use pretty_assertions::assert_eq;
 
 async fn base_config() -> (tempfile::TempDir, Config) {
@@ -170,7 +176,7 @@ async fn ordinary_transport_transitions_use_the_resolved_incoming_map() {
 #[tokio::test]
 async fn mcp_refresh_preserves_current_user_and_session_layers_without_reopening_ema() {
     let (_home, base) = base_config().await;
-    let current = layered_config(
+    let mut current = layered_config(
         &base,
         &enterprise_config("https://current-idp.example", "current-resource"),
         "",
@@ -178,14 +184,44 @@ async fn mcp_refresh_preserves_current_user_and_session_layers_without_reopening
         "[mcp_servers.enterprise]\nenabled = false",
     )
     .await;
+    let bundle = CloudConfigBundleFixture::enterprise_config("auto_review.policy = 'published'")
+        .add_enterprise_requirement(
+            "allowed_approvals_reviewers = ['auto_review']\nauto_review.required_on_models = ['protected']",
+        )
+        .into_bundle();
+    let mut cloud = CloudConfigBundleSnapshot {
+        bundle: Ok(Some(bundle)),
+        config_server: None,
+        binding: None,
+    };
+    CloudConfigBundlePolicy::default().publish_snapshot(&mut cloud);
+    let snapshot = load_guardian_policy_snapshot(
+        LOCAL_FS.as_ref(),
+        base.codex_home.as_path(),
+        &LoaderOverrides::without_managed_config_for_tests(),
+        &CloudConfigBundleLoader::from_snapshot(cloud),
+        /*revision*/ 1,
+    )
+    .await
+    .unwrap();
     let next = layered_config(
         &base,
         &enterprise_config("https://old-idp.example", "old-resource"),
         "",
-        "",
+        "mcp_shared_repl_cwd = true\n[auto_review]\nrequired_on_models = ['incoming']",
         "",
     )
     .await;
+    let before_publication = current
+        .resolve_runtime_refresh(&next, RuntimeConfigRefresh::Mcp)
+        .unwrap();
+    assert_eq!(
+        before_publication.config_layer_stack.requirements(),
+        next.config_layer_stack.requirements()
+    );
+
+    current.config_layer_stack.apply_guardian_policy(&snapshot);
+    current.guardian_policy_revision = snapshot.revision;
     let refreshed = current
         .resolve_runtime_refresh(&next, RuntimeConfigRefresh::Mcp)
         .unwrap();
@@ -203,6 +239,50 @@ async fn mcp_refresh_preserves_current_user_and_session_layers_without_reopening
             .collect::<Vec<_>>()
     };
     assert_eq!(preserved_layers(&refreshed), preserved_layers(&current));
+    let layers = &refreshed.config_layer_stack;
+    let reviewer = &layers.requirements().approvals_reviewer;
+    assert!(
+        reviewer
+            .can_set(&codex_config::types::ApprovalsReviewer::User)
+            .is_err()
+    );
+    assert!(
+        reviewer
+            .can_set(&codex_config::types::ApprovalsReviewer::AutoReview)
+            .is_ok()
+    );
+    assert_eq!(
+        layers
+            .requirements_toml()
+            .allowed_approvals_reviewers
+            .as_deref(),
+        Some([codex_config::types::ApprovalsReviewer::AutoReview].as_slice())
+    );
+    assert!(
+        layers
+            .requirements()
+            .auto_review_required_for_model("protected")
+    );
+    assert!(
+        !layers
+            .requirements()
+            .auto_review_required_for_model("incoming")
+    );
+    assert_eq!(
+        layers
+            .requirements_toml()
+            .auto_review
+            .as_ref()
+            .and_then(|review| review.required_on_models.as_deref())
+            .unwrap(),
+        ["protected"]
+    );
+    assert!(refreshed.features.enabled(Feature::McpSharedReplCwd));
+    assert_eq!(
+        layers.guardian_config().unwrap().policy.as_deref(),
+        Some("published")
+    );
+    assert!(layers.guardian_policy_binding().is_some());
     let server = &runtime_servers(&refreshed)["enterprise"];
     assert!(!server.enabled);
     assert_eq!(

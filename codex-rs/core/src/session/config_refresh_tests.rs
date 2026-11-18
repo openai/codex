@@ -1,7 +1,56 @@
 //! Runtime-refresh regressions; pure authority resolution is tested with Config.
 
 use super::*;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_exec_server::LOCAL_FS;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn mcp_reload_survives_guardian_only_publications() {
+    let (session, _) = make_session_and_context().await;
+    let before = session.get_config().await;
+    let mut incoming = before.as_ref().clone();
+    incoming.config_layer_stack = incoming
+        .config_layer_stack
+        .with_session_plugins(toml::from_str("[_default]\nenabled = false").unwrap())
+        .unwrap();
+    let first_revision = before.guardian_policy_revision + 1;
+    let latest_revision = first_revision + 1;
+    for (revision, policy) in [
+        (first_revision, "first policy"),
+        (latest_revision, "latest policy"),
+    ] {
+        let loader = CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+            "guardian_policy_config = {policy:?}"
+        ));
+        let snapshot = load_guardian_policy_snapshot(
+            LOCAL_FS.as_ref(),
+            before.codex_home.as_path(),
+            &LoaderOverrides::without_managed_config_for_tests(),
+            &loader,
+            revision,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            session.refresh_guardian_policy(&snapshot).await,
+            crate::ConfigRefreshOutcome::Published
+        );
+    }
+
+    assert_eq!(
+        session.refresh_mcp_config(before, incoming).await,
+        crate::ConfigRefreshOutcome::Published
+    );
+    let published = session.get_config().await;
+    assert!(!published.plugins.allows_plugin("browser"));
+    assert_eq!(published.guardian_policy_revision, latest_revision);
+    assert_eq!(
+        published.guardian_policy_config.as_deref(),
+        Some("latest policy")
+    );
+}
 
 async fn runtime_servers(session: &Session) -> HashMap<String, McpServerConfig> {
     let config = session.get_config().await;

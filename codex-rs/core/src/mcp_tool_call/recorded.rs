@@ -48,6 +48,10 @@ pub(crate) async fn prepare_approval_action(
     let policy = mcp_tool_approval_policy(&call, &metadata).ok_or_else(|| {
         FunctionCallError::RespondToModel("MCP tool call blocked by app configuration".into())
     })?;
+    let requested_reviewer = invocation
+        .session
+        .mcp_requested_reviewer(&invocation.step_context.settings)
+        .await;
     match prepare_mcp_tool_approval(
         &invocation.session,
         &invocation.step_context,
@@ -60,6 +64,7 @@ pub(crate) async fn prepare_approval_action(
         call.server_environment_id(),
         call.server_key(),
         policy,
+        requested_reviewer,
     )
     .await
     {

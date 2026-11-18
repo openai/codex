@@ -1474,6 +1474,15 @@ impl CodexThread {
         self.session.disable_mcp_enterprise_auth().await;
     }
 
+    /// Refresh managed Guardian policy for future turns without changing MCP state.
+    /// Session and user policy fallbacks remain pinned until their own reload.
+    pub async fn refresh_guardian_policy(
+        &self,
+        snapshot: &codex_config::GuardianPolicySnapshot,
+    ) -> ConfigRefreshOutcome {
+        self.session.refresh_guardian_policy(snapshot).await
+    }
+
     /// Refresh MCP configuration, managed requirements, and session plugin and app overrides.
     /// An omitted section preserves its current overrides. An empty map restores inheritance.
     /// A stale owner requires reloading from the current config before retrying.

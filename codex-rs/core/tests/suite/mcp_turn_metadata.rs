@@ -2,12 +2,15 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppToolApproval;
 use codex_core::ConfigRefreshOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::config::Config;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
@@ -988,6 +991,74 @@ approvals_reviewer = "auto_review"
         apps_tool_call.pointer("/params/arguments/title"),
         Some(&json!("Lunch"))
     );
+
+    if !protected_model && !work_link_reviewer {
+        let after_policy_refresh = "calendar-after-policy-refresh";
+        mount_sse_sequence(
+            &server,
+            vec![
+                sse(vec![
+                    ev_response_created(after_policy_refresh),
+                    ev_function_call_with_namespace(
+                        after_policy_refresh,
+                        SEARCH_CALENDAR_NAMESPACE,
+                        SEARCH_CALENDAR_CREATE_TOOL,
+                        &calendar_args,
+                    ),
+                    ev_completed(after_policy_refresh),
+                ]),
+                sse(vec![ev_response_created("done"), ev_completed("done")]),
+            ],
+        )
+        .await;
+        let snapshot = load_guardian_policy_snapshot(
+            LOCAL_FS.as_ref(),
+            test.config.codex_home.as_path(),
+            &LoaderOverrides::without_managed_config_for_tests(),
+            &CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "allowed_approvals_reviewers = ['user']",
+            ),
+            /*revision*/ 1,
+        )
+        .await?;
+        assert_eq!(
+            test.codex.refresh_guardian_policy(&snapshot).await,
+            ConfigRefreshOutcome::Published
+        );
+        submit_user_turn(
+            &test,
+            "Use [$calendar](app://calendar) to create another event.",
+            AskForApproval::OnRequest,
+            PermissionProfile::Disabled,
+            /*collaboration_mode*/ None,
+        )
+        .await?;
+        let EventMsg::ElicitationRequest(request) = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await
+        else {
+            anyhow::bail!("the existing MCP runtime skipped user approval");
+        };
+        assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+        test.codex
+            .submit(Op::ResolveElicitation {
+                server_name: request.server_name,
+                request_id: request.id,
+                decision: ElicitationAction::Accept,
+                content: None,
+                meta: None,
+            })
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        recorded_apps_tool_call_by_call_id(&server, after_policy_refresh).await;
+    }
 
     Ok(())
 }

@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
@@ -17,6 +18,7 @@ use super::auto_compact_window::AutoCompactWindowSnapshot;
 use super::auto_compact_window::ContextWindowIdGenerator;
 use crate::TurnStartOptions;
 use crate::agent::host::ServiceTierAcceptance;
+use crate::config::Config;
 use crate::context_manager::ContextManager;
 use crate::context_manager::HistoryReplacement;
 use crate::session::PreviousTurnSettings;
@@ -73,6 +75,9 @@ impl ReasoningEffortPin {
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
+    /// Config identities reachable from the current one through Guardian-only publications.
+    /// A mismatch with the last entry means another kind of update replaced the config.
+    pub(crate) guardian_config_snapshots: Vec<Weak<Config>>,
     /// Shared root tier publication starts when the runtime wins registration.
     pub(crate) shared_service_tier_pending: bool,
     /// Receipt for the current host root tier, retained for callers retrying that commit.
@@ -146,6 +151,7 @@ impl SessionState {
             active_disabled_plugin_ids: Vec::new(),
             persisted_dynamic_tools: Arc::clone(&session_configuration.dynamic_tools),
             session_configuration,
+            guardian_config_snapshots: Vec::new(),
             shared_service_tier_pending: false,
             service_tier_acceptance: None,
             base_instructions_provenance: None,

@@ -434,7 +434,7 @@ impl Session {
                 environments,
             ),
         };
-        current
+        let settings = current
             .apply_update(
                 update,
                 &constraints,
@@ -443,7 +443,23 @@ impl Session {
                 &self.features,
             )
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        // Changes to the selected model or reviewer must also satisfy the
+        // policy that continues to apply to this turn's MCP actions.
+        if update.approvals_reviewer.is_some() || update.model.is_some() {
+            let requirements = turn_context.config.config_layer_stack.requirements();
+            requirements
+                .approvals_reviewer
+                .can_set(&settings.approvals_reviewer())
+                .and_then(|()| {
+                    settings.selected().validate(&StepSettingsConstraints {
+                        requirements,
+                        ..constraints
+                    })
+                })
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(settings)
     }
 
     /// Rechecks ordinary managed authorization after asynchronous resolution.

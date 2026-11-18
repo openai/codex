@@ -2,6 +2,8 @@
 //! The synchronous service captures one action; no outcome is stored by tool-call ID.
 
 use codex_async_utils::THREAD_STACK_SIZE_BYTES;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::protocol::ReviewDecision;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -104,15 +106,32 @@ pub(crate) fn decide_approval(
         let turn = context.turn();
         turn.extension_data.insert_arc(Arc::clone(&turn.config));
         let live_config = session.get_config().await;
-        let requirements = live_config.config_layer_stack.requirements();
-        let model_requires_review =
-            requirements.auto_review_required_for_model(&context.model_info.slug);
+        let mcp_requirements = (matches!(
+            request.request,
+            Ok(GuardianApprovalRequest::McpToolCall { .. })
+        ) || (request.request.is_err()
+            && matches!(
+                request.category,
+                GuardianScope::Mcp | GuardianScope::ComputerUse
+            )))
+        .then(|| turn.config.config_layer_stack.requirements());
+        // Live requirements can harden review. MCP also keeps any mandatory
+        // restrictions from the policy captured for its issuing turn.
+        let requirements = [
+            Some(live_config.config_layer_stack.requirements()),
+            mcp_requirements,
+        ];
+        let model_requires_review = requirements.iter().flatten().any(|requirements| {
+            requirements.auto_review_required_for_model(&context.model_info.slug)
+        });
         let require_guardian = options.require_guardian
             || model_requires_review
-            || requirements
-                .approvals_reviewer
-                .can_set(&codex_protocol::config_types::ApprovalsReviewer::User)
-                .is_err();
+            || requirements.iter().flatten().any(|requirements| {
+                requirements
+                    .approvals_reviewer
+                    .can_set(&ApprovalsReviewer::User)
+                    .is_err()
+            });
         let full_access = context.environments().has_full_access(
             context.approval_policy,
             &turn.config.permissions.effective_permission_profile(),

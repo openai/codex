@@ -24,6 +24,7 @@ use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::plugins::plugins_manager_for_config_with_runtime;
 use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::ConfigRequirements;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -509,13 +510,13 @@ pub fn with_app_plugin_sources(
 
 pub(crate) fn mcp_approvals_reviewer_from_layers(
     config_layer_stack: &codex_config::ConfigLayerStack,
+    requirements: &ConfigRequirements,
     default_reviewer: ApprovalsReviewer,
     model: Option<&str>,
     server_name: &str,
     connector_id: Option<&str>,
     link_id: Option<&str>,
 ) -> ApprovalsReviewer {
-    let requirements = config_layer_stack.requirements();
     if model.is_some_and(|model| requirements.auto_review_required_for_model(model)) {
         return ApprovalsReviewer::AutoReview;
     }
@@ -543,7 +544,15 @@ pub(crate) fn mcp_approvals_reviewer_from_layers(
         return reviewer;
     }
 
-    default_reviewer
+    if requirements
+        .approvals_reviewer
+        .can_set(&default_reviewer)
+        .is_ok()
+    {
+        default_reviewer
+    } else {
+        requirements.approvals_reviewer.value()
+    }
 }
 
 #[cfg(test)]
