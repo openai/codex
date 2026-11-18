@@ -197,8 +197,6 @@ impl ReviewInput {
         GuardianReviewSessionParams {
             parent_session: self.session,
             parent_history: self.history,
-            reasoning_summary: self.context.reasoning_summary,
-            personality: self.context.personality,
             parent_context: self.context,
             spawn_config: config.spawn_config,
             node_repl_policy: config.node_repl_policy,

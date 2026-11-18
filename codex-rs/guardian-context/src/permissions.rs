@@ -82,20 +82,29 @@ impl SectionContributor for PermissionContextSection {
         let Some(permissions) = input.permissions else {
             return Ok(None);
         };
-        if permissions.environment_id.is_none()
-            && permissions.denied_paths.is_empty()
-            && permissions.denied_globs.is_empty()
+        permissions.section(input.target)
+    }
+}
+
+impl PermissionContext {
+    pub(crate) fn section(
+        &self,
+        target: crate::ContextTarget,
+    ) -> Result<Option<ContextSection>, SectionError> {
+        if self.environment_id.is_none()
+            && self.denied_paths.is_empty()
+            && self.denied_globs.is_empty()
         {
             return Ok(None);
         }
-        let body = permissions.body().into_text().unwrap_or_default();
+        let body = self.body().into_text().unwrap_or_default();
         // Async scoring falls back to synchronous review instead of dropping restrictions.
-        if input.target == crate::ContextTarget::Async && body.len() > MAX_ASYNC_PERMISSION_BYTES {
+        if target == crate::ContextTarget::Async && body.len() > MAX_ASYNC_PERMISSION_BYTES {
             return Err(SectionError::EvidenceLimitExceeded {
                 section: "permissions",
             });
         }
-        let (start, end) = permissions.markers();
+        let (start, end) = self.markers();
         Ok(Some(ContextSection::PermissionContext {
             items: vec![start.into(), body, end.into()],
         }))

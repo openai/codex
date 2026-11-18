@@ -329,7 +329,19 @@ impl ReviewerRequest for PreparedReview {
         if self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
             || !recovery_requested
         {
-            record_failed_review(&session.session, &self.params, &result.outcome).await;
+            session
+                .record_failed_review(
+                    &self.params.parent_session,
+                    &self.params.parent_context,
+                    &self.params.request,
+                    &self.params.review_model.model,
+                    codex_guardian_reviewer::ReviewFeedbackSettings {
+                        enabled: self.params.spawn_config.feedback_enabled,
+                        ephemeral: self.params.spawn_config.ephemeral,
+                    },
+                    &result.outcome,
+                )
+                .await;
         }
         result
     }

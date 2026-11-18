@@ -43,8 +43,8 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         /*live_network_config*/ None,
         &params.review_model.model,
         params.review_model.reasoning_effort.clone(),
-        params.reasoning_summary,
-        params.personality,
+        params.parent_context.reasoning_summary,
+        params.parent_context.personality,
         ResolvedModelMessages::bundled(),
         ReviewRetrieval::ConversationHistory,
     )
@@ -307,8 +307,6 @@ async fn test_review_params() -> GuardianReviewSessionParams {
             model_overridden: false,
             model_override: None,
         },
-        reasoning_summary,
-        personality,
         external_cancel: None,
         deadline: codex_guardian_reviewer::ReviewDeadline::At(
             tokio::time::Instant::now() + Duration::from_secs(30),

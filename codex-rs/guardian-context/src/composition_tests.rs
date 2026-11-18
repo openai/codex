@@ -4,6 +4,36 @@ use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn pending_action_replays_the_encrypted_call_with_its_evidence_output() {
+    let call: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "function_call",
+        "namespace": "collaboration",
+        "name": "send_message",
+        "call_id": "send-1",
+        "arguments": r#"{"target":"/root/worker","message":"opaque"}"#,
+        "encrypted_content": "opaque-replay",
+        "encrypted_function_args": ["message"]
+    }))
+    .unwrap();
+    let action = crate::PlannedAction {
+        kind: crate::PlannedActionKind::ToolCall(Box::new(call.clone())),
+        reason: None,
+        tool_descriptions: None,
+    };
+    let messages = ComposedContext::for_pending_action(action, /*permissions*/ None)
+        .unwrap()
+        .into_messages();
+    let [ResponseItem::Message { .. }, replay, output] = messages.as_slice() else {
+        panic!("expected the review instruction, exact call, and evidence-only output");
+    };
+    assert_eq!(replay, &call);
+    assert_eq!(
+        Some(output.clone()),
+        crate::native_tool_call::evidence_output(&call)
+    );
+}
+
+#[test]
 fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     let message = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
         id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),

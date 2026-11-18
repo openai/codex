@@ -5,7 +5,6 @@
 mod approval_request;
 mod coverage;
 mod decision;
-mod feedback;
 mod input_budget;
 mod permissions;
 mod prompt;
