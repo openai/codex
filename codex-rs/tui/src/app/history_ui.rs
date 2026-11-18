@@ -295,6 +295,11 @@ impl App {
     }
 
     pub(super) fn open_url_in_browser(&mut self, url: String) {
+        if let Some(thread_id) = crate::thread_links::thread_id(&url) {
+            self.app_event_tx
+                .send(AppEvent::OpenThreadLink { thread_id });
+            return;
+        }
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
                 .add_error_message(format!("Failed to open browser for {url}: {err}"));

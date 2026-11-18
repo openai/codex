@@ -955,7 +955,7 @@ fn web_link_labels_keep_link_style_in_wrapped_prose_and_tables() {
 #[test]
 fn web_link_labels_have_a_visible_underline_snapshot() {
     let text = render_markdown_text(
-        "plain [plain](https://example.com) `code` [`code`](https://example.com)",
+        "plain [plain](https://example.com) `code` [`code`](https://example.com) [thread](codex://threads/019e60fc-0518-7c21-9596-980fe97225ba)",
     );
     assert_debug_snapshot!(text);
 }

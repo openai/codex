@@ -251,6 +251,7 @@ mod text_selection;
 mod theme_picker;
 mod thread_color;
 mod thread_label;
+mod thread_links;
 mod thread_transcript;
 mod token_usage;
 mod tool_output;

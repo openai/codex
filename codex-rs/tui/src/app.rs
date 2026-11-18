@@ -300,6 +300,7 @@ pub(crate) mod thread_attachment;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
+mod thread_links;
 mod thread_routing;
 mod thread_session_state;
 mod thread_settings;

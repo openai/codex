@@ -1187,6 +1187,7 @@ struct PickerState {
     transcript_cells: HashMap<(BackendId, ThreadId), SessionTranscriptState>,
     pending_transcript_open: Option<(BackendId, ThreadId)>,
     unread: HashMap<(BackendId, ThreadId), String>,
+    overlay_backend_id: BackendId,
     overlay_receipt: Option<PickerLoadRequest>,
     pending_transcript_cancellation: Option<oneshot::Sender<()>>,
     transcript_loading_frame_shown: bool,
@@ -1409,6 +1410,7 @@ impl PickerState {
             transcript_cells: HashMap::new(),
             pending_transcript_open: None,
             unread: HashMap::new(),
+            overlay_backend_id: backend_id,
             overlay_receipt: None,
             pending_transcript_cancellation: None,
             transcript_loading_frame_shown: false,
@@ -1537,6 +1539,7 @@ impl PickerState {
                     thread_id,
                     revision,
                 });
+        self.overlay_backend_id = backend_id;
         self.overlay = Some(overlay);
         self.pending_transcript_open = None;
         self.transcript_loading_frame_shown = false;
@@ -1560,6 +1563,14 @@ impl PickerState {
             && let Some(receipt) = self.overlay_receipt.take()
         {
             (self.picker_loader)(receipt);
+        }
+        if let Overlay::Transcript(transcript) = overlay
+            && let Some(thread_id) = transcript.pending_thread_link.take()
+        {
+            tui.set_mouse_capture(crate::tui::MouseCapture::Inherit)?;
+            self.overlay = None;
+            self.open_thread_transcript(self.overlay_backend_id, thread_id);
+            return Ok(());
         }
         if overlay.is_done() {
             self.overlay = None;
@@ -1590,7 +1601,10 @@ impl PickerState {
             self.request_frame();
             return;
         };
-        let backend_id = row.backend_id.unwrap_or(self.backend_id);
+        self.open_thread_transcript(row.backend_id.unwrap_or(self.backend_id), thread_id);
+    }
+
+    fn open_thread_transcript(&mut self, backend_id: BackendId, thread_id: ThreadId) {
         let key = (backend_id, thread_id);
         self.pending_transcript_open = Some(key);
         self.transcript_loading_frame_shown = false;
@@ -6111,6 +6125,79 @@ mod tests {
             frames
                 .try_recv()
                 .expect("redraw even when the routed key has no effect");
+        }
+    }
+
+    #[tokio::test]
+    async fn linked_transcript_handoff_restores_mouse_capture() {
+        use crate::tui::MouseCapture;
+
+        for outcome in ["canceled", "failed", "loaded"] {
+            let mut state = PickerState::new(
+                BackendId::new(),
+                FrameRequester::test_dummy(),
+                page_only_loader(|_| {}),
+                ProviderFilter::MatchDefault(String::from("openai")),
+                /*show_all*/ true,
+                /*filter_cwd*/ None,
+                SessionPickerAction::Resume,
+            );
+            let thread_id = ThreadId::new();
+            let key = (state.backend_id, thread_id);
+            state.overlay = Some(Overlay::new_transcript(
+                Vec::new(),
+                state.keymap.pager.clone(),
+                state.copy_on_select,
+                state.mouse_scroll_speed,
+            ));
+            let mut tui = crate::tui::test_support::make_test_tui().expect("tui");
+            state
+                .handle_overlay_event(&mut tui, TuiEvent::Draw)
+                .unwrap();
+            assert_eq!(tui.mouse_capture, MouseCapture::Enabled);
+            let Some(Overlay::Transcript(transcript)) = &mut state.overlay else {
+                panic!("transcript preview");
+            };
+            transcript.pending_thread_link = Some(thread_id);
+            state
+                .handle_overlay_event(&mut tui, TuiEvent::Draw)
+                .unwrap();
+            assert_eq!(state.pending_transcript_open, Some(key));
+            assert_eq!(tui.mouse_capture, MouseCapture::Inherit);
+
+            if outcome == "canceled" {
+                state
+                    .handle_transcript_loading_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            } else {
+                let transcript = if outcome == "failed" {
+                    Err(std::io::Error::other("failed"))
+                } else {
+                    Ok(LoadedTranscript {
+                        cells: Vec::new(),
+                        unread_revision: None,
+                    })
+                };
+                state
+                    .handle_background_event(BackgroundEvent::Transcript {
+                        backend_id: key.0,
+                        thread_id,
+                        transcript,
+                    })
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(tui.mouse_capture, MouseCapture::Inherit);
+            if outcome == "loaded" {
+                assert!(state.note_transcript_loading_frame_drawn());
+                state.open_pending_transcript_if_ready();
+                state
+                    .handle_overlay_event(&mut tui, TuiEvent::Draw)
+                    .unwrap();
+                assert_eq!(tui.mouse_capture, MouseCapture::Enabled);
+            } else {
+                assert!(state.overlay.is_none());
+                assert_eq!(state.pending_transcript_open, None);
+            }
         }
     }
 

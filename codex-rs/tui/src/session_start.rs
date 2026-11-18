@@ -93,10 +93,7 @@ pub(crate) async fn complete_session_start(
         Err(err) => {
             // Match the requested ID as well as the server's archive guidance: an unrelated
             // startup failure must never cause us to unarchive a session.
-            let archived_prefix = format!("session {} is archived. ", target.thread_id);
-            if !archived_session_guidance(&err)
-                .is_some_and(|message| message.starts_with(&archived_prefix))
-            {
+            if !is_archived_session_error(&err, target.thread_id) {
                 return Err(session_start_error(action.verb(), target, err));
             }
         }
@@ -146,6 +143,14 @@ fn session_start_error(
 
     let target_label = target_session.display_label();
     color_eyre::eyre::eyre!("Failed to {action} session from {target_label}: {err}")
+}
+
+pub(crate) fn is_archived_session_error(
+    err: &color_eyre::Report,
+    thread_id: codex_protocol::ThreadId,
+) -> bool {
+    let prefix = format!("session {thread_id} is archived. ");
+    archived_session_guidance(err).is_some_and(|message| message.starts_with(&prefix))
 }
 
 fn archived_session_guidance(err: &color_eyre::Report) -> Option<String> {

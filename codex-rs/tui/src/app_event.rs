@@ -410,6 +410,10 @@ pub(crate) enum AppEvent {
         result: Result<AgentsOverviewThreadRefresh, String>,
     },
     /// Switch to a root session selected from the shared dashboard.
+    /// Open a linked conversation in its owning session tree.
+    OpenThreadLink {
+        thread_id: ThreadId,
+    },
     SelectAgentsOverviewThread {
         thread_id: ThreadId,
     },

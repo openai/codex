@@ -990,3 +990,42 @@ async fn navigation_supersedes_home_before_and_after_the_first_draw() {
         }
     }
 }
+
+#[tokio::test]
+async fn thread_links_return_navigation_to_the_overlay_owner() -> Result<()> {
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let id = codex_protocol::ThreadId::new();
+    let lines = crate::markdown_render::render_markdown_lines_with_width_and_cwd(
+        &format!("[other thread](codex://threads/{id})"),
+        /*width*/ None,
+        /*cwd*/ None,
+    );
+    let mut overlay = transcript_overlay(vec![Arc::new(
+        history_cell::AgentMessageCell::new_hyperlink_lines(lines, /*is_first_line*/ true),
+    )]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 90, /*height*/ 12,
+    );
+    overlay.render(area, &mut Buffer::empty(area));
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        overlay.handle_event(
+            &mut tui,
+            TuiEvent::Mouse(MouseEvent {
+                kind,
+                column: 4,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )?;
+        overlay.render(area, &mut Buffer::empty(area));
+    }
+    assert_eq!(overlay.pending_thread_link.take(), Some(id));
+    Ok(())
+}

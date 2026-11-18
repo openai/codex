@@ -3422,6 +3422,9 @@ impl App {
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
             }
+            AppEvent::OpenThreadLink { thread_id } => {
+                return Box::pin(thread_links::open_thread_link(self, tui, app_server, thread_id)).await;
+            }
             AppEvent::SelectAgentsOverviewThread { thread_id }
                 if self.agents_overview.pending_archives.contains_key(&thread_id) => {}
             AppEvent::SelectAgentsOverviewThread { thread_id } => {

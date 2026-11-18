@@ -141,6 +141,7 @@ impl TranscriptView {
             return Some(ReaderLink::Agent(agent));
         }
         link.reader_destination(self.document_links)
+            .or_else(|| link.interaction_destination().map(ReaderLink::External))
     }
 
     pub(crate) fn cycle_document_link(
@@ -427,7 +428,7 @@ impl TranscriptView {
                 .hyperlinks
                 .iter()
                 .find(|link| link.columns.contains(&column))?
-                .terminal_destination()
+                .interaction_destination()
                 .map(ViewAction::OpenLink);
         }
         let inside = self.area.contains(point);

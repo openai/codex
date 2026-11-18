@@ -53,10 +53,10 @@ use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::markdown_destination;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::source_span_width;
 use crate::terminal_hyperlinks::visible_lines;
-use crate::terminal_hyperlinks::web_destination;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -2310,7 +2310,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn style_link_label(&mut self, mut span: Span<'static>) -> Span<'static> {
         if let Some(link) = self.link.as_mut()
-            && (link.style_label || web_destination(&link.destination).is_some())
+            && (link.style_label || markdown_destination(&link.destination).is_some())
         {
             link.has_visible_label |=
                 !span.content.trim().is_empty() && display_width(&span.content) > 0;
@@ -2359,7 +2359,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 self.pop_inline_style();
             }
             if link.show_destination
-                || (!link.has_visible_label && web_destination(&link.destination).is_some())
+                || (!link.has_visible_label && markdown_destination(&link.destination).is_some())
             {
                 // Link destinations are rendered as " (url)" suffixes. When parsing table cells,
                 // append the suffix into the active cell buffer rather than the outer paragraph
@@ -2651,7 +2651,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             if let Some(destination) = self
                 .link
                 .as_ref()
-                .and_then(|link| web_destination(&link.destination))
+                .and_then(|link| markdown_destination(&link.destination))
             {
                 // Inline code and HTML retain source columns until the transcript expands tabs.
                 let start = self.source_columns.measure(line, source_span_width);
@@ -2694,7 +2694,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         let destination = self
             .link
             .as_ref()
-            .and_then(|link| web_destination(&link.destination));
+            .and_then(|link| markdown_destination(&link.destination));
         if let Some(path) = self.label_document_path() {
             self.document_label_span(span, path)
         } else if let Some(destination) = destination {

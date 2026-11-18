@@ -26,7 +26,9 @@ use super::*;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::backend_id::BackendId;
 use crate::bottom_pane::BottomPaneView;
+use crate::chatwidget::ReadOnlyThread;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use crate::session_start::is_archived_session_error;
 use crate::startup_draft::StartupDraftPump;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
@@ -933,13 +935,13 @@ impl App {
                 ThreadAttachPresentation::SessionLineage
             };
             let (resumed, read_only) = if let Some((_, started)) = started {
-                (started, false)
+                (started, None)
             } else if let Some(blank) = self
                 .live_blank_session(app_server, root_thread_id, &target_thread)
                 .await
             {
                 restored_blank_session = true;
-                (blank, false)
+                (blank, None)
             } else {
                 match app_server
                     .resume_thread_with_permission_overrides(
@@ -954,15 +956,21 @@ impl App {
                     Ok(resumed) => {
                         provider_resume_checked = true;
                         resumed_mode = Some(resumed.session.collaboration_mode.is_some());
-                        (resumed, false)
+                        (resumed, None)
                     }
                     Err(error)
                         if crate::app_server_session::is_active_writer_error(&error)
                             || crate::app_server_session::model_provider_error(&error)
-                                .is_some() =>
+                                .is_some()
+                            || is_archived_session_error(&error, root_thread_id) =>
                     {
                         provider_resume_checked = true;
                         provider_error = crate::app_server_session::model_provider_error(&error);
+                        let reason = if is_archived_session_error(&error, root_thread_id) {
+                            ReadOnlyThread::Archived
+                        } else {
+                            ReadOnlyThread::ExternalWriter
+                        };
                         match app_server
                             .read_thread_for_viewing(
                                 &resume_config,
@@ -973,7 +981,7 @@ impl App {
                         {
                             Ok((thread, notice)) => {
                                 history_notice = notice;
-                                (thread, true)
+                                (thread, Some(reason))
                             }
                             Err(_) => {
                                 tracing::warn!("Failed to load read-only conversation history");
@@ -1033,7 +1041,8 @@ impl App {
                 }
             }
             // Read-only views retain explicit choices but never another task's restored state.
-            let preserve_explicit_permissions = preserve_explicit_permissions || read_only;
+            let preserve_explicit_permissions =
+                preserve_explicit_permissions || read_only.is_some();
             self.runtime_approvals_reviewer_override = self
                 .runtime_approvals_reviewer_override
                 .filter(|_| preserve_explicit_permissions);
@@ -1081,10 +1090,16 @@ impl App {
             if let Some(error) = provider_error {
                 self.chat_widget
                     .show_provider_error(error, /*rejected_message_id*/ None);
-            } else if read_only {
-                self.ensure_thread_channel(root_thread_id)
-                    .mark_external_writer();
-                self.chat_widget.show_external_writer_thread();
+            } else if let Some(reason) = read_only {
+                let channel = self.ensure_thread_channel(root_thread_id);
+                match reason {
+                    ReadOnlyThread::Archived => {
+                        channel.archived = true;
+                        channel.mark_replay_only();
+                    }
+                    ReadOnlyThread::ExternalWriter => channel.mark_external_writer(),
+                }
+                self.chat_widget.show_read_only_thread(reason);
             }
             if let Some(notice) = history_notice {
                 self.chat_widget
@@ -1104,7 +1119,7 @@ impl App {
             if is_new_session {
                 self.remember_launch_permissions();
             }
-            if !read_only {
+            if read_only.is_none() {
                 let approval = self.config.permissions.approval_policy.value();
                 if self
                     .runtime_approval_policy_override

@@ -38,6 +38,16 @@ pub(super) async fn resume_displayed_thread(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
 ) {
+    if app.primary_thread_id != Some(thread_id) {
+        if let Some(channel) = app.thread_event_channels.get_mut(&thread_id) {
+            channel.archived = false;
+        }
+        if let Err(error) = app.select_agent_thread(tui, app_server, thread_id).await {
+            app.chat_widget
+                .add_error_message(format!("Failed to reopen agent: {error}"));
+        }
+        return;
+    }
     let target = SessionTarget {
         backend_id: app_server.backend_id(),
         path: app

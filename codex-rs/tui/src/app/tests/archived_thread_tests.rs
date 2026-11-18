@@ -205,3 +205,85 @@ async fn archived_thread_notice_retains_draft_when_recovery_fails() -> Result<()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn unarchived_child_writer_conflict_preserves_retry_notice_and_draft() -> Result<()> {
+    let (mut app, _codex_home) = Box::pin(make_history_test_app()).await?;
+    let child = create_history_rollout(
+        &app.config,
+        ThreadHistoryMode::Legacy,
+        "Saved child message",
+    )?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let started = Box::pin(app_server.resume_thread(
+        &app.local_settings,
+        app.config.clone(),
+        child,
+        crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+    ))
+    .await?;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    // Exercise child recovery while its owning root remains the primary session.
+    app.primary_thread_id = Some(ThreadId::new());
+    app.upsert_agent_picker_thread(
+        child, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
+    app.chat_widget
+        .apply_external_edit("Retained child draft".into());
+    app_server.thread_archive(child).await?;
+    app.enqueue_thread_notification(
+        child,
+        ServerNotification::ThreadArchived(ThreadArchivedNotification {
+            thread_id: child.to_string(),
+        }),
+    )
+    .await?;
+    assert!(app.chat_widget.is_archived_view());
+    app_server.thread_unarchive(child).await?;
+    app.enqueue_thread_notification(
+        child,
+        ServerNotification::ThreadUnarchived(
+            codex_app_server_protocol::ThreadUnarchivedNotification {
+                thread_id: child.to_string(),
+            },
+        ),
+    )
+    .await?;
+    // Another client wins the writer lease between unarchive and our resume.
+    let writer = std::sync::Arc::new(codex_rollout::WriterLockCoordinator::new(
+        app.config.codex_home.as_path(),
+    ));
+    let _lock = writer.acquire(child)?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::ResumeUnarchivedThread(child),
+    ))
+    .await?;
+    assert_eq!(
+        (
+            app.current_displayed_thread_id(),
+            app.thread_event_channels[&child].archived,
+            app.thread_event_channels[&child].attachment(),
+            app.chat_widget.is_external_writer_view(),
+            app.chat_widget.composer_text_with_pending(),
+        ),
+        (
+            Some(child),
+            false,
+            ThreadEventAttachment::ExternalWriter,
+            true,
+            "Retained child draft".to_string(),
+        ),
+    );
+    insta::assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 100), @"
+      🔒   This conversation is open in another app                                          r to retry
+          Close it there and press R to continue here.
+
+       r retry   f fork   ←/esc command center   ⌃c/q exit   ⌃t transcript
+    ");
+    app_server.shutdown().await?;
+    Ok(())
+}

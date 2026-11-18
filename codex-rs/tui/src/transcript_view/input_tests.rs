@@ -374,9 +374,16 @@ fn shift_click_preserves_selection_units_and_allows_dragging() {
 
 #[test]
 fn ordinary_click_opens_bare_and_markdown_links_on_release() {
-    for markdown in [
-        "https://example.com/docs",
-        "[docs](https://example.com/docs)",
+    for (markdown, destination) in [
+        ("https://example.com/docs", "https://example.com/docs"),
+        (
+            "[docs](https://example.com/docs)",
+            "https://example.com/docs",
+        ),
+        (
+            "[other thread](codex://threads/019e60fc-0518-7c21-9596-980fe97225ba)",
+            "codex://threads/019e60fc-0518-7c21-9596-980fe97225ba",
+        ),
     ] {
         for width in [12, 60] {
             let (mut view, cells) = transcript(markdown, width);
@@ -405,7 +412,7 @@ fn ordinary_click_opens_bare_and_markdown_links_on_release() {
                     view.selected_text(&cells),
                     view.is_following()
                 ),
-                ("https://example.com/docs", None, true)
+                (destination, None, true)
             );
             assert!(view.handle_mouse(up, &cells).is_none());
         }

@@ -497,6 +497,11 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
     let (codex_home, server, source, target) = test_server(json!({}), /*older_messages*/ 0).await?;
 
     let listed = response_json(call_tool(&server, &source, "list_threads", json!({})).await);
+    assert_eq!(listed["schemaVersion"], 5);
+    assert_eq!(
+        listed["navigationHint"],
+        "Link to a returned thread in Markdown as [title](codex://threads/<id>); clicking opens it in the TUI."
+    );
     assert!(
         listed["threads"]
             .as_array()
@@ -626,6 +631,7 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
     );
     let mut listed_archived = Vec::new();
     loop {
+        assert_eq!(archived_threads["navigationHint"], listed["navigationHint"]);
         listed_archived.extend(
             archived_threads["threads"]
                 .as_array()
