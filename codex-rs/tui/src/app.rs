@@ -1036,9 +1036,9 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         let transcript_owns_input = match (&event, &self.overlay) {
-            (TuiEvent::Key(key), Some(Overlay::Transcript(overlay))) => {
-                overlay.owns_interaction_key(*key)
-            }
+            (TuiEvent::Key(key), Some(overlay)) => overlay
+                .input_transcript()
+                .is_some_and(|view| view.owns_interaction_key(*key)),
             (TuiEvent::Key(key), None) => {
                 tui.is_owned_screen()
                     && self.chat_widget.no_modal_or_popup_active()

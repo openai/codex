@@ -94,7 +94,7 @@ impl App {
         self.chat_widget
             .observe_config_editor_transition_key_event(key_event);
         self.transcript_view.set_keymap_bindings(&self.keymap);
-        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+        if let Some(overlay) = &mut self.overlay {
             overlay.set_keymap_bindings(&self.keymap);
         }
         if self.overlay.is_none() && self.chat_widget.handle_quick_dial_menu(key_event) {
@@ -102,7 +102,11 @@ impl App {
         }
         let contexts = self.key_chord_contexts(tui);
         let select_mode_chord = self.select_mode_owns_chord(tui, key_event);
-        if (matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
+        if (self
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input_transcript)
+            .is_some_and(|view| view.owns_interaction_key(key_event))
             || (tui.is_owned_screen()
                 && self.overlay.is_none()
                 && !self.focused_sidebar_chooser(tui)
@@ -285,16 +289,16 @@ impl App {
         use crate::keymap::KeymapContextSet;
 
         if let Some(overlay) = &self.overlay {
-            let contexts = match overlay {
-                Overlay::Transcript(view) if view.is_search_editing() => {
+            let contexts = match overlay.input_transcript() {
+                Some(view) if view.is_search_editing() => {
                     KeymapContextSet::new(KeymapContext::Editor)
                 }
-                Overlay::Transcript(view) if view.is_select_mode() => {
+                Some(view) if view.is_select_mode() => {
                     KeymapContextSet::transcript().with_transcript_select()
                 }
                 _ if self.backtrack.overlay_preview_active => KeymapContextSet::browsing(),
-                Overlay::Transcript(_) => KeymapContextSet::transcript(),
-                _ => KeymapContextSet::new(KeymapContext::Pager),
+                Some(_) => KeymapContextSet::transcript(),
+                None => KeymapContextSet::new(KeymapContext::Pager),
             };
             return contexts.with_voice_toggle(&self.keymap);
         }

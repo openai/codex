@@ -33,6 +33,14 @@ pub(crate) struct TranscriptOverlay {
     is_done: bool,
 }
 
+impl Overlay {
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        if let Self::Transcript(view) = self {
+            view.set_keymap_bindings(keymap);
+        }
+    }
+}
+
 impl TranscriptOverlay {
     pub(crate) fn bookmark(&mut self) -> TranscriptBookmark {
         self.view.bookmark(&self.cells)
