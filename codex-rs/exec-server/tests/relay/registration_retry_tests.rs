@@ -106,6 +106,7 @@ impl RegistryFixture {
         let environment = accept_websocket(&self.listener, "environment").await?;
         let args = NoiseRendezvousConnectArgs {
             bundle: NoiseRendezvousConnectBundle {
+                http_headers: Default::default(),
                 websocket_url: format!("ws://{}/relay?role=harness", self.listener.local_addr()?),
                 environment_id: ENVIRONMENT_ID.to_string(),
                 executor_registration_id: registration_id.to_string(),

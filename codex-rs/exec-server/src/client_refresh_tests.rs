@@ -90,6 +90,7 @@ impl NoiseRendezvousConnectProvider for Registry {
                     .map_err(|_| ExecServerError::Protocol("test lookup failed".to_owned()))?;
             }
             Ok(NoiseRendezvousConnectBundle {
+                http_headers: Default::default(),
                 websocket_url: target.url,
                 environment_id: "environment".to_owned(),
                 executor_registration_id: target.registration,
@@ -206,7 +207,7 @@ impl Executor {
                         let validator = validator.clone();
                         connections.spawn(async move {
                             let socket = tokio_tungstenite::accept_async(socket).await.unwrap();
-                            run_multiplexed_environment(socket, processor, "environment".to_owned(), executor.registration, executor.identity, validator).await;
+                            run_multiplexed_environment(socket, processor, "environment".to_owned(), executor.registration, executor.identity, validator, /*admission*/ None).await;
                         });
                     }
                     _ = connections.join_next(), if !connections.is_empty() => {}

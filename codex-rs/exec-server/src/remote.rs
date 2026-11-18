@@ -70,10 +70,11 @@ mod registration_retry;
 
 /// Wire transport used after registering a remote exec-server.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-/// The transport used to connect a remote exec-server environment.
 pub enum RemoteEnvironmentTransport {
     #[default]
     Noise,
+    /// Accept authenticated Noise connections on this published guest address.
+    NoiseInbound(std::net::SocketAddr),
     Direct,
 }
 
@@ -181,12 +182,9 @@ impl EnvironmentRegistryClient {
             security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
             executor_public_key: executor_public_key.clone(),
         };
-        let (response, executor_credential) = self
-            .send_authenticated(
-                Request::new(Method::POST, url).with_json(&body),
-                Some(deadline),
-            )
-            .await?;
+        let request = Request::new(Method::POST, url).with_json(&body);
+        let (response, executor_credential) =
+            self.send_authenticated(request, Some(deadline)).await?;
         let status = response.status();
         // Read diagnostics within the same attempt budget, preserving a known error status.
         let response: EnvironmentRegistryRegistrationResponse = timeout_at(deadline, async {
@@ -294,6 +292,7 @@ impl EnvironmentRegistryClient {
             ));
         }
         Ok(NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url: response.url,
             environment_id: response.environment_id,
             executor_registration_id: response.executor_registration_id,
@@ -379,7 +378,7 @@ impl EnvironmentRegistryClient {
 }
 
 #[derive(Clone)]
-struct RegistryHarnessKeyValidator {
+pub(crate) struct RegistryHarnessKeyValidator {
     client: EnvironmentRegistryClient,
     environment_id: String,
     executor_registration_id: String,
@@ -774,6 +773,35 @@ where
             })
             .await
         }
+        RemoteEnvironmentTransport::NoiseInbound(address) => {
+            let inbound_processor = processor.clone();
+            run_remote_transport(
+                config,
+                std::future::pending(),
+                |config, client| async move {
+                    let control = crate::server::NoiseListenerControl::default();
+                    let run = run_inbound_noise_environment(
+                        config,
+                        client,
+                        inbound_processor,
+                        address,
+                        control.clone(),
+                    );
+                    tokio::pin!(run, shutdown);
+                    let result = tokio::select! {
+                        result = &mut run => result,
+                        _ = &mut shutdown => {
+                            control.stop();
+                            run.await
+                        }
+                    };
+                    control.stop();
+                    control.wait().await;
+                    result
+                },
+            )
+            .await
+        }
         RemoteEnvironmentTransport::Direct => {
             run_remote_transport(config, shutdown, |config, client| {
                 run_direct_environment(config, client, processor.clone())
@@ -798,7 +826,7 @@ where
     // separate Direct-compatible bridge, so reject it rather than use the
     // Noise-specific path.
     // Remove this guard when a Direct-compatible forwarder is added.
-    if config.transport == RemoteEnvironmentTransport::Direct {
+    if config.transport != RemoteEnvironmentTransport::Noise {
         return Err(ExecServerError::EnvironmentRegistryConfig(
             "direct exec-server transport does not support forwarding".to_string(),
         ));
@@ -812,6 +840,42 @@ where
         run_remote_environment_connections(config, client, forwarder)
     })
     .await
+}
+
+async fn run_inbound_noise_environment(
+    config: RemoteEnvironmentConfig,
+    client: EnvironmentRegistryClient,
+    processor: ConnectionProcessor,
+    address: std::net::SocketAddr,
+    control: crate::server::NoiseListenerControl,
+) -> Result<(), ExecServerError> {
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(ExecServerError::Spawn)?;
+    let identity = NoiseChannelIdentity::generate().map_err(|error| {
+        ExecServerError::Protocol(format!("failed to generate Noise identity: {error}"))
+    })?;
+    let public_key = identity.public_key();
+    let registration = tokio::select! {
+        result = client.register_environment_with_retry(&config.environment_id, &public_key) => result?,
+        _ = control.cancelled() => return Ok(()),
+    };
+    let validator = RegistryHarnessKeyValidator {
+        client,
+        environment_id: config.environment_id.clone(),
+        executor_registration_id: registration.executor_registration_id.clone(),
+    };
+    crate::server::run_noise_websocket_listener(
+        listener,
+        processor,
+        config.environment_id,
+        registration.executor_registration_id,
+        identity,
+        validator,
+        control,
+    )
+    .await
+    .map_err(ExecServerError::Spawn)
 }
 
 async fn run_remote_transport<F, R, T>(
@@ -886,6 +950,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
                         environment_id: config.environment_id.clone(),
                         executor_registration_id,
                     },
+                    /*admission*/ None,
                 )
                 .await;
                 backoff.connection_closed(connected_at.elapsed());

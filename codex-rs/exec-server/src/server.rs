@@ -19,6 +19,8 @@ pub use request_dispatcher::ConcurrentRequestLimit;
 pub use request_dispatcher::RequestDispatchMode;
 pub use transport::DEFAULT_LISTEN_URL;
 pub use transport::ExecServerListenUrlParseError;
+pub(crate) use transport::NoiseListenerControl;
+pub(crate) use transport::run_noise_websocket_listener;
 
 use crate::ExecServerRuntimeOptions;
 use crate::ExecServerTelemetry;

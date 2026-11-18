@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_util::task::TaskTracker;
 use tracing::warn;
 
 use crate::ExecServerError;
@@ -86,8 +87,8 @@ impl<H: NoiseStreamHandler> NoiseVirtualStream<H> {
 /// The returned value is the read half; the spawned task owns outbound framing
 /// and reports its instance ID on exit so stream-ID reuse is safe.
 pub(crate) fn spawn_noise_virtual_stream<H: NoiseStreamHandler>(
-    stream_id: String,
-    instance_id: u64,
+    instance: ClosedNoiseVirtualStream,
+    tasks: Option<&TaskTracker>,
     handler: H,
     physical_outgoing_tx: mpsc::Sender<Vec<u8>>,
     closed_stream_tx: mpsc::Sender<ClosedNoiseVirtualStream>,
@@ -99,9 +100,10 @@ pub(crate) fn spawn_noise_virtual_stream<H: NoiseStreamHandler>(
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let transport = Arc::new(Mutex::new(transport));
     let writer_transport = Arc::clone(&transport);
-    let owner_stream_id = stream_id.clone();
+    let owner_stream_id = instance.stream_id.clone();
+    let instance_id = instance.instance_id;
     let owner_closed_stream_tx = closed_stream_tx.clone();
-    let writer_stream_id = stream_id;
+    let writer_stream_id = instance.stream_id;
     let writer_task = tokio::spawn(async move {
         let mut next_seq = 0u32;
         'writer: while let Some(message) = outgoing_rx.recv().await {
@@ -166,7 +168,7 @@ pub(crate) fn spawn_noise_virtual_stream<H: NoiseStreamHandler>(
         writer_task,
         executor_registration,
     };
-    tokio::spawn(async move {
+    let owner = async move {
         handler.run_connection(connection).await;
         let _ = owner_closed_stream_tx
             .send(ClosedNoiseVirtualStream {
@@ -174,7 +176,12 @@ pub(crate) fn spawn_noise_virtual_stream<H: NoiseStreamHandler>(
                 instance_id,
             })
             .await;
-    });
+    };
+    if let Some(tasks) = tasks {
+        tasks.spawn(owner);
+    } else {
+        tokio::spawn(owner);
+    }
 
     NoiseVirtualStream {
         incoming_tx,

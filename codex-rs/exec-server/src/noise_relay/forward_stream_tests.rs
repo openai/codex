@@ -53,8 +53,11 @@ async fn forwards_opaque_noise_payloads_and_drains_before_closing() -> Result<()
     let (physical_outgoing_tx, mut physical_outgoing_rx) = mpsc::channel(1);
     let (closed_stream_tx, mut closed_stream_rx) = mpsc::channel(2);
     let mut stream = spawn_noise_virtual_stream(
-        "stream-1".to_string(),
-        /*instance_id*/ 7,
+        ClosedNoiseVirtualStream {
+            stream_id: "stream-1".to_string(),
+            instance_id: 7,
+        },
+        /*tasks*/ None,
         forwarder,
         physical_outgoing_tx,
         closed_stream_tx,

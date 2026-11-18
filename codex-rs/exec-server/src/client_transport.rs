@@ -658,6 +658,7 @@ impl ExecServerClient {
             http_client_factory,
         } = args;
         let NoiseRendezvousConnectBundle {
+            http_headers,
             websocket_url,
             environment_id,
             executor_registration_id,
@@ -676,6 +677,21 @@ impl ExecServerClient {
                 url: diagnostic_url.clone(),
                 source,
             })?;
+        if !http_headers.is_empty() && request.uri().scheme_str() != Some("wss") {
+            return Err(ExecServerError::Protocol(
+                "Noise WebSocket admission headers require wss://".to_string(),
+            ));
+        }
+        for (name, value) in &http_headers {
+            if is_websocket_handshake_header(name) {
+                return Err(ExecServerError::Protocol(
+                    "invalid Noise WebSocket admission header".to_string(),
+                ));
+            }
+            let mut value = value.clone();
+            value.set_sensitive(true);
+            request.headers_mut().insert(name, value);
+        }
         request.headers_mut().extend(current_rendezvous_headers());
         let (stream, _) = timeout(
             connect_timeout,

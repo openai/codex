@@ -161,6 +161,7 @@ impl NoiseRendezvousConnectProvider for SequenceNoiseConnectProvider {
 
 fn test_bundle(websocket_url: String) -> Result<NoiseRendezvousConnectBundle> {
     Ok(NoiseRendezvousConnectBundle {
+        http_headers: Default::default(),
         websocket_url,
         environment_id: "environment".to_string(),
         executor_registration_id: "registration".to_string(),
@@ -238,6 +239,35 @@ async fn noise_handshake_reports_disconnect_reason() -> Result<()> {
 }
 
 #[tokio::test]
+async fn noise_admission_headers_are_rejected_before_dialing_plaintext() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mut bundle = test_bundle(format!("ws://{}", listener.local_addr()?))?;
+    bundle.http_headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_static("fake-token"),
+    );
+    let result = ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
+        bundle,
+        harness_identity: NoiseChannelIdentity::generate()?,
+        client_name: "test".to_string(),
+        connect_timeout: std::time::Duration::from_secs(1),
+        initialize_timeout: std::time::Duration::from_secs(1),
+        resume_session_id: None,
+        http_client_factory: codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
+    })
+    .await;
+    assert!(matches!(result, Err(ExecServerError::Protocol(_))));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let websocket_url = format!("ws://{}", listener.local_addr()?);
@@ -262,6 +292,7 @@ async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
     let initialize_timeout = std::time::Duration::from_millis(1);
     let opened = ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
         bundle: NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url,
             environment_id: "environment".to_string(),
             executor_registration_id: "registration".to_string(),

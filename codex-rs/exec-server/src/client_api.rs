@@ -44,6 +44,8 @@ pub struct RemoteExecServerConnectArgs {
 /// physical connection attempt and must not be mixed with values from another
 /// registry response.
 pub struct NoiseRendezvousConnectBundle {
+    /// Admission headers for the authorized WebSocket destination. Never log them.
+    pub http_headers: HeaderMap,
     pub websocket_url: String,
     pub environment_id: String,
     pub executor_registration_id: String,

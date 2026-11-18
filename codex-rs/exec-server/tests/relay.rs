@@ -21,10 +21,13 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
+use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecServerRuntimeOptions;
 use codex_exec_server::FsReadFileParams;
+use codex_exec_server::NoiseChannelIdentity;
 use codex_exec_server::NoiseChannelPublicKey;
+use codex_exec_server::NoiseRendezvousConnectArgs;
 use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
@@ -82,6 +85,7 @@ impl NoiseRendezvousConnectProvider for FreshBundleNoiseConnectProvider {
     ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         let bundle = NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url: self.websocket_url.clone(),
             environment_id: ENVIRONMENT_ID.to_string(),
             executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
@@ -419,5 +423,140 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     connection.close().await;
     let _ = shutdown_tx.send(());
     timeout(TEST_TIMEOUT, remote_environment).await???;
+    Ok(())
+}
+
+/// An inbound executor serves encrypted RPCs directly and rejects a registry-denied harness.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inbound_noise_executes_only_after_registry_authorization() -> Result<()> {
+    use codex_exec_server::RemoteEnvironmentTransport;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::body_partial_json;
+
+    let relay = RelayTest::new().await?;
+    let address = relay.listener.local_addr()?;
+    let registry = relay.registry;
+    drop(relay.listener);
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{ENVIRONMENT_ID}/validate"
+        )))
+        .and(body_partial_json(
+            serde_json::json!({"harness_key_authorization": "denied"}),
+        ))
+        .respond_with(ResponseTemplate::new(403))
+        .with_priority(1)
+        .mount(&registry)
+        .await;
+    let config = RemoteEnvironmentConfig::new_with_transport(
+        registry.uri(),
+        ENVIRONMENT_ID.to_string(),
+        RemoteEnvironmentTransport::NoiseInbound(address),
+        static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )?;
+    let (codex_exe, sandbox_exe) = common::current_test_binary_helper_paths()?;
+    let runtime = ExecServerRuntimeOptions::new(codex_exe, sandbox_exe)?;
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = AbortOnDropHandle::new(tokio::spawn(
+        codex_exec_server::run_remote_environment_until_shutdown(config, runtime, async move {
+            let _ = stopped.await;
+        }),
+    ));
+    let executor_key = timeout(TEST_TIMEOUT, async {
+        loop {
+            if let Ok(key) = registered_executor_public_key(&registry).await {
+                break key;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let (mut plaintext, _) = tokio_tungstenite::connect_async(format!("ws://{address}/")).await?;
+    plaintext
+        .send(Message::Text(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"plaintext"}}"#
+                .into(),
+        ))
+        .await?;
+    assert!(
+        timeout(std::time::Duration::from_millis(150), plaintext.next())
+            .await
+            .is_err()
+    );
+    let idle = tokio::spawn(async move {
+        while let Some(message) = plaintext.next().await {
+            match message {
+                Ok(Message::Ping(payload)) => plaintext.send(Message::Pong(payload)).await?,
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    });
+    let connect = |authorization: &str| -> Result<NoiseRendezvousConnectArgs> {
+        Ok(NoiseRendezvousConnectArgs {
+            bundle: NoiseRendezvousConnectBundle {
+                http_headers: Default::default(),
+                websocket_url: format!("ws://{address}/"),
+                environment_id: ENVIRONMENT_ID.to_string(),
+                executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
+                executor_public_key: executor_key.clone(),
+                harness_key_authorization: authorization.to_string(),
+            },
+            harness_identity: NoiseChannelIdentity::generate()?,
+            client_name: "inbound-test".to_string(),
+            connect_timeout: TEST_TIMEOUT,
+            initialize_timeout: TEST_TIMEOUT,
+            resume_session_id: None,
+            http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        })
+    };
+    assert!(
+        ExecServerClient::connect_noise_rendezvous(connect("denied")?)
+            .await
+            .is_err()
+    );
+    let client =
+        ExecServerClient::connect_noise_rendezvous(connect(HARNESS_KEY_AUTHORIZATION)?).await?;
+    let temp = TempDir::new()?;
+    let path = temp.path().join("proof");
+    std::fs::write(&path, b"inbound-noise-proof")?;
+    let response = client
+        .fs_read_file(FsReadFileParams {
+            path: PathUri::from_host_native_path(path.clone())?,
+            follow_symlinks: None,
+            sandbox: None,
+        })
+        .await?;
+    assert_eq!(
+        STANDARD.decode(response.data_base64)?,
+        b"inbound-noise-proof"
+    );
+    timeout(std::time::Duration::from_secs(25), idle).await???;
+    // The first-authorization deadline must not close an established Noise session.
+    client
+        .fs_read_file(FsReadFileParams {
+            path: PathUri::from_host_native_path(path.clone())?,
+            follow_symlinks: None,
+            sandbox: None,
+        })
+        .await?;
+    let _ = stop.send(());
+    timeout(TEST_TIMEOUT, server).await???;
+    assert!(
+        timeout(
+            TEST_TIMEOUT,
+            client.fs_read_file(FsReadFileParams {
+                path: PathUri::from_host_native_path(path)?,
+                follow_symlinks: None,
+                sandbox: None,
+            })
+        )
+        .await?
+        .is_err()
+    );
     Ok(())
 }

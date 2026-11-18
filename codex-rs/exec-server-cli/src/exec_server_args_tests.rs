@@ -351,3 +351,30 @@ fn standalone_help_documents_executor_options() {
         .join("\n");
     insta::assert_snapshot!(help);
 }
+
+/// An inbound Noise listener requires remote registration and cannot expose direct RPC transport.
+#[test]
+fn inbound_noise_requires_registered_noise_transport() {
+    let command = exec_server_from_args(&[
+        "--remote",
+        "https://registry.example.com",
+        "--environment-id",
+        "env-1",
+        "--listen",
+        "ws://0.0.0.0:9001",
+    ]);
+    assert_eq!(command.listen.as_deref(), Some("ws://0.0.0.0:9001"));
+    command.validate_remote_transport().unwrap();
+    let command = exec_server_from_args(&[
+        "--remote",
+        "https://registry.example.com",
+        "--environment-id",
+        "env-1",
+        "--remote-transport",
+        "direct",
+        "--aws-sigv4",
+        "--listen",
+        "ws://0.0.0.0:9001",
+    ]);
+    assert!(command.validate_remote_transport().is_err());
+}

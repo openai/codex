@@ -68,11 +68,7 @@ pub struct ExecServerCommand {
     request_dispatch_mode: codex_exec_server::RequestDispatchMode,
 
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        conflicts_with = "exec_server_remote"
-    )]
+    #[arg(long = "listen", value_name = "URL")]
     listen: Option<String>,
 
     #[command(flatten)]
@@ -303,7 +299,13 @@ impl ExecServerCommand {
             let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new_with_transport(
                 base_url,
                 environment_id,
-                if direct_transport {
+                if let Some(listen) = self.listen.as_deref() {
+                    let address = listen
+                        .strip_prefix("ws://")
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| anyhow::anyhow!("remote --listen requires ws://IP:PORT"))?;
+                    codex_exec_server::RemoteEnvironmentTransport::NoiseInbound(address)
+                } else if direct_transport {
                     codex_exec_server::RemoteEnvironmentTransport::Direct
                 } else {
                     codex_exec_server::RemoteEnvironmentTransport::Noise
@@ -427,6 +429,16 @@ impl ExecServerCommand {
         anyhow::ensure!(
             !self.chatgpt_token_stdin || self.command.is_none(),
             "--chatgpt-token-stdin cannot be used with forward"
+        );
+        anyhow::ensure!(
+            self.remote.is_none()
+                || self.listen.is_none()
+                || (self.remote_transport == ExecServerRemoteTransport::Noise
+                    && self.command.is_none()
+                    && self.listen.as_deref().is_some_and(|s| s
+                        .strip_prefix("ws://")
+                        .is_some_and(|v| v.parse::<std::net::SocketAddr>().is_ok()))),
+            "remote --listen requires ws://IP:PORT, Noise transport, and no forward"
         );
         match (self.remote_transport, self.aws_sigv4) {
             (ExecServerRemoteTransport::Noise, true) => {

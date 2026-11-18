@@ -580,6 +580,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     let executor_public_key = registered_parent_lifetime_executor_public_key(&registry).await?;
     let harness_args = NoiseRendezvousConnectArgs {
         bundle: NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url: format!("{rendezvous_url}/relay?role=harness"),
             environment_id: ENVIRONMENT_ID.to_string(),
             executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
@@ -870,6 +871,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{}/v1/metrics", protocol = "jso
     let executor_public_key = registered_parent_lifetime_executor_public_key(&registry).await?;
     let args = NoiseRendezvousConnectArgs {
         bundle: NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url: format!("{rendezvous}/relay?role=harness"),
             environment_id: ENVIRONMENT.to_string(),
             executor_registration_id: "registration-scoped".to_string(),
