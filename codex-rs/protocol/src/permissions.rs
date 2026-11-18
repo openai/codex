@@ -595,6 +595,18 @@ pub fn project_roots_glob_pattern(subpath: &Path) -> String {
     format!("{PROJECT_ROOTS_GLOB_PATTERN_PREFIX}{}", subpath.display())
 }
 
+pub(crate) fn has_workspace_root_rules(entries: &[FileSystemSandboxEntry]) -> bool {
+    entries.iter().any(|entry| match &entry.path {
+        FileSystemPath::Special { value } => {
+            matches!(value, FileSystemSpecialPath::ProjectRoots { .. })
+        }
+        FileSystemPath::GlobPattern { pattern } => {
+            pattern.starts_with(PROJECT_ROOTS_GLOB_PATTERN_PREFIX)
+        }
+        FileSystemPath::Path { .. } => false,
+    })
+}
+
 fn read_only_file_system_entries() -> Vec<FileSystemSandboxEntry> {
     vec![FileSystemSandboxEntry::new(
         FileSystemPath::Special {

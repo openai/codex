@@ -13,6 +13,7 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
@@ -241,7 +242,7 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
     let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox_override: SandboxOverride::NoOverride,
-        sandbox: SandboxType::MacosSeatbelt,
+        local_selection: SandboxSelection::Explicit(SandboxType::MacosSeatbelt),
         sandbox_requested: true,
         permissions: &permissions,
         exec_server_permissions: &exec_server_permissions,
@@ -309,7 +310,7 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
     let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox_override: SandboxOverride::NoOverride,
-        sandbox: SandboxType::None,
+        local_selection: SandboxSelection::Explicit(SandboxType::None),
         sandbox_requested: false,
         permissions: &permissions,
         exec_server_permissions: &permissions,

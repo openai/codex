@@ -1203,22 +1203,49 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
     );
 }
 
-#[test]
-fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() {
-    let expected = codex_sandboxing::get_platform_sandbox(/*windows_sandbox_enabled*/ false)
-        .unwrap_or(SandboxType::None);
+fn local_exec_params(
+    cwd: &AbsolutePathBuf,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> ExecParams {
+    ExecParams {
+        command: vec!["echo".to_string(), "ok".to_string()],
+        cwd: cwd.clone(),
+        expiration: ExecExpiration::DefaultTimeout,
+        capture_policy: ExecCapturePolicy::ShellTool,
+        env: HashMap::new(),
+        network: None,
+        network_environment_id: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level,
+        justification: None,
+        arg0: None,
+    }
+}
 
-    assert_eq!(
-        select_process_exec_tool_sandbox_type(
-            &PermissionProfile::from_runtime_permissions(
-                &FileSystemSandboxPolicy::unrestricted(),
-                NetworkSandboxPolicy::Restricted,
-            ),
-            SandboxType::None,
-            /*enforce_managed_network*/ false,
-        ),
-        expected
+#[tokio::test]
+async fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() -> Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let cwd = dir.path().abs();
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::unrestricted(),
+        NetworkSandboxPolicy::Restricted,
     );
+    let params = local_exec_params(&cwd, WindowsSandboxLevel::Disabled);
+    let expected = codex_sandboxing::get_platform_sandbox(/*windows_sandbox_enabled*/ false);
+    let request = build_exec_request(
+        params,
+        &profile,
+        &cwd,
+        &[],
+        &Some(dir.path().join("codex-linux-sandbox")),
+        /*codex_self_exe*/ &None,
+        SandboxType::None,
+        /*use_legacy_landlock*/ false,
+    )
+    .await?;
+    assert_eq!(request.sandbox, expected.unwrap_or(SandboxType::None));
+    Ok(())
 }
 
 #[tokio::test]
@@ -1263,6 +1290,16 @@ async fn build_exec_request_projects_workspace_roots_only_for_windows_sandbox() 
         request.windows_sandbox_workspace_roots,
         if cfg!(windows) {
             native_roots
+        } else {
+            Vec::new()
+        },
+    );
+    assert_eq!(
+        build_request(&PermissionProfile::read_only(), &[])
+            .await?
+            .windows_sandbox_workspace_roots,
+        if cfg!(windows) {
+            vec![cwd.clone()]
         } else {
             Vec::new()
         },
@@ -1329,10 +1366,11 @@ fn command_runs_after_integrity_check_failure(time_out: bool) -> anyhow::Result<
         env: std::env::vars().collect(),
         network: None,
         network_environment_id: None,
-        sandbox: select_process_exec_tool_sandbox_type(
+        sandbox: SandboxManager::new().select_initial(
             &permission_profile,
+            SandboxablePreference::Auto,
             SandboxType::WindowsMxc,
-            /*enforce_managed_network*/ false,
+            /*has_managed_network_requirements*/ false,
         ),
         sandbox_override: SandboxOverride::NoOverride,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -1350,7 +1388,7 @@ fn command_runs_after_integrity_check_failure(time_out: bool) -> anyhow::Result<
                     expiration: ExecExpiration::DefaultTimeout,
                     capture_policy: ExecCapturePolicy::ShellTool,
                 },
-                Vec::new(),
+                &[],
             ));
             let request = if time_out {
                 tokio::time::pause();

@@ -13,8 +13,8 @@
 //! Flow at a glance (open process)
 //! 1) Build a small request `{ command, cwd }`.
 //! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
-//! 3) Runtime: transform `SandboxTransformRequest` -> `ExecRequest` -> spawn PTY.
-//! 4) If denial, orchestrator retries with `SandboxType::None`.
+//! 3) Prepare the approved sandbox on the execution host, then spawn the PTY.
+//! 4) On sandbox denial, the orchestrator may authorize a retry with different permissions.
 //! 5) Process handle is returned with streaming output + metadata.
 //!
 //! This keeps policy logic and user interaction centralized while the PTY/process

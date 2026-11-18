@@ -410,8 +410,8 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox_override: SandboxOverride,
-    pub sandbox: SandboxType,
-    /// Whether policy requested sandboxing, independent of this host's concrete wrapper.
+    pub(crate) local_selection: SandboxSelection,
+    /// Whether this attempt requests a sandbox, after applying any approved bypass.
     pub sandbox_requested: bool,
     pub permissions: &'a codex_protocol::models::PermissionProfile,
     /// Canonical permissions before this host materializes workspace roots.
@@ -504,29 +504,24 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
-        let mut request = self
-            .manager
-            .transform(SandboxTransformRequest {
+        crate::sandboxing::ExecRequest::prepare_local_sandbox(
+            self.manager,
+            SandboxTransformRequest {
                 command,
                 permissions: self.permissions,
-                workspace_roots: None,
+                workspace_roots: Some(self.workspace_roots),
                 runtime_readable_paths: None,
-                selection: SandboxSelection::Explicit(self.sandbox),
+                selection: self.local_selection,
                 network: SandboxNetwork::new(self.enforce_managed_network, network, environment_id),
                 sandbox_policy_cwd: self.sandbox_cwd,
                 sandbox_exe: self.sandbox_exe.map(std::path::PathBuf::as_path),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-            })?
-            .into_command_request()?;
-        request.sandbox_override = self.sandbox_override;
-        let workspace_roots = self
-            .workspace_roots
-            .iter()
-            .map(PathUri::to_abs_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, workspace_roots)
-            .await
+            },
+            options,
+            self.sandbox_override,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -557,7 +552,7 @@ impl<'a> SandboxAttempt<'a> {
             arg0: None,
         };
         let mut exec_request =
-            crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, Vec::new())
+            crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, &[])
                 .await?;
         exec_request.exec_server_managed_network = managed_network;
         // A controller-only proxy may be disabled on the executor. With no launch config,

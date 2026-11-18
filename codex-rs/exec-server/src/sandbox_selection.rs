@@ -5,6 +5,7 @@ use codex_file_system::WindowsSandboxSelection;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 
 pub(crate) fn validate_remote_mxc(info: &crate::EnvironmentInfo) -> std::io::Result<()> {
     if !info.capabilities.windows_mxc {
@@ -30,5 +31,15 @@ pub(crate) fn sandbox_selection(
             );
         }
     };
-    (SandboxSelection::RequirePlatform, level)
+    (
+        SandboxSelection::Platform {
+            preference: SandboxablePreference::Require,
+            windows_sandbox: if level == WindowsSandboxLevel::Disabled {
+                SandboxType::None
+            } else {
+                SandboxType::WindowsRestrictedToken
+            },
+        },
+        level,
+    )
 }

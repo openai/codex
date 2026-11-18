@@ -301,7 +301,7 @@ async fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backe
     let manager = SandboxManager::new();
     let mut attempt = SandboxAttempt {
         sandbox_override: SandboxOverride::NoOverride,
-        sandbox: SandboxType::WindowsRestrictedToken,
+        local_selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
         sandbox_requested: true,
         permissions: &permissions,
         exec_server_permissions: &permissions,
@@ -376,7 +376,7 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     let manager = SandboxManager::new();
     let mut attempt = SandboxAttempt {
         sandbox_override: SandboxOverride::NoOverride,
-        sandbox: SandboxType::None,
+        local_selection: SandboxSelection::Explicit(SandboxType::None),
         sandbox_requested: true,
         permissions: &permissions,
         exec_server_permissions: &exec_server_permissions,

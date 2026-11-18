@@ -23,7 +23,10 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
+use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -126,11 +129,38 @@ impl ExecRequest {
         }
     }
 
+    /// Prepare an authorized local attempt for a launcher that owns its pipes or terminal.
+    pub(crate) async fn prepare_local_sandbox(
+        manager: &SandboxManager,
+        request: SandboxTransformRequest<'_>,
+        options: ExecOptions,
+        sandbox_override: SandboxOverride,
+    ) -> Result<Self, CodexErr> {
+        let workspace_roots = request.workspace_roots.unwrap_or_default();
+        let mut request = manager.transform(request)?.into_command_request()?;
+        request.sandbox_override = sandbox_override;
+        Self::from_sandbox_exec_request(request, options, workspace_roots).await
+    }
+
     pub(crate) async fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
-        windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
+        workspace_roots: &[PathUri],
     ) -> Result<Self, CodexErr> {
+        let windows_sandbox_workspace_roots =
+            if request.sandbox == SandboxType::WindowsRestrictedToken {
+                workspace_roots
+                    .iter()
+                    .map(PathUri::to_abs_path)
+                    .collect::<std::io::Result<Vec<_>>>()
+                    .map_err(|err| {
+                        CodexErr::InvalidRequest(format!(
+                            "invalid Windows sandbox workspace roots: {err}"
+                        ))
+                    })?
+            } else {
+                Vec::new()
+            };
         codex_exec_server::run_integrity_checks((&request).into()).await;
         let SandboxExecRequest {
             command,

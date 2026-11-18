@@ -125,19 +125,6 @@ pub enum ExecCapturePolicy {
     SensitiveFullBuffer,
 }
 
-fn select_process_exec_tool_sandbox_type(
-    permission_profile: &PermissionProfile,
-    windows_sandbox_type: SandboxType,
-    enforce_managed_network: bool,
-) -> SandboxType {
-    SandboxManager::new().select_initial(
-        permission_profile,
-        SandboxablePreference::Auto,
-        windows_sandbox_type,
-        enforce_managed_network,
-    )
-}
-
 fn network_proxy_environment_error(
     network_environment_id: Option<&str>,
     err: impl std::fmt::Display,
@@ -367,14 +354,8 @@ pub async fn build_exec_request(
         sandbox_permissions: _,
     } = params;
 
+    let manager = SandboxManager::new();
     let enforce_managed_network = network.is_some();
-    let sandbox_type = select_process_exec_tool_sandbox_type(
-        permission_profile,
-        windows_sandbox_type,
-        enforce_managed_network,
-    );
-    tracing::debug!("Sandbox type: {sandbox_type:?}");
-
     let (env, managed_network) = if let Some(network) = network.as_ref() {
         let prepared = network
             .prepare_for_optional_environment(env, network_environment_id.as_deref())
@@ -385,6 +366,12 @@ pub async fn build_exec_request(
     } else {
         (env, None)
     };
+    let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd);
+    let workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
+        std::slice::from_ref(&sandbox_policy_cwd_uri)
+    } else {
+        windows_sandbox_workspace_roots
+    };
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -392,9 +379,6 @@ pub async fn build_exec_request(
         ))
     })?;
     let cwd = PathUri::from_abs_path(&cwd);
-    let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd);
-
-    let manager = SandboxManager::new();
     let command = SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
@@ -407,13 +391,23 @@ pub async fn build_exec_request(
         expiration,
         capture_policy,
     };
+    // An already-bound profile only needs its concrete paths validated. Its Windows
+    // launcher hints can include foreign roots that this host won't use.
+    let policy_roots = if permission_profile.has_workspace_root_rules() {
+        workspace_roots
+    } else {
+        &[]
+    };
     let request = manager
         .transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
-            workspace_roots: None,
+            workspace_roots: Some(policy_roots),
             runtime_readable_paths: None,
-            selection: SandboxSelection::Explicit(sandbox_type),
+            selection: SandboxSelection::Platform {
+                preference: SandboxablePreference::Auto,
+                windows_sandbox: windows_sandbox_type,
+            },
             network: SandboxNetwork::new(
                 enforce_managed_network,
                 network.as_ref(),
@@ -429,26 +423,9 @@ pub async fn build_exec_request(
             windows_sandbox_level,
         })?
         .into_command_request()?;
-    // These hints belong to the native Windows backend. Other backends use
-    // the materialized profile and must not project executor paths onto this host.
-    let windows_sandbox_workspace_roots = if sandbox_type == SandboxType::WindowsRestrictedToken {
-        if windows_sandbox_workspace_roots.is_empty() {
-            vec![sandbox_cwd.clone()]
-        } else {
-            windows_sandbox_workspace_roots
-                .iter()
-                .map(PathUri::to_abs_path)
-                .collect::<io::Result<Vec<_>>>()
-                .map_err(|err| {
-                    CodexErr::InvalidRequest(format!(
-                        "invalid Windows sandbox workspace roots: {err}"
-                    ))
-                })?
-        }
-    } else {
-        Vec::new()
-    };
-    ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_workspace_roots).await
+    let request = ExecRequest::from_sandbox_exec_request(request, options, workspace_roots).await?;
+    tracing::debug!("Sandbox type: {:?}", request.sandbox);
+    Ok(request)
 }
 
 pub(crate) async fn execute_exec_request(

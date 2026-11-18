@@ -13,6 +13,7 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::ensure_native_sandbox;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::AppliedPatchFileChange;
@@ -176,6 +177,20 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
         let started_at = Instant::now();
+        let remote = self.uses_executor_managed_process_sandbox(req);
+        let local_backend = if attempt.sandbox_requested && !remote {
+            attempt.manager.select_initial(
+                attempt.permissions,
+                self.sandbox_preference(),
+                attempt.windows_sandbox_type,
+                attempt.enforce_managed_network,
+            )
+        } else {
+            SandboxType::None
+        };
+        if !remote {
+            ensure_native_sandbox(attempt.sandbox_override, local_backend)?;
+        }
         let fs = req.turn_environment.environment().get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
@@ -239,16 +254,16 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             timed_out: false,
         };
         let sandbox_denied = failed
-            && if attempt.sandbox == SandboxType::None {
+            && if local_backend == SandboxType::None {
                 attempt.sandbox_requested && is_likely_executor_managed_sandbox_denied(&output)
             } else {
-                is_likely_sandbox_denied(attempt.sandbox, &output)
+                is_likely_sandbox_denied(local_backend, &output)
             };
         if sandbox_denied {
             // TODO(iceweasel): Report executor filesystem sandbox backends like process/start so
             // executor-managed apply_patch denials can emit backend-specific violation telemetry.
-            if attempt.sandbox != SandboxType::None {
-                record_filesystem_sandbox_violation(attempt.sandbox, &output);
+            if local_backend != SandboxType::None {
+                record_filesystem_sandbox_violation(local_backend, &output);
             }
             return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output: Box::new(output),

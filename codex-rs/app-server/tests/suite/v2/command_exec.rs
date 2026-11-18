@@ -512,63 +512,147 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
 }
 
 #[cfg(unix)]
+#[test_case::test_case(false; "local core")]
+#[test_case::test_case(true; "exec server")]
 #[tokio::test]
-async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+async fn command_exec_permission_profile_project_roots_use_command_cwd(
+    exec_server: bool,
+) -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     let command_dir = codex_home.path().join("command-cwd");
-    std::fs::create_dir(&command_dir)?;
+    let granted = command_dir.join("granted/child.txt");
+    let sibling = command_dir.join("sibling.txt");
+    let parent = codex_home.path().join("granted/parent.txt");
+    std::fs::create_dir_all(command_dir.join("granted"))?;
+    std::fs::create_dir(codex_home.path().join("granted"))?;
+    std::fs::write(&sibling, b"original")?;
+    std::fs::write(&parent, b"original")?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     insert_command_exec_config(
         codex_home.path(),
         r#"
 [permissions.command-cwd.filesystem]
 ":root" = "read"
-":workspace_roots" = "write"
+[permissions.command-cwd.filesystem.":workspace_roots"]
+"granted" = "write"
 "#,
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf child > granted/child.txt &&
+         ! (printf sibling > sibling.txt) 2>/dev/null &&
+         ! (printf parent > ../granted/parent.txt) 2>/dev/null"
+            .to_string(),
+    ];
+    let (exit_code, output) = if exec_server {
+        use app_test_support::LocalWebsocketExecServer;
+        use codex_core::config::ConfigBuilder;
+        use codex_core::config::ConfigOverrides;
+        use codex_core::config::LoaderOverrides;
+        use codex_core::exec_env::create_env;
+        use codex_exec_server::Environment;
+        use codex_exec_server::ExecParams;
+        use codex_exec_server::ExecProcessEvent;
+        use codex_exec_server::FileSystemSandboxContext;
+        use codex_utils_path_uri::PathUri;
 
-    let command_request_id = mcp
-        .send_command_exec_request(CommandExecParams {
-            command: vec![
-                "sh".to_string(),
-                "-lc".to_string(),
-                "printf child > child.txt && ! printf parent > ../parent.txt".to_string(),
-            ],
-            process_id: None,
-            tty: false,
-            stream_stdin: false,
-            stream_stdout_stderr: false,
-            output_bytes_cap: None,
-            disable_output_cap: false,
-            disable_timeout: false,
-            timeout_ms: None,
-            cwd: Some("command-cwd".into()),
-            env: None,
-            size: None,
-            sandbox_policy: None,
-            permission_profile: Some("command-cwd".to_string()),
-        })
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(command_dir.clone()),
+                default_permissions: Some("command-cwd".to_string()),
+                ..Default::default()
+            })
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .build()
+            .await?;
+        let server = LocalWebsocketExecServer::start(
+            codex_home.path(),
+            &codex_utils_cargo_bin::cargo_bin("exec-server")?,
+        )
         .await?;
-
-    let response: CommandExecResponse = mcp.read_response(command_request_id).await?;
-    assert_eq!(
-        response.exit_code, 0,
-        "parent cwd write should fail under command project-root profile: {response:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(command_dir.join("child.txt"))?,
-        "child"
-    );
-    assert!(
-        !codex_home.path().join("parent.txt").exists(),
-        "permissionProfile :workspace_roots write should not grant the server cwd when command cwd differs"
-    );
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_owned()))?;
+        let cwd = PathUri::from_host_native_path(&command_dir)?;
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            config.permissions.permission_profile().clone(),
+            cwd.clone(),
+        );
+        let started = environment
+            .get_exec_backend()
+            .start(ExecParams {
+                process_id: "restricted-write".into(),
+                metadata: None,
+                argv: command,
+                cwd,
+                env_policy: None,
+                shell_snapshot: None,
+                env: create_env(
+                    &config.permissions.shell_environment_policy,
+                    /*thread_id*/ None,
+                ),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: Some(sandbox),
+                enforce_managed_network: false,
+                managed_network: None,
+                network_proxy: None,
+            })
+            .await?;
+        let mut events = started.process.subscribe_events();
+        let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+        let mut status = None;
+        let mut output = String::new();
+        loop {
+            match tokio::time::timeout_at(deadline, events.recv()).await?? {
+                ExecProcessEvent::Output(chunk) => {
+                    output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+                }
+                ExecProcessEvent::Exited { exit_code, .. } => status = Some(exit_code),
+                ExecProcessEvent::Closed { .. } => {
+                    break (
+                        status.context("exec-server closed without an exit code")?,
+                        output,
+                    );
+                }
+                ExecProcessEvent::Failed(message) => {
+                    anyhow::bail!("exec-server failed: {message}\n{output}");
+                }
+            }
+        }
+    } else {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+            .await?;
+        let command_request_id = mcp
+            .send_command_exec_request(CommandExecParams {
+                command,
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                disable_output_cap: false,
+                disable_timeout: false,
+                timeout_ms: None,
+                cwd: Some("command-cwd".into()),
+                env: None,
+                size: None,
+                sandbox_policy: None,
+                permission_profile: Some("command-cwd".to_string()),
+            })
+            .await?;
+        let response: CommandExecResponse = mcp.read_response(command_request_id).await?;
+        (response.exit_code, response.stderr)
+    };
+    assert_eq!(exit_code, 0, "{output}");
+    assert_eq!(std::fs::read(granted)?, b"child");
+    assert_eq!(std::fs::read(sibling)?, b"original");
+    assert_eq!(std::fs::read(parent)?, b"original");
 
     Ok(())
 }

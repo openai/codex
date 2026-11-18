@@ -134,13 +134,15 @@ impl SandboxExecRequest {
     }
 }
 
-/// How the execution host selects a backend for this launch.
-#[derive(Clone, Copy)]
+/// A backend chosen by the caller, or a sandbox selected from policy on the execution host.
+#[derive(Clone, Copy, Debug)]
 pub enum SandboxSelection {
     /// Use the selected backend, including an explicitly native launch.
     Explicit(SandboxType),
-    /// Refuse the launch if this host cannot provide its platform sandbox.
-    RequirePlatform,
+    Platform {
+        preference: SandboxablePreference,
+        windows_sandbox: SandboxType,
+    },
 }
 
 /// Network enforcement for one launch. A proxy may be required without a live proxy
@@ -464,11 +466,20 @@ impl SandboxManager {
         .map_err(SandboxTransformError::InvalidPolicy)?;
         let backend = match request.selection {
             SandboxSelection::Explicit(sandbox) => sandbox,
-            SandboxSelection::RequirePlatform => {
-                #[cfg(windows)]
-                crate::windows_mxc::record_availability_once();
-                get_platform_sandbox(request.windows_sandbox_level != WindowsSandboxLevel::Disabled)
-                    .ok_or(SandboxTransformError::SandboxUnavailable)?
+            SandboxSelection::Platform {
+                preference,
+                windows_sandbox,
+            } => {
+                let sandbox = self.select_initial(
+                    request.permissions,
+                    preference,
+                    windows_sandbox,
+                    enforce_managed_network,
+                );
+                if preference == SandboxablePreference::Require && sandbox == SandboxType::None {
+                    return Err(SandboxTransformError::SandboxUnavailable);
+                }
+                sandbox
             }
         };
         if is_file_system_helper && backend == SandboxType::None {

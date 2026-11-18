@@ -22,6 +22,7 @@ use crate::permissions::FileSystemSpecialPath;
 use crate::permissions::LegacySandboxPolicyProjection;
 use crate::permissions::NetworkSandboxPolicy;
 use crate::permissions::RawFileSystemSandboxEntry;
+use crate::permissions::has_workspace_root_rules;
 use crate::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
@@ -698,6 +699,17 @@ impl PermissionProfile {
             Self::Disabled => FileSystemSandboxPolicy::unrestricted(),
             Self::External { .. } => FileSystemSandboxPolicy::external_sandbox(),
         }
+    }
+
+    /// Whether this profile has filesystem rules relative to the execution host's workspace roots.
+    pub fn has_workspace_root_rules(&self) -> bool {
+        matches!(
+            self,
+            Self::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } if has_workspace_root_rules(entries)
+        )
     }
 
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {

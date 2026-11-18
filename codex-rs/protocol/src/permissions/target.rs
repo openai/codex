@@ -8,12 +8,12 @@ use super::FileSystemSandboxPolicy;
 use super::FileSystemSandboxPolicyContext;
 use super::FileSystemSpecialPath;
 use super::InvalidDenyReadGlobBehavior;
-use super::PROJECT_ROOTS_GLOB_PATTERN_PREFIX;
 use super::PROTECTED_METADATA_PATH_NAMES;
 use super::ReadDenyMatcher;
 use super::deny_read_validator::DenyReadValidator;
 use super::deny_read_validator::has_context_read_denials;
 use super::file_system_root;
+use super::has_workspace_root_rules;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashSet;
@@ -56,20 +56,7 @@ impl FileSystemSandboxPolicy {
             FileSystemAccessMode::Write,
         )]);
         approved.preserve_deny_read_restrictions_from(self);
-        if context.workspace_roots.is_empty()
-            && approved.entries.iter().any(|entry| {
-                matches!(
-                    &entry.path,
-                    FileSystemPath::Special {
-                        value: FileSystemSpecialPath::ProjectRoots { .. }
-                    }
-                ) || matches!(
-                    &entry.path,
-                    FileSystemPath::GlobPattern { pattern }
-                        if pattern.starts_with(PROJECT_ROOTS_GLOB_PATTERN_PREFIX)
-                )
-            })
-        {
+        if context.workspace_roots.is_empty() && has_workspace_root_rules(&approved.entries) {
             return self.clone();
         }
         let Some(mut approved) =

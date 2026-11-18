@@ -34,6 +34,7 @@ use codex_protocol::permissions::file_system_root;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::Arc;
@@ -83,7 +84,7 @@ impl ToolOrchestrator {
         };
         let attempt_with_network_approval = SandboxAttempt {
             sandbox_override: attempt.sandbox_override,
-            sandbox: attempt.sandbox,
+            local_selection: attempt.local_selection,
             sandbox_requested: attempt.sandbox_requested,
             permissions: attempt.permissions,
             exec_server_permissions: attempt.exec_server_permissions,
@@ -331,32 +332,36 @@ impl ToolOrchestrator {
             turn_ctx.network.is_some()
         };
         let sandbox_preference = tool.sandbox_preference();
-        let sandbox_requested = match sandbox_override {
-            SandboxOverride::BypassSandboxFirstAttempt => false,
-            SandboxOverride::NoOverride | SandboxOverride::EscalatedSandboxWithRestrictions => {
-                sandbox_manager.should_sandbox(
-                    initial_permissions,
-                    sandbox_preference,
-                    managed_network_active,
-                )
-            }
-        };
+        let policy_requires_sandbox = sandbox_manager.should_sandbox(
+            initial_permissions,
+            sandbox_preference,
+            managed_network_active,
+        );
         let windows_sandbox_type = codex_protocol::sandbox::effective_windows_sandbox_type(
             sandbox_config.windows_sandbox_type,
             sandbox_config.windows_sandbox_level,
         );
-        let initial_sandbox = if sandbox_requested && !executor_managed_process_sandbox {
-            sandbox_manager.select_initial(
+        let sandbox_requested = sandbox_override != SandboxOverride::BypassSandboxFirstAttempt
+            && policy_requires_sandbox;
+        let platform_selection = SandboxSelection::Platform {
+            preference: sandbox_preference,
+            windows_sandbox: windows_sandbox_type,
+        };
+        let local_selection = if sandbox_requested {
+            platform_selection
+        } else {
+            SandboxSelection::Explicit(SandboxType::None)
+        };
+        if !executor_managed_process_sandbox
+            && sandbox_override == SandboxOverride::EscalatedSandboxWithRestrictions
+        {
+            let available = sandbox_manager.select_initial(
                 initial_permissions,
                 sandbox_preference,
                 windows_sandbox_type,
                 managed_network_active,
-            )
-        } else {
-            SandboxType::None
-        };
-        if !executor_managed_process_sandbox {
-            ensure_native_sandbox(sandbox_override, initial_sandbox)?;
+            );
+            ensure_native_sandbox(sandbox_override, available)?;
         }
 
         let sandbox_policy_cwd = tool
@@ -370,7 +375,7 @@ impl ToolOrchestrator {
         };
         let initial_attempt = SandboxAttempt {
             sandbox_override,
-            sandbox: initial_sandbox,
+            local_selection,
             sandbox_requested,
             permissions: initial_permissions,
             exec_server_permissions: escalated_profile.as_ref().unwrap_or(permission_profile),
@@ -553,22 +558,11 @@ impl ToolOrchestrator {
                         .result?;
                 }
 
-                let retry_sandbox_requested = !unsandboxed_allowed
-                    && sandbox_manager.should_sandbox(
-                        initial_permissions,
-                        sandbox_preference,
-                        managed_network_active,
-                    );
-                let retry_sandbox = if retry_sandbox_requested && !executor_managed_process_sandbox
-                {
-                    sandbox_manager.select_initial(
-                        initial_permissions,
-                        sandbox_preference,
-                        windows_sandbox_type,
-                        managed_network_active,
-                    )
+                let retry_sandbox_requested = !unsandboxed_allowed && policy_requires_sandbox;
+                let local_selection = if retry_sandbox_requested {
+                    platform_selection
                 } else {
-                    SandboxType::None
+                    SandboxSelection::Explicit(SandboxType::None)
                 };
                 let retry_sandbox_exe = if unsandboxed_allowed {
                     None
@@ -577,7 +571,7 @@ impl ToolOrchestrator {
                 };
                 let retry_attempt = SandboxAttempt {
                     sandbox_override,
-                    sandbox: retry_sandbox,
+                    local_selection,
                     sandbox_requested: retry_sandbox_requested,
                     permissions: initial_permissions,
                     exec_server_permissions: escalated_profile
