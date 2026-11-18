@@ -7,6 +7,7 @@ mod render;
 mod rows;
 
 use super::*;
+pub(super) use navigation::SectionDirection;
 
 // Counts and filtering use the same status groups.
 pub(super) const TASK_FILTERS: &[(&str, Option<AgentsOverviewGroup>)] = &[

@@ -463,6 +463,47 @@ async fn live_center_pages_visible_rows_without_wrapping() {
 }
 
 #[tokio::test]
+async fn live_center_navigates_sections() {
+    let mut app = make_test_app().await;
+    let config: TuiKeymap =
+        toml::from_str("[agents]\nnext_group = ['shift-down', 'shift-j', 'f8']").unwrap();
+    app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+    let threads = (0..6)
+        .map(|index| {
+            let mut thread = overview_thread(
+                ThreadId::from_u128(100 + index),
+                /*parent_thread_id*/ None,
+                &format!("Section task {index}"),
+                ThreadStatus::Idle,
+            );
+            thread.updated_at -= index as i64;
+            thread.cwd = test_path_buf(&format!("/tmp/project-{}", index / 2)).abs();
+            thread
+        })
+        .collect();
+    let mut view = app.agents_overview_view(threads, Some(ThreadId::from_u128(/*value*/ 101)));
+    let selected = |view: &AgentsOverviewView| view.rows[view.selected_index().unwrap()].thread_id;
+    for (key, expected) in [
+        (KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), 102),
+        (KeyCode::Char('J').into(), 104),
+        (KeyEvent::new(KeyCode::Char('j'), KeyModifiers::SHIFT), 104),
+        (KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT), 102),
+        (KeyCode::Char('K').into(), 100),
+        (KeyEvent::new(KeyCode::Char('k'), KeyModifiers::SHIFT), 100),
+    ] {
+        view.handle_key_event(key);
+        assert_eq!(selected(&view), ThreadId::from_u128(expected));
+    }
+    view.handle_key_event(KeyCode::Char('/').into());
+    view.handle_key_event(KeyCode::Char('J').into());
+    assert!(screen(&view, /*width*/ 80, /*height*/ 18).contains("Search › J"));
+    view.handle_key_event(KeyCode::Esc.into());
+    view.handle_key_event(KeyCode::Char('r').into());
+    view.handle_key_event(KeyCode::F(8).into());
+    assert_eq!(selected(&view), ThreadId::from_u128(/*value*/ 100));
+}
+
+#[tokio::test]
 async fn live_center_metadata_clips_at_grapheme_boundaries() {
     let app = make_test_app().await;
     let mut view = app.agents_overview_view(

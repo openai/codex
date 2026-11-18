@@ -294,6 +294,8 @@ define_keymap_actions! {
         cancel => "Cancel and close selection views.",
     }
     agents "Agents" {
+        next_group => "Select the first task in the next group.",
+        previous_group => "Select the first task in the previous group.",
         resume => "Open the session resume picker.",
         search => "Search the available agent tasks.",
         new_task => "Open a new session in the selected checkout.",

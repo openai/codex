@@ -2,6 +2,8 @@
 source: tui/src/keymap_setup.rs
 expression: agents
 ---
+Next Group | shift-down, shift-j | Agents next_group Next Group Select the first task in the next group. shift-down, shift-j Default
+Previous Group | shift-up, shift-k | Agents previous_group Previous Group Select the first task in the previous group. shift-up, shift-k Default
 Resume | o | Agents resume Resume Open the session resume picker. o Default
 Search | f3, / | Agents search Search Search the available agent tasks. f3, / Default
 New Task | n | Agents new_task New Task Open a new session in the selected checkout. n Default

@@ -723,6 +723,15 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
 
+        if self.agents_keymap.next_group.is_pressed(key) {
+            self.select_section(command_center::SectionDirection::Next);
+            return;
+        }
+        if self.agents_keymap.previous_group.is_pressed(key) {
+            self.select_section(command_center::SectionDirection::Previous);
+            return;
+        }
+
         if self.agents_keymap.search.is_pressed(key) {
             let mut state = self.state();
             if state.rename_target.is_none() {

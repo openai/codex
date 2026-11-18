@@ -13,6 +13,8 @@ expression: "screen(&view, width, height)"
   enter  Open
   pgup   Page up
   pgdn   Page down
+  ⇧↓     Next group
+  ⇧↑     Previous group
   ⌃c     Quit
 
   Tasks
@@ -30,7 +32,5 @@ expression: "screen(&view, width, height)"
   tab/⇧tab  Filter
   f3        Search
   g         Group
-
-
 
   esc back

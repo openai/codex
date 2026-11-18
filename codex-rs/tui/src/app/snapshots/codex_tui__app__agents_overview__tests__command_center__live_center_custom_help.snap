@@ -7,16 +7,16 @@ expression: "screen(&view, 100, 24)"
   ────────────────────────────────────────────────────────────────────────────────────────────────
   Task shortcuts
 
-  Navigate            Tasks                      View
-  k      Up           n          New             tab/⇧tab  Filter
-  j      Down         w          New worktree    f3        Search
-  enter  Open         o          Resume          g         Group
-  pgdn   Page down    f          Fork
-  ⌃c     Quit         z r        Rename
-                      x          Stop
-                      h          Hide
-                      backspace  Delete
-                      z p        Pin/unpin
+  Navigate                 Tasks                      View
+  k      Up                n          New             tab/⇧tab  Filter
+  j      Down              w          New worktree    f3        Search
+  enter  Open              o          Resume          g         Group
+  pgdn   Page down         f          Fork
+  ⇧j     Next group        z r        Rename
+  ⇧k     Previous group    x          Stop
+  ⌃c     Quit              h          Hide
+                           backspace  Delete
+                           z p        Pin/unpin
 
 
 

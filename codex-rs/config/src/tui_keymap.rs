@@ -522,6 +522,10 @@ pub struct TuiListKeymap {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiAgentsKeymap {
+    /// Select the first task in the next group.
+    pub next_group: Option<KeybindingsSpec>,
+    /// Select the first task in the previous group.
+    pub previous_group: Option<KeybindingsSpec>,
     /// Open the session resume picker.
     pub resume: Option<KeybindingsSpec>,
     /// Search the available agent tasks.

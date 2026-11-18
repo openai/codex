@@ -478,6 +478,8 @@ impl ListKeymap {
 /// Task-management shortcuts specific to the agents dashboard.
 #[derive(Clone, Debug)]
 pub(crate) struct AgentsKeymap {
+    pub(crate) next_group: Vec<KeyBinding>,
+    pub(crate) previous_group: Vec<KeyBinding>,
     pub(crate) resume: Vec<KeyBinding>,
     pub(crate) search: Vec<KeyBinding>,
     pub(crate) new_task: Vec<KeyBinding>,
@@ -1539,6 +1541,8 @@ impl RuntimeKeymap {
         };
 
         let mut agents = AgentsKeymap {
+            next_group: resolve_local!(keymap, defaults, agents, next_group),
+            previous_group: resolve_local!(keymap, defaults, agents, previous_group),
             resume: resolve_local!(keymap, defaults, agents, resume),
             search: resolve_local!(keymap, defaults, agents, search),
             new_task: resolve_local!(keymap, defaults, agents, new_task),
@@ -1556,6 +1560,11 @@ impl RuntimeKeymap {
 
         // New defaults yield to explicit bindings, including existing list shortcuts.
         for (configured, bindings) in [
+            (keymap.agents.next_group.as_ref(), &mut agents.next_group),
+            (
+                keymap.agents.previous_group.as_ref(),
+                &mut agents.previous_group,
+            ),
             (keymap.agents.resume.as_ref(), &mut agents.resume),
             (keymap.agents.search.as_ref(), &mut agents.search),
             (keymap.agents.new_task.as_ref(), &mut agents.new_task),
@@ -1727,6 +1736,11 @@ impl RuntimeKeymap {
         };
 
         for (configured, bindings) in [
+            (keymap.agents.next_group.as_ref(), &mut agents.next_group),
+            (
+                keymap.agents.previous_group.as_ref(),
+                &mut agents.previous_group,
+            ),
             (keymap.agents.resume.as_ref(), &mut agents.resume),
             (keymap.agents.search.as_ref(), &mut agents.search),
             (keymap.agents.new_task.as_ref(), &mut agents.new_task),
@@ -2189,6 +2203,8 @@ impl RuntimeKeymap {
                 chord_hints: Arc::default(),
             },
             agents: AgentsKeymap {
+                next_group: default_bindings![shift(KeyCode::Down), shift(KeyCode::Char('j'))],
+                previous_group: default_bindings![shift(KeyCode::Up), shift(KeyCode::Char('k'))],
                 resume: default_bindings![plain(KeyCode::Char('o'))],
                 search: default_bindings![plain(KeyCode::F(3)), plain(KeyCode::Char('/'))],
                 new_task: default_bindings![plain(KeyCode::Char('n'))],

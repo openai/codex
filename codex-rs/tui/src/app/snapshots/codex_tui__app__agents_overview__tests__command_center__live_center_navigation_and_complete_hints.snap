@@ -13,6 +13,8 @@ expression: "screen(&view, width, height)"
   enter  Open
   pgup   Page up
   pgdn   Page down
+  ⇧↓     Next group
+  ⇧↑     Previous group
   ⌃c     Quit
 
   Tasks
@@ -22,7 +24,5 @@ expression: "screen(&view, width, height)"
   f          Fork
   r          Rename
   x          Stop
-  a          Archive
-  h          Hide
   … resize to see all
   esc back

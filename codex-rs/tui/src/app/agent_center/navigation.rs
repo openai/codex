@@ -1,5 +1,5 @@
-//! Page navigation shares the rendered row layout, including group headings.
-//! Command-center paging moves the viewport and selection together without wrapping at either end.
+//! Section and page navigation share the rendered row layout, including group headings.
+//! Navigation clamps at either end of the visible list.
 
 use super::*;
 
@@ -8,6 +8,11 @@ pub(super) enum CenterRow {
     Task(usize),
     Gap,
     ShowMore,
+}
+
+pub(in crate::app::agents_overview_view) enum SectionDirection {
+    Next,
+    Previous,
 }
 
 impl AgentsOverviewView {
@@ -34,6 +39,39 @@ impl AgentsOverviewView {
             previous = Some(index);
         }
         entries
+    }
+
+    pub(in crate::app::agents_overview_view) fn select_section(
+        &mut self,
+        direction: SectionDirection,
+    ) {
+        if self.state().rename_target.is_some() {
+            return;
+        }
+        let indices = self.selectable_indices();
+        let entries = self.center_rows(&indices, self.state().grouping);
+        let mut sections = Vec::new();
+        let mut current = None;
+        for row in entries {
+            match row {
+                CenterRow::Group(index) => sections.push(index),
+                CenterRow::Task(index) if index == self.selected => {
+                    current = sections.len().checked_sub(1)
+                }
+                CenterRow::ShowMore if self.selected == usize::MAX => {
+                    current = Some(sections.len())
+                }
+                CenterRow::Task(_) | CenterRow::Gap | CenterRow::ShowMore => {}
+            }
+        }
+        let target = current.and_then(|current| match direction {
+            SectionDirection::Next => current.checked_add(1),
+            SectionDirection::Previous => current.checked_sub(1),
+        });
+        if let Some(index) = target.and_then(|target| sections.get(target)).copied() {
+            self.selected = index;
+            self.state().show_more_selected = false;
+        }
     }
 
     pub(in crate::app::agents_overview_view) fn page_selection(&mut self, action: ListAction) {
