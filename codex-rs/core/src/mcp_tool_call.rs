@@ -2720,7 +2720,8 @@ async fn maybe_persist_mcp_tool_approval(
         return;
     }
 
-    sess.reload_user_config_layer().await;
+    // Keep the config reload's large future out of ordinary MCP calls, which never poll it.
+    Box::pin(sess.reload_user_config_layer()).await;
 }
 
 async fn persist_codex_app_tool_approval(
