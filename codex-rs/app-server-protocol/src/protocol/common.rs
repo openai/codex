@@ -3521,11 +3521,13 @@ mod tests {
                 v2::LoginAccountParams::AmazonBedrock {
                     api_key: "secret".to_string(),
                     region: "us-west-2".to_string(),
+                    provider_id: None,
                 },
                 json!({
                     "type": "amazonBedrock",
                     "apiKey": "secret",
-                    "region": "us-west-2"
+                    "region": "us-west-2",
+                    "providerId": null
                 }),
             ),
             (
@@ -3534,13 +3536,15 @@ mod tests {
                     secret_access_key: "secret-access-key".to_string(),
                     session_token: Some("session-token".to_string()),
                     region: "us-west-2".to_string(),
+                    provider_id: Some(v2::BedrockProviderId::AmazonBedrockRuntime),
                 },
                 json!({
                     "type": "amazonBedrockAccessKeys",
                     "accessKeyId": "access-key-id",
                     "secretAccessKey": "secret-access-key",
                     "sessionToken": "session-token",
-                    "region": "us-west-2"
+                    "region": "us-west-2",
+                    "providerId": "amazon-bedrock-runtime"
                 }),
             ),
         ] {

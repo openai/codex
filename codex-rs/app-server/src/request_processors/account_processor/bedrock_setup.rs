@@ -10,6 +10,7 @@ use codex_app_server_protocol::BedrockAwsProfile;
 use codex_app_server_protocol::BedrockDiscoverParams;
 use codex_app_server_protocol::BedrockDiscoverResponse;
 use codex_app_server_protocol::BedrockEnvironmentCredential;
+use codex_app_server_protocol::BedrockProviderId;
 use codex_app_server_protocol::BedrockSetupParams;
 use codex_app_server_protocol::BedrockSetupResponse;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -71,15 +72,21 @@ impl AccountRequestProcessor {
         params: BedrockSetupParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.ensure_provider_login_allowed(CloudLoginProvider::AmazonBedrock)?;
-        let (profile, region) = match &params {
-            BedrockSetupParams::Profile { profile, region } => {
-                (Some(profile.trim()), region.trim())
-            }
-            BedrockSetupParams::Environment { region } => (None, region.trim()),
+        let (profile, region, provider_id) = match &params {
+            BedrockSetupParams::Profile {
+                profile,
+                region,
+                provider_id,
+            } => (Some(profile.trim()), region.trim(), *provider_id),
+            BedrockSetupParams::Environment {
+                region,
+                provider_id,
+            } => (None, region.trim(), *provider_id),
         };
         let write = prepare_bedrock_provider(
             &self.config_manager,
             BedrockProviderConfig {
+                provider_id: provider_id.unwrap_or(BedrockProviderId::AmazonBedrock),
                 region: Some(region),
                 profile,
             },

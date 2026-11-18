@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::BedrockDiscoverParams;
 use codex_app_server_protocol::BedrockDiscoverResponse;
+use codex_app_server_protocol::BedrockProviderId;
 use codex_app_server_protocol::BedrockSetupParams;
 use codex_app_server_protocol::BedrockSetupResponse;
 use codex_app_server_protocol::ClientRequest;
@@ -39,6 +40,9 @@ async fn bedrock_app_server(
     TestAppServer::builder()
         .with_codex_home(codex_home)
         .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_FEDERATION_RULE_ID", None),
+            ("OPENAI_IDENTITY_TOKEN_FILE", None),
             ("AWS_CONFIG_FILE", Some(aws_config_path.as_ref())),
             (
                 "AWS_SHARED_CREDENTIALS_FILE",
@@ -99,6 +103,7 @@ async fn discover_bedrock_profiles_and_environment_credentials() -> Result<()> {
             request_id,
             params: BedrockSetupParams::Environment {
                 region: " us-east-2 ".to_string(),
+                provider_id: Some(BedrockProviderId::AmazonBedrockRuntime),
             },
         })
         .await?;
@@ -110,8 +115,8 @@ async fn discover_bedrock_profiles_and_environment_credentials() -> Result<()> {
     assert_eq!(
         config,
         toml::toml! {
-            model_provider = "amazon-bedrock"
-            [model_providers.amazon-bedrock.aws]
+            model_provider = "amazon-bedrock-runtime"
+            [model_providers.amazon-bedrock-runtime.aws]
             region = "us-east-2"
         }
         .into()
@@ -126,11 +131,11 @@ async fn discover_bedrock_profiles_and_environment_credentials() -> Result<()> {
         })
         .await?;
     let default_model = models.data.iter().find(|model| model.is_default).unwrap();
-    assert!(default_model.model.starts_with("openai."));
+    assert!(default_model.model.starts_with("global.openai."));
     let thread = app_server
         .start_thread(ThreadStartParams::default())
         .await?;
-    assert_eq!(thread.model_provider, "amazon-bedrock");
+    assert_eq!(thread.model_provider, "amazon-bedrock-runtime");
     assert_eq!(thread.model, default_model.model);
 
     Ok(())
@@ -158,15 +163,13 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
     )
     .await?;
 
-    let response: BedrockSetupResponse = app_server
-        .request(|request_id| ClientRequest::BedrockSetup {
-            request_id,
-            params: BedrockSetupParams::Profile {
-                profile: " engineering ".to_string(),
-                region: " us-west-2 ".to_string(),
-            },
-        })
+    let request_id = app_server
+        .send_raw_request(
+            "account/bedrock/setup",
+            Some(json!({"type":"profile", "profile":" engineering ", "region":" us-west-2 "})),
+        )
         .await?;
+    let response: BedrockSetupResponse = app_server.read_response(request_id).await?;
     assert_eq!(response, BedrockSetupResponse {});
     let config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(
@@ -185,6 +188,7 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
             request_id,
             params: BedrockSetupParams::Environment {
                 region: "us-east-1".to_string(),
+                provider_id: None,
             },
         })
         .await?;
@@ -214,6 +218,30 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
         }
         .into()
     );
+
+    let _: BedrockSetupResponse = app_server
+        .request(|request_id| ClientRequest::BedrockSetup {
+            request_id,
+            params: BedrockSetupParams::Profile {
+                profile: "engineering".to_string(),
+                region: "us-west-2".to_string(),
+                provider_id: Some(BedrockProviderId::AmazonBedrockRuntime),
+            },
+        })
+        .await?;
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let mut expected = config;
+    expected["model_provider"] = "amazon-bedrock-runtime".into();
+    expected["model_providers"].as_table_mut().unwrap().insert(
+        "amazon-bedrock-runtime".to_string(),
+        toml::toml! {
+            [aws]
+            profile = "engineering"
+            region = "us-west-2"
+        }
+        .into(),
+    );
+    assert_eq!(saved, expected);
 
     let managed_home = TempDir::new()?;
     let managed_config_path = managed_home.path().join("config.toml");
@@ -255,6 +283,7 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
             params: BedrockSetupParams::Profile {
                 profile: "engineering".to_string(),
                 region: "us-west-2".to_string(),
+                provider_id: None,
             },
         })
         .await?;
@@ -358,7 +387,9 @@ async fn setup_bedrock_rejects_invalid_or_conflicting_credentials() -> Result<()
         let source_path = layered_home_path.join(source_file);
         let active_path = layered_home_path.join("selected.config.toml");
         let exporter_config = "[model_providers.amazon-bedrock.aws.credential_export]\n\
-             command = \"secret-command\"\nargs = [\"secret-argument\"]\n";
+             command = \"secret-command\"\nargs = [\"secret-argument\"]\n\
+             [model_providers.amazon-bedrock-runtime.aws.credential_export]\n\
+             command = \"runtime-command\"\n";
         std::fs::write(&config_path, "")?;
         std::fs::write(&active_path, "")?;
         std::fs::write(&source_path, exporter_config)?;
@@ -383,6 +414,10 @@ async fn setup_bedrock_rejects_invalid_or_conflicting_credentials() -> Result<()
             (
                 "account/bedrock/setup",
                 json!({"type": "environment", "region": "us-west-2"}),
+            ),
+            (
+                "account/bedrock/setup",
+                json!({"type": "profile", "profile": "engineering", "region": "us-west-2", "providerId": "amazon-bedrock-runtime"}),
             ),
             (
                 "account/login/start",

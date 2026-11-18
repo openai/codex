@@ -759,7 +759,11 @@ impl AuthModeWidget {
                 BedrockCredential::ApiKey(api_key) => request_handle
                     .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
                         request_id,
-                        params: LoginAccountParams::AmazonBedrock { api_key, region },
+                        params: LoginAccountParams::AmazonBedrock {
+                            api_key,
+                            region,
+                            provider_id: None,
+                        },
                     })
                     .await
                     .map_err(|error| error.to_string())
@@ -772,7 +776,11 @@ impl AuthModeWidget {
                 BedrockCredential::Profile(profile) => request_handle
                     .request_typed::<BedrockSetupResponse>(ClientRequest::BedrockSetup {
                         request_id,
-                        params: BedrockSetupParams::Profile { profile, region },
+                        params: BedrockSetupParams::Profile {
+                            profile,
+                            region,
+                            provider_id: None,
+                        },
                     })
                     .await
                     .map(|_| ())
@@ -780,7 +788,10 @@ impl AuthModeWidget {
                 BedrockCredential::Environment => request_handle
                     .request_typed::<BedrockSetupResponse>(ClientRequest::BedrockSetup {
                         request_id,
-                        params: BedrockSetupParams::Environment { region },
+                        params: BedrockSetupParams::Environment {
+                            region,
+                            provider_id: None,
+                        },
                     })
                     .await
                     .map(|_| ())
@@ -797,6 +808,7 @@ impl AuthModeWidget {
                             secret_access_key,
                             session_token,
                             region,
+                            provider_id: None,
                         },
                     })
                     .await

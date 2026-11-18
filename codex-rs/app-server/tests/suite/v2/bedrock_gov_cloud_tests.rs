@@ -70,6 +70,7 @@ async fn checks_current_provider_after_login_without_restart() -> Result<()> {
             params: LoginAccountParams::AmazonBedrock {
                 api_key: "test-key".to_string(),
                 region: "us-west-2".to_string(),
+                provider_id: None,
             },
         })
         .await?;

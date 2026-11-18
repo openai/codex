@@ -2422,6 +2422,10 @@ class AmazonBedrockLoginAccountParams(BaseModel):
         populate_by_name=True,
     )
     api_key: Annotated[str, Field(alias="apiKey")]
+    provider_id: Annotated[
+        BedrockProviderId | None,
+        Field(alias="providerId", description="Defaults to Amazon Bedrock Mantle when omitted."),
+    ] = None
     region: str
     type: Annotated[
         Literal["amazonBedrock"], Field(title="AmazonBedrockv2::LoginAccountParamsType")
@@ -2433,6 +2437,10 @@ class AmazonBedrockAccessKeysLoginAccountParams(BaseModel):
         populate_by_name=True,
     )
     access_key_id: Annotated[str, Field(alias="accessKeyId")]
+    provider_id: Annotated[
+        BedrockProviderId | None,
+        Field(alias="providerId", description="Defaults to Amazon Bedrock Mantle when omitted."),
+    ] = None
     region: str
     secret_access_key: Annotated[str, Field(alias="secretAccessKey")]
     session_token: Annotated[str | None, Field(alias="sessionToken")] = None

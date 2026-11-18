@@ -3,6 +3,7 @@ use crate::config_manager::ConfigManager;
 use crate::config_manager_service::PreparedProviderWrite;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use codex_app_server_protocol::BedrockProviderId;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteErrorCode;
@@ -11,8 +12,10 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 
 pub(super) struct BedrockProviderConfig<'a> {
+    pub(super) provider_id: BedrockProviderId,
     pub(super) region: Option<&'a str>,
     pub(super) profile: Option<&'a str>,
 }
@@ -29,8 +32,12 @@ pub(super) async fn prepare_bedrock_provider(
     if let Some(region) = config.region {
         settings.push(("aws.region", Some(region)));
     }
+    let provider_id = match config.provider_id {
+        BedrockProviderId::AmazonBedrock => AMAZON_BEDROCK_PROVIDER_ID,
+        BedrockProviderId::AmazonBedrockRuntime => AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+    };
     let (write, provider) = config_manager
-        .prepare_provider_config(&layers, AMAZON_BEDROCK_PROVIDER_ID, settings)
+        .prepare_provider_config(&layers, provider_id, settings)
         .map_err(map_config_error)?;
     if provider
         .aws

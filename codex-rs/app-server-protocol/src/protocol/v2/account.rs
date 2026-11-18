@@ -1,3 +1,4 @@
+use super::BedrockProviderId;
 use super::ThreadUsage;
 use crate::JsonSchema;
 use crate::TS;
@@ -117,7 +118,13 @@ pub enum LoginAccountParams {
     #[experimental("account/login/start.amazonBedrock")]
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
-    AmazonBedrock { api_key: String, region: String },
+    AmazonBedrock {
+        api_key: String,
+        region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
+    },
     /// [UNSTABLE] Managed Amazon Bedrock AWS access key login is experimental.
     #[experimental("account/login/start.amazonBedrockAccessKeys")]
     #[serde(rename = "amazonBedrockAccessKeys", rename_all = "camelCase")]
@@ -128,6 +135,9 @@ pub enum LoginAccountParams {
         #[ts(optional = nullable)]
         session_token: Option<String>,
         region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
     },
 }
 

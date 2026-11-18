@@ -1,3 +1,4 @@
+use super::BedrockProviderId;
 use crate::JsonSchema;
 use crate::TS;
 use serde::Deserialize;
@@ -50,10 +51,21 @@ pub enum AwsCredentialType {
 pub enum BedrockSetupParams {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Profile { profile: String, region: String },
+    Profile {
+        profile: String,
+        region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Environment { region: String },
+    Environment {
+        region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]

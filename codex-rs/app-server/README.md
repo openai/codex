@@ -430,9 +430,11 @@ version-gate published policy bundles.
 
 # Amazon Bedrock authentication
 
-If `model_providers.amazon-bedrock.aws.credential_export` is configured, Bedrock setup and
-Bedrock login return an error without changing configuration or saved credentials. Remove the
-exporter configuration before selecting another credential source. `aws.credential_export` and
+Bedrock setup and login accept an optional `providerId`: `amazon-bedrock` (Mantle) or
+`amazon-bedrock-runtime`. Omission or `null` selects Mantle for compatibility. If the selected
+provider has `aws.credential_export` configured, setup and login return an error without changing
+configuration or saved credentials. Remove the exporter configuration before selecting another
+credential source. `aws.credential_export` and
 `aws.profile` cannot be configured together.
 
 Application network restrictions apply to each AWS credential and region HTTP request and to
@@ -874,8 +876,8 @@ writes still require validation. Lower-precedence definitions can be overridden;
 required definitions are read-only. Both capabilities are false when user
 configuration is ignored. The flag does not establish credential validity or
 whether a setup flow that also selects a default provider will succeed.
-`account/bedrock/setup` targets `amazon-bedrock`; edits to `amazon-bedrock-runtime`
-must use that provider's configuration paths instead.
+`account/bedrock/setup` selects Mantle by default; pass `providerId: "amazon-bedrock-runtime"`
+to select Runtime. Direct edits must use the selected provider's configuration paths.
 
 Use `modelProvider/config/write` with a tagged `settings` patch. To create a
 custom gateway, send `type: "customGateway"`, `name`, and `baseUrl`. Omit

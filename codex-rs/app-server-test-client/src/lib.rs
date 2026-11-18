@@ -1048,6 +1048,7 @@ async fn test_login(
                         params: codex_app_server_protocol::LoginAccountParams::AmazonBedrock {
                             api_key,
                             region,
+                            provider_id: None,
                         },
                     },
                     request_id,
