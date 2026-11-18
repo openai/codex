@@ -96,8 +96,9 @@ async fn trusted_h2_requires_settings_and_certificate() -> Result<()> {
     .await?
 }
 
+/// Interactive tunnel responses must reach buffered writers before either side closes.
 #[tokio::test]
-async fn forwards_upload_before_response_and_rejects_before_upload() -> Result<()> {
+async fn forwards_interactive_data_and_rejects_before_upload() -> Result<()> {
     timeout(Duration::from_secs(15), async {
         for status in [200, 403] {
             let (server, client) = tls_configs()?;
@@ -121,6 +122,7 @@ async fn forwards_upload_before_response_and_rejects_before_upload() -> Result<(
                 let mut send = respond.send_response(Response::builder().status(status).body(())?, status != 200)?;
                 let handler = async move {
                     if status != 200 { return Ok::<_, anyhow::Error>(()); }
+                    send.send_data(Bytes::from_static(b"kex"), false)?;
                     let mut body = request.into_body();
                     let mut received = Vec::new();
                     while let Some(data) = body.data().await { let data = data?; received.extend_from_slice(&data); body.flow_control().release_capacity(data.len())?; }
@@ -142,9 +144,12 @@ async fn forwards_upload_before_response_and_rejects_before_upload() -> Result<(
             let (input, output) = tokio::io::split(socket);
             let relay = tokio::spawn(async move {
                 Connection::Http2(sender, Box::new(connection)).admit(request).await?
-                    .relay(input, output).await
+                    .relay(input, tokio::io::BufWriter::new(output)).await
             });
             if status == 200 {
+                let mut prompt = [0; 3];
+                local.read_exact(&mut prompt).await?;
+                assert_eq!(&prompt, b"kex");
                 let mut received = Vec::new();
                 local.write_all(&upload).await?; local.shutdown().await?; local.read_to_end(&mut received).await?;
                 assert_eq!(received.len(), download.len());

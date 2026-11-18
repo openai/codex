@@ -216,6 +216,7 @@ pub(super) async fn bridge(
         while let Some(data) = recv.data().await {
             let data = data.map_err(|_| stream_error())?;
             write.write_all(&data).await.context("writing local TCP")?;
+            write.flush().await.context("flushing local TCP")?;
             recv.flow_control()
                 .release_capacity(data.len())
                 .map_err(|_| stream_error())?;
