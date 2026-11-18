@@ -30,7 +30,7 @@ pub struct PreparedGuardianContext {
 }
 
 impl PreparedGuardianContext {
-    async fn prepare(
+    pub(in crate::guardian) async fn prepare(
         parent: Arc<Session>,
         mut context: GuardianReviewContext,
         config: Config,

@@ -97,6 +97,7 @@ use super::prompt::GuardianPromptMode;
 #[cfg(test)]
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::GuardianTranscriptHistory;
+use super::request_budget::ExhaustedReviewBudget;
 use super::review::guardian_review_session_config;
 pub(crate) use super::reviewer_config::build_guardian_review_session_config;
 use codex_guardian_reviewer::run_before_review_deadline;
@@ -654,36 +655,14 @@ async fn run_review_on_session(
         state.transcript_history_version = reviewer_history_version;
         state.transcript_source = Some(transcript_source);
     }
-    let budget_exhausted = review_session
-        .session
-        .services
-        .thread_extension_data
-        .remove::<super::request_budget::ExhaustedReviewBudget>();
-    let result = match turn_result.outcome {
-        GuardianReviewSessionOutcome::SessionFailed {
-            error_info: Some(CodexErrorInfo::ContextWindowExceeded),
-            ..
-        } if matches!(
-            budget_exhausted.as_deref(),
-            Some(super::request_budget::ExhaustedReviewBudget::Detected)
-        ) =>
-        {
-            GuardianReviewSessionOutcome::InputBudgetExceeded
-        }
-        result => result,
-    };
     ReviewSessionResult {
-        outcome: result,
-        disposition: if budget_exhausted.is_some() {
-            SessionDisposition::Discard
-        } else {
-            turn_result.disposition
-        },
+        outcome: turn_result.outcome,
+        disposition: turn_result.disposition,
         analytics: analytics_result,
     }
 }
 
-async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSession) {
+pub(super) async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSession) {
     let followup_reminder = GuardianFollowupReviewReminder
         .body()
         .into_text()
@@ -712,7 +691,7 @@ async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSessio
         .await;
 }
 
-async fn prepare_verdict_session(
+pub(super) async fn prepare_verdict_session(
     review_session: &GuardianReviewSession,
     context: &GuardianReviewContext,
     category: GuardianScope,
@@ -783,6 +762,26 @@ async fn prepare_verdict_session(
     Ok(())
 }
 
+fn finish_budgeted_verdict(
+    mut turn: ReviewTurnResult,
+    budget: Option<&ExhaustedReviewBudget>,
+) -> ReviewTurnResult {
+    let Some(budget) = budget else { return turn };
+    turn.disposition = SessionDisposition::Discard;
+    if matches!(budget, ExhaustedReviewBudget::Detected)
+        && matches!(
+            turn.outcome,
+            GuardianReviewSessionOutcome::SessionFailed {
+                error_info: Some(CodexErrorInfo::ContextWindowExceeded),
+                ..
+            }
+        )
+    {
+        turn.outcome = GuardianReviewSessionOutcome::InputBudgetExceeded;
+    }
+    turn
+}
+
 /// Input for one verdict, with the evidence that replaces the prompt marker at admission.
 pub(super) struct PreparedVerdictTurn {
     pub(super) request: TurnInputRequest,
@@ -821,7 +820,8 @@ impl GuardianReviewSession {
             }
             let result = wait_for_guardian_review(self, &id, deadline, cancel, analytics).await;
             observation.finish(result.turn_completed);
-            Ok(result)
+            let budget = store.remove::<ExhaustedReviewBudget>();
+            Ok(finish_budgeted_verdict(result, budget.as_deref()))
         }
         .await;
         store.remove::<super::PendingReviewRouting>();

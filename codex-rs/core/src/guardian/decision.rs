@@ -4,6 +4,7 @@
 use codex_async_utils::THREAD_STACK_SIZE_BYTES;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::GuardianScope;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -54,6 +55,20 @@ pub(crate) fn decide_approval(
 ) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
     let mut context: GuardianReviewContext = context.into();
     let request: ReviewAction = request.into();
+    let bind_reviewer = |session: &Session| {
+        session
+            .services
+            .thread_extension_data
+            .get::<Arc<dyn crate::guardian_review::AttachedReviewer>>()
+            .map(|reviewer| Arc::clone(reviewer.as_ref()).bind())
+    };
+    // Only Never can grant full access. Bind other requests before scheduling as usual.
+    let may_have_full_access = context.approval_policy == AskForApproval::Never;
+    let attached_reviewer = if may_have_full_access {
+        None
+    } else {
+        bind_reviewer(&session)
+    };
     // Bind the invocation before scheduling. Async review cleanup can outlive
     // the decision, but must not extend the time blocking this tool.
     let review_timing = if context
@@ -136,7 +151,13 @@ pub(crate) fn decide_approval(
             context.approval_policy,
             &turn.config.permissions.effective_permission_profile(),
         );
-        let mut require_synchronous_review = options.require_synchronous_review;
+        let attached_reviewer = if may_have_full_access && !full_access {
+            bind_reviewer(&session)
+        } else {
+            attached_reviewer
+        };
+        let mut require_synchronous_review =
+            options.require_synchronous_review || attached_reviewer.is_some();
         if let Some(assessment) = &context.serving_assessment {
             let permissions = request.request.as_ref().ok().and_then(|request| {
                 super::permissions::for_environment(&context, request.target_environment_id()).ok()
@@ -167,6 +188,7 @@ pub(crate) fn decide_approval(
         let decision = codex_guardian_reviewer::ReviewRequest {
             serving_assessment: context.serving_assessment.as_ref().map(|value| value.requires_review),
             host: ReviewRuntime {
+                attached_reviewer,
                 session: Arc::clone(&session),
                 history_reset: history_reset.clone(),
                 context: context.clone(),

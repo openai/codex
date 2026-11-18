@@ -907,6 +907,49 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
     assert!(turn_completed);
 }
 
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, Some(ExhaustedReviewBudget::Detected), true; "local exhaustion asks the user")]
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, None, false; "backend context limit denies")]
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, Some(ExhaustedReviewBudget::Compacting), false; "compaction failure denies")]
+#[test_case::test_case(CodexErrorInfo::ServerOverloaded, Some(ExhaustedReviewBudget::Detected), false; "unrelated server failure denies")]
+fn optional_sync_verdict_falls_back_only_for_local_input_exhaustion(
+    error_info: CodexErrorInfo,
+    budget: Option<ExhaustedReviewBudget>,
+    expect_user_approval: bool,
+) {
+    let turn = ReviewTurnResult {
+        outcome: GuardianReviewSessionOutcome::SessionFailed {
+            error: anyhow::anyhow!("review failed"),
+            error_info: Some(error_info),
+            retry_at: None,
+        },
+        disposition: SessionDisposition::Reusable,
+        turn_completed: true,
+    };
+    let turn = finish_budgeted_verdict(turn, budget.as_ref());
+    let completion = codex_guardian_reviewer::complete_review(
+        turn.outcome.into(),
+        &model_info_from_slug("active-model"),
+        /*require_guardian*/ false,
+        /*event*/ None,
+        GuardianReviewAnalyticsResult::without_session(),
+    );
+    match completion.decision {
+        None => assert!(expect_user_approval),
+        Some(codex_protocol::protocol::ReviewDecision::Denied { .. }) => {
+            assert!(!expect_user_approval)
+        }
+        other => panic!("unexpected review decision: {other:?}"),
+    }
+    assert_eq!(
+        turn.disposition,
+        if budget.is_some() {
+            SessionDisposition::Discard
+        } else {
+            SessionDisposition::Reusable
+        }
+    );
+}
+
 #[tokio::test]
 async fn wait_for_guardian_review_ignores_prior_turn_aborts() {
     let (review_session, tx_event, _rx_sub) = test_review_session().await;

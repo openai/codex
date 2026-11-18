@@ -36,3 +36,51 @@ pub fn reviewer_headers(config: &crate::config::Config) -> crate::CodexResponses
         )]),
     }
 }
+
+/// A thread's synchronous reviewer. Bind the evidence catch-up to the action before it waits.
+pub trait AttachedReviewer: Send + Sync {
+    fn bind(self: std::sync::Arc<Self>) -> BoundReviewer;
+}
+
+/// Evidence preparation bound to one action, shared by its review attempts.
+#[derive(Clone)]
+pub struct BoundReviewer {
+    pub preparation: std::sync::Arc<dyn ReviewerPreparation>,
+    pub retrieval: ReviewRetrieval,
+}
+
+/// Safe to report with a review ID before a verdict has started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ReviewPreparationError {
+    #[error("Guardian board evidence is unavailable")]
+    EvidenceUnavailable,
+    #[error("timed out preparing Guardian review")]
+    PreparationTimedOut,
+    #[error("reviewer is unavailable")]
+    ReviewerUnavailable,
+    #[error("evidence delivery failed")]
+    DeliveryFailed,
+    #[error("preparation was cancelled")]
+    Cancelled,
+}
+
+/// Reserve the actor's reviewer after routing and delivery have covered the bound action.
+pub trait ReviewerPreparation: Send + Sync {
+    fn prepare<'a>(
+        &'a self,
+        setup: &'a PreparedGuardianContext,
+        cancel: &'a tokio_util::sync::CancellationToken,
+    ) -> codex_extension_api::ExtensionFuture<
+        'a,
+        Result<Box<dyn PreparedAssessment>, ReviewPreparationError>,
+    >;
+}
+
+/// Holds the model session until the host finishes validating the original authority.
+/// Dropping an interrupted reservation discards its partially admitted conversation.
+pub trait PreparedAssessment: Send + Sync {
+    fn runtime(&self) -> &GuardianReviewSession;
+    /// Whether this reservation opened a reviewer or continued a retained one.
+    fn session_kind(&self) -> codex_analytics::GuardianReviewSessionKind;
+    fn finish(self: Box<Self>, disposition: codex_guardian_reviewer::SessionDisposition);
+}
