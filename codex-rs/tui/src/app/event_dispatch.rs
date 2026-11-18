@@ -3709,7 +3709,7 @@ impl App {
                         && self.document_preview_available(tui, app_server);
                     match path {
                         Ok(path) => Box::pin(self.open_resolved_document(tui, app_server, source, original_path, path, location, focus)).await?,
-                        Err(error) if focus => self.chat_widget.add_error_message(format!("Could not open file: {error}")),
+                        Err(error) if focus => self.chat_widget.add_error_message(format!("Could not open {original_path}: {error}")),
                         Err(_) => {}
                     }
                 }

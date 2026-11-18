@@ -1,5 +1,7 @@
 //! Read-only Markdown previews use the focused thread's workspace and app-server.
 
+mod open_error;
+
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
@@ -22,6 +24,7 @@ use crate::transcript_view::ViewAction;
 use codex_app_server_client::AppServerPath;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use color_eyre::eyre::eyre;
 use ratatui::layout::Position;
 use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
@@ -84,7 +87,7 @@ pub(super) struct Document {
 
 enum State {
     Loading(Instant),
-    Failed(String),
+    Failed(color_eyre::Report),
     Image(Box<SidebarImage>),
     Ready {
         view: Box<TranscriptView>,
@@ -138,11 +141,11 @@ impl Document {
 
     pub(super) fn connection_replaced(&mut self) {
         if matches!(self.state, State::Loading(_)) {
-            self.state = State::Failed("Connection changed. Reopen this file to try again.".into());
+            self.state = State::Failed(eyre!("Connection changed. Reopen this file to try again."));
         }
     }
 
-    pub(super) fn loaded(&mut self, result: Result<DocumentContent, String>) {
+    pub(super) fn loaded(&mut self, result: Result<DocumentContent>) {
         self.state = match result {
             Ok(DocumentContent::Image(image)) => State::Image(image),
             Ok(DocumentContent::Text(source)) => {
@@ -151,7 +154,7 @@ impl Document {
                     self.location.is_some() || !crate::markdown_render::is_markdown_file(&title);
                 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
                 if code && source.len() > MAX_SOURCE_BYTES {
-                    self.state = State::Failed("Source preview limit is 1 MiB".into());
+                    self.state = State::Failed(eyre!("Source preview limit is 1 MiB"));
                     return;
                 }
                 // Like the transcript layout, count one LF per logical line, including CRLF input.
@@ -171,7 +174,7 @@ impl Document {
                 const MAX_SOURCE_LINES: usize = 10_000;
                 if line_starts.len() > MAX_SOURCE_LINES {
                     self.state =
-                        State::Failed(format!("Source preview limit is {MAX_SOURCE_LINES} lines"));
+                        State::Failed(eyre!("Source preview limit is {MAX_SOURCE_LINES} lines"));
                     return;
                 }
                 let language = code.then(|| {
@@ -264,9 +267,18 @@ impl Document {
                 .render(body, buf);
             }
             State::Failed(error) => {
-                Paragraph::new(format!("Could not open file: {error}"))
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .render(body, buf);
+                let mut lines = open_error::lines(&self.path, error, body.width);
+                // On short panes, keep the space for the filename and recovery message.
+                if lines.len() + 2 < usize::from(body.height) {
+                    lines.insert(0, Line::default());
+                    if resize_hint.is_none() {
+                        let esc = crate::key_hint::plain(KeyCode::Esc);
+                        let footer = Rect::new(body.x, body.bottom() - 1, body.width, 1);
+                        crate::footer_hint::shortcut(&esc.display_label(), "close")
+                            .render(footer, buf);
+                    }
+                }
+                Paragraph::new(lines).render(body, buf);
             }
             State::Ready {
                 view,
@@ -563,8 +575,7 @@ impl App {
                         .map(DocumentContent::Text)
                 }
             }
-            .await
-            .map_err(|error| format!("{error:#}"));
+            .await;
             tx.send(AppEvent::SidebarDocumentLoaded {
                 backend_id,
                 parent,

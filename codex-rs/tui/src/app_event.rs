@@ -563,7 +563,7 @@ pub(crate) enum AppEvent {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,
         request: uuid::Uuid,
-        result: Result<crate::sidebar_image::DocumentContent, String>,
+        result: color_eyre::Result<crate::sidebar_image::DocumentContent>,
     },
     SidebarFilesLoaded {
         backend_id: crate::backend_id::BackendId,

@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsCreateDirectoryResponse;
@@ -238,8 +239,13 @@ impl AppServerFileSystem {
                     })
                     .await
                     .wrap_err_with(|| format!("{method} failed in TUI"))?;
-                serde_json::from_value(response.map_err(|source| {
-                    color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
+                serde_json::from_value(response.map_err(|mut source| {
+                    // Callers log these errors. Keep raw server diagnostics out of the logs.
+                    source.data = None;
+                    TypedRequestError::Server {
+                        method: method.to_string(),
+                        source,
+                    }
                 })?)
                 .wrap_err_with(|| format!("{method} returned invalid data"))
             }
