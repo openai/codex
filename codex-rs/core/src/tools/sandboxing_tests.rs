@@ -340,6 +340,7 @@ async fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backe
         .expect("prepare elevated Windows sandbox request");
     let overrides = request
         .windows_sandbox_filesystem_overrides
+        .as_ref()
         .expect("elevated Windows sandbox should preserve deny-read overrides");
     assert_eq!(overrides.additional_deny_read_paths, vec![denied_path]);
     assert_eq!(request.windows_sandbox_workspace_roots, vec![cwd]);
@@ -427,9 +428,9 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     .expect("prepare remote exec request");
     assert!(!attempt.is_escalated());
 
-    assert_eq!(request.command, argv);
-    assert_eq!(request.arg0, None);
-    assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(request.argv(), argv);
+    assert_eq!(request.arg0(), &None);
+    assert_eq!(request.sandbox(), SandboxType::None);
     assert_eq!(
         request.exec_server_sandbox,
         Some(codex_exec_server::FileSystemSandboxContext {

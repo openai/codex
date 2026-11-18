@@ -59,24 +59,23 @@ pub(super) async fn spawn_command_under_sandbox(
     .await
     .map_err(|err| io::Error::other(err.to_string()))?;
 
-    let (program, args) = exec_request
-        .command
-        .split_first()
+    let command = exec_request
+        .direct_command()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "command args are empty"))?;
 
-    let mut child = tokio::process::Command::new(program);
-    if let Some(arg0) = exec_request.arg0.as_deref() {
+    let mut child = tokio::process::Command::new(command.program);
+    if let Some(arg0) = command.arg0 {
         child.arg0(arg0);
     }
-    child.args(args);
+    child.args(command.args);
     // TODO(anp): Keep PathUri through the macOS sandbox process launch boundary.
-    let native_cwd = exec_request
+    let native_cwd = command
         .cwd
         .to_abs_path()
         .map_err(|err| io::Error::other(err.to_string()))?;
     child.current_dir(native_cwd);
     child.env_clear();
-    child.envs(exec_request.env);
+    child.envs(command.env);
 
     match stdio_policy {
         StdioPolicy::RedirectForShellTool => {

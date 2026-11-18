@@ -33,6 +33,7 @@ pub use denial::is_likely_sandbox_denied;
 pub use linux_pid_namespace::LinuxSandboxPidNamespace;
 pub use manager::SandboxCommand;
 pub use manager::SandboxExecRequest;
+pub use manager::SandboxExecutables;
 pub use manager::SandboxManager;
 pub use manager::SandboxNetwork;
 pub use manager::SandboxSelection;

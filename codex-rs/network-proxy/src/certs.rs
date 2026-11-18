@@ -3,6 +3,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
 use base64::Engine as _;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_home_dir::find_codex_home;
 use rama_net::tls::ApplicationProtocol;
 use rama_tls_rustls::dep::pki_types::CertificateDer;
@@ -602,6 +603,20 @@ fn is_generated_managed_ca_artifact_path(path: &Path, proxy_dir: &Path, prefix: 
         return false;
     };
     format!("{:x}", Sha256::digest(trust_bundle)) == expected_hash
+}
+
+/// Find a generated CA in the environment prepared for a managed route on this host.
+pub fn managed_mitm_ca_from_env(env: &HashMap<String, String>) -> Option<AbsolutePathBuf> {
+    CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .chain(CHILD_ONLY_CA_ENV_KEYS)
+        .filter_map(|key| env.get(key))
+        .find_map(|path| {
+            if !is_managed_mitm_ca_trust_bundle_path(path) {
+                return None;
+            }
+            AbsolutePathBuf::from_absolute_path(path).ok()
+        })
 }
 
 /// Returns whether `path` points at a current Codex-generated MITM CA bundle.

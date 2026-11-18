@@ -821,7 +821,7 @@ async fn completed_local_commands_preserve_exit_code(tty: bool) -> anyhow::Resul
                 cwd: cwd.clone(),
                 expiration: request.expiration,
                 capture_policy: request.capture_policy,
-                env: request.env,
+                env: shell_env(),
                 network: None,
                 network_environment_id: None,
                 sandbox_permissions: SandboxPermissions::UseDefault,
@@ -838,6 +838,7 @@ async fn completed_local_commands_preserve_exit_code(tty: bool) -> anyhow::Resul
             /*use_legacy_landlock*/ false,
         )
         .await?
+        .into_exec_request()
     } else {
         request
     };

@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_utils_path_uri::PathUri;
@@ -88,16 +89,6 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
-        let mut helper_readable_paths = Vec::new();
-        if !sandbox.use_legacy_landlock {
-            helper_readable_paths.push(helper.clone());
-            if let Some(linux_helper) = &self.runtime_paths.codex_linux_sandbox_exe
-                && linux_helper != helper
-            {
-                helper_readable_paths.push(linux_helper.clone());
-            }
-        }
-
         let sandbox_manager = SandboxManager::for_file_system_helpers()
             .with_linux_sandbox_pid_namespace(self.runtime_paths.linux_sandbox_pid_namespace);
         #[cfg(target_os = "macos")]
@@ -128,14 +119,13 @@ impl FileSystemSandboxRunner {
                 command,
                 permissions: &sandbox.permissions,
                 workspace_roots: Some(&sandbox.workspace_roots),
-                runtime_readable_paths: Some(&helper_readable_paths),
                 selection,
                 network: Default::default(),
                 sandbox_policy_cwd: &sandbox.cwd,
-                sandbox_exe: if cfg!(windows) {
-                    Some(helper.as_path())
-                } else {
-                    self.runtime_paths.codex_linux_sandbox_exe.as_deref()
+                executables: SandboxExecutables::Executor {
+                    codex: helper,
+                    linux_sandbox: self.runtime_paths.codex_linux_sandbox_exe.as_ref(),
+                    arg0: None,
                 },
                 use_legacy_landlock: sandbox.use_legacy_landlock,
                 windows_sandbox_level,

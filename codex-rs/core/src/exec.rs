@@ -19,7 +19,7 @@ use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
 use crate::sandboxing::ExecOptions;
-use crate::sandboxing::ExecRequest;
+use crate::sandboxing::PreparedLocalExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -37,6 +37,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
@@ -321,7 +323,7 @@ pub async fn process_exec_tool_call(
     .await?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_req, stdout_stream).await
+    crate::sandboxing::execute_env(exec_req.into_exec_request(), stdout_stream).await
 }
 
 /// Transform a portable exec request into the concrete argv/env that should be
@@ -336,7 +338,7 @@ pub async fn build_exec_request(
     codex_self_exe: &Option<PathBuf>,
     windows_sandbox_type: SandboxType,
     use_legacy_landlock: bool,
-) -> Result<ExecRequest> {
+) -> Result<PreparedLocalExecRequest> {
     let ExecParams {
         command,
         cwd,
@@ -387,10 +389,6 @@ pub async fn build_exec_request(
         managed_network,
         additional_permissions: None,
     };
-    let options = ExecOptions {
-        expiration,
-        capture_policy,
-    };
     // An already-bound profile only needs its concrete paths validated. Its Windows
     // launcher hints can include foreign roots that this host won't use.
     let policy_roots = if permission_profile.has_workspace_root_rules() {
@@ -398,12 +396,11 @@ pub async fn build_exec_request(
     } else {
         &[]
     };
-    let request = manager
-        .transform(SandboxTransformRequest {
+    let request = PreparedLocalExecRequest::from_wrapped(
+        manager.transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
             workspace_roots: Some(policy_roots),
-            runtime_readable_paths: None,
             selection: SandboxSelection::Platform {
                 preference: SandboxablePreference::Auto,
                 windows_sandbox: windows_sandbox_type,
@@ -414,48 +411,49 @@ pub async fn build_exec_request(
                 network_environment_id.as_deref(),
             ),
             sandbox_policy_cwd: &sandbox_policy_cwd_uri,
-            sandbox_exe: if cfg!(windows) {
+            executables: SandboxExecutables::Launcher(if cfg!(windows) {
                 codex_self_exe.as_deref()
             } else {
                 codex_linux_sandbox_exe.as_deref()
-            },
+            }),
             use_legacy_landlock,
             windows_sandbox_level,
-        })?
-        .into_command_request()?;
-    let request = ExecRequest::from_sandbox_exec_request(request, options, workspace_roots).await?;
-    tracing::debug!("Sandbox type: {:?}", request.sandbox);
+        })?,
+        expiration,
+        capture_policy,
+        workspace_roots,
+    )
+    .await?;
+    tracing::debug!("Sandbox type: {:?}", request.as_ref().sandbox());
     Ok(request)
 }
 
-pub(crate) async fn execute_exec_request(
-    exec_request: ExecRequest,
+pub(crate) async fn capture_sandbox_request(
+    request: SandboxExecRequest,
+    options: ExecOptions,
+    windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
+    windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
-    let ExecRequest {
+    let SandboxExecRequest {
         command,
         native_program,
         cwd,
         env,
-        exec_server_env_config: _,
-        exec_server_shell_snapshot: _,
         network,
-        expiration,
-        capture_policy,
         sandbox,
-        windows_sandbox_policy_cwd,
-        windows_sandbox_workspace_roots,
+        sandbox_policy_cwd: windows_sandbox_policy_cwd,
         windows_sandbox_level,
         permission_profile,
-        windows_sandbox_filesystem_overrides,
         network_environment_id,
         arg0,
-        exec_server_sandbox: _,
-        exec_server_enforce_managed_network: _,
-        exec_server_managed_network: _,
-        exec_server_network_proxy: _,
-    } = exec_request;
+        ..
+    } = request;
+    let ExecOptions {
+        expiration,
+        capture_policy,
+    } = options;
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
 
     // TODO(anp): Keep PathUri through the local process launch boundary.
@@ -473,7 +471,7 @@ pub(crate) async fn execute_exec_request(
         expiration,
         capture_policy,
         env,
-        network: network.clone(),
+        network,
         network_environment_id,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level,

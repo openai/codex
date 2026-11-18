@@ -28,6 +28,7 @@ use codex_protocol::protocol::ReviewDecision;
 pub(crate) use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
@@ -510,11 +511,12 @@ impl<'a> SandboxAttempt<'a> {
                 command,
                 permissions: self.permissions,
                 workspace_roots: Some(self.workspace_roots),
-                runtime_readable_paths: None,
                 selection: self.local_selection,
                 network: SandboxNetwork::new(self.enforce_managed_network, network, environment_id),
                 sandbox_policy_cwd: self.sandbox_cwd,
-                sandbox_exe: self.sandbox_exe.map(std::path::PathBuf::as_path),
+                executables: SandboxExecutables::Launcher(
+                    self.sandbox_exe.map(std::path::PathBuf::as_path),
+                ),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             },
@@ -569,7 +571,7 @@ impl<'a> SandboxAttempt<'a> {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
                 permissions: exec_server_permissions,
                 sandbox_override: self.sandbox_override,
-                cwd: exec_request.windows_sandbox_policy_cwd.clone(),
+                cwd: exec_request.sandbox_policy_cwd().clone(),
                 workspace_roots: self.workspace_roots.to_vec(),
                 user_home_dir: None,
                 temporary_directories: None,

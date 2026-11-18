@@ -196,14 +196,14 @@ fn exec_server_env_for_request(
 ) {
     if let Some(exec_server_env_config) = &request.exec_server_env_config {
         let mut env =
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env);
+            env_overlay_for_exec_server(request.env(), &exec_server_env_config.local_policy_env);
         if request.exec_server_shell_snapshot.is_some()
             && !exec_server_env_config.policy.r#set.contains_key("PATH")
         {
             env.remove("PATH");
         }
         if request.exec_server_managed_network.is_some() {
-            for (key, value) in &request.env {
+            for (key, value) in request.env() {
                 if is_managed_proxy_env_var(key, value) {
                     env.insert(key.clone(), value.clone());
                 }
@@ -211,7 +211,7 @@ fn exec_server_env_for_request(
         }
         (Some(exec_server_env_config.policy.clone()), env)
     } else {
-        (None, request.env.clone())
+        (None, request.env().clone())
     }
 }
 
@@ -236,14 +236,14 @@ fn exec_server_params_for_request(
             thread_id: Some(ctx.session.thread_id()),
             tool_call_id: Some(ctx.call_id.clone()),
         }),
-        argv: request.command.clone(),
-        cwd: request.cwd.clone(),
+        argv: request.argv().to_vec(),
+        cwd: request.cwd().clone(),
         env_policy,
         shell_snapshot: request.exec_server_shell_snapshot.clone(),
         env,
         tty,
         pipe_stdin: false,
-        arg0: request.arg0.clone(),
+        arg0: request.arg0().clone(),
         sandbox,
         enforce_managed_network: request.exec_server_enforce_managed_network,
         managed_network: request.exec_server_managed_network.clone(),
@@ -1316,7 +1316,7 @@ impl UnifiedExecProcessManager {
         &self,
         process_id: i32,
         tool_ctx: &ToolCtx,
-        request: ExecRequest,
+        mut request: ExecRequest,
         network: Option<&NetworkProxy>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         shell_snapshot: Option<codex_exec_server::ShellSnapshotRequest>,
@@ -1329,11 +1329,8 @@ impl UnifiedExecProcessManager {
             .as_ref()
             .filter(|launch| launch.policy_decision_timeout_ms.is_some())
             .and_then(|launch| network?.remote_policy_decider(launch.proxy.allow_local_binding));
-        let request = ExecRequest {
-            exec_server_env_config,
-            exec_server_shell_snapshot: shell_snapshot,
-            ..request
-        };
+        request.exec_server_env_config = exec_server_env_config;
+        request.exec_server_shell_snapshot = shell_snapshot;
         self.open_session_with_prepared_exec_env(
             process_id,
             &request,
@@ -1403,12 +1400,13 @@ impl UnifiedExecProcessManager {
         }
 
         // TODO(anp): Keep PathUri through the local PTY/process launch boundary.
-        let native_cwd = request
-            .cwd
-            .to_abs_path()
-            .map_err(|_| UnifiedExecError::ForeignPath {
-                path: request.cwd.clone(),
-            })?;
+        let native_cwd =
+            request
+                .cwd()
+                .to_abs_path()
+                .map_err(|_| UnifiedExecError::ForeignPath {
+                    path: request.cwd().clone(),
+                })?;
 
         let (program, args) = request
             .program_and_args()
@@ -1416,14 +1414,14 @@ impl UnifiedExecProcessManager {
         let network_proxy_restricting_sid = {
             #[cfg(target_os = "windows")]
             {
-                if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-                    request
+                if let Some(launch) = request.native_windows() {
+                    launch
                         .network
                         .as_ref()
                         .map(|network| {
                             network
                                 .network_proxy_restricting_sid(
-                                    request.network_environment_id.as_deref(),
+                                    launch.network_environment_id.as_deref(),
                                 )
                                 .ok_or_else(|| {
                                     UnifiedExecError::create_process(
@@ -1443,26 +1441,24 @@ impl UnifiedExecProcessManager {
             }
         };
         let windows_sandbox =
-            if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-                Some(codex_sandboxing::WindowsSandboxSpawnRequest {
-                    permission_profile: &request.permission_profile,
+            request
+                .native_windows()
+                .map(|launch| codex_sandboxing::WindowsSandboxSpawnRequest {
+                    permission_profile: &launch.permission_profile,
                     workspace_roots: &request.windows_sandbox_workspace_roots,
-                    windows_sandbox_level: request.windows_sandbox_level,
-                    proxy_enforced: request.network.is_some(),
+                    windows_sandbox_level: launch.windows_sandbox_level,
+                    proxy_enforced: request.has_network_proxy(),
                     network_proxy_restricting_sid: network_proxy_restricting_sid.as_deref(),
                     proxy_settings_mode: windows_sandbox_proxy_settings_mode,
                     filesystem_overrides: request.windows_sandbox_filesystem_overrides.as_ref(),
-                })
-            } else {
-                None
-            };
+                });
         let spawn_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
             program,
             args,
             cwd: native_cwd.as_path(),
-            env: &request.env,
-            arg0: &request.arg0,
-            sandbox: request.sandbox,
+            env: request.env(),
+            arg0: request.arg0(),
+            sandbox: request.sandbox(),
             windows_sandbox,
             tty,
             stdin_open: tty,
@@ -1471,7 +1467,7 @@ impl UnifiedExecProcessManager {
         .await;
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        UnifiedExecProcess::from_spawned(spawned, request.sandbox).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox()).await
     }
 
     #[tracing::instrument(

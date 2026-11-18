@@ -17,6 +17,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
@@ -196,7 +197,6 @@ impl ShellSnapshotSandbox {
                 },
                 permissions: &self.permissions,
                 workspace_roots: Some(&self.workspace_roots),
-                runtime_readable_paths: None,
                 selection: self.selection,
                 network: SandboxNetwork::new(
                     self.enforce_managed_network,
@@ -204,7 +204,7 @@ impl ShellSnapshotSandbox {
                     Some(&self.environment_id),
                 ),
                 sandbox_policy_cwd: &self.sandbox_policy_cwd,
-                sandbox_exe: self.sandbox_exe.as_deref(),
+                executables: SandboxExecutables::Launcher(self.sandbox_exe.as_deref()),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             },

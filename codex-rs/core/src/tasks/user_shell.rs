@@ -12,11 +12,11 @@ use uuid::Uuid;
 
 use crate::exec::ExecCapturePolicy;
 use crate::exec::StdoutStream;
-use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_session_env;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::execute_env;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
@@ -209,31 +209,21 @@ pub(crate) async fn execute_user_shell_command(
         .await;
 
     let permission_profile = PermissionProfile::Disabled;
-    let exec_env = ExecRequest {
-        native_program: None,
-        command: exec_command.clone(),
-        cwd: cwd.clone().into(),
-        env: exec_env_map,
-        exec_server_env_config: None,
-        exec_server_shell_snapshot: None,
-        // `/shell` is the explicit full-access escape hatch, so it must not
-        // inherit a managed proxy from the surrounding session or turn.
-        network: None,
-        network_environment_id: None,
-        expiration: timeout_ms.unwrap_or(USER_SHELL_TIMEOUT_MS).into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
-        sandbox: SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone().into(),
-        windows_sandbox_workspace_roots: Vec::new(),
-        windows_sandbox_level: turn_context.windows_sandbox_level,
+    // `/shell` is the explicit full-access escape hatch, so it must not inherit a managed proxy.
+    let exec_env = ExecRequest::new(
+        exec_command,
+        cwd.clone(),
+        exec_env_map,
+        /*network*/ None,
+        /*network_environment_id*/ None,
+        timeout_ms.unwrap_or(USER_SHELL_TIMEOUT_MS).into(),
+        ExecCapturePolicy::ShellTool,
+        SandboxType::None,
+        Vec::new(),
+        turn_context.windows_sandbox_level,
         permission_profile,
-        windows_sandbox_filesystem_overrides: None,
-        arg0: None,
-        exec_server_sandbox: None,
-        exec_server_enforce_managed_network: false,
-        exec_server_managed_network: None,
-        exec_server_network_proxy: None,
-    };
+        /*arg0*/ None,
+    );
 
     let stdout_stream = Some(StdoutStream {
         sub_id: turn_context.sub_id.clone(),
@@ -241,7 +231,7 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_request(exec_env, stdout_stream, /*after_spawn*/ None)
+    let exec_result = execute_env(exec_env, stdout_stream)
         .or_cancel(&cancellation_token)
         .await;
 

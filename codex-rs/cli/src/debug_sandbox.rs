@@ -27,6 +27,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
@@ -437,7 +438,6 @@ async fn run_command_under_sandbox(
         },
         permissions: &permission_profile,
         workspace_roots: workspace_roots.as_deref(),
-        runtime_readable_paths: None,
         selection: SandboxSelection::Explicit(sandbox),
         network: SandboxNetwork::new(
             network.is_some(),
@@ -445,7 +445,7 @@ async fn run_command_under_sandbox(
             /*environment_id*/ None,
         ),
         sandbox_policy_cwd: &cwd,
-        sandbox_exe: sandbox_exe.as_deref(),
+        executables: SandboxExecutables::Launcher(sandbox_exe.as_deref()),
         use_legacy_landlock,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })?;

@@ -38,6 +38,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
@@ -516,11 +517,10 @@ async fn windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts() ->
                     },
                     permissions: &permission_profile,
                     workspace_roots: Some(std::slice::from_ref(&cwd_uri)),
-                    runtime_readable_paths: None,
                     selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
                     network: Default::default(),
                     sandbox_policy_cwd: &cwd_uri,
-                    sandbox_exe: Some(codex.as_path()),
+                    executables: SandboxExecutables::Launcher(Some(codex.as_path())),
                     use_legacy_landlock: false,
                     windows_sandbox_level: WindowsSandboxLevel::Elevated,
                 })?

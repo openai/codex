@@ -1,4 +1,5 @@
 use super::SandboxCommand;
+use super::SandboxExecutables;
 use super::SandboxManager;
 use super::SandboxNetwork;
 use super::SandboxSelection;
@@ -116,7 +117,6 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::None),
             network: SandboxNetwork::new(
                 /*enforce_managed_network*/ false,
@@ -124,7 +124,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
                 Some("remote"),
             ),
             sandbox_policy_cwd: &cwd_uri,
-            sandbox_exe: None,
+            executables: SandboxExecutables::Launcher(None),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
@@ -182,11 +182,10 @@ fn symlinked_workspace_reports_seatbelt_preparation_error() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::MacosSeatbelt),
             network: Default::default(),
             sandbox_policy_cwd: &workspace_uri,
-            sandbox_exe: None,
+            executables: SandboxExecutables::Launcher(None),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
@@ -237,11 +236,10 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::None),
             network: Default::default(),
             sandbox_policy_cwd: &cwd_uri,
-            sandbox_exe: None,
+            executables: SandboxExecutables::Launcher(None),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
@@ -326,11 +324,10 @@ fn transform_additional_permissions_preserves_denied_entries() {
             },
             permissions: &permissions,
             workspace_roots: Some(roots),
-            runtime_readable_paths: Some(&[]),
             selection: SandboxSelection::Explicit(SandboxType::None),
             network: Default::default(),
             sandbox_policy_cwd: &cwd_uri,
-            sandbox_exe: None,
+            executables: SandboxExecutables::Launcher(None),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
         };
@@ -405,11 +402,10 @@ fn sandbox_transform_request(cwd: &PathUri, sandbox: SandboxType) -> SandboxTran
         },
         permissions: &PermissionProfile::Disabled,
         workspace_roots: None,
-        runtime_readable_paths: None,
         selection: SandboxSelection::Explicit(sandbox),
         network: Default::default(),
         sandbox_policy_cwd: cwd,
-        sandbox_exe: None,
+        executables: SandboxExecutables::Launcher(None),
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     }
@@ -440,7 +436,7 @@ fn transform_linux_seccomp_request(
     let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("current dir"));
     manager
         .transform(SandboxTransformRequest {
-            sandbox_exe: Some(codex_linux_sandbox_exe),
+            executables: SandboxExecutables::Launcher(Some(codex_linux_sandbox_exe)),
             ..sandbox_transform_request(&cwd, SandboxType::LinuxSeccomp)
         })
         .expect("transform")
@@ -727,7 +723,6 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
             },
             permissions: &PermissionProfile::Disabled,
             workspace_roots: None,
-            runtime_readable_paths: None,
             selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
             network: SandboxNetwork::new(
                 enforce_managed_network,
@@ -735,7 +730,9 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
                 /*environment_id*/ None,
             ),
             sandbox_policy_cwd: &cwd_uri,
-            sandbox_exe: Some(std::path::Path::new("/tmp/codex-linux-sandbox")),
+            executables: SandboxExecutables::Launcher(Some(std::path::Path::new(
+                "/tmp/codex-linux-sandbox",
+            ))),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;

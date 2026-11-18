@@ -151,22 +151,22 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         .await
         .expect("prepare exec request");
 
-    assert_eq!(exec_request.cwd, PathUri::from_abs_path(&command_cwd));
+    assert_eq!(*exec_request.cwd(), PathUri::from_abs_path(&command_cwd));
     assert_eq!(
-        exec_request.windows_sandbox_policy_cwd,
+        *exec_request.sandbox_policy_cwd(),
         PathUri::from_abs_path(&native_sandbox_policy_cwd)
     );
-    assert_eq!(exec_request.network, None);
+    assert!(!exec_request.has_network_proxy());
     for key in PROXY_ENV_KEYS {
-        assert_eq!(exec_request.env.get(*key), None, "{key} should be unset");
+        assert_eq!(exec_request.env().get(*key), None, "{key} should be unset");
     }
     for key in CUSTOM_CA_ENV_KEYS {
-        assert_eq!(exec_request.env.get(key), None, "{key} should be unset");
+        assert_eq!(exec_request.env().get(key), None, "{key} should be unset");
     }
     #[cfg(target_os = "macos")]
-    assert_eq!(exec_request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);
+    assert_eq!(exec_request.env().get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);
     assert_eq!(
-        exec_request.env.get("CUSTOM_ENV"),
+        exec_request.env().get("CUSTOM_ENV"),
         Some(&"kept".to_string())
     );
 
