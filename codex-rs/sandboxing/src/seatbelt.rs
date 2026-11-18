@@ -1,3 +1,7 @@
+use crate::SandboxExecRequest;
+use crate::SandboxTransformError;
+use crate::manager::SandboxBackend;
+use crate::manager::launch::SandboxOperation;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
@@ -15,6 +19,77 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 use url::Url;
+
+pub(super) struct Seatbelt<'a> {
+    pub(super) operation: &'a SandboxOperation,
+    pub(super) allowed_symlinked_codex_home: Option<&'a AbsolutePathBuf>,
+    pub(super) enforce_managed_network: bool,
+    pub(super) route: Option<ManagedNetworkSandboxContext>,
+}
+
+impl SandboxBackend for Seatbelt<'_> {
+    fn prepare(
+        &mut self,
+        exec: &mut SandboxExecRequest,
+        _cwd: &AbsolutePathBuf,
+        policy_cwd: &AbsolutePathBuf,
+    ) -> Result<(), SandboxTransformError> {
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            exec.permission_profile.to_runtime_permissions();
+        let managed_network = match (self.route.take(), &exec.network) {
+            (None, Some(proxy)) => {
+                let prepared = proxy
+                    .prepare_for_optional_environment(
+                        std::mem::take(&mut exec.env),
+                        exec.network_environment_id.as_deref(),
+                    )
+                    .map_err(|err| {
+                        SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                    })?;
+                exec.env = prepared.env;
+                Some(prepared.sandbox_context)
+            }
+            (context, _) => context,
+        };
+        let (profile, sockets) = match self.operation {
+            SandboxOperation::Command => (MacosSeatbeltProfile::Process, [].as_slice()),
+            SandboxOperation::InheritedTerminal { allow_unix_sockets } => (
+                MacosSeatbeltProfile::ProcessWithInheritedTerminal,
+                allow_unix_sockets.as_slice(),
+            ),
+            SandboxOperation::FileSystemHelper => {
+                (MacosSeatbeltProfile::FileSystemHelper, [].as_slice())
+            }
+        };
+        let args = create_seatbelt_command_args_with_profile(
+            CreateSeatbeltCommandArgsParams {
+                command: std::mem::take(&mut exec.command),
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                network_sandbox_policy,
+                sandbox_policy_cwd: policy_cwd,
+                enforce_managed_network: self.enforce_managed_network,
+                managed_network: managed_network.as_ref(),
+                environment_id: exec.network_environment_id.as_deref(),
+                network: exec.network.as_ref(),
+                extra_allow_unix_sockets: sockets,
+            },
+            profile,
+            self.allowed_symlinked_codex_home,
+        )
+        .map_err(|err| match err {
+            SeatbeltPreparationError::FileSystem(message) => {
+                SandboxTransformError::SeatbeltPreparation(message)
+            }
+            SeatbeltPreparationError::EnvironmentNetworkProxy(message) => {
+                SandboxTransformError::EnvironmentNetworkProxy(message)
+            }
+        })?;
+        exec.command = std::iter::once(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_owned())
+            .chain(args)
+            .collect();
+        Ok(())
+    }
+}
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");

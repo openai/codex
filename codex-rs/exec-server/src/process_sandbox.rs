@@ -8,7 +8,6 @@ use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::ProcessStartErrorData;
 use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::ManagedNetworkSandboxContext;
-use codex_network_proxy::ManagedProxyRouting;
 use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
@@ -22,6 +21,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::WrappedSandboxCommand;
+use codex_sandboxing::executor_managed_proxy_routing;
 #[cfg(windows)]
 use codex_shell_command::shell_detect::fallback_powershell_shell_for_windows_sandbox;
 use codex_utils_path_uri::PathUri;
@@ -34,6 +34,7 @@ use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::sandbox_selection::sandbox_selection;
+use crate::sandbox_selection::windows_sandbox_backend;
 
 #[tracing::instrument(
     name = "codex.exec_server.process_prepare_sandbox",
@@ -215,27 +216,17 @@ async fn prepare_managed_network(
     let Some(launch) = &params.network_proxy else {
         return without_executor_proxy(env);
     };
-    #[cfg(windows)]
-    let routing = match params
-        .sandbox
-        .as_ref()
-        .map(|sandbox| sandbox.windows_sandbox_selection)
-    {
-        None => {
-            // Native Windows commands have no sandbox token SID for shared ingress.
-            let mut native_env = env;
-            codex_network_proxy::strip_managed_proxy_env(&mut native_env);
-            return without_executor_proxy(native_env);
-        }
-        Some(WindowsSandboxSelection::Mxc) => ManagedProxyRouting::DedicatedListeners,
-        Some(
-            WindowsSandboxSelection::Disabled
-            | WindowsSandboxSelection::RestrictedToken
-            | WindowsSandboxSelection::Elevated,
-        ) => ManagedProxyRouting::SharedIngress,
+    let routing = executor_managed_proxy_routing(
+        params
+            .sandbox
+            .as_ref()
+            .map(|sandbox| windows_sandbox_backend(sandbox.windows_sandbox_selection)),
+    );
+    let Some(routing) = routing else {
+        let mut native_env = env;
+        codex_network_proxy::strip_managed_proxy_env(&mut native_env);
+        return without_executor_proxy(native_env);
     };
-    #[cfg(not(windows))]
-    let routing = ManagedProxyRouting::SharedIngress;
     let mut state = NetworkProxyState::from_remote_launch_config(
         launch.clone(),
         codex_utils_path_uri::Platform::native(),

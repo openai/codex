@@ -1,8 +1,8 @@
 use super::*;
 use codex_core::exec_env::inject_apply_patch_env;
 use codex_core::windows_sandbox::local_binding_policy_for_sandbox;
-use codex_core::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
+use codex_sandboxing::managed_proxy_routing_for_windows_sandbox;
 
 #[derive(Clone)]
 pub(crate) struct CommandExecRequestProcessor {

@@ -1,13 +1,17 @@
 //! Prepare the Linux sandbox helper command for bubblewrap or legacy Landlock.
 
-#[cfg(target_os = "linux")]
+use crate::LinuxSandboxPidNamespace;
+use crate::SandboxExecRequest;
 use crate::SandboxTransformError;
+use crate::manager::SandboxBackend;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::ffi::OsStr;
 use std::path::Path;
 
 /// Managed proxy and socket grants belong to bubblewrap. Legacy Landlock is a compatibility mode.
-pub(super) enum LinuxSandboxMode<'a> {
+enum LinuxSandboxMode<'a> {
     Bubblewrap {
         managed_network: Option<&'a ManagedNetworkSandboxContext>,
     },
@@ -15,7 +19,7 @@ pub(super) enum LinuxSandboxMode<'a> {
 }
 
 impl<'a> LinuxSandboxMode<'a> {
-    pub(super) fn resolve(
+    fn resolve(
         use_legacy_landlock: bool,
         managed_network: Option<&'a ManagedNetworkSandboxContext>,
     ) -> Self {
@@ -27,7 +31,7 @@ impl<'a> LinuxSandboxMode<'a> {
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn ensure_supported_on_wsl1(
+    fn ensure_supported_on_wsl1(
         &self,
         permission_profile: &PermissionProfile,
     ) -> Result<(), SandboxTransformError> {
@@ -47,6 +51,83 @@ impl<'a> LinuxSandboxMode<'a> {
     }
 }
 
+pub(super) struct Linux<'a> {
+    pub(super) pid_namespace: LinuxSandboxPidNamespace,
+    pub(super) transparent_tcp: bool,
+    pub(super) sandbox_exe: Option<&'a Path>,
+    pub(super) use_legacy_landlock: bool,
+    pub(super) enforce_managed_network: bool,
+    pub(super) route: Option<ManagedNetworkSandboxContext>,
+}
+
+impl SandboxBackend for Linux<'_> {
+    fn prepare(
+        &mut self,
+        exec: &mut SandboxExecRequest,
+        cwd: &AbsolutePathBuf,
+        policy_cwd: &AbsolutePathBuf,
+    ) -> Result<(), SandboxTransformError> {
+        let exe = self
+            .sandbox_exe
+            .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+        self.route = match (
+            self.enforce_managed_network,
+            self.route.take(),
+            &exec.network,
+        ) {
+            (false, _, _) => None,
+            (true, None, Some(proxy)) => {
+                let prepared = proxy
+                    .prepare_for_optional_environment(
+                        std::mem::take(&mut exec.env),
+                        exec.network_environment_id.as_deref(),
+                    )
+                    .map_err(|err| {
+                        SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                    })?;
+                exec.env = prepared.env;
+                Some(prepared.sandbox_context)
+            }
+            (true, context, _) => Some(context.unwrap_or_default()),
+        };
+        let mode = LinuxSandboxMode::resolve(self.use_legacy_landlock, self.route.as_ref());
+        #[cfg(target_os = "linux")]
+        if crate::bwrap::is_wsl1() {
+            mode.ensure_supported_on_wsl1(&exec.permission_profile)?;
+        }
+        let program = exe.to_string_lossy().into_owned();
+        let mut args = create_linux_sandbox_command_args_for_permission_profile(
+            std::mem::take(&mut exec.command),
+            cwd,
+            &exec.permission_profile,
+            policy_cwd,
+            mode,
+        );
+        // Only the startup opt-in requires a helper that understands PID inheritance.
+        if self.pid_namespace == LinuxSandboxPidNamespace::Inherit {
+            args.insert(0, "--inherit-pid-namespace".to_owned());
+        }
+        if self
+            .route
+            .as_ref()
+            .is_some_and(|ctx| ctx.transparent_tcp || self.transparent_tcp)
+        {
+            args.insert(0, "--transparent-tcp".to_owned());
+        }
+        exec.command = std::iter::once(program).chain(args).collect();
+        // Without bwrap --argv0, the Linux helper uses its own argv[0] as the inner executable.
+        let arg0 = if let Some(path) = exe.to_str()
+            && exe.file_name() == Some(OsStr::new(CODEX_LINUX_SANDBOX_ARG0))
+        {
+            path
+        } else {
+            CODEX_LINUX_SANDBOX_ARG0
+        };
+        exec.arg0 = Some(arg0.to_owned());
+        Ok(())
+    }
+}
+
 /// Basename used when the Codex executable self-invokes as the Linux sandbox
 /// helper.
 pub const CODEX_LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
@@ -61,7 +142,7 @@ pub const CODEX_LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 /// after parsing these arguments. The profile JSON flag is emitted before
 /// helper feature flags so the argv order matches the helper's CLI shape. See
 /// `docs/linux_sandbox.md` for the Linux semantics.
-pub(super) fn create_linux_sandbox_command_args_for_permission_profile(
+fn create_linux_sandbox_command_args_for_permission_profile(
     command: Vec<String>,
     command_cwd: &Path,
     permission_profile: &PermissionProfile,

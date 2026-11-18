@@ -5,10 +5,9 @@ use crate::SandboxIntegrityRequest;
 use crate::SandboxType;
 use crate::SpawnOptions;
 use crate::SpawnRequest;
-use crate::WindowsSandboxFilesystemOverrides;
-use crate::WindowsSandboxProxySettingsMode;
 use crate::WindowsSandboxSpawnRequest;
 use crate::spawn::spawn_process;
+use crate::windows::WindowsSessionPolicy;
 use anyhow::Context;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::sandbox::SandboxOverride;
@@ -33,15 +32,6 @@ use codex_utils_path_uri::LegacyAppPathString;
 #[cfg(any(windows, test))]
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
-
-pub(super) struct WindowsSessionPolicy {
-    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
-    pub(super) filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
-    pub(super) proxy_enforced: bool,
-    #[cfg(windows)]
-    pub(super) restricting_sid: Option<String>,
-    pub(super) proxy_settings_mode: WindowsSandboxProxySettingsMode,
-}
 
 /// A command prepared for its selected sandbox. Native Windows token sessions
 /// must use the Windows session launcher.
@@ -233,7 +223,7 @@ impl WrappedSandboxCommand {
 }
 
 #[derive(Clone, Default)]
-pub(super) enum SandboxOperation {
+pub(crate) enum SandboxOperation {
     #[default]
     Command,
     #[cfg(target_os = "macos")]

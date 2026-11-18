@@ -93,16 +93,6 @@ pub fn local_binding_policy_for_sandbox(
     }
 }
 
-pub fn managed_proxy_routing_for_windows_sandbox(
-    sandbox_type: SandboxType,
-) -> codex_network_proxy::ManagedProxyRouting {
-    if cfg!(windows) && sandbox_type == SandboxType::WindowsMxc {
-        codex_network_proxy::ManagedProxyRouting::DedicatedListeners
-    } else {
-        codex_network_proxy::ManagedProxyRouting::SharedIngress
-    }
-}
-
 /// Adapts the selected implementation for legacy checks that only understand setup levels.
 /// Backend selection must continue to use [`SandboxType`] directly.
 pub(crate) fn windows_sandbox_level_for_legacy_checks(

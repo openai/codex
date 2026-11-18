@@ -1,8 +1,20 @@
+#[cfg(windows)]
+use crate::SandboxExecRequest;
+#[cfg(windows)]
+use crate::SandboxTransformError;
+use crate::WindowsSandboxProxySettingsMode;
+#[cfg(windows)]
+use crate::manager::SandboxBackend;
+#[cfg(windows)]
+use codex_network_proxy::NetworkProxy;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_network_proxy::ManagedProxyRouting;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPolicyProjection;
@@ -12,6 +24,68 @@ use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::SandboxType;
+
+pub(super) struct WindowsSessionPolicy {
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+    pub(super) filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
+    pub(super) proxy_enforced: bool,
+    #[cfg(windows)]
+    pub(super) restricting_sid: Option<String>,
+    pub(super) proxy_settings_mode: WindowsSandboxProxySettingsMode,
+}
+
+#[cfg(windows)]
+pub(super) struct WindowsToken<'a> {
+    pub(super) proxy_settings: Option<WindowsSandboxProxySettingsMode>,
+    pub(super) file_system_helper: bool,
+    pub(super) sandbox_exe: Option<&'a Path>,
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+    pub(super) enforce_managed_network: bool,
+    pub(super) network: Option<&'a NetworkProxy>,
+    pub(super) environment_id: Option<&'a str>,
+    pub(super) session: &'a mut Option<Box<WindowsSessionPolicy>>,
+}
+
+#[cfg(windows)]
+impl SandboxBackend for WindowsToken<'_> {
+    fn prepare(
+        &mut self,
+        exec: &mut SandboxExecRequest,
+        _cwd: &AbsolutePathBuf,
+        policy_cwd: &AbsolutePathBuf,
+    ) -> Result<(), SandboxTransformError> {
+        if self.file_system_helper {
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
+            crate::manager::wrap_windows_file_system_helper(
+                exec,
+                &self.workspace_roots,
+                &codex_home,
+                self.sandbox_exe,
+            )?;
+        } else if let Some(proxy_settings_mode) = self.proxy_settings {
+            let filesystem_overrides = WindowsSandboxFilesystemOverrides::resolve(
+                SandboxType::WindowsRestrictedToken,
+                &exec.permission_profile,
+                policy_cwd,
+                exec.windows_sandbox_level,
+                &exec.env,
+            )
+            .map_err(|err| SandboxTransformError::InvalidPolicy(io::Error::other(err)))?;
+            *self.session = Some(Box::new(WindowsSessionPolicy {
+                workspace_roots: std::mem::take(&mut self.workspace_roots),
+                filesystem_overrides,
+                proxy_enforced: self.enforce_managed_network,
+                restricting_sid: crate::manager::windows_proxy_restricting_sid(
+                    self.network,
+                    self.environment_id,
+                )?,
+                proxy_settings_mode,
+            }));
+        }
+        Ok(())
+    }
+}
 
 /// Resolved filesystem overrides for the Windows sandbox backends.
 ///
@@ -62,6 +136,27 @@ impl WindowsSandboxFilesystemOverrides {
 
 pub fn windows_sandbox_uses_elevated_backend(sandbox_level: WindowsSandboxLevel) -> bool {
     matches!(sandbox_level, WindowsSandboxLevel::Elevated)
+}
+
+/// MXC uses dedicated proxy listeners when the proxy runs on Windows.
+pub fn managed_proxy_routing_for_windows_sandbox(sandbox_type: SandboxType) -> ManagedProxyRouting {
+    if cfg!(windows) && sandbox_type == SandboxType::WindowsMxc {
+        ManagedProxyRouting::DedicatedListeners
+    } else {
+        ManagedProxyRouting::SharedIngress
+    }
+}
+
+/// A native Windows process has no sandbox token SID for shared proxy ingress.
+/// An explicit sandbox context can request shared ingress even with Windows sandboxing disabled.
+pub fn executor_managed_proxy_routing(
+    windows_sandbox: Option<SandboxType>,
+) -> Option<ManagedProxyRouting> {
+    match windows_sandbox {
+        Some(sandbox) => Some(managed_proxy_routing_for_windows_sandbox(sandbox)),
+        None if cfg!(windows) => None,
+        None => Some(ManagedProxyRouting::SharedIngress),
+    }
 }
 
 pub fn permission_profile_supports_windows_restricted_token_sandbox(
