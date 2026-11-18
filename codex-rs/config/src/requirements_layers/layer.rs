@@ -67,7 +67,7 @@ impl RequirementsLayerEntry {
             base_dir,
             path_context: _,
         } = self;
-        let toml = parse_layer_toml(&toml, &source)?;
+        let toml = parse_layer_toml(toml, &source)?;
         Ok((source, toml, base_dir))
     }
 }
@@ -100,7 +100,7 @@ impl ComposableRequirementsLayer {
             let _guard = base_dir
                 .as_ref()
                 .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
-            let mut regular_toml = parse_layer_toml(&toml, &source)?;
+            let mut regular_toml = parse_layer_toml(toml, &source)?;
 
             if matches!(source, RequirementSource::EnterpriseManaged { .. })
                 && regular_toml.get("config_server").is_some()
@@ -240,19 +240,19 @@ pub(super) struct DomainMergedRequirementsFields {
 }
 
 fn parse_layer_toml(
-    toml: &RequirementsLayerToml,
+    toml: RequirementsLayerToml,
     source: &RequirementSource,
 ) -> Result<TomlValue, RequirementsCompositionError> {
     match toml {
         RequirementsLayerToml::String(contents) => {
-            toml::from_str(contents).map_err(|err: toml::de::Error| {
+            toml::from_str(&contents).map_err(|err: toml::de::Error| {
                 RequirementsCompositionError::Parse {
                     layer_source: source.clone(),
                     message: err.to_string(),
                 }
             })
         }
-        RequirementsLayerToml::Value(value) => Ok(value.clone()),
+        RequirementsLayerToml::Value(value) => Ok(value),
     }
 }
 

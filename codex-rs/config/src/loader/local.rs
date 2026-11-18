@@ -111,7 +111,7 @@ pub(super) async fn load_local_config_layers_with_overrides(
     let loaded_managed = layer_io::load_config_layers_internal(
         fs,
         codex_home.as_path(),
-        overrides.clone(),
+        overrides,
         /*strict_config*/ false,
     )
     .await?;

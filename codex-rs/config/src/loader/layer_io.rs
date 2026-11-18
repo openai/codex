@@ -46,7 +46,7 @@ pub(super) struct LoadedConfigLayers {
 pub(super) async fn load_config_layers_internal(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
-    overrides: LoaderOverrides,
+    overrides: &LoaderOverrides,
     strict_config: bool,
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
@@ -67,9 +67,10 @@ pub(super) async fn load_config_layers_internal(
     #[cfg(not(windows))]
     let ignore_default_managed_config = false;
 
-    let managed_config_path = AbsolutePathBuf::from_absolute_path(
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
-    )?;
+    let managed_config_path = match managed_config_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => AbsolutePathBuf::from_absolute_path(managed_config_default_path(codex_home))?,
+    };
 
     #[cfg(windows)]
     let startup_warnings = if ignore_default_managed_config {
@@ -114,7 +115,7 @@ pub(super) async fn load_config_layers_internal(
         .await?
         .map(|loaded| MangedConfigFromFile {
             managed_config: loaded,
-            file: managed_config_path.clone(),
+            file: managed_config_path,
         })
     };
 

@@ -1366,3 +1366,99 @@ fn otel_headers_helper_interval_must_be_positive() {
         900000
     );
 }
+
+#[tokio::test]
+async fn guardian_refresh_validates_fallback_after_merging_retained_layers() {
+    let mut stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::EnterpriseManaged {
+                    id: "workspace".into(),
+                    name: "Workspace".into(),
+                },
+                toml::from_str("[auto_review]\npolicy = 'old policy'").unwrap(),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::from_str("model = 'session-model'").unwrap(),
+            ),
+        ],
+        ConfigRequirements {
+            allow_login_shell: Some(crate::Sourced::new(
+                /*value*/ false,
+                RequirementSource::Unknown,
+            )),
+            ..Default::default()
+        },
+        ConfigRequirementsToml {
+            allow_login_shell: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let home = tempdir().unwrap();
+    let path = home.path().join("managed.toml");
+    std::fs::write(&path, "sandbox_mode = 'invalid'").unwrap();
+    let overrides = LoaderOverrides::with_managed_config_path_for_tests(path);
+    let load = |cloud_config_bundle, revision| {
+        load_guardian_policy_snapshot(
+            &TestFileSystem,
+            home.path(),
+            &overrides,
+            cloud_config_bundle,
+            revision,
+        )
+    };
+    let bundle =
+        crate::test_support::CloudConfigBundleFixture::enterprise_config("model = 'irrelevant'")
+            .add_enterprise_config("auto_review = 1")
+            .add_enterprise_config("auto_review.policy = 'lower priority'")
+            .add_enterprise_requirement("allowed_approvals_reviewers = ['auto_review']")
+            .into_loader();
+    let snapshot = load(&bundle, /*revision*/ 1).await.unwrap();
+    let before = stack.effective_config();
+    let mut retained = stack.clone();
+    stack.apply_guardian_policy(&snapshot);
+    retained.retain_guardian_policy_from(&stack);
+    assert_eq!(retained, stack);
+    assert!(
+        stack
+            .requirements()
+            .approvals_reviewer
+            .can_set(&codex_protocol::config_types::ApprovalsReviewer::User)
+            .is_err()
+    );
+    assert_eq!(stack.effective_config(), before);
+    assert_eq!(
+        stack.requirements().allow_login_shell,
+        Some(crate::Sourced::new(
+            /*value*/ false,
+            RequirementSource::Unknown
+        ))
+    );
+    assert!(stack.guardian_config().is_err());
+
+    let local = stack
+        .clone()
+        .with_session_config(toml::from_str("auto_review.policy = 'local'").unwrap())
+        .unwrap();
+    assert_eq!(
+        local.guardian_config().unwrap(),
+        crate::config_toml::AutoReviewToml {
+            policy: Some("local".to_owned()),
+            ..Default::default()
+        }
+    );
+    // Removing the workspace bundle must not revive its old managed fallback.
+    let removed = load(
+        &crate::CloudConfigBundleLoader::default(),
+        snapshot.revision + 1,
+    )
+    .await
+    .unwrap();
+    stack.apply_guardian_policy(&removed);
+    assert_eq!(
+        stack.guardian_config().unwrap(),
+        crate::config_toml::AutoReviewToml::default()
+    );
+}

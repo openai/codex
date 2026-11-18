@@ -17,6 +17,8 @@ mod diagnostics;
 mod filesystem_constraints;
 mod fingerprint;
 mod guardian;
+mod guardian_policy;
+pub use guardian_policy::GuardianPolicySnapshot;
 mod hook_config;
 mod host_name;
 mod in_app_browser_requirements;

@@ -72,6 +72,7 @@ pub use local::LocalConfigLayers;
 pub use local::LocalTomlLayer;
 pub use local::LocalTomlLayerStack;
 pub use local::load_local_config_layers;
+pub use managed_requirements::load_guardian_policy_snapshot;
 pub use managed_requirements::load_managed_requirements_state;
 #[cfg(windows)]
 pub use windows::WindowsSystemConfigNamespaceProbe;

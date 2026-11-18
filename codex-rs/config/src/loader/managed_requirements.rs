@@ -1,5 +1,5 @@
-//! Loads managed requirements independently of user and project configuration,
-//! retaining source layers for diagnostics during full configuration loads.
+//! Reads managed requirements in precedence order. Full configuration and Guardian
+//! policy compose and validate their own views of those sources.
 
 use super::layer_io;
 use super::layer_io::LoadedConfigLayers;
@@ -8,11 +8,16 @@ use super::load_requirements_toml;
 use super::macos;
 use super::requirements_layers_from_legacy_scheme;
 use super::system_requirements_toml_file_with_overrides;
+use crate::CloudConfigBundleLoader;
+use crate::CloudConfigBundleSnapshot;
+use crate::ConfigLayerSource;
 use crate::ConfigRequirements;
 use crate::ConfigRequirementsToml;
+use crate::GuardianPolicySnapshot;
 use crate::RequirementsLayerEntry;
 use crate::compose_requirements;
 use crate::config_requirements::ConfigRequirementsWithSources;
+use crate::guardian_policy::GuardianFallbackLayer;
 use crate::state::ConfigLoadOptions;
 use crate::state::LoaderOverrides;
 use codex_file_system::ExecutorFileSystem;
@@ -63,9 +68,118 @@ pub async fn load_managed_requirements_state(
     Ok(requirements_toml)
 }
 
-/// Composes the same requirements for full config loads and policy-only checks.
-/// The loaded legacy config and source layers are also returned for the full
-/// config stack and its ignored-field diagnostics.
+/// Loads only managed review requirements, preserving their provenance and source validity.
+pub async fn load_guardian_policy_snapshot(
+    fs: &dyn ExecutorFileSystem,
+    codex_home: &Path,
+    overrides: &LoaderOverrides,
+    cloud_config_bundle: &CloudConfigBundleLoader,
+    revision: u64,
+) -> io::Result<GuardianPolicySnapshot> {
+    let mut legacy = layer_io::load_config_layers_internal(
+        fs, codex_home, overrides, /*strict_config*/ false,
+    )
+    .await?;
+    let snapshot = if overrides.ignore_managed_requirements {
+        CloudConfigBundleSnapshot {
+            config_server: None,
+            bundle: Ok(None),
+            binding: None,
+        }
+    } else {
+        cloud_config_bundle.get_snapshot().await
+    };
+    let base = AbsolutePathBuf::from_absolute_path(codex_home)?;
+    let bundle = snapshot
+        .bundle
+        .map_err(io::Error::other)?
+        .unwrap_or_default();
+    // Cloud fragments arrive highest priority first; merging proceeds lowest first.
+    let mut managed_config = Vec::new();
+    for fragment in bundle.config_toml.enterprise_managed.into_iter().rev() {
+        let mut table: toml::Table =
+            toml::from_str(&fragment.contents).map_err(io::Error::other)?;
+        if let Some(value) = table.remove("auto_review") {
+            managed_config.push(GuardianFallbackLayer::new(
+                ConfigLayerSource::EnterpriseManaged {
+                    id: fragment.id,
+                    name: fragment.name,
+                },
+                value,
+            ));
+        }
+    }
+    // Preserve the fallbacks before narrowing legacy config to reviewer requirements.
+    let mut project_legacy = |source, config: &mut toml::Value| {
+        if let Some(table) = config.as_table_mut() {
+            if let Some(value) = table.remove("auto_review") {
+                managed_config.push(GuardianFallbackLayer::new(source, value));
+            }
+            table.retain(|key, _| key == "approvals_reviewer");
+        }
+    };
+    if let Some(layer) = &mut legacy.managed_config {
+        project_legacy(
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: layer.file.clone(),
+            },
+            &mut layer.managed_config,
+        );
+    }
+    if let Some(layer) = &mut legacy.managed_config_from_mdm {
+        project_legacy(
+            ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+            &mut layer.managed_config,
+        );
+    }
+    let layers = bundle
+        .requirements_toml
+        .into_layers()
+        .into_iter()
+        .map(|layer| layer.with_base_dir(base.clone()))
+        .collect();
+    let requirements_layers =
+        load_requirements_layers(fs, codex_home, overrides, legacy, layers).await?;
+    let requirements_layers = requirements_layers
+        .into_iter()
+        .map(|layer| {
+            let (source, mut value, base_dir) = layer.into_raw_parts()?;
+            if let Some(table) = value.as_table_mut() {
+                table.retain(|key, _| {
+                    matches!(
+                        key,
+                        "allowed_approvals_reviewers"
+                            | "auto_review"
+                            | "guardian_policy_config"
+                            | "guardian_extra_policy"
+                            | "config_server"
+                    )
+                });
+            }
+            let layer = RequirementsLayerEntry::from_toml_value(source, value);
+            Ok::<_, io::Error>(match base_dir {
+                Some(base) => layer.with_base_dir(base),
+                None => layer,
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut requirements = compose_requirements(requirements_layers)?.unwrap_or_default();
+    if requirements.config_server.take().map(|source| source.value) != snapshot.config_server {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Required managed configuration has not been loaded",
+        ));
+    }
+    // Fallbacks are validated after retained thread layers have been merged.
+    GuardianPolicySnapshot::from_requirements(
+        revision,
+        requirements,
+        snapshot.binding,
+        managed_config,
+    )
+}
+
+/// Composes all managed requirements and retains source layers for diagnostics.
 pub(super) async fn load_requirements_from_sources(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
@@ -77,6 +191,32 @@ pub(super) async fn load_requirements_from_sources(
     LoadedConfigLayers,
     Vec<RequirementsLayerEntry>,
 )> {
+    let loaded_config_layers =
+        layer_io::load_config_layers_internal(fs, codex_home, overrides, strict_config).await?;
+    let requirements_layers = load_requirements_layers(
+        fs,
+        codex_home,
+        overrides,
+        loaded_config_layers.clone(),
+        bundle_requirements,
+    )
+    .await?;
+    let mut requirements = compose_requirements(requirements_layers.clone())?.unwrap_or_default();
+    if overrides.ignore_login_requirements {
+        requirements.allowed_login_methods = None;
+        requirements.allowed_chatgpt_workspaces = None;
+    }
+    Ok((requirements, loaded_config_layers, requirements_layers))
+}
+
+/// Collects ordered requirement layers, converting the supplied legacy configuration.
+async fn load_requirements_layers(
+    fs: &dyn ExecutorFileSystem,
+    codex_home: &Path,
+    overrides: &LoaderOverrides,
+    legacy_config: LoadedConfigLayers,
+    bundle_requirements: Vec<RequirementsLayerEntry>,
+) -> io::Result<Vec<RequirementsLayerEntry>> {
     let mut requirements_layers = Vec::new();
     let mut system_requirements_layer = None;
     let managed_preferences_requirements_layer;
@@ -103,24 +243,14 @@ pub(super) async fn load_requirements_from_sources(
         managed_preferences_requirements_layer = None;
     }
 
-    let loaded_config_layers =
-        layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
-            .await?;
     if !overrides.ignore_managed_requirements {
         requirements_layers.extend(system_requirements_layer);
         requirements_layers.extend(bundle_requirements);
-        // Legacy managed_config.toml contributes approval and sandbox requirements.
         requirements_layers.extend(requirements_layers_from_legacy_scheme(
-            loaded_config_layers.clone(),
+            legacy_config,
             codex_home,
         )?);
         requirements_layers.extend(managed_preferences_requirements_layer);
     }
-
-    let mut requirements = compose_requirements(requirements_layers.clone())?.unwrap_or_default();
-    if overrides.ignore_login_requirements {
-        requirements.allowed_login_methods = None;
-        requirements.allowed_chatgpt_workspaces = None;
-    }
-    Ok((requirements, loaded_config_layers, requirements_layers))
+    Ok(requirements_layers)
 }
