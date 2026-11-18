@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 
 use crate::attestation::app_server_attestation_provider;
@@ -825,6 +826,10 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.thread_processor.thread_created_receiver()
+    }
+
+    pub(crate) fn thread_manager(&self) -> Weak<ThreadManager> {
+        Arc::downgrade(&self.thread_processor.thread_manager)
     }
 
     pub(crate) async fn daemon_recovery_snapshot(

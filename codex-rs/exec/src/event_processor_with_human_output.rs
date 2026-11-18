@@ -217,10 +217,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         config: &Config,
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
+        workspace_roots: &[PathUri],
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         eprintln!("OpenAI Codex v{VERSION}\n--------");
-        for (key, value) in config_summary_entries(config, session_configured_event) {
+        for (key, value) in
+            config_summary_entries(config, session_configured_event, workspace_roots)
+        {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
@@ -445,10 +448,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 fn config_summary_entries(
     config: &Config,
     session_configured_event: &SessionConfiguredEvent,
+    workspace_roots: &[PathUri],
 ) -> Vec<(&'static str, String)> {
-    let permission_profile = config.permissions.effective_permission_profile();
     let mut entries = vec![
-        ("workdir", config.cwd.display().to_string()),
+        (
+            "workdir",
+            session_configured_event.cwd.display().to_string(),
+        ),
         ("model", session_configured_event.model.clone()),
         (
             "provider",
@@ -461,9 +467,9 @@ fn config_summary_entries(
         (
             "sandbox",
             summarize_permission_profile(
-                &permission_profile,
-                &PathUri::from_abs_path(&config.cwd),
-                &config.effective_workspace_roots(),
+                &session_configured_event.permission_profile,
+                &PathUri::from_abs_path(&session_configured_event.cwd),
+                workspace_roots,
             ),
         ),
     ];

@@ -45,7 +45,9 @@ use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -85,14 +87,18 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_core::ThreadManager;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
+use codex_utils_path_uri::PathUri;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -226,6 +232,55 @@ enum ProcessorCommand {
     },
 }
 
+/// Effective permissions and workspace roots reported by a loaded embedded thread.
+pub struct ThreadPermissions {
+    pub profile: PermissionProfile,
+    pub workspace_roots: Vec<PathUri>,
+}
+
+/// Read access to effective permissions in a single embedded app-server runtime.
+#[derive(Clone, Default)]
+pub struct ThreadPermissionsReader {
+    thread_manager: Arc<OnceLock<Weak<ThreadManager>>>,
+}
+
+impl ThreadPermissionsReader {
+    pub async fn read(&self, thread_id: ThreadId) -> IoResult<ThreadPermissions> {
+        let thread_manager = self
+            .thread_manager
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                IoError::new(
+                    ErrorKind::BrokenPipe,
+                    "in-process app-server runtime is closed",
+                )
+            })?;
+        let thread = thread_manager
+            .get_thread(thread_id)
+            .await
+            .map_err(|err| IoError::new(ErrorKind::NotFound, err))?;
+        let snapshot = thread.config_snapshot().await;
+        let mut seen = HashSet::new();
+        let workspace_roots = snapshot
+            .workspace_roots
+            .iter()
+            .map(PathUri::from_abs_path)
+            .chain(
+                snapshot
+                    .profile_workspace_roots
+                    .iter()
+                    .map(|root| root.as_uri().clone()),
+            )
+            .filter(|root| seen.insert(root.to_string()))
+            .collect();
+        Ok(ThreadPermissions {
+            profile: snapshot.permission_profile,
+            workspace_roots,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct InProcessClientSender {
     client_tx: mpsc::Sender<InProcessClientMessage>,
@@ -296,6 +351,7 @@ impl InProcessClientSender {
 /// request/response helpers, and surface-specific startup policy.
 pub struct InProcessClientHandle {
     client: InProcessClientSender,
+    thread_permissions_reader: ThreadPermissionsReader,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     runtime_handle: tokio::task::JoinHandle<()>,
     #[cfg(test)]
@@ -303,6 +359,10 @@ pub struct InProcessClientHandle {
 }
 
 impl InProcessClientHandle {
+    pub fn thread_permissions_reader(&self) -> ThreadPermissionsReader {
+        self.thread_permissions_reader.clone()
+    }
+
     /// Sends a typed client request into the in-process runtime.
     ///
     /// The returned value is a transport-level `IoResult` containing either a
@@ -484,6 +544,8 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
+    let thread_permissions_reader = ThreadPermissionsReader::default();
+    let thread_manager = Arc::clone(&thread_permissions_reader.thread_manager);
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
@@ -570,6 +632,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                 remote_control_handle: None,
                 plugin_startup_tasks: Some(PluginStartupConfig::Current),
             }));
+            thread_manager.get_or_init(|| processor.thread_manager());
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new(
                 crate::transport::ConnectionOrigin::InProcess,
@@ -889,6 +952,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
 
     Ok(InProcessClientHandle {
         client: InProcessClientSender { client_tx },
+        thread_permissions_reader,
         event_rx,
         runtime_handle,
         #[cfg(test)]
@@ -1144,6 +1208,7 @@ mod tests {
         });
         let client = InProcessClientHandle {
             client: InProcessClientSender { client_tx },
+            thread_permissions_reader: ThreadPermissionsReader::default(),
             event_rx,
             runtime_handle,
             _test_codex_home: None,

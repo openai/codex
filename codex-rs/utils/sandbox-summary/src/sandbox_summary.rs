@@ -65,7 +65,7 @@ pub fn summarize_permission_profile(
                 }
             }
 
-            if workspace_writable {
+            if workspace_writable && (cwd.is_opaque() || policy.can_write_path(cwd, &context)) {
                 let mut writable_entries = vec!["workdir".to_string()];
                 if slash_tmp_writable {
                     writable_entries.push("/tmp".to_string());
@@ -77,10 +77,12 @@ pub fn summarize_permission_profile(
                     workspace_roots
                         .iter()
                         .filter(|root| root.to_string() != cwd.to_string())
+                        .filter(|root| policy.can_write_path(root, &context))
                         .map(PathUri::inferred_native_path_string),
                 );
                 format!("workspace-write [{}]", writable_entries.join(", "))
-            } else if other_writes
+            } else if workspace_writable
+                || other_writes
                 || tmpdir_writable
                 || (cwd.infer_path_convention() == Some(PathConvention::Posix)
                     && slash_tmp_writable)

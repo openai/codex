@@ -55,6 +55,8 @@ pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
 pub use codex_app_server::in_process::StateDbHandle;
+pub use codex_app_server::in_process::ThreadPermissions;
+use codex_app_server::in_process::ThreadPermissionsReader;
 pub use codex_app_server::verified_local_daemon_socket;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
@@ -76,6 +78,7 @@ pub use codex_core::otel_init::build_provider as build_otel_provider;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimeOptions;
 use codex_feedback::CodexFeedback;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
@@ -362,6 +365,7 @@ enum ClientCommand {
 /// boundary.
 pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
+    thread_permissions_reader: ThreadPermissionsReader,
     event_rx: mpsc::UnboundedReceiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
 }
@@ -394,6 +398,7 @@ impl InProcessAppServerClient {
         let mut handle =
             codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
         let request_sender = handle.sender();
+        let thread_permissions_reader = handle.thread_permissions_reader();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         // e9996ec62a preserved transcript events by awaiting a bounded queue, but that can
         // deadlock a foreground request whose response is behind unread notifications.
@@ -500,6 +505,7 @@ impl InProcessAppServerClient {
 
         Ok(Self {
             command_tx,
+            thread_permissions_reader,
             event_rx,
             worker_handle,
         })
@@ -509,6 +515,11 @@ impl InProcessAppServerClient {
         InProcessAppServerRequestHandle {
             command_tx: self.command_tx.clone(),
         }
+    }
+
+    /// Reads effective permissions for a thread loaded in this embedded server.
+    pub async fn thread_permissions(&self, thread_id: ThreadId) -> IoResult<ThreadPermissions> {
+        self.thread_permissions_reader.read(thread_id).await
     }
 
     /// Sends a typed client request and returns raw JSON-RPC result.
@@ -614,6 +625,7 @@ impl InProcessAppServerClient {
     pub async fn shutdown(self) -> IoResult<()> {
         let Self {
             command_tx,
+            thread_permissions_reader: _,
             event_rx,
             worker_handle,
         } = self;
@@ -2202,6 +2214,7 @@ mod tests {
 
         let mut client = InProcessAppServerClient {
             command_tx,
+            thread_permissions_reader: ThreadPermissionsReader::default(),
             event_rx,
             worker_handle,
         };
@@ -2310,6 +2323,7 @@ mod tests {
         });
         let client = InProcessAppServerClient {
             command_tx,
+            thread_permissions_reader: ThreadPermissionsReader::default(),
             event_rx,
             worker_handle,
         };

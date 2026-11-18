@@ -1990,7 +1990,7 @@ async fn cold_resume_reresolves_persisted_active_permission_profile() -> Result<
 }
 
 #[tokio::test]
-async fn cold_resume_with_removed_permission_profile_uses_configured_default() -> Result<()> {
+async fn cold_resume_with_removed_permission_profile_requires_explicit_selection() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
         let codex_home = TempDir::new()?;
@@ -2016,22 +2016,35 @@ async fn cold_resume_with_removed_permission_profile_uses_configured_default() -
             .await?;
         let resume_id = mcp
             .send_thread_resume_request(ThreadResumeParams {
-                thread_id,
+                thread_id: thread_id.clone(),
                 ..Default::default()
             })
             .await?;
-        let ThreadResumeResponse {
-            sandbox,
-            active_permission_profile,
-            ..
-        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert!(
+            error
+                .error
+                .message
+                .contains("saved permission profile `dev`")
+        );
 
-        assert!(matches!(sandbox, AppSandboxPolicy::DangerFullAccess));
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id,
+                permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let response: ThreadResumeResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
         assert_eq!(
-            active_permission_profile,
-            Some(ActivePermissionProfile::new(
-                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-            ))
+            response.active_permission_profile,
+            Some(ActivePermissionProfile::read_only())
         );
     }
     Ok(())
