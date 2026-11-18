@@ -116,7 +116,16 @@ pub struct PermissionProfileToml {
     pub workspace_roots: Option<WorkspaceRootsToml>,
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
+    pub credentials: Option<CredentialPermissionsToml>,
 }
+
+/// In `requirements.toml`, `[permissions.credentials]` sets shared credential policy and
+/// `[permissions.<profile>.credentials]` sets policy for a named profile.
+/// Omit the shared table until it contains a supported policy setting.
+/// In `config.toml`, credentials use the named-profile form alongside filesystem and network.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialPermissionsToml {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PermissionProfileResolutionError {

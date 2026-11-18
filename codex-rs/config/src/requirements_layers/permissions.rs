@@ -51,6 +51,7 @@ impl DenyReadMergeState {
                         deny_read: Some(self.deny_read),
                     }),
                     network: None,
+                    credentials: None,
                     profiles: Default::default(),
                 },
                 source,

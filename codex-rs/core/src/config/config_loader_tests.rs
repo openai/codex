@@ -1880,6 +1880,8 @@ managed-standard = true
 [permissions.managed-standard]
 extends = ":workspace"
 
+[permissions.managed-standard.credentials]
+
 [permissions.managed-standard.network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
@@ -1910,6 +1912,8 @@ enable_socks5 = false
         toml::from_str::<PermissionProfileToml>(
             r#"
 extends = ":workspace"
+
+[credentials]
 
 [filesystem]
 ":root" = "read"
@@ -2354,6 +2358,47 @@ extends = ":workspace"
         error.to_string(),
         "requirements.toml permissions profile `duplicate-profile` conflicts with a config-defined profile of the same name"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_managed_credentials_table_cannot_select_a_user_profile() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        "[permissions.credentials]\nextends = ':workspace'",
+    )
+    .await?;
+
+    for (selected, child) in [
+        ("credentials", ""),
+        ("build", "[permissions.build]\nextends = 'credentials'"),
+    ] {
+        let requirements = format!(
+            r#"
+default_permissions = "{selected}"
+
+[allowed_permission_profiles]
+{selected} = true
+
+[permissions.credentials]
+{child}
+"#
+        );
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            )
+            .build()
+            .await
+            .expect_err("an empty managed profile must not bind to the writable user profile");
+        assert!(
+            err.to_string().contains("`permissions.credentials` in requirements.toml is reserved for shared credential policy; rename the managed profile"),
+            "{selected}: {err}"
+        );
+    }
     Ok(())
 }
 

@@ -40,6 +40,7 @@ use crate::browser_computer_use_requirements::ComputerUseRequirementsToml;
 use crate::config_toml::ConfigToml;
 use crate::mcp_requirements::validate_mcp_server_requirement;
 use crate::mcp_types::AppToolApproval;
+use crate::permissions_toml::CredentialPermissionsToml;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
@@ -762,8 +763,9 @@ pub struct PermissionsRequirementsToml {
     // Keep the optional raw payload out of config-loading futures' inline storage.
     #[serde(default, deserialize_with = "deserialize_permissions_network")]
     pub network: Option<Box<NetworkRequirementsToml>>,
-    // `filesystem` and `network` are reserved for requirements-level
-    // constraints and cannot name profiles.
+    #[serde(default, deserialize_with = "deserialize_permissions_credentials")]
+    pub credentials: Option<CredentialPermissionsToml>,
+    // Shared requirements tables cannot name profiles.
     #[serde(default, flatten)]
     pub profiles: BTreeMap<String, PermissionProfileToml>,
 }
@@ -773,7 +775,10 @@ impl PermissionsRequirementsToml {
     pub(crate) fn take_network(table: &mut Option<Self>) -> Option<Box<NetworkRequirementsToml>> {
         let permissions = table.as_mut()?;
         let network = permissions.network.take()?;
-        if permissions.filesystem.is_none() && permissions.profiles.is_empty() {
+        if permissions.filesystem.is_none()
+            && permissions.credentials.is_none()
+            && permissions.profiles.is_empty()
+        {
             *table = None;
         }
         Some(network)
@@ -785,6 +790,32 @@ fn deserialize_permissions_network<'de, D>(
 ) -> Result<Option<Box<NetworkRequirementsToml>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+{
+    deserialize_shared_permission_table(
+        deserializer,
+        "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid",
+    )
+}
+
+fn deserialize_permissions_credentials<'de, D>(
+    deserializer: D,
+) -> Result<Option<CredentialPermissionsToml>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_shared_permission_table(
+        deserializer,
+        "`permissions.credentials` in requirements.toml is reserved for shared credential policy; rename the managed profile (for example, to `credential-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `credentials` in config.toml remain valid",
+    )
+}
+
+fn deserialize_shared_permission_table<'de, D, T>(
+    deserializer: D,
+    rename_error: &'static str,
+) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
 {
     let table = toml::Table::deserialize(deserializer)?;
     if table.is_empty()
@@ -798,9 +829,7 @@ where
         .iter()
         .any(|key| table.contains_key(*key))
     {
-        return Err(D::Error::custom(
-            "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid",
-        ));
+        return Err(D::Error::custom(rename_error));
     }
     toml::Value::Table(table)
         .try_into()

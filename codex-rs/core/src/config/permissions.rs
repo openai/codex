@@ -256,6 +256,7 @@ fn permission_profile_toml_from_file_system_policy(
         insert_filesystem_permission_toml(&mut filesystem.entries, entry);
     }
     PermissionProfileToml {
+        credentials: None,
         description: None,
         extends: None,
         workspace_roots: None,

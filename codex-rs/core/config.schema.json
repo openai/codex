@@ -1707,6 +1707,11 @@
       ],
       "type": "object"
     },
+    "CredentialPermissionsToml": {
+      "additionalProperties": false,
+      "description": "In `requirements.toml`, `[permissions.credentials]` sets shared credential policy and `[permissions.<profile>.credentials]` sets policy for a named profile. Omit the shared table until it contains a supported policy setting. In `config.toml`, credentials use the named-profile form alongside filesystem and network.",
+      "type": "object"
+    },
     "CredentialProviderConfig": {
       "additionalProperties": false,
       "description": "Declarative description of an environment-backed credential family.",
@@ -4203,6 +4208,9 @@
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "credentials": {
+          "$ref": "#/definitions/CredentialPermissionsToml"
+        },
         "description": {
           "type": "string"
         },

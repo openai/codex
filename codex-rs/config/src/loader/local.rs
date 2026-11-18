@@ -222,7 +222,6 @@ pub(super) async fn load_local_config_layers_with_overrides(
             .as_table()
             .into_iter()
             .flatten()
-            .filter(|(name, _)| !matches!(name.as_str(), "filesystem" | "network"))
             .map(|(name, profile)| {
                 (
                     name.clone(),
@@ -235,6 +234,12 @@ pub(super) async fn load_local_config_layers_with_overrides(
                         .and_then(|network| network.get("mitm"))
                         .is_some(),
                 )
+            })
+            .filter(|(name, parent, has_mitm)| match name.as_str() {
+                "filesystem" | "network" => false,
+                // Older hosts can still interpret this raw table as a managed sandbox profile.
+                "credentials" => parent.is_some() || *has_mitm,
+                _ => true,
             }),
     )?;
 
