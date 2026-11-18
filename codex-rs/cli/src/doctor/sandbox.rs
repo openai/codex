@@ -305,6 +305,10 @@ pub(super) fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) -> 
                         | SetupErrorCode::HelperFirewallRuleVerifyFailed => {
                             "ask IT to allow Codex sandbox rules in managed Windows Firewall policy"
                         }
+                        SetupErrorCode::RegisteredServiceTimedOut
+                        | SetupErrorCode::RegisteredServicePipeClosed => {
+                            "check that the Codex sandbox service is running and let pending setup finish before retrying"
+                        }
                         SetupErrorCode::OrchestratorPayloadSerializeFailed
                         | SetupErrorCode::HelperRequestArgsFailed
                         | SetupErrorCode::HelperUnknownError => {

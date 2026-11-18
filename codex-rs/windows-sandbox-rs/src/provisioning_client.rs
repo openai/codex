@@ -37,6 +37,8 @@ use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::Services;
 use windows_sys::Win32::System::Services::SC_HANDLE;
 
+const REGISTERED_SERVICE_UNAVAILABLE: &str =
+    "app runtime provisioning service is unavailable; refusing helper fallback";
 const PROVISIONING_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -185,7 +187,7 @@ fn provision(
 
 fn service_unavailable() -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
     if crate::registered_core_requested() {
-        bail!("app runtime provisioning service is unavailable; refusing helper fallback");
+        bail!(REGISTERED_SERVICE_UNAVAILABLE);
     }
     Ok(WindowsSandboxProvisioningOutcome::Unavailable)
 }
@@ -257,23 +259,13 @@ fn send_service_request(
     }
     let response = match exchange_request(&mut pipe, request, deadline) {
         Ok(response) => response,
-        Err(error)
-            if error.downcast_ref::<io::Error>().is_some_and(|error| {
-                matches!(
-                    error.kind(),
-                    io::ErrorKind::UnexpectedEof | io::ErrorKind::TimedOut
-                ) || matches!(
-                    error.raw_os_error(),
-                    Some(code)
-                        if code == ERROR_BROKEN_PIPE as i32
-                            || code == ERROR_NO_DATA as i32
-                            || code == ERROR_PIPE_NOT_CONNECTED as i32
-                )
-            }) =>
-        {
-            return Ok(crate::SandboxProvisioningResponse::Unavailable);
+        Err(error) => {
+            let registered_core = matches!(
+                &request.message,
+                crate::ProvisioningMessage::ProvisionSandboxRequest { payload } if payload.registered_core
+            );
+            return service_exchange_error(error, registered_core);
         }
-        Err(error) => return Err(error),
     };
     if matches!(&response, crate::SandboxProvisioningResponse::Error { message }
         if message == crate::SANDBOX_GROUP_CHANGED)
@@ -282,6 +274,34 @@ fn send_service_request(
         return group_change::retry(request, deadline);
     }
     Ok(response)
+}
+
+fn service_exchange_error(
+    error: anyhow::Error,
+    registered_core: bool,
+) -> anyhow::Result<crate::SandboxProvisioningResponse> {
+    let Some(cause) = error.downcast_ref::<io::Error>() else {
+        return Err(error);
+    };
+    let code = match cause.kind() {
+        io::ErrorKind::TimedOut => crate::SetupErrorCode::RegisteredServiceTimedOut,
+        io::ErrorKind::UnexpectedEof => crate::SetupErrorCode::RegisteredServicePipeClosed,
+        _ if matches!(cause.raw_os_error(), Some(code) if code == ERROR_BROKEN_PIPE as i32
+            || code == ERROR_NO_DATA as i32 || code == ERROR_PIPE_NOT_CONNECTED as i32) =>
+        {
+            crate::SetupErrorCode::RegisteredServicePipeClosed
+        }
+        _ => return Err(error),
+    };
+    if !registered_core {
+        return Ok(crate::SandboxProvisioningResponse::Unavailable);
+    }
+    Err(error
+        .context(crate::SetupFailure::new(
+            code,
+            "sandbox provisioning transport failed",
+        ))
+        .context(REGISTERED_SERVICE_UNAVAILABLE))
 }
 
 fn exchange_request(

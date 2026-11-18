@@ -33,6 +33,10 @@ pub enum SetupErrorCode {
     OrchestratorHelperReportReadFailed,
     /// Helper exited successfully before setup completed.
     OrchestratorHelperIncomplete,
+    /// Registered Core's provisioning request reached its transport deadline.
+    RegisteredServiceTimedOut,
+    /// The provisioning pipe closed before registered Core received a reply.
+    RegisteredServicePipeClosed,
     // Helper (elevated process) failures.
     /// Helper failed while validating or decoding the request payload.
     HelperRequestArgsFailed,
@@ -86,6 +90,8 @@ impl SetupErrorCode {
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
             Self::OrchestratorHelperIncomplete => "orchestrator_helper_incomplete",
+            Self::RegisteredServiceTimedOut => "registered_service_timed_out",
+            Self::RegisteredServicePipeClosed => "registered_service_pipe_closed",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",

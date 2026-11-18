@@ -1,4 +1,4 @@
-//! Exercises process-local workload-identity routing without contacting the service.
+//! Exercises provisioning client routing and transport failures without contacting the service.
 
 use super::WindowsSandboxProvisioningOutcome;
 use super::provision_windows_sandbox_via_service;
@@ -67,4 +67,39 @@ fn workload_identity_child() -> Result<()> {
         assert_eq!(outcome?, WindowsSandboxProvisioningOutcome::Unavailable);
     }
     Ok(())
+}
+
+#[test]
+fn registered_setup_retains_the_transport_cause_for_metrics() {
+    use crate::SetupErrorCode;
+    use std::io;
+    use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+
+    for (cause, code) in [
+        (
+            io::ErrorKind::TimedOut.into(),
+            SetupErrorCode::RegisteredServiceTimedOut,
+        ),
+        (
+            io::ErrorKind::UnexpectedEof.into(),
+            SetupErrorCode::RegisteredServicePipeClosed,
+        ),
+        (
+            io::Error::from_raw_os_error(ERROR_BROKEN_PIPE as i32),
+            SetupErrorCode::RegisteredServicePipeClosed,
+        ),
+    ] {
+        let error = anyhow::Error::new(cause).context("wait for sandbox provisioning response");
+        let error = super::service_exchange_error(error, /*registered_core*/ true).unwrap_err();
+        assert_eq!(error.to_string(), super::REGISTERED_SERVICE_UNAVAILABLE);
+        assert_eq!(crate::extract_setup_failure(&error).unwrap().code, code);
+    }
+    let timeout = io::Error::from(io::ErrorKind::TimedOut);
+    assert!(matches!(
+        super::service_exchange_error(timeout.into(), /*registered_core*/ false).unwrap(),
+        crate::SandboxProvisioningResponse::Unavailable
+    ));
+    let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+    let error = super::service_exchange_error(denied.into(), /*registered_core*/ true).unwrap_err();
+    assert!(crate::extract_setup_failure(&error).is_none());
 }
