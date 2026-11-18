@@ -1,6 +1,9 @@
+#![cfg(test)]
+
 use super::process::OutputDrainPolicy;
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
@@ -213,4 +216,93 @@ async fn remote_process_preserves_executor_sandbox_type() {
         .await;
         assert_eq!(process.sandbox_type(), sandbox_type);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn closed_output_is_classified_without_waiting_for_more_output() {
+    use codex_sandboxing::SandboxType;
+    for sandbox_type in [SandboxType::None, SandboxType::LinuxSeccomp] {
+        let process = remote_process(
+            WriteStatus::Accepted,
+            /*terminate_error*/ None,
+            sandbox_type,
+        )
+        .await;
+        let output = process.output_handles();
+        output
+            .output_buffer
+            .lock()
+            .await
+            .push_chunk(ExecOutputStream::Stderr, b"permission denied");
+        let closed = output.output_closed_notify.notified();
+        tokio::pin!(closed);
+        closed.as_mut().enable();
+        process.terminate_confirmed().await.expect("terminate");
+        closed.await;
+
+        let start = tokio::time::Instant::now();
+        let result = process.check_for_sandbox_denial().await;
+        assert_eq!(start.elapsed(), std::time::Duration::ZERO);
+        if sandbox_type == SandboxType::None {
+            result.expect("unsandboxed failure is not a sandbox denial");
+        } else {
+            assert!(matches!(
+                result,
+                Err(UnifiedExecError::SandboxDenied { .. })
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn output_closing_during_denial_check_wakes_without_timeout() {
+    use codex_sandboxing::SandboxType;
+    for sandbox_type in [SandboxType::None, SandboxType::LinuxSeccomp] {
+        let process = remote_process(
+            WriteStatus::Accepted,
+            /*terminate_error*/ None,
+            sandbox_type,
+        )
+        .await;
+        process
+            .output_handles()
+            .output_buffer
+            .lock()
+            .await
+            .push_chunk(ExecOutputStream::Stderr, b"permission denied");
+
+        let check = process.check_for_sandbox_denial();
+        tokio::pin!(check);
+        let start = tokio::time::Instant::now();
+        assert!(futures::poll!(check.as_mut()).is_pending());
+        process.terminate_confirmed().await.expect("terminate");
+
+        let result = check.await;
+        assert_eq!(start.elapsed(), std::time::Duration::ZERO);
+        if sandbox_type == SandboxType::None {
+            result.expect("unsandboxed failure is not a sandbox denial");
+        } else {
+            assert!(matches!(
+                result,
+                Err(UnifiedExecError::SandboxDenied { .. })
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn open_output_preserves_denial_context_timeout() {
+    let process = remote_process(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::None,
+    )
+    .await;
+
+    let start = tokio::time::Instant::now();
+    process
+        .check_for_sandbox_denial()
+        .await
+        .expect("running process is not a sandbox denial");
+    assert_eq!(start.elapsed(), std::time::Duration::from_millis(20));
 }

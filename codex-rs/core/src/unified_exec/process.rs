@@ -303,11 +303,22 @@ impl UnifiedExecProcess {
     }
 
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        let _ = tokio::time::timeout(
-            Duration::from_millis(20),
-            self.output.output_notify.notified(),
-        )
-        .await;
+        // A closed output stream cannot provide any more denial context.
+        if !self.output.output_closed.load(Ordering::Acquire) {
+            let closed = self.output.output_closed_notify.notified();
+            tokio::pin!(closed);
+            closed.as_mut().enable();
+            // Recheck after registering so closure cannot be lost before we wait.
+            if !self.output.output_closed.load(Ordering::Acquire) {
+                let _ = tokio::time::timeout(Duration::from_millis(20), async {
+                    tokio::select! {
+                        _ = self.output.output_notify.notified() => {}
+                        _ = &mut closed => {}
+                    }
+                })
+                .await;
+            }
+        }
 
         let aggregated = self.snapshot_output().await;
         let aggregated_text = String::from_utf8_lossy(&aggregated);
