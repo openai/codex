@@ -1,0 +1,12 @@
+---
+source: tui/src/transcript_view/input_tests.rs
+expression: picture
+---
+• Started `/root/
+          ^^^^^^^
+reviewer/
+^^^^^^^^^
+verify_the_sidebar_lay
+^^^^^^^^^^^^^^^^^^^^^^
+out`
+^^^^

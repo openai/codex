@@ -3,6 +3,7 @@
 use super::agent_navigation::AgentPickerThreadVisibility;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
+use super::sidebar_subagents::PendingLink;
 use super::*;
 use crate::app_event::AgentPickerThreadRefresh;
 use codex_app_server_protocol::RequestId;
@@ -111,15 +112,16 @@ impl App {
         root: ThreadId,
         request_id: Uuid,
         result: Result<AgentPickerThreadRefresh, String>,
-    ) {
-        let Some(completion) = self
+    ) -> Option<PendingLink> {
+        let completion = self
             .agent_navigation
-            .finish_picker_refresh(root, request_id)
-        else {
-            return;
-        };
+            .finish_picker_refresh(root, request_id)?;
+        let pending_link = self
+            .sidebars
+            .get_mut(&Some(root))
+            .and_then(|pane| pane.agents.pending_link.take());
         if self.primary_thread_id != Some(root) {
-            return;
+            return None;
         }
         let refresh = match result {
             Ok(refresh) => refresh,
@@ -129,14 +131,14 @@ impl App {
                 if completion.follow_up_requested {
                     self.refresh_agent_picker_threads(app_server, root);
                 }
-                return;
+                return None;
             }
         };
         for thread in refresh.threads {
             let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
                 continue;
             };
-            let sidebar_agent = self.register_sidebar_agent(root, thread_id);
+            let sidebar_agent = self.confirm_sidebar_agent(root, thread_id);
             if !completion.visibility_changed_threads.contains(&thread_id) {
                 self.update_agent_picker_thread_visibility(
                     thread_id,
@@ -188,6 +190,7 @@ impl App {
         if completion.follow_up_requested {
             self.refresh_agent_picker_threads(app_server, root);
         }
+        pending_link.filter(|link| link.backend == app_server.backend_id())
     }
 
     pub(super) fn set_agent_picker_thread_visibility(

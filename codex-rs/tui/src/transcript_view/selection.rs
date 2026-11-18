@@ -663,6 +663,7 @@ impl TranscriptView {
             | ViewAction::CopyAndFollow(text) => text.as_str(),
             ViewAction::Changed
             | ViewAction::ExitSelectMode
+            | ViewAction::OpenAgent(_)
             | ViewAction::OpenLink(_)
             | ViewAction::OpenDocument(_) => {
                 return None;

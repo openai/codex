@@ -75,7 +75,7 @@ pub(super) enum AgentPickerThreadVisibility {
 
 #[derive(Debug)]
 pub(super) struct AgentPickerRefreshState {
-    root: ThreadId,
+    pub(super) root: ThreadId,
     request_id: Uuid,
     pub(super) visibility_changed_threads: HashSet<ThreadId>,
     pub(super) follow_up_requested: bool,

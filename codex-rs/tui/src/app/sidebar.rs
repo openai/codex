@@ -16,6 +16,7 @@ use crate::sidebar_chooser::ChatTabs;
 use crate::sidebar_chooser::ChooserScroll;
 use crate::sidebar_chooser::Discovery;
 use crate::sidebar_tab_strip::SidebarTab;
+use crate::terminal_hyperlinks::ReaderLink;
 use crate::tui::Tui;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -116,7 +117,7 @@ pub(super) struct SidebarPane {
 }
 
 impl SidebarPane {
-    pub(super) fn visible_link_at(&self, column: u16, row: u16) -> Option<String> {
+    pub(super) fn visible_link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
         let SidebarContent::Document(id) = self.visible_content()? else {
             return None;
         };
@@ -160,6 +161,7 @@ impl SidebarPane {
             self.cancel_hidden_document_primary(/*visible*/ false);
         }
         self.focus_document_request = None;
+        self.agents.pending_link = None;
         if self.content != content {
             self.showing_file_path = false;
         }
@@ -492,6 +494,7 @@ impl SidebarPane {
     pub(super) fn hide(&mut self) {
         self.cancel_hidden_document_primary(/*visible*/ false);
         self.focus_document_request = None;
+        self.agents.pending_link = None;
         self.opening = None;
         self.showing_file_path = false;
         if let Some(files) = &mut self.files {

@@ -101,6 +101,7 @@ impl App {
                     | AppEvent::SideChatArchived { .. }
                     | AppEvent::SavedChatPrepared { .. } | AppEvent::SavedChatReleased { .. }
                     | AppEvent::StartQueuedSavedChat
+                    | AppEvent::OpenSidebarAgent { .. }
                     | AppEvent::OpenSidebarDocument { .. }
                     | AppEvent::SidebarDocumentResolved { .. }
                     | AppEvent::SidebarDocumentLoaded { .. }
@@ -178,6 +179,7 @@ impl App {
                 event,
                 AppEvent::OpenAgentPicker
                     | AppEvent::SelectAgentThread(_)
+                    | AppEvent::OpenSidebarAgent { .. }
                     | AppEvent::StartSide { .. }
                     | AppEvent::ForkCurrentSession { .. }
                     | AppEvent::StartManagedWorktree {
@@ -3592,12 +3594,16 @@ impl App {
                 request_id,
                 result,
             } => {
-                self.apply_agent_picker_thread_refresh(
+                if let Some(link) = self.apply_agent_picker_thread_refresh(
                     app_server,
                     primary_thread_id,
                     request_id,
                     result,
-                );
+                )
+                    && self.sidebar_agent_link_root(tui, link.source) == Some(primary_thread_id)
+                {
+                    self.open_sidebar_agent(tui, app_server, link.agent).await?;
+                }
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, app_server, thread_id)
@@ -3663,6 +3669,18 @@ impl App {
                     && self.wants_saved_chat(target)
                 {
                     Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
+                }
+            }
+            AppEvent::OpenSidebarAgent { backend, source, agent } => {
+                if backend == app_server.backend_id()
+                    && let Some(root) = self.sidebar_agent_link_root(tui, source)
+                {
+                    if self.is_confirmed_sidebar_agent(root, agent) {
+                        self.open_sidebar_agent(tui, app_server, agent).await?;
+                    } else if self.agent_navigation.picker_refresh.as_ref().is_some_and(|refresh| refresh.root == root) {
+                        // Resume can paint a link before its owning thread list returns.
+                        self.sidebar_mut().agents.pending_link = Some(sidebar_subagents::PendingLink { backend, source, agent });
+                    }
                 }
             }
             AppEvent::OpenSidebarDocument { backend_id, source, link } => {

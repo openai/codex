@@ -94,6 +94,7 @@ struct VisibleRow {
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
     pub(crate) image_protocol: Option<crate::pets::ImageProtocol>,
+    pub(crate) agent_links: Option<crate::backend_id::BackendId>,
     pub(crate) document_links: bool,
     pub(crate) mouse_scroll_speed: f64,
     pending_mouse_scroll: f64,
@@ -137,6 +138,7 @@ impl Default for TranscriptView {
     fn default() -> Self {
         Self {
             image_protocol: None,
+            agent_links: None,
             document_links: false,
             mouse_scroll_speed: 1.0,
             pending_mouse_scroll: 0.0,
@@ -325,6 +327,9 @@ impl TranscriptView {
             };
             let row_area = Rect::new(area.x, y, area.width, /*height*/ 1);
             layout.render(row_area, buf, row);
+            if self.agent_links.is_some() {
+                layout.underline_agent_links(row_area, buf, row);
+            }
             self.render_disclosure(&activity_ids, &layout, row, row_area, buf);
             if self.highlight == Some(index) && self.selection.is_none() && !self.search.is_active()
             {

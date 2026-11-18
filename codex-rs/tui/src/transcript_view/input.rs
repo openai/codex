@@ -28,6 +28,7 @@ pub(crate) enum ViewAction {
     CopyOnSelect(String),
     PrimarySelection(String),
     CopyAndFollow(String),
+    OpenAgent(ThreadId),
     OpenLink(String),
     OpenDocument(FileLink),
 }
@@ -35,6 +36,7 @@ pub(crate) enum ViewAction {
 impl From<ReaderLink> for ViewAction {
     fn from(link: ReaderLink) -> Self {
         match link {
+            ReaderLink::Agent(id) => Self::OpenAgent(id),
             ReaderLink::External(url) => Self::OpenLink(url),
             ReaderLink::Document(link) => Self::OpenDocument(link),
         }
@@ -118,19 +120,26 @@ impl TranscriptView {
             | ViewAction::ExitSelectMode
             | ViewAction::Copy(_)
             | ViewAction::CopyAndFollow(_)
+            | ViewAction::OpenAgent(_)
             | ViewAction::OpenDocument(_)
             | ViewAction::OpenLink(_) => SelectionCopy::EXPLICIT,
         }
     }
 
-    /// Resolve links in the last rendered transcript, sharing geometry with click activation.
+    #[cfg(test)]
     pub(crate) fn link_at(&self, column: u16, row: u16) -> Option<String> {
         self.reader_link_at(column, row)
             .map(ReaderLink::into_destination)
     }
 
-    fn reader_link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
+    /// Resolve links in the last rendered transcript, sharing geometry with click activation.
+    pub(crate) fn reader_link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
         let (_, link) = self.raw_link_at(ScreenPosition::new(column, row))?;
+        if self.agent_links.is_some()
+            && let Some(agent) = link.agent_id()
+        {
+            return Some(ReaderLink::Agent(agent));
+        }
         link.reader_destination(self.document_links)
     }
 

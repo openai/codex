@@ -373,6 +373,7 @@ impl App {
                         id == panes.passive_thread && self.agent_navigation.is_parent_owned(id)
                     });
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
+                        companion.view.agent_links = self.transcript_view.agent_links;
                         companion.view.image_protocol = self.transcript_view.image_protocol;
                         panes.paint_companion(
                             companion,
@@ -1480,6 +1481,15 @@ impl App {
                 }
             } else if let ViewAction::OpenLink(url) = action {
                 self.open_url_in_browser(url);
+            } else if let ViewAction::OpenAgent(agent) = action
+                && let Some(backend) = self.transcript_view.agent_links
+                && let Some(source) = self.current_displayed_thread_id()
+            {
+                self.app_event_tx.send(AppEvent::OpenSidebarAgent {
+                    backend,
+                    source,
+                    agent,
+                });
             } else if let ViewAction::OpenDocument(link) = action
                 && let Some(source) = self.current_displayed_thread_id()
             {

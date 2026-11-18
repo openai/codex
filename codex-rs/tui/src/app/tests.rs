@@ -2398,14 +2398,17 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
         .agent_navigation
         .begin_picker_refresh(primary_thread_id)
         .expect("picker refresh after missed archive");
-    app.apply_agent_picker_thread_refresh(
-        &app_server,
-        primary_thread_id,
-        request_id,
-        Ok(crate::app_event::AgentPickerThreadRefresh {
-            threads: Vec::new(),
-            archived_thread_ids: std::collections::HashSet::from([archived_thread_id]),
-        }),
+    assert!(
+        app.apply_agent_picker_thread_refresh(
+            &app_server,
+            primary_thread_id,
+            request_id,
+            Ok(crate::app_event::AgentPickerThreadRefresh {
+                threads: Vec::new(),
+                archived_thread_ids: std::collections::HashSet::from([archived_thread_id]),
+            }),
+        )
+        .is_none()
     );
     assert_eq!(
         app.thread_event_channels[&archived_thread_id].attachment(),

@@ -15,6 +15,7 @@ use crate::sidebar_image::DocumentContent;
 use crate::sidebar_image::SidebarImage;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::ReaderLink;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
@@ -94,9 +95,9 @@ enum State {
 }
 
 impl Document {
-    pub(super) fn link_at(&self, column: u16, row: u16) -> Option<String> {
+    pub(super) fn link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
         match &self.state {
-            State::Ready { view, .. } if !view.is_select_mode() => view.link_at(column, row),
+            State::Ready { view, .. } if !view.is_select_mode() => view.reader_link_at(column, row),
             _ => None,
         }
     }
@@ -452,7 +453,9 @@ impl App {
         let backend_id = resolver.backend_id();
         let tx = self.app_event_tx.clone();
         let request = uuid::Uuid::new_v4();
-        self.sidebar_mut().focus_document_request = Some(request);
+        let pane = self.sidebar_mut();
+        pane.agents.pending_link = None;
+        pane.focus_document_request = Some(request);
         tokio::spawn(async move {
             let resolved = resolver
                 .resolve_thread_file(source, &path)

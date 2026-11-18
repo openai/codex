@@ -129,7 +129,9 @@ impl App {
         if !self.can_select_thread() {
             return Ok(());
         }
-        self.sidebar_mut().focus_document_request = None;
+        let pane = self.sidebar_mut();
+        pane.agents.pending_link = None;
+        pane.focus_document_request = None;
         let child = target.child;
         let flight = self.saved_openings.active.get(&target.key());
         let state = if let Some(flight) = flight

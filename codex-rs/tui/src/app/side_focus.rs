@@ -916,6 +916,9 @@ impl App {
     }
 
     fn focus_current_parent_view(&mut self, tui: &mut tui::Tui) {
+        if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent()) {
+            pane.agents.pending_link = None;
+        }
         self.cancel_transcript_browsing(tui);
         clear_transcript_interaction(&mut self.transcript_view, &self.transcript_cells);
         self.cancel_pending_key_chord();

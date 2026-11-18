@@ -13,13 +13,15 @@ use crossterm::event::MouseEventKind::Up;
 
 use super::App;
 use super::side_companion::SideCompanion;
+use crate::app_event::AppEvent;
+use crate::terminal_hyperlinks::ReaderLink;
 use crate::transcript_view::ViewAction;
 use crate::tui::PointerShape;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 
 impl App {
-    pub(super) fn transcript_link_at(&self, mouse: MouseEvent) -> Option<String> {
+    pub(super) fn transcript_link_at(&self, mouse: MouseEvent) -> Option<ReaderLink> {
         if !mouse.modifiers.is_empty()
             && !mouse
                 .modifiers
@@ -44,7 +46,7 @@ impl App {
         } else {
             &self.transcript_view
         };
-        view.link_at(mouse.column, mouse.row)
+        view.reader_link_at(mouse.column, mouse.row)
     }
 
     pub(super) fn handle_passive_transcript_event(
@@ -57,6 +59,7 @@ impl App {
             return false;
         };
         let view = &mut companion.view;
+        view.agent_links = self.transcript_view.agent_links;
         view.mouse_scroll_speed = self.transcript_view.mouse_scroll_speed;
         view.copy_on_select = self.transcript_view.copy_on_select;
         view.copy_on_select_clear_selection = self.transcript_view.copy_on_select_clear_selection;
@@ -80,6 +83,14 @@ impl App {
             self.transcript_view.show_copy_feedback(&result, count);
         } else if let ViewAction::OpenLink(url) = action {
             self.open_url_in_browser(url);
+        } else if let ViewAction::OpenAgent(agent) = action
+            && let Some(backend) = view.agent_links
+        {
+            self.app_event_tx.send(AppEvent::OpenSidebarAgent {
+                backend,
+                source: id,
+                agent,
+            });
         }
         tui.frame_requester().schedule_frame();
         true

@@ -14,7 +14,7 @@ expression: "screen.replace(&child.to_string(), \"[agent id]\")"
   /model - choose what model and reasoning effort to use                                                               │
   /review - review any changes and find issues                                                                         │• Agent thread [agent id] could
                                                                                                                        │not be resumed live. Replaying saved transcript.
-                                                                                                                       │
+• Started `/root/reviewer`                                                                                             │
                                                                                                                        │
                                                                                                                        │
                                                                                                                        │

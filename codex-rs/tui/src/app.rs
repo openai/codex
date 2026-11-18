@@ -908,6 +908,9 @@ impl App {
             }
             _ => self.sidebar_press = None,
         }
+        self.transcript_view.agent_links = self
+            .side_retention_enabled(tui)
+            .then(|| app_server.backend_id());
         self.transcript_view.document_links = self.document_preview_available(tui, app_server);
         crate::markdown_render::preferences::set_document_links(
             self.transcript_view.document_links,
@@ -1169,12 +1172,23 @@ impl App {
                 && painted.passive.union(painted.focused) == Rect::from(size)
             {
                 let painted_area = painted.passive;
-                if let Some(url) = self.transcript_link_at(*press) {
+                if let Some(link) = self.transcript_link_at(*press) {
+                    use crate::terminal_hyperlinks::ReaderLink;
                     if press.modifiers.is_empty() {
                         self.passive_link_drag = Some((current.passive_thread, painted.passive));
                         self.handle_passive_transcript_event(tui, current.passive_thread, &event);
                     } else {
-                        self.open_url_in_browser(url);
+                        match link {
+                            ReaderLink::Agent(agent) => {
+                                self.app_event_tx.send(AppEvent::OpenSidebarAgent {
+                                    backend: app_server.backend_id(),
+                                    source: current.passive_thread,
+                                    agent,
+                                });
+                            }
+                            ReaderLink::External(url) => self.open_url_in_browser(url),
+                            ReaderLink::Document(link) => self.open_url_in_browser(link.path),
+                        }
                     }
                     return Ok(AppRunControl::Continue);
                 }

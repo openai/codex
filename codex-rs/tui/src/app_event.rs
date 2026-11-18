@@ -536,6 +536,11 @@ pub(crate) enum AppEvent {
         request: uuid::Uuid,
     },
     StartQueuedSavedChat,
+    OpenSidebarAgent {
+        backend: crate::backend_id::BackendId,
+        source: ThreadId,
+        agent: ThreadId,
+    },
     OpenSidebarDocument {
         backend_id: crate::backend_id::BackendId,
         source: ThreadId,

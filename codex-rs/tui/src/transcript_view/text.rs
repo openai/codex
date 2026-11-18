@@ -851,6 +851,27 @@ impl TextLayout {
         }
     }
 
+    pub(super) fn underline_agent_links(&self, area: Rect, buf: &mut Buffer, row: usize) {
+        let Some((inset, links)) = self.row_links(row) else {
+            return;
+        };
+        for link in links.iter().filter(|link| link.agent_id().is_some()) {
+            let columns = (inset + link.columns.start)
+                ..(inset + link.columns.end).min(usize::from(area.width));
+            if !columns.is_empty() {
+                buf.set_style(
+                    Rect::new(
+                        area.x + columns.start as u16,
+                        area.y,
+                        columns.len() as u16,
+                        1,
+                    ),
+                    Style::default().underlined(),
+                );
+            }
+        }
+    }
+
     pub(super) fn document_links(&self) -> Vec<(Range<usize>, ReaderLink)> {
         let mut stops: Vec<(Range<usize>, ReaderLink)> = Vec::new();
         let mut previous_source = None;

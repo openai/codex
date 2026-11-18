@@ -2,6 +2,7 @@
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
+use crate::backend_id::BackendId;
 use crate::keymap::ListAction;
 use crate::sidebar_chooser::AgentRow;
 use codex_app_server_protocol::CollabAgentStatus;
@@ -18,9 +19,19 @@ pub(super) enum OutcomeReplay {
     Reconnect,
 }
 
+pub(super) struct PendingLink {
+    pub(super) backend: BackendId,
+    pub(super) source: ThreadId,
+    pub(super) agent: ThreadId,
+}
+
 #[derive(Default)]
 pub(super) struct Overview {
     members: HashSet<ThreadId>,
+    // Replay can contain activity inherited from another thread. Only backend ancestry
+    // can authorize navigation from a transcript link.
+    confirmed_members: HashSet<ThreadId>,
+    pub(super) pending_link: Option<PendingLink>,
     states: HashMap<ThreadId, State>,
     restored_outcomes: HashSet<ThreadId>,
     pub(super) rows: Vec<AgentRow>,
@@ -139,7 +150,10 @@ impl App {
         let Some(parent) = self.primary_thread_id else {
             return Ok(());
         };
-        if !self.is_sidebar_agent(agent) || self.sidebar_parent() != Some(parent) {
+        if self.chat_widget.has_misalignment_policy_violation()
+            || !self.is_confirmed_sidebar_agent(parent, agent)
+            || self.sidebar_parent() != Some(parent)
+        {
             return Ok(());
         }
         let pane = self.sidebars.entry(Some(parent)).or_default();
@@ -162,6 +176,51 @@ impl App {
         }
         tui.frame_requester().schedule_frame();
         result
+    }
+
+    pub(super) fn sidebar_agent_link_root(
+        &self,
+        tui: &tui::Tui,
+        source: ThreadId,
+    ) -> Option<ThreadId> {
+        let root = self.primary_thread_id?;
+        if self.sidebar_parent() != Some(root) || !self.conversation_focus_available(tui) {
+            return None;
+        }
+        let docked = self.docked_agent();
+        if source != root && docked != Some((root, source)) {
+            return None;
+        }
+        let screen = tui.terminal.last_known_screen_size.into();
+        (self.current_displayed_thread_id() == Some(source)
+            || (docked.is_some()
+                && super::side_pane::layout(self, tui, screen)
+                    .is_some_and(|layout| layout.passive_thread == source)))
+        .then_some(root)
+    }
+
+    pub(super) fn is_confirmed_sidebar_agent(&self, root: ThreadId, agent: ThreadId) -> bool {
+        self.sidebars
+            .get(&Some(root))
+            .is_some_and(|pane| pane.agents.confirmed_members.contains(&agent))
+    }
+
+    pub(super) fn confirm_sidebar_agent(&mut self, parent: ThreadId, agent: ThreadId) -> bool {
+        let Some(root) = self.primary_thread_id else {
+            return false;
+        };
+        if (parent == root || self.is_confirmed_sidebar_agent(root, parent))
+            && self.register_sidebar_agent(parent, agent)
+        {
+            self.sidebars
+                .entry(Some(root))
+                .or_default()
+                .agents
+                .confirmed_members
+                .insert(agent);
+            return true;
+        }
+        false
     }
 
     pub(super) fn is_sidebar_agent(&self, id: ThreadId) -> bool {
@@ -252,7 +311,7 @@ impl App {
                 if let Some(parent) =
                     super::loaded_threads::thread_spawn_parent_thread_id(&e.thread.source)
                     && let Ok(child) = ThreadId::from_string(&e.thread.id)
-                    && self.register_sidebar_agent(parent, child)
+                    && self.confirm_sidebar_agent(parent, child)
                 {
                     self.upsert_agent_picker_thread(
                         child,
