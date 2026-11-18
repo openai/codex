@@ -38,6 +38,8 @@ mod pending_thread_metadata_tests;
 #[cfg(test)]
 #[path = "read_thread_tests.rs"]
 mod read_thread_tests;
+#[cfg(all(test, unix))]
+mod realtime_input_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -46,15 +48,20 @@ mod timestamp_metadata_tests;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::realtime::RealtimeItem;
+use codex_rollout::ResponseItemEnvelope;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use codex_rollout::WriterLockCoordinator;
 use codex_state::SqliteConfig;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::OwnedMutexGuard;
@@ -158,6 +165,7 @@ pub struct LocalThreadStore {
     /// can use the other connections while SQLite's single writer is busy.
     thread_history_writer: Arc<Semaphore>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
+    realtime_frames_local_enabled: Arc<AtomicBool>,
     #[cfg(test)]
     startup_migration_retry_gate: Option<Arc<StartupMigrationRetryGate>>,
 }
@@ -176,6 +184,13 @@ struct LiveRecorderEntry {
     // so missing SQLite rows can still be seeded.
     history_mode: ThreadHistoryMode,
     writer_lock: WriterLockGuard,
+    realtime_seals: Arc<Mutex<RealtimeSeals>>,
+}
+
+#[derive(Default)]
+struct RealtimeSeals {
+    pending: Option<String>,
+    committed: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -287,6 +302,7 @@ impl LocalThreadStore {
             thread_history_db: Arc::new(OnceCell::new()),
             thread_history_writer: Arc::new(Semaphore::new(/* permits */ 1)),
             thread_data_cleanup: None,
+            realtime_frames_local_enabled: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             startup_migration_retry_gate: None,
         }
@@ -301,6 +317,12 @@ impl LocalThreadStore {
     ) -> Self {
         self.thread_data_cleanup = Some(Arc::new(cleanup));
         self
+    }
+
+    /// Controls new realtime-frame enrollment without changing existing enrolled threads.
+    pub fn set_realtime_frames_local_enabled(&self, enabled: bool) {
+        self.realtime_frames_local_enabled
+            .store(enabled, Ordering::Relaxed);
     }
 
     /// Return the state DB handle used by local rollout writers.
@@ -426,6 +448,7 @@ impl LocalThreadStore {
                     rollout_id,
                     history_mode,
                     writer_lock,
+                    realtime_seals: Arc::new(Mutex::new(RealtimeSeals::default())),
                 });
                 Ok(())
             }
@@ -524,6 +547,17 @@ impl LocalThreadStore {
 }
 
 impl ThreadStore for LocalThreadStore {
+    fn seal_realtime_input(
+        &self,
+        thread_id: ThreadId,
+        frames: Vec<RealtimeItem>,
+        input: ResponseItemEnvelope,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(
+            async move { live_writer::seal_realtime_input(self, thread_id, frames, input).await },
+        )
+    }
+
     fn model_ids(&self) -> Option<Arc<dyn codex_state::SessionModelIdStore>> {
         self.state_db
             .clone()
@@ -806,8 +840,22 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { projects::delete_project(self, project_id).await })
     }
 
-    fn realtime_frames_enabled(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, bool> {
-        Box::pin(async { Ok(self.state_db.is_some()) })
+    fn realtime_frames_enabled(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async move {
+            if self.state_db.is_none() {
+                return Ok(false);
+            }
+            // Legacy rollout migration rewrites rolled-back history. Enroll only once
+            // the live thread is already paginated, so the realtime stream stays intact.
+            let (_, _, history_mode) = live_writer::live_writer_parts(self, thread_id).await?;
+            if history_mode != ThreadHistoryMode::Paginated {
+                return Ok(false);
+            }
+            if self.realtime_frames_local_enabled.load(Ordering::Relaxed) {
+                return Ok(true);
+            }
+            thread_history::has_canonical_realtime_session(self, thread_id).await
+        })
     }
 
     fn supports_paginated_history_lists(&self) -> bool {
@@ -831,6 +879,25 @@ impl ThreadStore for LocalThreadStore {
         params: crate::ListRealtimeParams,
     ) -> ThreadStoreFuture<'_, crate::RealtimePage> {
         Box::pin(LocalThreadStore::list_realtime(self, params))
+    }
+
+    fn load_realtime_session(
+        &self,
+        thread_id: ThreadId,
+        realtime_session_id: String,
+    ) -> ThreadStoreFuture<'_, Option<Vec<codex_protocol::realtime::RealtimeItem>>> {
+        Box::pin(thread_history::load_realtime_session(
+            self,
+            thread_id,
+            realtime_session_id,
+        ))
+    }
+
+    fn load_realtime_session_head(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<String>> {
+        Box::pin(thread_history::load_realtime_session_head(self, thread_id))
     }
 
     fn search_threads(
@@ -962,6 +1029,56 @@ mod tests {
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
     use crate::local::test_support::write_session_file_with_history_mode;
+
+    #[tokio::test]
+    async fn realtime_frames_require_enabled_paginated_local_history() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime)));
+
+        for (history_mode, expected) in [
+            (ThreadHistoryMode::Legacy, false),
+            (ThreadHistoryMode::Paginated, true),
+        ] {
+            let thread_id = ThreadId::default();
+            let mut params = create_thread_params(thread_id);
+            params.history_mode = history_mode;
+            let live_thread = LiveThread::create(store.clone(), params)
+                .await
+                .expect("create live thread");
+            assert!(!store.realtime_frames_enabled(thread_id).await.unwrap());
+            store.set_realtime_frames_local_enabled(/*enabled*/ true);
+            assert_eq!(
+                store.realtime_frames_enabled(thread_id).await.unwrap(),
+                expected
+            );
+            if expected {
+                live_thread
+                    .append_items(&[RolloutItem::RealtimeItem(RealtimeItem {
+                        id: "realtime-session-start:call-1".to_string(),
+                        realtime_session_id: "call-1".to_string(),
+                        observed_at_ms: Some(1),
+                        content:
+                            codex_protocol::realtime::RealtimeItemContent::RealtimeSessionStarted,
+                    })])
+                    .await
+                    .unwrap();
+                live_thread.persist(PersistContext::Standard).await.unwrap();
+                live_thread.flush().await.unwrap();
+            }
+            store.set_realtime_frames_local_enabled(/*enabled*/ false);
+            assert_eq!(
+                store.realtime_frames_enabled(thread_id).await.unwrap(),
+                expected
+            );
+        }
+    }
 
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {

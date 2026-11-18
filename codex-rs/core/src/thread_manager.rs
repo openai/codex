@@ -1034,6 +1034,18 @@ impl ThreadManager {
         Arc::clone(&self.state.thread_store)
     }
 
+    /// Updates local realtime enrollment after a runtime feature decision changes.
+    pub fn set_realtime_frames_local_enabled(&self, enabled: bool) {
+        if let Some(store) = self
+            .state
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            store.set_realtime_frames_local_enabled(enabled);
+        }
+    }
+
     /// Starts the local rollout migration path after a runtime feature enablement.
     ///
     /// Startup config handles the initial launch in [`crate::ThreadStoreBuilder::build`]. This covers

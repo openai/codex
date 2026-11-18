@@ -79,6 +79,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mcp_shared_repl_cwd",
     "memories",
     "mentions_v2",
+    "realtime_frames_local",
     "remote_control",
     "remote_plugin",
     "tool_suggest",
@@ -390,6 +391,9 @@ impl ConfigRequestProcessor {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         self.thread_manager.set_api_key_model_discovery_enabled(
             config.features.enabled(Feature::ApiKeyModelDiscovery),
+        );
+        self.thread_manager.set_realtime_frames_local_enabled(
+            config.features.enabled(Feature::RealtimeFramesLocal),
         );
         if should_start_background_rollout_migration && config.features.enabled(feature) {
             self.thread_manager.start_background_rollout_migration();

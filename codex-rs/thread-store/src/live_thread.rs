@@ -1,3 +1,4 @@
+use codex_rollout::ResponseItemEnvelope;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -5,6 +6,7 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::realtime::RealtimeItem;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutPersistenceTelemetry;
 use codex_rollout::measure_and_filter_rollout_items;
@@ -246,25 +248,7 @@ impl LiveThread {
         if items.is_empty() {
             return Ok(());
         }
-        let update = self
-            .metadata_sync
-            .lock()
-            .await
-            .observe_appended_items(items.as_slice());
-        if let Some(update) = update {
-            self.thread_store
-                .record_thread_metadata(UpdateThreadMetadataParams {
-                    thread_id: self.thread_id,
-                    patch: update.patch.clone(),
-                    include_archived: true,
-                })
-                .await?;
-            self.metadata_sync
-                .lock()
-                .await
-                .mark_pending_update_applied(&update);
-        }
-        Ok(())
+        self.observe_appended_metadata(&items).await
     }
 
     /// Returns the filtered items if sampling already needed to collect them.
@@ -307,6 +291,54 @@ impl LiveThread {
             .await?;
         let update = self.metadata_sync.lock().await.take_pending_update();
         self.apply_pending_metadata_update(update, context).await
+    }
+
+    pub async fn seal_realtime_items(&self, items: Vec<RealtimeItem>) -> ThreadStoreResult<()> {
+        if self.thread_store.uses_separate_realtime_frame_store() {
+            return self
+                .thread_store
+                .seal_realtime_items(self.thread_id, items)
+                .await;
+        }
+        let records: Vec<_> = items.into_iter().map(RolloutItem::RealtimeItem).collect();
+        self.append_items(&records).await?;
+        self.flush().await
+    }
+
+    pub async fn seal_realtime_input(
+        &self,
+        frames: Vec<RealtimeItem>,
+        input: ResponseItemEnvelope,
+    ) -> ThreadStoreResult<()> {
+        let record = RolloutItem::ResponseItem(input.clone());
+        self.thread_store
+            .seal_realtime_input(self.thread_id, frames, input)
+            .await?;
+        // The store owns the idempotent acceptance barrier. Apply append-derived
+        // metadata afterward so retrying a failed metadata update cannot append again.
+        self.observe_appended_metadata(&[record]).await
+    }
+
+    async fn observe_appended_metadata(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        let update = self
+            .metadata_sync
+            .lock()
+            .await
+            .observe_appended_items(items);
+        if let Some(update) = update {
+            self.thread_store
+                .record_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id: self.thread_id,
+                    patch: update.patch.clone(),
+                    include_archived: true,
+                })
+                .await?;
+            self.metadata_sync
+                .lock()
+                .await
+                .mark_pending_update_applied(&update);
+        }
+        Ok(())
     }
 
     pub async fn flush(&self) -> ThreadStoreResult<()> {

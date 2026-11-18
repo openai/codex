@@ -18,7 +18,7 @@ pub struct RealtimeItem {
 }
 
 /// A frame holds one or more payloads, at most one per channel. They share one ID,
-/// observation time, and seal. V1 requires its only channel, `voice_transcript`.
+/// observation time, and seal. Currently, `voice_transcript` is required.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RealtimeFrameChannels {
     pub voice_transcript: RealtimeVoiceTranscript,
@@ -51,6 +51,10 @@ pub enum RealtimeItemContent {
     },
     RealtimeSessionClosed {
         outcome: RealtimeSessionOutcome,
+        /// Hosted frame-table sequence of the session's last frame (zero for a silent call).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(type = "number | null", optional)]
+        final_frame_sequence: Option<u64>,
     },
     /// Durable acceptance of the exact bounded input used by an agent turn.
     /// The enclosing item ID is the acceptance identity; source IDs never use

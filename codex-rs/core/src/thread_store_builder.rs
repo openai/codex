@@ -78,6 +78,9 @@ impl<'config> ThreadStoreBuilder<'config> {
                             })
                         }),
                 );
+                store.set_realtime_frames_local_enabled(
+                    config.features.enabled(Feature::RealtimeFramesLocal),
+                );
                 if has_state_db && background_migration_enabled {
                     let startup_store = Arc::clone(&store);
                     let codex_home = config.codex_home.to_path_buf();

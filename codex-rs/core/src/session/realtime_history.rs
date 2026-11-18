@@ -23,7 +23,24 @@ impl Session {
             .realtime_frames_enabled(self.thread_id())
             .await
             .map_err(std::io::Error::other)?;
-        history.lock().await.frame_enrollment = Some(enabled);
+        let floor = if enabled
+            && matches!(
+                self.history_initialization,
+                codex_history::HistoryInitialization::ColdResume
+            ) {
+            self.services
+                .thread_store
+                .realtime_frame_clock_floor(self.thread_id())
+                .await
+                .map_err(std::io::Error::other)?
+        } else {
+            None
+        };
+        let mut history = history.lock().await;
+        if let Some(floor) = floor {
+            history.observation_clock.observe(floor);
+        }
+        history.frame_enrollment = Some(enabled);
         Ok(enabled)
     }
 
@@ -54,16 +71,15 @@ impl Session {
         }
         let live_thread = self.live_thread_for_persistence("append realtime history")?;
         let items = effects.items;
-        let records = items
-            .iter()
-            .cloned()
-            .map(RolloutItem::RealtimeItem)
-            .collect::<Vec<_>>();
-        live_thread.append_items(&records).await?;
-        // A completed notification acknowledges durable history, including on hosts
-        // whose append operation only admits work to an asynchronous writer.
         if effects.seal_frames {
-            live_thread.flush().await?;
+            live_thread.seal_realtime_items(items.clone()).await?;
+        } else {
+            let records = items
+                .iter()
+                .cloned()
+                .map(RolloutItem::RealtimeItem)
+                .collect::<Vec<_>>();
+            live_thread.append_items(&records).await?;
         }
         for item in items {
             if !matches!(

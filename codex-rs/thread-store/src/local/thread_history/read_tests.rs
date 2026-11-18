@@ -644,6 +644,7 @@ async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
                 realtime_session_id: "voice-1".to_string(),
                 observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionClosed {
+                    final_frame_sequence: None,
                     outcome: RealtimeSessionOutcome::Ended,
                 },
             },
@@ -920,6 +921,7 @@ async fn timeline_page_state_excludes_realtime_events_after_fork_cutoff() {
                 realtime_session_id: "voice".to_string(),
                 observed_at_ms: None,
                 content: RealtimeItemContent::RealtimeSessionClosed {
+                    final_frame_sequence: None,
                     outcome: RealtimeSessionOutcome::Ended,
                 },
             },

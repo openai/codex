@@ -1286,6 +1286,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "realtime_frames_local": {
+              "type": "boolean"
+            },
             "reasoning_effort_override": {
               "type": "boolean"
             },
@@ -8596,6 +8599,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "realtime_frames_local": {
           "type": "boolean"
         },
         "reasoning_effort_override": {

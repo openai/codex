@@ -116,6 +116,149 @@ pub(in crate::local) async fn list_realtime(
     .await
 }
 
+/// Resolve and project the complete durable prefix while the caller holds the writer lock.
+async fn recovery_snapshot(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<Option<(ThreadId, u64, u64)>> {
+    let Some(resolved) =
+        super::super::thread_rollout_resolver::resolve_current_including_archived(store, thread_id)
+            .await?
+    else {
+        // A fresh paginated thread has a live writer before its rollout or SQLite row exists.
+        return Ok(None);
+    };
+    validate_thread_for_paginated_reads(
+        store,
+        thread_id,
+        /*include_archived*/ true,
+        "load_realtime_session",
+    )
+    .await?;
+    let meta = codex_rollout::read_session_meta_line(&resolved.path)
+        .await
+        .map_err(thread_history_error)?
+        .meta;
+    let first = meta
+        .subagent_history_start_ordinal
+        .or_else(|| meta.history_base.map(|base| base.end_ordinal_exclusive));
+    if meta.forked_from_id.is_some() && first.is_none() {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "load_realtime_session",
+        });
+    }
+    super::super::thread_history_materialization::materialize_to_sqlite(
+        store,
+        resolved.rollout_id,
+        &resolved.path,
+    )
+    .await?;
+    let end = super::projection_state(store, resolved.rollout_id)
+        .await?
+        .map_or(0, |state| state.next_ordinal);
+    Ok(Some((resolved.rollout_id, first.unwrap_or(0), end)))
+}
+
+/// Recover a logical call from the same authoritative durable-prefix projection as list_realtime.
+pub(in crate::local) async fn load_realtime_session(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    session_id: String,
+) -> ThreadStoreResult<Option<Vec<RealtimeItem>>> {
+    let _writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let Some((rollout_id, first, end)) = recovery_snapshot(store, thread_id).await? else {
+        return Ok(None);
+    };
+    let rows = sqlx::query_scalar::<_, String>(
+        r#"
+SELECT item_json
+FROM thread_realtime_items
+WHERE thread_id = ? AND rollout_ordinal >= ? AND rollout_ordinal < ?
+  AND json_extract(item_json, '$.realtime_session_id') = ?
+ORDER BY rollout_ordinal
+"#,
+    )
+    .bind(rollout_id.to_string())
+    .bind(sqlite_integer(first, "first realtime position")?)
+    .bind(sqlite_integer(end, "realtime snapshot end")?)
+    .bind(session_id)
+    .fetch_all(store.thread_history_db().await?)
+    .await
+    .map_err(thread_history_error)?;
+    let items: Vec<RealtimeItem> = rows
+        .into_iter()
+        .map(|row| serde_json::from_str(&row).map_err(thread_history_error))
+        .collect::<ThreadStoreResult<_>>()?;
+    Ok(items
+        .iter()
+        .any(|item| {
+            matches!(
+                item.content,
+                codex_protocol::realtime::RealtimeItemContent::RealtimeSessionStarted
+            )
+        })
+        .then_some(items))
+}
+
+pub(in crate::local) async fn load_realtime_session_head(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<Option<String>> {
+    let _writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let Some((rollout_id, first, end)) = recovery_snapshot(store, thread_id).await? else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, String>(
+        r#"
+SELECT json_extract(item_json, '$.realtime_session_id')
+FROM thread_realtime_items
+WHERE thread_id = ? AND rollout_ordinal >= ? AND rollout_ordinal < ?
+  AND item_type = 'realtime_session_started'
+ORDER BY rollout_ordinal DESC
+LIMIT 1
+"#,
+    )
+    .bind(rollout_id.to_string())
+    .bind(sqlite_integer(first, "first realtime position")?)
+    .bind(sqlite_integer(end, "realtime snapshot end")?)
+    .fetch_optional(store.thread_history_db().await?)
+    .await
+    .map_err(thread_history_error)
+}
+
+/// A canonical start marker makes enrollment sticky when the rollout flag is disabled.
+pub(in crate::local) async fn has_canonical_realtime_session(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<bool> {
+    let _writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let snapshot = match recovery_snapshot(store, thread_id).await {
+        Err(ThreadStoreError::Unsupported {
+            operation: "load_realtime_session",
+        }) => return Ok(false),
+        result => result?,
+    };
+    let Some((rollout_id, first, end)) = snapshot else {
+        return Ok(false);
+    };
+    sqlx::query_scalar::<_, bool>(
+        r#"
+SELECT EXISTS (
+    SELECT 1 FROM thread_realtime_items
+    WHERE thread_id = ? AND rollout_ordinal >= ? AND rollout_ordinal < ?
+      AND item_type = 'realtime_session_started'
+      AND json_extract(item_json, '$.observed_at_ms') IS NOT NULL
+)
+"#,
+    )
+    .bind(rollout_id.to_string())
+    .bind(sqlite_integer(first, "first realtime position")?)
+    .bind(sqlite_integer(end, "realtime snapshot end")?)
+    .fetch_one(store.thread_history_db().await?)
+    .await
+    .map_err(thread_history_error)
+}
+
 async fn read_page(
     pool: &sqlx::SqlitePool,
     params: ListRealtimeParams,

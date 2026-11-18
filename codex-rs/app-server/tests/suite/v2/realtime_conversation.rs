@@ -6,6 +6,8 @@ use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -706,6 +708,7 @@ async fn realtime_conversation_streams_timeline_items() -> Result<()> {
         .await?;
     mcp.initialize().await?;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
+    enable_local_realtime_frames(&mut mcp).await?;
 
     let thread_request = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -1250,6 +1253,7 @@ async fn realtime_timeline_splits_accepted_steering_and_persists_promoted_artifa
         ])]),
     )
     .await?;
+    enable_local_realtime_frames(&mut harness.mcp).await?;
     let thread_request = harness
         .mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -4396,6 +4400,17 @@ async fn login_with_api_key(mcp: &mut TestAppServer, api_key: &str) -> Result<()
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(login, LoginAccountResponse::ApiKey {});
 
+    Ok(())
+}
+
+async fn enable_local_realtime_frames(mcp: &mut TestAppServer) -> Result<()> {
+    let request = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("realtime_frames_local".to_string(), true)]),
+        })
+        .await?;
+    let _: ExperimentalFeatureEnablementSetResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request)).await??;
     Ok(())
 }
 

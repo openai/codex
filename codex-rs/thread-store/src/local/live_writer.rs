@@ -199,6 +199,79 @@ pub(super) async fn append_items(
     .await
 }
 
+pub(super) async fn seal_realtime_input(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    frames: Vec<codex_protocol::realtime::RealtimeItem>,
+    input: codex_rollout::ResponseItemEnvelope,
+) -> ThreadStoreResult<()> {
+    let id = input
+        .realtime_handoff_item()
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: "realtime input is missing handoff metadata".to_owned(),
+        })?
+        .id;
+    let records = frames
+        .into_iter()
+        .map(RolloutItem::RealtimeItem)
+        .chain(std::iter::once(RolloutItem::ResponseItem(input)))
+        .collect();
+    seal_realtime_records(store, thread_id, id, records).await
+}
+
+/// An uncertain flush keeps ownership of the already queued model-facing seal.
+/// Retrying confirms that batch instead of appending it again.
+async fn seal_realtime_records(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    id: String,
+    items: Vec<RolloutItem>,
+) -> ThreadStoreResult<()> {
+    let mut cursor = store.live_writer_locks.lock(thread_id).await;
+    let (recorder, rollout_id, history_mode, seals) = {
+        let entries = store.live_recorders.lock().await;
+        let entry = entries
+            .get(&thread_id)
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
+        (
+            entry.recorder.clone(),
+            entry.rollout_id,
+            entry.history_mode,
+            entry.realtime_seals.clone(),
+        )
+    };
+    let mut seals = seals.lock_owned().await;
+    if let Some(pending) = seals.pending.clone() {
+        recorder.flush().await.map_err(thread_store_io_error)?;
+        seals.pending = None;
+        seals.committed.insert(pending);
+    }
+    if !seals.committed.contains(&id) {
+        let mut items = into_persisted_rollout_items(items, history_mode);
+        let next = codex_rollout::stamp_item_ordinals(*cursor, &mut items);
+        recorder
+            .record_canonical_items(&items)
+            .await
+            .map_err(thread_store_io_error)?;
+        *cursor = next;
+        seals.pending = Some(id.clone());
+        recorder.flush().await.map_err(thread_store_io_error)?;
+        seals.pending = None;
+        seals.committed.insert(id);
+    }
+    if history_mode == ThreadHistoryMode::Paginated
+        && let Err(err) = super::thread_history_materialization::materialize_to_sqlite(
+            store,
+            rollout_id,
+            recorder.rollout_path(),
+        )
+        .await
+    {
+        warn!("failed to project durable rollout for {thread_id}: {err}");
+    }
+    sync_materialized_rollout_path(store, thread_id, recorder.rollout_path()).await
+}
+
 pub(super) async fn persist_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,

@@ -122,7 +122,7 @@ pub enum ThreadRealtimeSessionOutcome {
 }
 
 /// A frame holds one or more payloads, at most one per channel. They share one ID,
-/// observation time, and seal. V1 requires its only channel, `voice_transcript`.
+/// observation time, and seal. Currently, `voice_transcript` is required.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeFrameChannels {
@@ -209,7 +209,7 @@ impl ThreadRealtimeItem {
                     }
                 },
             },
-            CoreRealtimeItemContent::RealtimeSessionClosed { outcome } => {
+            CoreRealtimeItemContent::RealtimeSessionClosed { outcome, .. } => {
                 ThreadRealtimeItemContent::RealtimeSessionClosed {
                     outcome: match outcome {
                         CoreRealtimeSessionOutcome::Ended => ThreadRealtimeSessionOutcome::Ended,

@@ -5,6 +5,6 @@ import type { ThreadRealtimeVoiceTranscript } from "./ThreadRealtimeVoiceTranscr
 
 /**
  * A frame holds one or more payloads, at most one per channel. They share one ID,
- * observation time, and seal. V1 requires its only channel, `voice_transcript`.
+ * observation time, and seal. Currently, `voice_transcript` is required.
  */
 export type ThreadRealtimeFrameChannels = { voice_transcript: ThreadRealtimeVoiceTranscript, };

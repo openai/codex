@@ -701,6 +701,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
                     realtime_session_id: "voice".to_string(),
                     observed_at_ms: None,
                     content: RealtimeItemContent::RealtimeSessionClosed {
+                        final_frame_sequence: None,
                         outcome: RealtimeSessionOutcome::Ended,
                     },
                 }),

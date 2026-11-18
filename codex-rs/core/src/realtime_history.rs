@@ -308,6 +308,7 @@ impl RealtimeHistoryState {
                             .frames_enabled()
                             .then(|| self.observation_clock.now_ms()),
                         content: RealtimeItemContent::RealtimeSessionClosed {
+                            final_frame_sequence: None,
                             outcome: if self.failed {
                                 RealtimeSessionOutcome::Failed
                             } else {

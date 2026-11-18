@@ -1,5 +1,7 @@
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::realtime::RealtimeItem;
+use codex_rollout::ResponseItemEnvelope;
 use codex_rollout::RolloutItem;
 use futures::future::BoxFuture;
 use std::any::Any;
@@ -286,6 +288,67 @@ pub trait ThreadStore: Any + Send + Sync {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory>;
 
+    /// Loads one logical call from authoritative persisted history. Separated-frame stores
+    /// must override this method to include their frame table; a lagging projection must fail
+    /// rather than report that the session is absent.
+    fn load_realtime_session(
+        &self,
+        thread_id: ThreadId,
+        realtime_session_id: String,
+    ) -> ThreadStoreFuture<'_, Option<Vec<codex_protocol::realtime::RealtimeItem>>> {
+        Box::pin(async move {
+            let history = self
+                .load_history(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await?;
+            let items: Vec<_> = history
+                .items
+                .iter()
+                .filter_map(|item| item.realtime_item().map(std::borrow::Cow::into_owned))
+                .filter(|item| item.realtime_session_id == realtime_session_id)
+                .collect();
+            Ok(items
+                .iter()
+                .any(|item| {
+                    matches!(
+                        item.content,
+                        codex_protocol::realtime::RealtimeItemContent::RealtimeSessionStarted
+                    )
+                })
+                .then_some(items))
+        })
+    }
+
+    /// Returns the latest logical session ID from authoritative start records, including a
+    /// closed session. Used only when a newly requested ID has no persisted session yet.
+    fn load_realtime_session_head(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<String>> {
+        Box::pin(async move {
+            let history = self
+                .load_history(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await?;
+            Ok(history
+                .items
+                .iter()
+                .rev()
+                .filter_map(RolloutItem::realtime_item)
+                .find_map(|item| {
+                    matches!(
+                        item.content,
+                        codex_protocol::realtime::RealtimeItemContent::RealtimeSessionStarted
+                    )
+                    .then(|| item.realtime_session_id.clone())
+                }))
+        })
+    }
+
     /// Captures a complete tail, optionally reading originals after a saved position.
     /// Local storage uses one reader for the cutoff and records; compressed rollouts
     /// are decoded once per call. It supports append-only paginated roots;
@@ -556,6 +619,50 @@ pub trait ThreadStore: Any + Send + Sync {
                 operation: "project/delete",
             })
         })
+    }
+
+    /// Hosted frame stores can acknowledge a seal independently of ordinary rollout writes.
+    fn uses_separate_realtime_frame_store(&self) -> bool {
+        false
+    }
+
+    /// Seal in input order. A durable receipt implies that every preceding source
+    /// frame is durable. Hosted stores may commit frames outside the rollout.
+    fn seal_realtime_items(
+        &self,
+        thread_id: ThreadId,
+        items: Vec<RealtimeItem>,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            let items = items.into_iter().map(RolloutItem::RealtimeItem).collect();
+            self.append_items(AppendThreadItemsParams { thread_id, items })
+                .await?;
+            self.flush_thread(thread_id).await
+        })
+    }
+
+    /// Commit an accepted model input after its realtime source frames are durable.
+    /// Implementations must safely accept retries of the same input after an uncertain
+    /// append or flush outcome without appending the model input more than once.
+    fn seal_realtime_input(
+        &self,
+        _thread_id: ThreadId,
+        _frames: Vec<RealtimeItem>,
+        _input: ResponseItemEnvelope,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "thread/realtime/sealInput",
+            })
+        })
+    }
+
+    /// Highest durable observation time outside the rollout, if the store has one.
+    fn realtime_frame_clock_floor(
+        &self,
+        _thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<i64>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Whether this live thread writes canonical realtime frames and handoff receipts.

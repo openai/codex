@@ -11,6 +11,7 @@ use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::test_support::auth_manager_from_auth;
+use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
@@ -497,6 +498,10 @@ async fn conversation_records_history_without_an_event_observer(
         .with_config({
             let url = realtime_server.uri().to_string();
             move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
                 config.experimental_realtime_ws_base_url = Some(url);
                 config.realtime.version = RealtimeWsVersion::V2;
             }
@@ -3947,6 +3952,10 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime(ephemeral: bool) ->
         .with_config({
             let realtime_base_url = realtime_server.uri().to_string();
             move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
                 config.ephemeral = ephemeral;
                 config.realtime.version = RealtimeWsVersion::V2;
                 config.experimental_realtime_ws_base_url = Some(realtime_base_url);
