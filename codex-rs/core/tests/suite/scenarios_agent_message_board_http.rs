@@ -264,8 +264,37 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
     if let Some(writer) = writer {
         writer.rollback().await?;
     }
+    let preview = codex_message_board::PostPreview {
+        metadata: serde_json::from_value(post.clone())?,
+        text_preview: "Worker's durable decision.".into(),
+        n_chars: "Worker's durable decision.".chars().count(),
+        truncated: false,
+    };
     if mode == BoardMode::Feature {
-        assert!(read.requests()[1].body_contains_text("Message Type: CHANNEL_POST"));
+        let notices = read.requests()[1]
+            .inputs_of_type("agent_message")
+            .into_iter()
+            .filter(|item| {
+                item["content"]
+                    .to_string()
+                    .contains("Message Type: CHANNEL_POST")
+            })
+            .map(|item| {
+                json!({
+                    "author": item["author"],
+                    "recipient": item["recipient"],
+                    "content": item["content"],
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            notices,
+            vec![json!({
+                "author": "/root/worker",
+                "recipient": "/root",
+                "content": [{"type":"input_text", "text":preview.notification_text()}],
+            })]
+        );
     }
     let result = board_result(
         read.requests().last().context("parent follow-up")?,
@@ -276,12 +305,7 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
             result
         )?,
         codex_message_board::Page {
-            results: vec![codex_message_board::PostPreview {
-                metadata: serde_json::from_value(post.clone())?,
-                text_preview: "Worker's durable decision.".into(),
-                n_chars: "Worker's durable decision.".chars().count(),
-                truncated: false,
-            }],
+            results: vec![preview],
             next_cursor: None,
         }
     );
