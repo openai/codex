@@ -55,6 +55,24 @@ pub async fn run_command_under_seatbelt(
     codex_linux_sandbox_exe: Option<PathBuf>,
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
+    let mut launch = start_command_under_seatbelt(
+        command,
+        codex_linux_sandbox_exe,
+        loader_overrides,
+        /*piped*/ false,
+    )
+    .await?;
+    launch.wait_and_exit().await
+}
+
+/// Starts a local Seatbelt command while retaining its private network proxy until exit.
+#[cfg(target_os = "macos")]
+pub async fn start_command_under_seatbelt(
+    command: SeatbeltCommand,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    loader_overrides: LoaderOverrides,
+    piped: bool,
+) -> anyhow::Result<StartedSandboxChild> {
     let SeatbeltCommand {
         sandbox_state,
         permissions_profile,
@@ -70,7 +88,7 @@ pub async fn run_command_under_seatbelt(
         &permissions_profile,
         include_managed_config,
     );
-    run_command_under_sandbox(
+    start_command_under_sandbox(
         DebugSandboxConfigOptions {
             sandbox_state,
             permissions_profile,
@@ -84,6 +102,7 @@ pub async fn run_command_under_seatbelt(
         SandboxType::Seatbelt,
         log_denials,
         &allow_unix_sockets,
+        piped,
     )
     .await
 }
@@ -208,6 +227,67 @@ impl ManagedRequirementsMode {
 }
 
 async fn run_command_under_sandbox(
+    config_options: DebugSandboxConfigOptions,
+    command: Vec<String>,
+    config_overrides: CliConfigOverrides,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    sandbox_type: SandboxType,
+    log_denials: bool,
+    allow_unix_sockets: &[AbsolutePathBuf],
+) -> anyhow::Result<()> {
+    let mut launch = start_command_under_sandbox(
+        config_options,
+        command,
+        config_overrides,
+        codex_linux_sandbox_exe,
+        sandbox_type,
+        log_denials,
+        allow_unix_sockets,
+        /*piped*/ false,
+    )
+    .await?;
+    launch.wait_and_exit().await
+}
+
+/// A child and the resources that must be released when that child exits.
+pub struct StartedSandboxChild {
+    child: Child,
+    _network_proxy: Option<codex_core::config::StartedNetworkProxy>,
+    #[cfg(target_os = "macos")]
+    denial_logger: Option<DenialLogger>,
+}
+
+impl StartedSandboxChild {
+    /// Borrow the child without separating it from the proxy that must outlive it.
+    pub(crate) fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    /// Preserve the ordinary CLI's exit status and optional denial report.
+    async fn wait_and_exit(&mut self) -> anyhow::Result<()> {
+        let status = self.child_mut().wait().await?;
+        #[cfg(target_os = "macos")]
+        if let Some(denial_logger) = self.denial_logger.take() {
+            let denials = denial_logger.finish().await;
+            eprintln!("\n=== Sandbox denials ===");
+            if denials.is_empty() {
+                eprintln!("None found.");
+            } else {
+                for seatbelt::SandboxDenial { name, capability } in denials {
+                    eprintln!("({name}) {capability}");
+                }
+            }
+        }
+        handle_exit_status(status);
+    }
+}
+
+/// Resolve and enforce the original CLI policy before starting a child with its private proxy.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the existing sandbox invocation inputs"
+)]
+async fn start_command_under_sandbox(
     mut config_options: DebugSandboxConfigOptions,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
@@ -219,7 +299,8 @@ async fn run_command_under_sandbox(
         allow(unused_variables)
     )]
     allow_unix_sockets: &[AbsolutePathBuf],
-) -> anyhow::Result<()> {
+    piped: bool,
+) -> anyhow::Result<StartedSandboxChild> {
     let sandbox_state = config_options
         .sandbox_state
         .sandbox_state_json
@@ -450,9 +531,10 @@ async fn run_command_under_sandbox(
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })?;
 
-    let mut child = spawn_debug_sandbox_child(
+    let child = spawn_debug_sandbox_child(
         wrapped.into_direct_command()?,
         permission_profile.network_sandbox_policy(),
+        piped,
     )
     .await?;
 
@@ -461,22 +543,12 @@ async fn run_command_under_sandbox(
         denial_logger.on_child_spawn(&child);
     }
 
-    let status = child.wait().await?;
-
-    #[cfg(target_os = "macos")]
-    if let Some(denial_logger) = denial_logger {
-        let denials = denial_logger.finish().await;
-        eprintln!("\n=== Sandbox denials ===");
-        if denials.is_empty() {
-            eprintln!("None found.");
-        } else {
-            for seatbelt::SandboxDenial { name, capability } in denials {
-                eprintln!("({name}) {capability}");
-            }
-        }
-    }
-
-    handle_exit_status(status);
+    Ok(StartedSandboxChild {
+        child,
+        _network_proxy: network_proxy,
+        #[cfg(target_os = "macos")]
+        denial_logger,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -546,17 +618,30 @@ async fn run_command_under_windows_session(
 async fn spawn_debug_sandbox_child(
     command: std::process::Command,
     network_sandbox_policy: NetworkSandboxPolicy,
+    piped: bool,
 ) -> std::io::Result<Child> {
     let mut cmd = TokioCommand::from(command);
     if !network_sandbox_policy.is_enabled() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
-    cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
+    cmd.stdin(if piped {
+        Stdio::piped()
+    } else {
+        Stdio::inherit()
+    })
+    .stdout(if piped {
+        Stdio::piped()
+    } else {
+        Stdio::inherit()
+    })
+    .stderr(if piped {
+        Stdio::piped()
+    } else {
+        Stdio::inherit()
+    })
+    .kill_on_drop(true)
+    .spawn()
 }
 
 async fn load_debug_sandbox_config(
