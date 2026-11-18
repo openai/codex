@@ -263,8 +263,9 @@ pub struct ConfigLayerStack {
     /// so `effective_config()` can replace complete entries without a fallible conversion.
     model_provider_requirements: Option<TomlValue>,
     /// Layers are listed from lowest precedence (base) to highest (top), so
-    /// later entries in the Vec override earlier ones.
-    layers: Vec<ConfigLayerEntry>,
+    /// later entries override earlier ones. Snapshots share immutable entries;
+    /// changing a layer replaces only that entry in the snapshot's own list.
+    layers: Vec<Arc<ConfigLayerEntry>>,
     /// Guardian's fallback layers apart from the retained user and session layers.
     guardian_config: Option<Arc<[GuardianFallbackLayer]>>,
     /// Runtime source validity for the independently published Guardian snapshot.
@@ -357,7 +358,7 @@ impl ConfigLayerStack {
             model_provider_requirements,
             guardian_config: None,
             guardian_binding: None,
-            layers,
+            layers: layers.into_iter().map(Arc::new).collect(),
             requirements,
             requirements_toml: Box::new(requirements_toml),
             ignore_user_and_project_exec_policy_rules: false,
@@ -567,6 +568,7 @@ impl ConfigLayerStack {
             .iter()
             .rev()
             .find(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
+            .map(Arc::as_ref)
     }
 
     pub fn get_user_config_file(&self) -> Option<&AbsolutePathBuf> {
@@ -651,8 +653,8 @@ impl ConfigLayerStack {
             .iter()
             .position(|layer| layer.name.precedence() > user_layer.name.precedence())
         {
-            Some(index) => layers.insert(index, user_layer),
-            None => layers.push(user_layer),
+            Some(index) => layers.insert(index, Arc::new(user_layer)),
+            None => layers.push(Arc::new(user_layer)),
         }
         Ok(Self {
             layers,
@@ -679,9 +681,12 @@ impl ConfigLayerStack {
         });
         self.layers.insert(
             index,
-            ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, config),
+            Arc::new(ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                config,
+            )),
         );
-        validate_enabled_config_layers(&self.layers)?;
+        validate_enabled_config_layers(self.all_layers_low_to_high())?;
         self.validate_project_mitm_profiles()?;
         Ok(self)
     }
@@ -720,7 +725,10 @@ impl ConfigLayerStack {
                 } else if table.remove(key).is_none() {
                     continue;
                 }
-                *layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, config);
+                *layer = Arc::new(ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    config,
+                ));
             }
         } else {
             return self.with_session_config(TomlValue::Table(
@@ -872,7 +880,7 @@ impl ConfigLayerStack {
     ///
     /// Requirement sources are tracked separately and are not included here.
     pub fn all_layers_low_to_high(&self) -> impl DoubleEndedIterator<Item = &ConfigLayerEntry> {
-        self.layers.iter()
+        self.layers.iter().map(Arc::as_ref)
     }
 
     /// Returns all config layers, including disabled layers, from highest
@@ -885,8 +893,10 @@ impl ConfigLayerStack {
 }
 
 /// Validates before merging so mixed forms and malformed filter entries cannot be normalized away.
-pub(crate) fn validate_enabled_config_layers(layers: &[ConfigLayerEntry]) -> std::io::Result<()> {
-    for layer in layers.iter().filter(|layer| !layer.is_disabled()) {
+pub(crate) fn validate_enabled_config_layers<'a>(
+    layers: impl IntoIterator<Item = &'a ConfigLayerEntry>,
+) -> std::io::Result<()> {
+    for layer in layers.into_iter().filter(|layer| !layer.is_disabled()) {
         validate_shell_environment_policy_filter_config(&layer.config).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
