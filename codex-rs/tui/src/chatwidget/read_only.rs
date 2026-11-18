@@ -1,6 +1,14 @@
 //! Frozen transcript views preserve drafts while their live attachment is unavailable.
 
 use super::*;
+use codex_app_server_protocol::ModelProviderError;
+
+/// The blocked transcript notice currently replacing the composer.
+#[derive(Clone, Copy)]
+pub(super) enum BlockedThreadView<'a> {
+    ProviderError(&'a ModelProviderError),
+    ReadOnly(ReadOnlyThread),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadOnlyThread {
@@ -25,6 +33,26 @@ impl ReadOnlyThread {
 }
 
 impl ChatWidget {
+    pub(super) fn blocked_thread_view(&self) -> Option<BlockedThreadView<'_>> {
+        self.provider_error
+            .as_ref()
+            .map(BlockedThreadView::ProviderError)
+            .or_else(|| self.read_only_thread.map(BlockedThreadView::ReadOnly))
+    }
+
+    pub(super) fn blocked_thread_command_center_key(&self) -> Option<crate::key_hint::KeyBinding> {
+        self.blocked_thread_view()?;
+        self.agents_navigation_key_available()
+            .then(|| crate::key_hint::plain(KeyCode::Left))
+    }
+
+    pub(crate) fn blocked_thread_command_center_key_pressed(&self, key: KeyEvent) -> bool {
+        key.kind == KeyEventKind::Press
+            && self
+                .blocked_thread_command_center_key()
+                .is_some_and(|binding| binding.is_press(key))
+    }
+
     pub(crate) fn show_external_writer_thread(&mut self) {
         self.show_read_only_thread(ReadOnlyThread::ExternalWriter);
     }

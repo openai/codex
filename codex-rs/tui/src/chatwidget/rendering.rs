@@ -1,6 +1,6 @@
 //! Shared composer and live-history composition for inline and owned transcript surfaces.
 
-use super::provider_error::ProviderErrorNotice;
+use super::read_only::BlockedThreadView;
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
@@ -10,8 +10,8 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::RectExt;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_lines;
 use crate::wrapping::word_wrap_lines;
-use ratatui::style::Styled as _;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use std::cell::Cell;
@@ -37,16 +37,14 @@ impl Renderable for NewBackendControl<'_> {
     }
 }
 
-struct ReadOnlyThreadNotice {
-    reason: ReadOnlyThread,
-    agents_navigation_key_available: bool,
-    transcript_hint: Option<crate::key_hint::ShortcutHint>,
+struct BlockedThreadNotice<'a> {
+    widget: &'a ChatWidget,
+    view: BlockedThreadView<'a>,
 }
 
-impl Renderable for ReadOnlyThreadNotice {
+impl Renderable for BlockedThreadNotice<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let content_width = area.width.saturating_sub(/*rhs*/ 4);
-        let card_lines = self.card_lines(content_width);
+        let card_lines = self.card_lines(area.width.saturating_sub(/*rhs*/ 4));
         let card_height = (card_lines.len() as u16).saturating_add(/*rhs*/ 2);
         let card = Rect::new(area.x, area.y, area.width, card_height.min(area.height));
         Widget::render(
@@ -81,16 +79,56 @@ impl Renderable for ReadOnlyThreadNotice {
     }
 }
 
-impl ReadOnlyThreadNotice {
+impl BlockedThreadNotice<'_> {
     fn card_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let (prefix, title, indent) = match self.reason {
+        match self.view {
+            BlockedThreadView::ProviderError(error) => {
+                let title = if self.can_continue()
+                    && matches!(
+                        error,
+                        codex_app_server_protocol::ModelProviderError::ModelProviderMismatch { .. }
+                    ) {
+                    "Continue in a new chat"
+                } else {
+                    error.title()
+                };
+                let mut lines = word_wrap_lines(
+                    &[Line::from(vec!["🔒  ".into(), title.bold()])],
+                    usize::from(width),
+                );
+                let mut description =
+                    vec![Line::from(self.widget.provider_error_message(error).dim())];
+                if let Some(remote) = self
+                    .widget
+                    .remote_connection
+                    .as_ref()
+                    .filter(|remote| !remote.is_local_daemon)
+                {
+                    description.push(Line::from(
+                        format!("Configuration on {}", remote.address).dim(),
+                    ));
+                }
+                lines.extend(adaptive_wrap_lines(
+                    &description,
+                    RtOptions::new(usize::from(width))
+                        .initial_indent("    ".into())
+                        .subsequent_indent("    ".into()),
+                ));
+                lines
+            }
+            BlockedThreadView::ReadOnly(reason) => Self::read_only_card_lines(reason, width),
+        }
+    }
+
+    fn read_only_card_lines(reason: ReadOnlyThread, width: u16) -> Vec<Line<'static>> {
+        let (prefix, title, indent) = match reason {
             ReadOnlyThread::ExternalWriter => {
                 ("🔒  ", "This conversation is open in another app", "    ")
             }
             ReadOnlyThread::Archived => ("", "This thread was archived", ""),
         };
         let title: Line<'static> = vec![prefix.into(), title.bold()].into();
-        let (key, action) = self.reason.action();
+        let (key, action) = reason.action();
         let retry: Line<'static> = vec![
             Span::styled(key, crate::style::accent_style()),
             format!(" to {action}").into(),
@@ -105,7 +143,7 @@ impl ReadOnlyThreadNotice {
             lines.push(retry);
         }
         lines.extend(word_wrap_lines(
-            &[Line::from(self.reason.message().dim())],
+            &[Line::from(reason.message().dim())],
             RtOptions::new(usize::from(width))
                 .initial_indent(indent.into())
                 .subsequent_indent(indent.into()),
@@ -113,37 +151,70 @@ impl ReadOnlyThreadNotice {
         lines
     }
 
+    fn can_continue(&self) -> bool {
+        self.widget.thread_id.is_some() && self.widget.current_rollout_path.is_some()
+    }
+
     fn footer_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let (key, action) = self.reason.action();
-        let mut items = vec![(key.to_string(), action.to_string())];
-        if self.reason == ReadOnlyThread::ExternalWriter {
-            items.push(("f".to_string(), "fork".to_string()));
+        let mut items = Vec::new();
+        match self.view {
+            BlockedThreadView::ProviderError(_) => {
+                if self.can_continue() {
+                    items.push(("c".to_string(), "continue in new chat".to_string()));
+                }
+                items.push(("n".to_string(), "start fresh".to_string()));
+            }
+            BlockedThreadView::ReadOnly(reason) => {
+                let (key, action) = reason.action();
+                items.push((key.to_string(), action.to_string()));
+                if reason == ReadOnlyThread::ExternalWriter {
+                    items.push(("f".to_string(), "fork".to_string()));
+                }
+            }
         }
         let escape = crate::key_hint::plain(KeyCode::Esc).display_label();
-        let quit_keys = [
-            crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
-            crate::key_hint::plain(KeyCode::Char('q')).display_label(),
-        ];
-        let key = if self.agents_navigation_key_available {
-            let left = crate::key_hint::plain(KeyCode::Left).display_label();
-            format!("{left}/{escape}")
-        } else {
-            escape
+        let left = self
+            .widget
+            .blocked_thread_command_center_key()
+            .map(|key| key.display_label());
+        let command_center_key = match self.view {
+            BlockedThreadView::ReadOnly(_) => {
+                Some(left.map_or_else(|| escape.clone(), |left| format!("{left}/{escape}")))
+            }
+            BlockedThreadView::ProviderError(_) => left,
         };
-        items.push((key, "command center".to_string()));
-        items.push((quit_keys.join("/"), "exit".to_string()));
-        if let Some(hint) = self.transcript_hint {
-            items.push((hint.display_label(), "transcript".to_string()));
+        if let Some(key) = command_center_key {
+            items.push((key, "command center".to_string()));
         }
-        let mut spans = vec![" ".set_style(crate::style::footer_hint_label_style())];
-        for (idx, (key, label)) in items.into_iter().enumerate() {
-            if idx > 0 {
-                spans.push("   ".set_style(crate::style::footer_hint_label_style()));
+        match self.view {
+            BlockedThreadView::ProviderError(_) => items.push((escape, "other chats".to_string())),
+            BlockedThreadView::ReadOnly(_) => {
+                let quit_keys = [
+                    crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
+                    crate::key_hint::plain(KeyCode::Char('q')).display_label(),
+                ];
+                items.push((quit_keys.join("/"), "exit".to_string()));
+                if let Some(hint) = self.widget.bottom_pane.transcript_shortcut_hint() {
+                    items.push((hint.display_label(), "transcript".to_string()));
+                }
+            }
+        }
+        let (leading, separator) = match self.view {
+            BlockedThreadView::ProviderError(_) => ("", " · "),
+            BlockedThreadView::ReadOnly(_) => (" ", "   "),
+        };
+        let mut spans = vec![leading.into()];
+        for (index, (key, label)) in items.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(separator.into());
             }
             spans.extend(crate::key_hint::key_label_spans(&key));
-            spans.push(format!(" {label}").set_style(crate::style::footer_hint_label_style()));
+            spans.push(format!(" {label}").into());
         }
-        word_wrap_lines(&[Line::from(spans)], usize::from(width))
+        word_wrap_lines(
+            &[Line::from(spans).style(crate::style::footer_hint_label_style())],
+            usize::from(width),
+        )
     }
 }
 
@@ -272,36 +343,10 @@ impl ChatWidget {
                     /*top*/ 1, /*left*/ 2, /*bottom*/ 1, /*right*/ 2,
                 )),
             ))
-        } else if let Some(error) = &self.provider_error
+        } else if let Some(view) = self.blocked_thread_view()
             && !self.bottom_pane.has_active_view()
         {
-            let can_continue = self.thread_id.is_some() && self.current_rollout_path.is_some();
-            RenderableItem::Owned(Box::new(ProviderErrorNotice {
-                title: if can_continue
-                    && matches!(
-                        error,
-                        codex_app_server_protocol::ModelProviderError::ModelProviderMismatch { .. }
-                    ) {
-                    "Continue in a new chat"
-                } else {
-                    error.title()
-                },
-                message: self.provider_error_message(error),
-                can_continue,
-                configuration_location: self
-                    .remote_connection
-                    .as_ref()
-                    .filter(|remote| !remote.is_local_daemon)
-                    .map(|remote| format!("Configuration on {}", remote.address)),
-            }))
-        } else if let Some(reason) = self.read_only_thread
-            && !self.bottom_pane.has_active_view()
-        {
-            RenderableItem::Owned(Box::new(ReadOnlyThreadNotice {
-                reason,
-                agents_navigation_key_available: self.agents_navigation_key_available(),
-                transcript_hint: self.bottom_pane.transcript_shortcut_hint(),
-            }))
+            RenderableItem::Owned(Box::new(BlockedThreadNotice { widget: self, view }))
         } else {
             let right_reserve = if self
                 .bottom_pane
