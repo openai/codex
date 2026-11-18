@@ -291,7 +291,7 @@ impl AppServerSession {
             })
             .await;
         drop(rollout_maintenance_guard);
-        let mut response: ThreadResumeResponse = match resume_response {
+        let response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
             Err(TypedRequestError::Server { source, .. })
                 if params.exclude_turns && is_history_pagination_unsupported(&source) =>
@@ -313,6 +313,24 @@ impl AppServerSession {
                 ));
             }
         };
+        self.finish_thread_resume(
+            local_settings,
+            &config,
+            thread_id,
+            response,
+            HistoryHydrationScope::Initial,
+        )
+        .await
+    }
+
+    pub(crate) async fn finish_thread_resume(
+        &mut self,
+        local_settings: &crate::local_settings::LocalSettings,
+        config: &Config,
+        thread_id: ThreadId,
+        mut response: ThreadResumeResponse,
+        scope: HistoryHydrationScope<'_>,
+    ) -> Result<AppServerStartedThread> {
         if let Some(subscribed) = &mut self.attachment_subscribed {
             *subscribed = true;
         }
@@ -320,9 +338,9 @@ impl AppServerSession {
             &mut response.thread,
             response.turns_backwards_cursor.clone(),
             response.items_backwards_cursor.clone(),
-            Some(&config),
+            Some(config),
             Some(local_settings),
-            HistoryHydrationScope::Initial,
+            scope,
         )
         .await?;
         let fork_parent_title = self
