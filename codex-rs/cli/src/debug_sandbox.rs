@@ -121,6 +121,23 @@ pub async fn run_command_under_linux_sandbox(
     codex_linux_sandbox_exe: Option<PathBuf>,
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
+    let mut launch = start_command_under_linux_sandbox(
+        command,
+        codex_linux_sandbox_exe,
+        loader_overrides,
+        /*piped*/ false,
+    )
+    .await?;
+    launch.wait_and_exit().await
+}
+
+/// Start a Linux sandbox child while retaining the resources required for its lifetime.
+pub async fn start_command_under_linux_sandbox(
+    command: LinuxSandboxCommand,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    loader_overrides: LoaderOverrides,
+    piped: bool,
+) -> anyhow::Result<StartedSandboxChild> {
     let LinuxSandboxCommand {
         transparent_tcp,
         sandbox_state,
@@ -135,7 +152,7 @@ pub async fn run_command_under_linux_sandbox(
         &permissions_profile,
         include_managed_config,
     );
-    run_command_under_sandbox(
+    start_command_under_sandbox(
         DebugSandboxConfigOptions {
             sandbox_state,
             permissions_profile,
@@ -149,6 +166,7 @@ pub async fn run_command_under_linux_sandbox(
         SandboxType::Linux { transparent_tcp },
         /*log_denials*/ false,
         &[],
+        piped,
     )
     .await
 }

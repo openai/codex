@@ -2577,6 +2577,7 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "assert_matches",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "clap_complete",

@@ -27,6 +27,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -104,6 +105,7 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
     "signal",
+    "sync",
     "time",
 ] }
 toml = { workspace = true }

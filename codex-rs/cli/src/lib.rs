@@ -3,6 +3,8 @@ pub(crate) mod debug_sandbox;
 mod exit_status;
 mod git_credential;
 pub(crate) mod login;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod shared_sandbox_launcher;
 
 use clap::Args;
 use clap::Parser;
