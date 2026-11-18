@@ -37,10 +37,10 @@ parent-29                                                      │
                                                                │child-29
                                                                │
                                                                │
-› parent draft-                                                │
-                                                               │› child draft!
-  GPT-6.2-Sol default                                          │
-                                                               │  GPT-6.2-Sol default · Agent
+› parent draft-                                                │› child draft!
+                                                               │
+  GPT-6.2-Sol default                                          │  GPT-6.2-Sol default · Agent
+                                                               │
 
 99 columns, reopened
  Side chat           ×                                                                          +

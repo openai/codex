@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/tests/background_task_defaults_tests.rs
-expression: "snapshots.join(\"\\n\\n\")"
+expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
 ---
 owned=false
 startup:
@@ -11,10 +11,10 @@ startup:
 
 attached:
 
-
 › draft during startup
 
   GPT-6.2-Sol default · /tmp/project
+
 
 owned=true
 startup:
@@ -24,7 +24,6 @@ startup:
 › draft during startup
 
 attached:
-
 
 › draft during startup
 

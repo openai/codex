@@ -3,12 +3,12 @@ source: tui/src/app/owned_transcript_input_tests.rs
 expression: "format!(\"before\\n{before}\\n\\nafter\\n{}\", screen(&tui))"
 ---
 before
-row 13
 row 14
 row 15
 row 16
 row 17
 row 18
+row 19
                      New activity · ↓ Back to bottom · esc
 
 › draft preserved
@@ -17,7 +17,6 @@ row 18
   New activity · esc latest
 
 after
-row 25
 row 26
 row 27
 row 28

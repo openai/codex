@@ -128,6 +128,26 @@ fn frame(buffer: &Buffer) -> String {
 }
 
 #[test]
+fn status_line_keeps_the_caret_anchored_while_typing() {
+    let mut composer = composer();
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        max_height: Some(5),
+        ..Default::default()
+    };
+    let mut rows = Vec::new();
+    for key in [None, Some(KeyCode::Char('x')), Some(KeyCode::Backspace)] {
+        if let Some(key) = key {
+            composer.handle_key_event(KeyEvent::from(key));
+        }
+        let height = composer.desired_height_with_options(/*width*/ 48, options);
+        let area = Rect::new(0, 5 - height, 48, height);
+        rows.push(composer.cursor_pos_with_options(area, options).unwrap().1);
+    }
+    assert_eq!(rows, [1, 1, 1]);
+}
+
+#[test]
 fn extension_uses_the_full_width_after_resize() {
     let mut composer = composer();
     composer.footer.show_warnings_key = None;
@@ -1134,6 +1154,11 @@ fn slash_suggestions_take_space_before_status_expands() {
     let (buf, rows) = render_status(&composer, area, options);
     assert_eq!(rows, ["one…"]);
     insta::assert_snapshot!(frame(&buf));
+
+    composer.set_status_line(Some("OK".into()));
+    let (buf, rows) = render_status(&composer, Rect::new(0, 0, 80, 5), options);
+    assert_eq!(rows, ["OK"]);
+    assert!(frame(&buf).contains("/model"));
 }
 
 #[test]
