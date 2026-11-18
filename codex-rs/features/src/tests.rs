@@ -255,6 +255,8 @@ fn guardian_v3_feature_config_resolves_base_and_profile_toggles() {
 fn guardian_v3_prompt_settings_do_not_implicitly_enable_the_feature() {
     let features: FeaturesToml = toml::from_str(
         r#"
+[guardianv3]
+message_board_in_memory = true
 [guardianv3.housekeeper]
 routing_instructions = "Group related deployment evidence."
 batch_timeout_ms = 15000
@@ -269,6 +271,7 @@ retrieval_instructions = "Search before assessing deployments."
         features.guardianv3,
         Some(FeatureToml::Config(crate::GuardianV3ConfigToml {
             enabled: None,
+            message_board_in_memory: Some(true),
             housekeeper: Some(crate::GuardianV3HousekeeperConfigToml {
                 routing_instructions: Some("Group related deployment evidence.".to_owned()),
                 batch_timeout_ms: std::num::NonZeroU32::new(15_000),

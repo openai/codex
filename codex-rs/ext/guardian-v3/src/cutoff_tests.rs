@@ -168,19 +168,32 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
     Ok(())
 }
 
+#[test_case::test_case(false; "on_disk")]
+#[test_case::test_case(true; "in_memory")]
 #[tokio::test]
-async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyhow::Result<()> {
+async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
+    in_memory: bool,
+) -> anyhow::Result<()> {
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::ThreadReadyInput;
     use codex_extension_api::ThreadStopInput;
     use codex_message_board::ReadPostRequest;
+    use codex_protocol::error::CodexErrorDetails;
     use codex_protocol::protocol::SessionSource;
     use std::num::NonZeroU32;
 
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
+    let home = Arc::new(tempfile::tempdir()?);
+    let settings = if in_memory {
+        "[features.guardianv3]\nenabled = true\nmessage_board_in_memory = true"
+    } else {
+        "[features.guardianv3]\nenabled = true"
+    };
+    std::fs::write(home.path().join("config.toml"), settings)?;
     let test = test_codex()
+        .with_home(home)
         .with_history_mode(ThreadHistoryMode::Paginated)
         .with_model_info_override("gpt-5.6-luna", |_| {})
         .with_config(|config| {
@@ -191,7 +204,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
     let root = test.session_configured.thread_id;
     let host = Arc::new(PausedClockHost {
         inner: board_host(root),
-        pause_next: AtomicBool::new(true),
+        pause_next: AtomicBool::new(false),
         started: Notify::new(),
         release: Notify::new(),
     });
@@ -209,31 +222,87 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
     let session = ExtensionData::new(root.to_string());
     let thread = test.codex.thread_extension_data();
     let lifecycle = &registry.thread_lifecycle_contributors()[0];
+    let ready = |history_initialization| ThreadReadyInput {
+        config: &test.config,
+        session_source: &SessionSource::Exec,
+        history_initialization,
+        history_mode: ThreadHistoryMode::Paginated,
+        session_store: &session,
+        thread_store: thread,
+    };
+    if in_memory {
+        lifecycle
+            .on_thread_ready(ready(HistoryInitialization::ColdResume))
+            .await;
+        assert!(thread.get::<RootEvidence>().is_none());
+        assert!(
+            thread
+                .get::<Arc<dyn codex_core::guardian_review::AttachedReviewer>>()
+                .is_some()
+        );
+        lifecycle
+            .on_thread_stop(ThreadStopInput {
+                thread_store: thread,
+                session_store: &session,
+            })
+            .await;
+    }
     lifecycle
-        .on_thread_ready(ThreadReadyInput {
-            config: &test.config,
-            session_source: &SessionSource::Exec,
-            history_initialization: codex_history::HistoryInitialization::New,
-            history_mode: ThreadHistoryMode::Paginated,
-            session_store: &session,
-            thread_store: thread,
-        })
+        .on_thread_ready(ready(HistoryInitialization::New))
         .await;
     let evidence = thread.get::<RootEvidence>().context("root intake")?;
-    let board = crate::local_board(test.config.sqlite_config().clone(), root.into())
-        .read_write()
-        .open(board_host(root))
-        .await?;
-    for channel in ["release", "releases-copy"] {
-        board
-            .upsert_channel(
-                root,
-                UpsertChannelRequest {
-                    channel_name: channel.into(),
-                    description: "Release policy".to_owned().try_into()?,
-                },
-            )
+    let worker = thread
+        .get::<crate::host::RootWorker>()
+        .context("root worker")?;
+    let board = &worker.reader;
+    let denied = board
+        .upsert_channel(
+            root,
+            UpsertChannelRequest {
+                channel_name: "reviews".into(),
+                description: "Read-only".to_owned().try_into()?,
+            },
+        )
+        .await
+        .err()
+        .context("reviewer unexpectedly updated a channel")?;
+    assert!(
+        matches!(denied.details(), CodexErrorDetails::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+    let append_user_message = async |order, text: &str| -> anyhow::Result<serde_json::Value> {
+        let item = RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: user_message_item(text),
+            metadata: Some(CodexHarnessMetadata {
+                user_input_order: Some(order),
+                ..Default::default()
+            }),
+        });
+        let original = serde_json::to_value(&item)?;
+        test.thread_store
+            .append_items(AppendThreadItemsParams {
+                thread_id: root,
+                items: vec![item],
+            })
             .await?;
+        Ok(original)
+    };
+    // Create the channels through the housekeeper and subscribe through the reviewer's handle.
+    let _seed_route = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("seed", r#"{"routes":[["release","releases-copy"]],"descriptions":[{"channel":"release","description":"Release policy"},{"channel":"releases-copy","description":"Release copy"}]}"#),
+            ev_completed("seed"),
+        ]),
+    ).await;
+    append_user_message(1, "Set up the release channels.").await?;
+    evidence.request_catch_up().await?.await?;
+    let database = test
+        .config
+        .sqlite_config()
+        .home()
+        .join("message_board_guardian_1.sqlite");
+    assert_eq!(tokio::fs::try_exists(database).await?, !in_memory);
+    for channel in ["release", "releases-copy"] {
         board
             .set_subscription(
                 root,
@@ -257,24 +326,9 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
         ]),
     )
     .await;
-    let append_user_message = async |order, text: &str| -> anyhow::Result<serde_json::Value> {
-        let item = RolloutItem::ResponseItem(ResponseItemEnvelope {
-            item: user_message_item(text),
-            metadata: Some(CodexHarnessMetadata {
-                user_input_order: Some(order),
-                ..Default::default()
-            }),
-        });
-        let original = serde_json::to_value(&item)?;
-        test.thread_store
-            .append_items(AppendThreadItemsParams {
-                thread_id: root,
-                items: vec![item],
-            })
-            .await?;
-        Ok(original)
-    };
-    let first_original = append_user_message(1, "Stop the release.").await?;
+    host.pause_next
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let first_original = append_user_message(2, "Stop the release.").await?;
     let wait = Duration::from_secs(15);
     let mut first = evidence.request_catch_up().await?;
     tokio::time::timeout(wait, host.started.notified()).await?;
@@ -289,7 +343,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
         ]),
     )
     .await;
-    let second_original = append_user_message(2, "New revocation.").await?;
+    let second_original = append_user_message(3, "New revocation.").await?;
     let second = tokio::time::timeout(wait, evidence.request_catch_up()).await??;
     host.release.notify_one();
     let first_position = first.await?;

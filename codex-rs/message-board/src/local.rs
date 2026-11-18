@@ -97,6 +97,39 @@ impl LocalAgentMessageBoard {
         })
     }
 
+    /// Opens a fresh read-write SQLite board with no backing file. Clones share its contents
+    /// until the last handle closes. A later open always creates an independent board.
+    pub async fn open_in_memory(
+        options: &LocalBoardOptions,
+        identity: SessionId,
+        host: Arc<dyn MessageBoardHost>,
+    ) -> Result<Self> {
+        options.validate()?;
+        let pool = SqliteConfig::open_in_memory_pool()
+            .await
+            .map_err(storage_error)?;
+        sqlx::raw_sql(pool::SCHEMA)
+            .execute(&pool)
+            .await
+            .map_err(storage_error)?;
+        Ok(Self {
+            identity,
+            storage_namespace: Arc::from(options.storage_namespace.as_str()),
+            pool: Arc::new(pool),
+            host,
+            access: Some(Access::ReadWrite),
+            nested_json_pointer: None,
+        })
+    }
+
+    /// Reads the same live board and can change only the caller's subscriptions.
+    pub fn read_only_handle(&self) -> Self {
+        Self {
+            access: Some(Access::ReadOnly),
+            ..self.clone()
+        }
+    }
+
     pub async fn create_channel(
         &self,
         caller: ThreadId,

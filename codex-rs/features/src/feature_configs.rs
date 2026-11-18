@@ -315,6 +315,9 @@ where
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV3ConfigToml {
+    /// Keep each fresh root's Guardian board in memory until the runtime closes. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_board_in_memory: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

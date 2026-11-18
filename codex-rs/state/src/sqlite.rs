@@ -447,6 +447,24 @@ impl SqliteConfig {
         Ok(pool)
     }
 
+    /// Open a private database that lasts for the lifetime of this pool.
+    pub async fn open_in_memory_pool() -> Result<SqlitePool, Error> {
+        // Keep the sole connection alive. Disabling the checkout ping also keeps
+        // a cancelled acquire from discarding the connection and its database.
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .max_lifetime(None)
+            .idle_timeout(None)
+            .test_before_acquire(false)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .in_memory(true)
+                    .pragma("temp_store", "MEMORY")
+                    .log_statements(LevelFilter::Off),
+            )
+            .await
+    }
+
     /// Open a writable Codex SQLite database, creating it if necessary.
     /// Keep this configuration alive to retain the cleanup lock for local logs.
     pub async fn open_read_write_pool(&self, path: &Path) -> anyhow::Result<SqlitePool> {
