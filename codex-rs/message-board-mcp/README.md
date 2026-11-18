@@ -102,7 +102,8 @@ existing launcher lifecycle; explicit host-supplied board connections are unchan
 
 A runner calls `launch_in_memory()`, then registers each tree with
 `server.add_board(session_id, host)`. It supplies the existing `MessageBoardHost`
-for membership, clocks and notification delivery. Configure the same MCP server
+for membership and notification delivery. Timestamps use the MCP backend's system
+clock, as in the standalone SQLite server. Configure the same MCP server
 with `server.url()` and the `Authorization` header from `server.authorization()`;
 this overrides the plugin endpoint through normal configuration.
 

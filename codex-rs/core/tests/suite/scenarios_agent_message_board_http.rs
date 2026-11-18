@@ -164,7 +164,8 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
             ]
             .into(),
             clock: Default::default(),
-            fail_clock: Default::default(),
+            // MCP timestamps must not depend on the runner's clock.
+            fail_clock: true.into(),
             agent_path_calls: Default::default(),
             active: Default::default(),
             fail_notifications: Default::default(),
@@ -208,6 +209,7 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
     let posted =
         responses::mount_sse_sequence(&server, board_turn("worker-post", "post", post_arguments))
             .await;
+    let before_post = chrono::Utc::now().timestamp_millis();
     child
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: "Find the board tools and post your decision.".into(),
@@ -220,9 +222,11 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
         "worker-post",
     )?;
     assert_eq!(post["author"], "/root/worker");
-    if mode == BoardMode::InMemory {
-        assert_eq!(post["created_at"], "2026-09-18T12:00:00Z");
-    }
+    let created_at = chrono::DateTime::parse_from_rfc3339(
+        post["created_at"].as_str().context("post timestamp")?,
+    )?
+    .timestamp_millis();
+    assert!((before_post..=chrono::Utc::now().timestamp_millis()).contains(&created_at));
     if mode != BoardMode::Feature {
         child.shutdown_and_wait().await?;
     }

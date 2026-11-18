@@ -1,16 +1,24 @@
 //! Runner-owned HTTP lifecycle over the existing in-memory board and host interfaces.
 //! Agent-specific bindings share tree state while retaining each caller's host.
+//! Timestamps use the MCP backend's system clock, independently of the agent clock.
 
 use crate::MessageBoardMcpServer;
 use crate::serve_http;
 use axum::http::HeaderValue;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::InMemoryAgentMessageBoard;
 use codex_message_board::InMemoryMessageBoards;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::MessageBoardTool;
+use codex_message_board::NotificationDelivery;
+use codex_message_board::PostPreview;
+use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::Result;
+use futures::future::BoxFuture;
 use rmcp::ErrorData;
 use rmcp::transport::StreamableHttpServerConfig;
 use std::collections::HashMap;
@@ -22,6 +30,33 @@ use tokio_util::sync::CancellationToken;
 
 type BoardBinding = (Arc<dyn AgentMessageBoard>, Arc<dyn MessageBoardHost>);
 type Boards = Arc<RwLock<HashMap<(SessionId, Option<ThreadId>), BoardBinding>>>;
+
+struct BackendClockHost(Arc<dyn MessageBoardHost>);
+
+impl MessageBoardHost for BackendClockHost {
+    fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, Result<AgentPath>> {
+        self.0.agent_path(caller)
+    }
+
+    fn resolve_agent(&self, path: AgentPath) -> BoxFuture<'_, Result<ThreadId>> {
+        self.0.resolve_agent(path)
+    }
+
+    fn current_time(&self, caller: ThreadId) -> BoxFuture<'_, Result<DateTime<Utc>>> {
+        Box::pin(async move {
+            self.0.agent_path(caller).await?;
+            Ok(Utc::now())
+        })
+    }
+
+    fn notify(
+        &self,
+        recipient: ThreadId,
+        post: PostPreview,
+    ) -> BoxFuture<'_, Result<NotificationDelivery>> {
+        self.0.notify(recipient, post)
+    }
+}
 
 /// One runner-owned endpoint. Dropping it initiates HTTP and MCP session cleanup.
 /// Call [`Self::shutdown`] to wait until that cleanup has finished.
@@ -45,7 +80,7 @@ impl LocalServer {
     }
 
     /// Registers a tree before its first tool call. The runner supplies authoritative
-    /// membership and clocks; the service never registers or spawns agents itself.
+    /// membership; the service never registers or spawns agents itself.
     pub fn add_board(
         &self,
         identity: SessionId,
@@ -59,6 +94,7 @@ impl LocalServer {
             !boards.keys().any(|(tree, _)| *tree == identity),
             "board session already registered"
         );
+        let host: Arc<dyn MessageBoardHost> = Arc::new(BackendClockHost(host));
         boards.insert(
             (identity, None),
             (
@@ -76,6 +112,7 @@ impl LocalServer {
         caller: ThreadId,
         host: Arc<dyn MessageBoardHost>,
     ) -> anyhow::Result<()> {
+        let host: Arc<dyn MessageBoardHost> = Arc::new(BackendClockHost(host));
         let board = self.states.open(identity, host.clone()).await;
         let mut boards = self
             .boards
