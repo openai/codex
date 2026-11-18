@@ -1120,10 +1120,7 @@ impl ContextManager {
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
         // Get reasoning items excluding all the ones after the last instruction boundary.
-        let Some(last_user_index) = self
-            .items
-            .iter()
-            .rposition(|envelope| is_user_turn_boundary(&envelope.item))
+        let Some(last_user_index) = self.items.iter().rposition(is_instruction_turn_boundary)
         else {
             return 0;
         };
@@ -1649,6 +1646,11 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         || (role == "assistant" && is_inter_agent_instruction_content(content))
 }
 
+/// Evaluates an instruction boundary from annotated history.
+pub(crate) fn is_instruction_turn_boundary(envelope: &ResponseItemEnvelope) -> bool {
+    is_user_turn_boundary(&envelope.item)
+}
+
 fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
     InterAgentCommunication::is_message_content(content)
 }
@@ -1656,7 +1658,7 @@ fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
 fn user_message_positions(items: &[ResponseItemEnvelope]) -> Vec<usize> {
     let mut positions = Vec::new();
     for (idx, envelope) in items.iter().enumerate() {
-        if is_user_turn_boundary(&envelope.item) {
+        if is_instruction_turn_boundary(envelope) {
             positions.push(idx);
         }
     }

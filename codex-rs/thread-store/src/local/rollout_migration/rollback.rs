@@ -14,14 +14,15 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::CATALOG_APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::InterAgentCommunication;
-use std::borrow::Borrow;
+use codex_rollout::ResponseItemEnvelope;
 
 /// Match the rollback boundaries used by legacy history reconstruction without
 /// treating every persisted lifecycle as a user turn. This intentionally stays
 /// local to the frozen migration adapter: the full core predicate also knows
 /// about dynamically registered contextual fragments that thread-store cannot
 /// depend on.
-pub(super) fn counts_as_boundary(response: &ResponseItem) -> bool {
+pub(super) fn counts_as_boundary(envelope: &ResponseItemEnvelope) -> bool {
+    let response = &envelope.item;
     if matches!(response, ResponseItem::AgentMessage { .. }) {
         return true;
     }
@@ -43,17 +44,14 @@ pub(super) fn is_pre_turn_context_update(response: &ResponseItem) -> bool {
 /// Apply the same response-history cut used by legacy cold resume to a persisted
 /// compaction checkpoint. The migration adapter uses a frozen contextual-fragment
 /// matcher because thread-store cannot depend on core's runtime fragment registry.
-pub(super) fn drop_last_n_user_turns<T>(history: &mut Vec<T>, num_turns: u32)
-where
-    T: Borrow<ResponseItem>,
-{
+pub(super) fn drop_last_n_user_turns(history: &mut Vec<ResponseItemEnvelope>, num_turns: u32) {
     if num_turns == 0 {
         return;
     }
     let user_positions = history
         .iter()
         .enumerate()
-        .filter_map(|(index, item)| counts_as_boundary(item.borrow()).then_some(index))
+        .filter_map(|(index, item)| counts_as_boundary(item).then_some(index))
         .collect::<Vec<_>>();
     let Some(&first_turn_index) = user_positions.first() else {
         return;
@@ -64,9 +62,7 @@ where
     } else {
         user_positions[user_positions.len() - count]
     };
-    while cut_index > first_turn_index
-        && is_pre_turn_context_update(history[cut_index - 1].borrow())
-    {
+    while cut_index > first_turn_index && is_pre_turn_context_update(&history[cut_index - 1].item) {
         cut_index -= 1;
     }
     history.truncate(cut_index);

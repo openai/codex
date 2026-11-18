@@ -88,6 +88,17 @@ fn escape_xml_text_bounded(input: &str, retain: Retain) -> String {
     if escaped.len() <= RealtimeDelegation::FIELD_BYTES {
         return escaped;
     }
+    let range = retained_range(&escaped, retain);
+    match retain {
+        Retain::Start => format!("{}{TRUNCATION_MARKER}", &escaped[range]),
+        Retain::End => format!("{TRUNCATION_MARKER}{}", &escaped[range]),
+    }
+}
+
+fn retained_range(escaped: &str, retain: Retain) -> std::ops::Range<usize> {
+    if escaped.len() <= RealtimeDelegation::FIELD_BYTES {
+        return 0..escaped.len();
+    }
     let retained_bytes = RealtimeDelegation::FIELD_BYTES - TRUNCATION_MARKER.len();
     match retain {
         Retain::Start => {
@@ -95,14 +106,14 @@ fn escape_xml_text_bounded(input: &str, retain: Retain) -> String {
             while !escaped.is_char_boundary(end) {
                 end -= 1;
             }
-            format!("{}{TRUNCATION_MARKER}", &escaped[..end])
+            0..end
         }
         Retain::End => {
             let mut start = escaped.len() - retained_bytes;
             while !escaped.is_char_boundary(start) {
                 start += 1;
             }
-            format!("{TRUNCATION_MARKER}{}", &escaped[start..])
+            start..escaped.len()
         }
     }
 }

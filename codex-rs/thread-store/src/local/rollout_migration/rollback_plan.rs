@@ -182,7 +182,7 @@ impl RollbackPlanner {
                     self.record_boundaries[index] = Some(boundary);
                     self.boundaries[boundary].message_id = response.id().cloned();
                     self.boundaries[boundary].input_source = response.metadata.as_ref().into();
-                } else if rollback::counts_as_boundary(&response.item) {
+                } else if rollback::counts_as_boundary(response) {
                     let boundary = self.start_boundary(index);
                     self.boundaries[boundary].message_id = response.id().cloned();
                     self.boundaries[boundary].input_source = response.metadata.as_ref().into();

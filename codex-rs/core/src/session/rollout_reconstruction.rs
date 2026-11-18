@@ -1,6 +1,6 @@
 use super::*;
 use crate::context::world_state::WorldStateSnapshot;
-use crate::context_manager::is_user_turn_boundary;
+use crate::context_manager::is_instruction_turn_boundary;
 use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
 use codex_protocol::ContextWindowId;
@@ -459,7 +459,7 @@ impl ContextManager {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |=
-                        is_user_turn_boundary(&response_item.item);
+                        is_instruction_turn_boundary(response_item);
                 }
                 RolloutItem::InterAgentCommunication(_) => {
                     let active_segment =

@@ -19,6 +19,7 @@ mod initialization;
 pub use initialization::HistoryInitialization;
 
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::PathBuf;
@@ -329,6 +330,24 @@ pub enum RolloutItem {
     EventMsg(EventMsg),
     /// Sparse, model-invisible facts used to reconstruct realtime presentation.
     RealtimeItem(RealtimeItem),
+}
+
+impl RolloutItem {
+    /// Returns the canonical realtime observation time without constructing a projection.
+    pub fn realtime_observed_at_ms(&self) -> Option<i64> {
+        match self {
+            Self::RealtimeItem(item) => item.observed_at_ms,
+            _ => None,
+        }
+    }
+
+    /// Returns the realtime presentation of this canonical rollout item, if any.
+    pub fn realtime_item(&self) -> Option<Cow<'_, RealtimeItem>> {
+        match self {
+            Self::RealtimeItem(item) => Some(Cow::Borrowed(item)),
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for RolloutItem {

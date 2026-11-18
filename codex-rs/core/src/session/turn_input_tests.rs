@@ -19,6 +19,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
@@ -29,6 +32,7 @@ use pretty_assertions::assert_eq;
 use test_case::test_case;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 #[derive(Clone, Copy)]
 struct NeverEndingTask {

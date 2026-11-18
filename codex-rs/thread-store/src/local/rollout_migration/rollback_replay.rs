@@ -68,7 +68,7 @@ impl ModelReplayPlanner {
             RolloutItem::TurnContext(context) => ReplayRecord::TurnContext(context.turn_id.clone()),
             RolloutItem::EventMsg(EventMsg::UserMessage(_))
             | RolloutItem::InterAgentCommunication(_) => ReplayRecord::UserBoundary,
-            RolloutItem::ResponseItem(response) if rollback::counts_as_boundary(&response.item) => {
+            RolloutItem::ResponseItem(response) if rollback::counts_as_boundary(response) => {
                 ReplayRecord::UserBoundary
             }
             RolloutItem::DynamicToolsUpdated { .. }

@@ -11,13 +11,14 @@ impl ObservationClock {
     pub(crate) fn restore(&mut self, items: &[RolloutItem]) {
         let floor = items
             .iter()
-            .filter_map(|item| match item {
-                RolloutItem::RealtimeItem(item) => item.observed_at_ms,
-                RolloutItem::Compacted(compacted) => compacted
-                    .resume_metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.observation_clock_floor_ms),
-                _ => None,
+            .filter_map(|item| {
+                item.realtime_observed_at_ms().or_else(|| match item {
+                    RolloutItem::Compacted(compacted) => compacted
+                        .resume_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.observation_clock_floor_ms),
+                    _ => None,
+                })
             })
             .max();
         if let Some(floor) = floor {

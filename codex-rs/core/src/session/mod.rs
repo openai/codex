@@ -278,6 +278,7 @@ mod model_catalog_settings;
 mod model_ids;
 pub(crate) mod multi_agents;
 mod plugin_selection;
+mod realtime_handoff;
 mod realtime_history;
 mod retained_context;
 mod review;

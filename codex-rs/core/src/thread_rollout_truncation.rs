@@ -3,7 +3,7 @@
 //! In core, "user turns" are detected by scanning `ResponseItem::Message` items and
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
-use crate::context_manager::is_user_turn_boundary;
+use crate::context_manager::is_instruction_turn_boundary;
 use crate::event_mapping;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
@@ -21,12 +21,12 @@ pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &Initia
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
     match item {
-        RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        RolloutItem::ResponseItem(item) => is_instruction_turn_boundary(item),
         RolloutItem::Compacted(checkpoint) => checkpoint
             .replacement_history
             .iter()
             .flatten()
-            .any(|item| is_user_turn_boundary(item)),
+            .any(is_instruction_turn_boundary),
         RolloutItem::InterAgentCommunication(_) => true,
         _ => false,
     }
