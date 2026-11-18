@@ -234,30 +234,28 @@ impl InputQueue {
                 .is_some_and(|(_, _, updates)| *updates.borrow())
     }
 
-    /// Native mailbox backlog qualifies regardless of turn ID or delivery phase.
-    /// Injected mail qualifies only while its matching turn still accepts mail.
+    /// Native and injected mail qualify only while the matching turn still accepts mail.
     pub(crate) async fn should_preempt_sampling_for_mail(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
         sub_id: &str,
     ) -> bool {
-        if self.has_pending_mailbox_items().await {
-            return true;
-        }
+        let native_mail_pending = self.has_pending_mailbox_items().await;
         let Some(turn_state) = self.turn_state_for_sub_id(active_turn, sub_id).await else {
             return false;
         };
         let turn_state = turn_state.lock().await;
         turn_state.accepts_mailbox_delivery_for_current_turn()
-            && turn_state.pending_input.items.iter().any(|input| {
-                matches!(
-                    input,
-                    TurnInput::ResponseItem(ResponseItemEnvelope {
-                        item: ResponseItem::AgentMessage { .. },
-                        ..
-                    })
-                )
-            })
+            && (native_mail_pending
+                || turn_state.pending_input.items.iter().any(|input| {
+                    matches!(
+                        input,
+                        TurnInput::ResponseItem(ResponseItemEnvelope {
+                            item: ResponseItem::AgentMessage { .. },
+                            ..
+                        })
+                    )
+                }))
     }
 
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {

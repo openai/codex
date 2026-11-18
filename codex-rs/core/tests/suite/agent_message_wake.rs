@@ -21,6 +21,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
@@ -179,7 +180,17 @@ async fn pending_agent_message_wake_respects_control_changes(
     };
     let first_mail = "First deferred worker update.";
     let second_mail = "Worker update after stop.";
-    test.codex.submit(mail(first_mail)).await?;
+    let first = mail(first_mail);
+    if wakes_on_agent_messages {
+        let Op::InterAgentCommunication { communication, .. } = first else {
+            unreachable!("mail constructs an agent communication");
+        };
+        test.codex
+            .inject_response_items(vec![communication.to_model_input_item()])
+            .await?;
+    } else {
+        test.codex.submit(first).await?;
+    }
     // The settings reply fences the preceding mailbox operation while the old
     // turn still owns admission, so only its completion can start the wake.
     test.codex
@@ -358,8 +369,16 @@ async fn interrupt_during_completion_preserves_running_status(
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.turn_lifecycle_contributor(barriers.clone());
     let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model| {
+            model.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("select runtime from model metadata");
             match setting {
                 AgentMessageWake::Enabled => config.features.enable(Feature::WakeOnAgentMessages),
                 AgentMessageWake::Disabled => config.features.disable(Feature::WakeOnAgentMessages),
@@ -368,15 +387,43 @@ async fn interrupt_during_completion_preserves_running_status(
         })
         .build_with_auto_env(&server)
         .await?;
-    let TurnInputSubmission::Started { turn_id, .. } = test
-        .codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Finish the work.".to_owned(),
-            text_elements: Vec::new(),
-        }]))
-        .await?
-    else {
-        anyhow::bail!("the initial input must start a turn");
+    let turn_id = match setting {
+        AgentMessageWake::Enabled => {
+            assert_eq!(test.codex.multi_agent_version(), None);
+            test.codex
+                .inject_response_items(vec![
+                    InterAgentCommunication::new(
+                        AgentPath::root().join("worker").expect("valid worker path"),
+                        AgentPath::root(),
+                        Vec::new(),
+                        "Finish the work.".to_owned(),
+                        /*trigger_turn*/ false,
+                    )
+                    .to_model_input_item(),
+                ])
+                .await?;
+            let EventMsg::TurnStarted(started) = wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnStarted(_))
+            })
+            .await
+            else {
+                unreachable!("waited for turn start")
+            };
+            started.turn_id
+        }
+        AgentMessageWake::Disabled => {
+            let TurnInputSubmission::Started { turn_id, .. } = test
+                .codex
+                .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: "Finish the work.".to_owned(),
+                    text_elements: Vec::new(),
+                }]))
+                .await?
+            else {
+                anyhow::bail!("the initial input must start a turn");
+            };
+            turn_id
+        }
     };
     // The stop callback runs after the task is detached, before TurnComplete
     // is persisted. This is a finishing turn, not an unstarted wake reservation.

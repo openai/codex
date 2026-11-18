@@ -28,6 +28,7 @@ use codex_history::RolloutItem;
 use codex_models_manager::ModelsManagerConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::AgentPath;
 use codex_protocol::RequestCountry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -40,6 +41,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::ResponseItem;
@@ -50,6 +52,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -1129,8 +1132,69 @@ impl CodexThread {
         crate::guardian::review_tool_call(&self.session, history, &tool_call, cancellation).await
     }
 
-    /// Record raw Responses API items without starting a new turn.
+    /// Inject raw Responses items. Plaintext agent-mail batches in a native MAv2
+    /// runtime use queue-only mailbox delivery and its existing wake policy.
+    /// Other batches retain history-injection semantics.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        let config = self.session.get_config().await;
+        // Native mail can represent this shape without changing its payload. Keep
+        // mixed history and multipart/encrypted items on the raw injection path.
+        if !config.multi_agent_v2.disable_native_tools
+            && !items.is_empty()
+            && let Some(messages) = items
+                .iter()
+                .map(|item| {
+                    let ResponseItem::AgentMessage {
+                        id,
+                        author,
+                        recipient,
+                        content,
+                        internal_chat_message_metadata_passthrough,
+                    } = item
+                    else {
+                        return None;
+                    };
+                    let [AgentMessageInputContent::InputText { text }] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(InterAgentCommunication {
+                        id: id.clone(),
+                        author: AgentPath::try_from(author.as_str()).ok()?,
+                        recipient: AgentPath::try_from(recipient.as_str()).ok()?,
+                        other_recipients: Vec::new(),
+                        content: text.clone(),
+                        encrypted_content: None,
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
+                        trigger_turn: false,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+            && match self.multi_agent_version() {
+                Some(version) => version,
+                None => self.session.resolve_multi_agent_version_for_model(
+                    self.selected_model_info().await.as_ref(),
+                    &config,
+                ),
+            } == MultiAgentVersion::V2
+        {
+            // Keep capacity eviction out between individual submissions. Each
+            // submission retains its own pin through dispatch after this batch returns.
+            let _batch_residency = self
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(self)
+                .await?;
+            for communication in messages {
+                self.submit(Op::InterAgentCommunication {
+                    communication,
+                    start_options: TurnStartOptions::default(),
+                })
+                .await?;
+            }
+            return Ok(());
+        }
         self.inject_response_items_with_retention(items).await
     }
 

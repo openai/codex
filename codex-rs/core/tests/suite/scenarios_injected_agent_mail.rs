@@ -75,6 +75,13 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
             config.update_plan_enabled = true;
+            // Hosted MAv2.5 owns delivery even when the model selects MAv2.
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("use MAv2");
+            config.multi_agent_v2.disable_native_tools = true;
+            config.multi_agent_v2.multi_agent_mode_hint_text = Some(String::new());
             config
                 .features
                 .disable(Feature::DeferMailboxPreemption)

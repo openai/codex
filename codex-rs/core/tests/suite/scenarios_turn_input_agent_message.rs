@@ -134,16 +134,16 @@ async fn agent_followup_preserves_native_boundaries(
         .thread;
     // An idle recipient must see its older queue-only mail before the new task.
     child
-        .submit(Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
+        .inject_response_items(vec![
+            InterAgentCommunication::new(
                 AgentPath::root(),
                 child_path.clone(),
                 Vec::new(),
                 "Older queued mail".to_owned(),
                 /*trigger_turn*/ false,
-            ),
-            start_options: Default::default(),
-        })
+            )
+            .to_model_input_item(),
+        ])
         .await?;
     child.submit(Op::RealtimeConversationListVoices).await?;
     wait_for_event(&child, |event| {

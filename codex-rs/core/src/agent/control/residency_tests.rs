@@ -1,9 +1,11 @@
+use super::ThreadEvictionOutcome;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::LocalAgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
+use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -75,10 +77,46 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         communication: communication.clone(),
         start_options: Default::default(),
     });
+    let injected = (0..=SUBMISSION_CHANNEL_CAPACITY)
+        .map(|index| {
+            let mut message = communication.clone();
+            message.content = format!("injected notice {index}");
+            message
+        })
+        .collect::<Vec<_>>();
+    let injection = first.thread.inject_response_items(
+        injected
+            .iter()
+            .map(InterAgentCommunication::to_model_input_item)
+            .collect(),
+    );
     tokio::pin!(delivery);
+    tokio::pin!(injection);
     assert!(futures::poll!(delivery.as_mut()).is_pending());
+    assert!(futures::poll!(injection.as_mut()).is_pending());
     drop(eviction_gate);
     delivery.await.expect("submit after eviction gate releases");
+    // Drain each accepted prefix while the batch yields, then attempt capacity eviction.
+    loop {
+        tokio::task::yield_now().await;
+        tokio::task::consume_budget().await;
+        if let std::task::Poll::Ready(result) = futures::poll!(injection.as_mut()) {
+            result.expect("inject after eviction gate releases");
+            break;
+        }
+        first
+            .thread
+            .update_thread_settings(ThreadSettingsOverrides::default())
+            .await
+            .expect("dispatch the accepted prefix");
+        assert_eq!(
+            state
+                .try_evict_v2_thread(Arc::clone(&first.thread), &membership)
+                .await
+                .unwrap(),
+            ThreadEvictionOutcome::Busy,
+        );
+    }
     first
         .thread
         .update_thread_settings(ThreadSettingsOverrides::default())
@@ -108,7 +146,11 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .local_agent_runtime
         .mailboxes
         .take(first.thread_id, |_| true);
-    assert_eq!(retained, vec![communication.into()]);
+    let expected = std::iter::once(communication)
+        .chain(injected)
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    assert_eq!(retained, expected);
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
 

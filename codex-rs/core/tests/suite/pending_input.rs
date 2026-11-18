@@ -516,17 +516,26 @@ impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config>
     }
 }
 
-#[test_case(false, Some("automation"), None, false; "live_root")]
-#[test_case(true, Some("automation"), None, false; "reloaded_root")]
-#[test_case(true, Some("automation"), Some("original-parent"), false; "reloaded_delegated")]
-#[test_case(true, None, None, false; "reloaded_unknown")]
-#[test_case(false, Some("automation"), Some("original-parent"), true; "settings_while_asleep")]
+#[derive(Clone, Copy)]
+enum MailDelivery {
+    Native,
+    Injected,
+}
+
+#[test_case(false, Some("automation"), None, false, MailDelivery::Native; "live_root")]
+#[test_case(true, Some("automation"), None, false, MailDelivery::Native; "reloaded_root")]
+#[test_case(true, Some("automation"), Some("original-parent"), false, MailDelivery::Native; "reloaded_delegated")]
+#[test_case(true, None, None, false, MailDelivery::Native; "reloaded_unknown")]
+#[test_case(false, Some("automation"), Some("original-parent"), true, MailDelivery::Native; "settings_while_asleep")]
+#[test_case(false, Some("automation"), None, false, MailDelivery::Injected; "injected_live_root")]
+#[test_case(true, Some("automation"), Some("original-parent"), false, MailDelivery::Injected; "injected_reloaded_root")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
     reload: bool,
     trigger: Option<&str>,
     parent: Option<&str>,
     update_settings: bool,
+    delivery: MailDelivery,
 ) -> anyhow::Result<()> {
     const CHILD_MESSAGE: &str = "worker completed";
 
@@ -546,6 +555,18 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
     let mut builder = test_codex()
         .with_model("gpt-5.4")
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            if matches!(delivery, MailDelivery::Injected) {
+                config
+                    .features
+                    .enable(Feature::MultiAgentV2)
+                    .expect("enable native mail");
+                config
+                    .features
+                    .disable(Feature::WakeOnAgentMessages)
+                    .expect("wake only for sleep");
+            }
+        })
         .with_extensions(Arc::new(extensions.build()));
     let mut test = builder.build_with_auto_env(&server).await?;
 
@@ -595,7 +616,22 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
         )
         .await?;
     }
-    enqueue_queue_only_agent_mail(&test.codex, CHILD_MESSAGE).await;
+    if matches!(delivery, MailDelivery::Injected) {
+        test.codex
+            .inject_response_items(vec![
+                InterAgentCommunication::new(
+                    AgentPath::try_from("/root/worker").expect("worker path"),
+                    AgentPath::root(),
+                    Vec::new(),
+                    CHILD_MESSAGE.to_owned(),
+                    /*trigger_turn*/ false,
+                )
+                .to_model_input_item(),
+            ])
+            .await?;
+    } else {
+        enqueue_queue_only_agent_mail(&test.codex, CHILD_MESSAGE).await;
+    }
     wait_for_turn_complete(&test.codex).await;
 
     let captured = requests.requests();
