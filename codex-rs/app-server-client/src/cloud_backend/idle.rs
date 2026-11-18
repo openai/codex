@@ -129,6 +129,7 @@ pub(super) struct Recovery {
     pub(super) pending: Option<(Arc<str>, Open)>,
     pub(super) installed: Option<Instant>,
     pub(super) held: Option<(String, Instant, BoxFuture<'static, Option<Opened>>)>,
+    pub(super) attempts: u8,
     // None until either the initial Attach event or the activation snapshot establishes status.
     pub(super) observed_idle: Option<bool>,
     pub(super) client: Arc<cloud::Client>,
@@ -176,12 +177,22 @@ impl Recovery {
             ))));
             return;
         }
+        let attempts = self.attempts;
+        if attempts >= 3 {
+            let _ = response.send(Ok(Err(recovery_error(
+                "The cloud reply stream keeps disconnecting. Your transcript and draft are still here.",
+            ))));
+            return;
+        }
         self.cancel();
         let client = Arc::clone(&self.client);
         let login = Arc::clone(&self.login);
         let root = thread_id.clone();
         let open = async move {
-            let attempt = login.permit.run(login.attach(&client, &root));
+            let attempt = login.permit.run(async {
+                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempts))).await;
+                login.attach(&client, &root).await
+            });
             let opened = tokio::select! {
                 biased;
                 _ = response.closed() => return None,
@@ -246,6 +257,7 @@ impl Recovery {
 
     pub(super) fn reset(&mut self) {
         self.held = None;
+        self.attempts = 0;
         drop(self.pending.take());
         self.state.send_replace(IdleReconnect::Inactive);
         self.installed = None;
@@ -294,6 +306,7 @@ impl Recovery {
             pending: None,
             installed: None,
             held: None,
+            attempts: 0,
             observed_idle: None,
             client,
             login: Arc::new(login),

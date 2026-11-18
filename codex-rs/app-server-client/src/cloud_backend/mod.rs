@@ -101,6 +101,7 @@ impl Replies {
                 if opened.ack.send(Ok(())).is_err() {
                     return;
                 }
+                recovery.attempts += 1;
                 recovery.installed = Some(tokio::time::Instant::now());
                 recovery.observed_idle = None;
                 self.stream_losses.supersede(&root);
@@ -165,6 +166,9 @@ impl Replies {
                     let stable = recovery
                         .installed
                         .is_none_or(|start| start.elapsed() >= std::time::Duration::from_secs(15));
+                    if stable {
+                        recovery.attempts = 0;
+                    }
                     if recovery.observed_idle == Some(true)
                         && stable
                         && idle::transient(error.as_ref())
