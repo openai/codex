@@ -1,3 +1,5 @@
+//! Relays bytes between the CLI's stdio and the app-server control socket.
+
 #![deny(clippy::print_stdout)]
 
 use std::io;
@@ -9,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 
 /// Connects to the Unix Domain Socket at `socket_path` and relays data between
 /// standard input/output and the socket.
-pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
+pub(crate) async fn run(socket_path: &Path) -> anyhow::Result<()> {
     let stream = UnixStream::connect(socket_path)
         .await
         .with_context(|| format!("failed to connect to socket at {}", socket_path.display()))?;

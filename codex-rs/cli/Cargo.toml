@@ -74,10 +74,10 @@ codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-state = { workspace = true }
-codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tui = { workspace = true }
+codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
@@ -98,6 +98,7 @@ sys-locale = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
+    "io-util",
     "macros",
     "net",
     "process",
@@ -130,7 +131,6 @@ app_test_support = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-app-server-client = { workspace = true }
-codex-uds = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 core_test_support = { workspace = true }
