@@ -688,19 +688,21 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         &format!("Echo from {first_process}."),
     );
 
+    let mut eager_config = fixture.config.clone();
+    eager_config
+        .features
+        .disable(Feature::McpLazyStdioStartup)?;
     let control = fixture
         .thread_manager
-        .start_thread(StartThreadOptions::new(fixture.config.clone()))
+        .start_thread(StartThreadOptions::new(eager_config))
         .await?
         .thread;
     wait_for_mcp_server(&control, SERVER_NAME).await?;
     let control_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&first_pid)).await?;
     control.shutdown_and_wait().await?;
 
-    let mut treatment = fixture.config.clone();
-    treatment.features.enable(Feature::McpLazyStdioStartup)?;
-    // The flag must preserve a required live connection even when the catalog is warm.
-    let mut required_config = treatment.clone();
+    // A required server still needs a live connection even when the catalog is warm.
+    let mut required_config = fixture.config.clone();
     let mut servers = required_config.mcp_servers.get().clone();
     servers
         .get_mut(SERVER_NAME)
@@ -741,7 +743,7 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         ..
     } = fixture
         .thread_manager
-        .start_thread(StartThreadOptions::new(treatment))
+        .start_thread(StartThreadOptions::new(fixture.config.clone()))
         .await?;
     second_thread.submit(Op::Interrupt).await?;
 

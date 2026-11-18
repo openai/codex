@@ -1202,7 +1202,8 @@ async fn code_mode_excludes_mcp_servers_using_their_configured_identity() -> Res
             let mut test = base_test;
             test.codex = new_thread.thread;
             test.session_configured = new_thread.session_configured;
-            wait_for_mcp_server(&test.codex, "rmcp").await?;
+            // The base thread may already have warmed the catalog, so this thread can
+            // expose the cached tools without starting the optional server.
             test.submit_turn("inspect the directly callable MCP tool")
                 .await?;
 

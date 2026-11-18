@@ -2442,7 +2442,7 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
             .await?;
         fixture.codex = started.thread;
         fixture.session_configured = started.session_configured;
-        wait_for_mcp_server(&fixture.codex, server_name).await?;
+        // The catalog is warm; the optional server starts on its first tool call.
 
         // A fresh thread must still discover the primary executor's repository
         // skills; host routing must not silently replace them with local skills.

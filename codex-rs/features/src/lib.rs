@@ -1806,8 +1806,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::McpLazyStdioStartup,
         key: "mcp_lazy_stdio_startup",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::MultiEnvironmentMcp,
