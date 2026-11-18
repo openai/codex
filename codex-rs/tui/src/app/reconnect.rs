@@ -565,6 +565,11 @@ impl App {
                 self.agent_navigation.mark_stopped(id);
             }
             if self.primary_thread_id == Some(id) {
+                self.restore_sidebar_agent_outcomes(
+                    id,
+                    &started.turns,
+                    super::sidebar_subagents::OutcomeReplay::Reconnect,
+                );
                 self.primary_session_configured = Some(started.session.clone());
             }
             if started.blocks_direct_input {

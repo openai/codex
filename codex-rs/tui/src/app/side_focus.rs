@@ -403,6 +403,7 @@ impl App {
                     && list_action != ListAction::Cancel
                     && pane.creation.is_none()
                     && pane.chat_tabs().files.is_empty()
+                    && pane.chat_tabs().agents.is_empty()
                 {
                     return true;
                 }
@@ -451,7 +452,9 @@ impl App {
         if let ChooserAction::Open(index) = action
             && new_chat == sidebar_chooser::NewChatState::WaitingForMainMessage
             && self.sidebar().is_some_and(|pane| {
-                pane.creation.is_none() && pane.chat_tabs().file(index).is_none()
+                pane.creation.is_none()
+                    && pane.chat_tabs().file(index).is_none()
+                    && pane.chat_tabs().agent(index).is_none()
             })
         {
             return true;
@@ -486,6 +489,23 @@ impl App {
             return true;
         }
         let pane = self.sidebar_mut();
+        if let ChooserAction::Open(index) = action
+            && pane.creation.is_none()
+            && let Some(agent) = pane.chat_tabs().agent(index).map(|agent| agent.id)
+        {
+            pane.choice = index;
+            if self
+                .agent_navigation
+                .visible_threads()
+                .iter()
+                .any(|(id, _)| *id == agent)
+                && let Err(error) = Box::pin(self.select_agent_thread(tui, server, agent)).await
+            {
+                self.chat_widget.add_error_message(error.to_string());
+            }
+            self.guard_chooser_key(activation);
+            return true;
+        }
         if let ChooserAction::Open(index) = action
             && pane.creation.is_none()
             && pane.chat_tabs().retry_row(index)

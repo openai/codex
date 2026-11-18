@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/tests.rs
-assertion_line: 3679
 expression: "states.join(\"\\n\\n\")"
 ---
 Loading
@@ -69,7 +68,7 @@ Refreshed chats
  Side chats  2
 
  › ○ Named sibling
-     Latest request with 界 界 界  a…
+     Latest request with 界 界 界  …
    ○ Child-only prompt
 
 Readable reply
@@ -82,6 +81,6 @@ Readable reply
  Side chats  2
 
  › ○ Named sibling
-     > Which branch? Keep ## My r…
+     > Which branch? Keep ## My …
    ○ Child-only prompt
                                   ↓

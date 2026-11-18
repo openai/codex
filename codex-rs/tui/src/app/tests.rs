@@ -10393,7 +10393,7 @@ async fn resizing_empty_transcript_schedules_settled_size_recheck() {
     );
 }
 
-fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItemPayload>) -> Turn {
+pub(super) fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItemPayload>) -> Turn {
     Turn {
         id: turn_id.to_string(),
         root_turn_id: None,

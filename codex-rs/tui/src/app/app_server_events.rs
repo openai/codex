@@ -262,6 +262,7 @@ impl App {
             }
         }
 
+        self.observe_sidebar_agent_event(&notification);
         if let ServerNotification::ThreadStatusChanged(status) = &notification {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }

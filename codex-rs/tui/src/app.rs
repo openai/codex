@@ -291,6 +291,7 @@ mod sidebar_close;
 mod sidebar_document;
 mod sidebar_files;
 pub(crate) mod sidebar_loading;
+mod sidebar_subagents;
 mod startup;
 pub(crate) mod startup_bootstrap;
 mod startup_prompts;

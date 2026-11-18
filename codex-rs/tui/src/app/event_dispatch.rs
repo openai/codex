@@ -3579,6 +3579,11 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker(app_server).await;
             }
+            AppEvent::DiscoverSidebarAgents(root) => {
+                if self.primary_thread_id == Some(root) && !self.reconnect.offline {
+                    self.refresh_agent_picker_threads(app_server, root);
+                }
+            }
             AppEvent::AgentPickerThreadsLoaded {
                 primary_thread_id,
                 request_id,

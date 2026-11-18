@@ -263,6 +263,11 @@ impl App {
         {
             pane.close = None;
         }
+        if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent())
+            && pane.visible_content().is_some()
+        {
+            pane.sync_agent_rows(&self.agent_navigation);
+        }
         let layout = sidebar::paint_layout(self, tui, screen_size.into());
         let displayed = self.current_displayed_thread_id();
         let chat = match displayed.and_then(|id| self.side_pair_key(id)) {

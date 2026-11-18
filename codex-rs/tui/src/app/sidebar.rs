@@ -2,6 +2,7 @@
 //! can paint the closing frames and reverse direction if reopened mid-slide.
 
 use super::App;
+use super::agent_navigation::AgentNavigationState;
 use super::pane_motion::PaneMotion;
 use super::side_pane;
 use super::side_pane::SidePaneLayout;
@@ -65,6 +66,7 @@ impl SideCreation {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChooserSelection {
+    Agent(ThreadId),
     New,
     Chat(ThreadId),
     Retry,
@@ -92,6 +94,7 @@ pub(super) struct SidebarPane {
     pub(super) focus_document_request: Option<uuid::Uuid>,
     content: SidebarContent,
     tabs: Vec<SidebarTab>,
+    pub(super) agents: super::sidebar_subagents::Overview,
     // The chooser keeps the same order when an attached chat becomes a live tab.
     choices: Vec<SideChat>,
     // A snapshot of the visible rows at the last explicit chooser refresh.
@@ -204,6 +207,7 @@ impl SidebarPane {
             opening: self.opening.as_ref(),
             ids: &self.tabs,
             choices: &self.choices,
+            agents: &self.agents.rows,
             latest_prompts: &self.latest_prompts,
             selected: self.visits.last().copied(),
             files: self
@@ -219,23 +223,59 @@ impl SidebarPane {
         }
     }
 
+    pub(super) fn sync_agent_rows(&mut self, nav: &AgentNavigationState) {
+        let rows = self.agents.chooser_rows(nav);
+        let reordered = self
+            .agents
+            .rows
+            .iter()
+            .map(|agent| agent.id)
+            .ne(rows.iter().map(|agent| agent.id));
+        let selection = self.input_state().choice;
+        self.agents.rows = rows;
+        if reordered {
+            self.restore_choice(selection);
+            self.tabs_revision += 1;
+        }
+    }
+
+    fn restore_choice(&mut self, selection: ChooserSelection) {
+        let tabs = self.chat_tabs();
+        let index = match selection {
+            ChooserSelection::New => Some(0),
+            ChooserSelection::Chat(id) => tabs.choice_index(id),
+            ChooserSelection::Agent(id) => tabs.agent_index(id),
+            ChooserSelection::File(offset) => {
+                Some(tabs.file_start() + offset).filter(|&index| tabs.file(index).is_some())
+            }
+            ChooserSelection::Retry => {
+                Some(tabs.choices.len() + 1).filter(|&index| tabs.retry_row(index))
+            }
+        };
+        if let Some(index) = index {
+            self.choice = index;
+        } else {
+            self.reset_choice();
+        }
+    }
+
     pub(super) fn set_discovery(&mut self, discovery: Discovery) {
-        let file = self.chat_tabs().file_offset(self.choice);
-        if matches!(discovery, Discovery::Failed(_)) && self.choices.is_empty() {
-            self.choice = 1;
-        }
+        let selection = self.input_state().choice;
         self.discovery = discovery;
-        if let Some(offset) = file {
-            self.choice = self.chat_tabs().file_start() + offset;
+        if self.choices.is_empty()
+            && matches!(self.discovery, Discovery::Failed(_))
+            && selection == ChooserSelection::New
+        {
+            self.choice = 1;
+        } else {
+            self.restore_choice(selection);
         }
-        self.choice = self.choice.min(self.chat_tabs().choice_count() - 1);
         self.tabs_revision += 1;
     }
 
     pub(super) fn update_saved_chats(&mut self, mut chats: Vec<SideChat>) {
-        let file = self.chat_tabs().file_offset(self.choice);
-        let selection = self.chat_tabs().choice(self.choice);
-        let keep_new = self.choice == 0 && !self.choices.is_empty();
+        let selection = self.input_state().choice;
+        let was_empty = self.choices.is_empty();
         for chat in &mut self.choices {
             if !self.tabs.contains(&SidebarTab::Chat(chat.id)) {
                 continue;
@@ -254,12 +294,10 @@ impl SidebarPane {
         self.choices = chats;
         if reordered {
             self.tabs_revision += 1;
-            if let Some(offset) = file {
-                self.choice = self.chat_tabs().file_start() + offset;
-            } else if let Some(index) = selection.and_then(|id| self.chat_tabs().choice_index(id)) {
-                self.choice = index;
-            } else if !keep_new {
+            if selection == ChooserSelection::New && was_empty {
                 self.reset_choice();
+            } else {
+                self.restore_choice(selection);
             }
         }
     }
@@ -386,6 +424,8 @@ impl SidebarPane {
             ChooserSelection::Retry
         } else if let Some(offset) = tabs.file_offset(self.choice) {
             ChooserSelection::File(offset)
+        } else if let Some(agent) = tabs.agent(self.choice) {
+            ChooserSelection::Agent(agent.id)
         } else {
             ChooserSelection::New
         };
@@ -403,10 +443,9 @@ impl SidebarPane {
     fn add_tab(&mut self, id: ThreadId) {
         if !self.tabs.contains(&SidebarTab::Chat(id)) {
             if self.chat_tabs().choice_index(id).is_none() {
-                if self.chat_tabs().file_offset(self.choice).is_some() {
-                    self.choice += 1;
-                }
+                let selection = self.input_state().choice;
                 self.choices.push(id.into());
+                self.restore_choice(selection);
             }
             self.tabs.push(SidebarTab::Chat(id));
             self.tabs_revision += 1;
@@ -455,8 +494,9 @@ impl SidebarPane {
             self.remove_choice(id);
         }
         if self.content == SidebarContent::Chat(id) {
-            self.content = match self.selected_chat() {
-                Some(child) => SidebarContent::Chat(child),
+            self.content = match self.recent_tab(/*excluding*/ None) {
+                Some(SidebarTab::Chat(child)) => SidebarContent::Chat(child),
+                Some(SidebarTab::Document(doc)) => SidebarContent::Document(doc),
                 None => {
                     self.hide();
                     self.motion = PaneMotion::default();
@@ -475,16 +515,13 @@ impl SidebarPane {
             self.opening = None;
         }
         if let Some(index) = self.chat_tabs().choice_index(id) {
+            let selection = self.input_state().choice;
             self.choices.remove(index - 1);
-            if index < self.choice {
-                self.choice -= 1;
-            }
-            let last = if self.files.is_some() {
-                self.chat_tabs().choice_count() - 1
+            if selection == ChooserSelection::Chat(id) {
+                self.choice = index.min(self.chat_tabs().choice_count() - 1);
             } else {
-                self.choices.len()
-            };
-            self.choice = self.choice.min(last);
+                self.restore_choice(selection);
+            }
             self.tabs_revision += 1;
         }
     }
@@ -631,10 +668,8 @@ impl App {
 
     pub(super) fn panel_focus(&self) -> Option<PaneFocus> {
         let pane = self.sidebar()?;
-        match pane.content {
-            SidebarContent::Chooser | SidebarContent::Document(_) => pane.focus,
-            SidebarContent::Chat(_) => None,
-        }
+        pane.focus
+            .filter(|_| !matches!(pane.content, SidebarContent::Chat(_)))
     }
 
     pub(super) fn sidebar_has_focus(&self) -> bool {

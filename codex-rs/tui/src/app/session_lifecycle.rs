@@ -1822,6 +1822,7 @@ impl App {
 
         let mut refreshed_thread_ids = HashSet::new();
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
+            self.register_sidebar_agent(primary_thread_id, thread.thread_id);
             let agent_path = thread.agent_path;
             let has_live_channel = self
                 .thread_event_channels

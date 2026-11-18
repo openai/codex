@@ -136,6 +136,7 @@ impl App {
             let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
                 continue;
             };
+            let sidebar_agent = self.register_sidebar_agent(root, thread_id);
             if !completion.visibility_changed_threads.contains(&thread_id) {
                 self.update_agent_picker_thread_visibility(
                     thread_id,
@@ -167,6 +168,10 @@ impl App {
             self.agent_navigation.set_agent_path(thread_id, agent_path);
             if !live && update_liveness {
                 self.agent_navigation.set_running(thread_id, is_running);
+            }
+            if sidebar_agent && !live && (is_running || thread.status == ThreadStatus::SystemError)
+            {
+                self.seed_discovered_sidebar_agent(root, thread_id, &thread.status);
             }
         }
         for thread_id in refresh.archived_thread_ids {

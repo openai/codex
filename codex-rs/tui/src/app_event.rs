@@ -489,6 +489,8 @@ pub(crate) enum AppEvent {
     },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+    /// Discover saved subagents on the owning backend after attaching a primary thread.
+    DiscoverSidebarAgents(ThreadId),
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {
         primary_thread_id: ThreadId,
