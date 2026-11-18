@@ -890,6 +890,22 @@ async fn model_lab_search_provider(
         .build_initialized()
         .await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    if allow_hosted {
+        // A binding captured during MCP startup need not be cached: its catalogs can
+        // still change. Measure per-turn discovery reuse with an already stable binding.
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_matching_notification("search connector ready", |notification| {
+                notification.method == "mcpServer/startupStatus/updated"
+                    && notification.params.as_ref().is_some_and(|params| {
+                        params["threadId"] == thread.id
+                            && params["name"] == codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+                            && params["status"] == "ready"
+                    })
+            }),
+        )
+        .await??;
+    }
     app.start_turn_and_wait_for_completion(TurnStartParams {
         thread_id: thread.id,
         responsesapi_client_metadata: match policy {
