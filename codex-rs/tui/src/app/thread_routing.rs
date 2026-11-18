@@ -2300,7 +2300,9 @@ impl App {
             && self.startup_protected_input_boundary
         {
             self.chat_widget.pre_draw_tick();
-            self.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
+            let screen_size = tui.prepare_draw_size()?;
+            self.handle_draw_pre_render(tui, screen_size)?;
+            self.render_chat_widget_frame(tui, screen_size)?;
             self.discard_startup_modal_input(tui)?;
         }
         if self.backtrack_render_pending {

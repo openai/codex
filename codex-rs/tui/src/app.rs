@@ -1501,7 +1501,7 @@ impl App {
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
-        let screen_size = tui.terminal.last_known_screen_size;
+        let screen_size = tui.prepare_draw_size()?;
         self.handle_draw_pre_render(tui, screen_size)?;
         self.chat_widget.pre_draw_tick();
         self.render_chat_widget_frame(tui, screen_size)?;

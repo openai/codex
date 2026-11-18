@@ -1612,6 +1612,8 @@ impl Tui {
         hud: Option<crate::bottom_pane::ShortcutHud>,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        // This draw uses the caller's resolved geometry directly, so its reservation is consumed.
+        self.screen_size.pending_draw_size = None;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]

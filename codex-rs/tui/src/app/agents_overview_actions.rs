@@ -57,7 +57,9 @@ async fn run_lifecycle_modal<T>(
     operation: impl Future<Output = T>,
     events: impl Stream<Item = tui::TuiEvent> + Unpin,
 ) -> color_eyre::Result<T> {
-    app.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
+    let screen_size = tui.prepare_draw_size()?;
+    app.handle_draw_pre_render(tui, screen_size)?;
+    app.render_chat_widget_frame(tui, screen_size)?;
     let mut events = events.fuse();
     tokio::pin!(operation);
     let result = loop {

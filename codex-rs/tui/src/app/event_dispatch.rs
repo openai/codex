@@ -769,7 +769,7 @@ impl App {
                     }
                     self.chat_widget.fork_in_progress = true;
                     // This handler awaits the fork outside the draw loop. Paint before waiting.
-                    let screen_size = tui.terminal.last_known_screen_size;
+                    let screen_size = tui.prepare_draw_size()?;
                     self.handle_draw_pre_render(tui, screen_size)?;
                     self.chat_widget.pre_draw_tick();
                     self.render_chat_widget_frame(tui, screen_size)?;
@@ -1485,7 +1485,7 @@ impl App {
                         | AppCommand::RealtimeConversationSpeech { .. }
                 );
                 if is_user_turn {
-                    let screen_size = tui.terminal.last_known_screen_size;
+                    let screen_size = tui.prepare_draw_size()?;
                     self.handle_draw_pre_render(tui, screen_size)?;
                     if self.transcript_reflow.has_pending_reflow() {
                         self.transcript_reflow.schedule_immediate();
@@ -4547,8 +4547,11 @@ impl App {
             self.chat_widget
                 .set_footer_hint_override(Some(vec![("Archiving…".into(), String::new())]));
             // Cleanup waits outside the event loop. Paint before sending its first request.
-            let screen_size = tui.terminal.last_known_screen_size;
-            if let Err(error) = self.render_chat_widget_frame(tui, screen_size) {
+            if let Err(error) = (|| -> Result<_> {
+                let screen_size = tui.prepare_draw_size()?;
+                self.handle_draw_pre_render(tui, screen_size)?;
+                self.render_chat_widget_frame(tui, screen_size)
+            })() {
                 tracing::warn!(%error, "failed to render archive progress");
             }
         }

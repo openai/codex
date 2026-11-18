@@ -13,7 +13,7 @@ use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 #[derive(Default)]
 pub(super) struct ScreenSizePolicy {
     pending_recheck_at: Option<Instant>,
-    pending_draw_size: Option<Size>,
+    pub(super) pending_draw_size: Option<Size>,
     deferred_size: Option<Size>,
 }
 
@@ -76,7 +76,10 @@ impl Tui {
 
     /// Reserve the next draw's geometry so live layouts use the same width as their frame.
     pub(crate) fn prepare_draw_size(&mut self) -> io::Result<Size> {
+        // An early paint must not cancel the later sample of settled terminal dimensions.
+        let pending_recheck_at = self.screen_size.pending_recheck_at;
         let size = self.take_event_screen_size()?;
+        self.screen_size.pending_recheck_at = pending_recheck_at;
         self.screen_size.pending_draw_size = Some(size);
         Ok(size)
     }
