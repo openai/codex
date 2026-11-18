@@ -596,6 +596,7 @@ impl McpRuntime {
         Self::binding_from_published_runtime(current, &required_servers, required_plugins).await
     }
 
+    #[tracing::instrument(name = "mcp.binding.capture", skip_all, fields(cache_hit))]
     async fn binding_from_published_runtime(
         current: Arc<PublishedMcpRuntime>,
         required_servers: &[McpServerKey],
@@ -607,28 +608,33 @@ impl McpRuntime {
             .stable_catalog_revisions(required_servers, required_plugins)
             .await;
         if let Some(catalog_revisions) = &stable_catalog_revisions {
-            let cached = current
-                .cached_binding
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cached = tracing::info_span!("mcp.binding.cache_lock_wait").in_scope(|| {
+                current
+                    .cached_binding
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
             if let Some(cached) = cached.as_ref()
                 && &cached.catalog_revisions == catalog_revisions
                 && let Some(binding) = cached.binding.upgrade()
             {
+                tracing::Span::current().record("cache_hit", true);
                 return Some(binding);
             }
         }
 
+        // A binding built below is a miss even if a concurrent capture wins publication.
+        tracing::Span::current().record("cache_hit", false);
+        // Keep the instrumented catalog fan-out out of its callers' future layouts.
+        // The cache-hit path above does not need this allocation.
         let binding = Arc::new(
-            current
-                .connections
-                .capture_binding_with_metadata(
-                    config,
-                    current.plugins_available,
-                    required_servers,
-                    required_plugins,
-                )
-                .await,
+            Box::pin(current.connections.capture_binding_with_metadata(
+                config,
+                current.plugins_available,
+                required_servers,
+                required_plugins,
+            ))
+            .await,
         );
         if let Some(catalog_revisions) = stable_catalog_revisions
             && current

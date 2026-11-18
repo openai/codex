@@ -119,6 +119,7 @@ impl McpConnectionSet {
         }
     }
 
+    #[instrument(name = "mcp.binding.catalog_revision_wait", skip_all)]
     pub(crate) async fn stable_catalog_revisions(
         &self,
         required_servers: &[McpServerKey],
@@ -380,6 +381,7 @@ impl McpConnectionSet {
             }
             (server_name, view, None)
         }))
+        .instrument(tracing::info_span!("mcp.binding.startup_wait"))
         .await;
         let catalog = &config.mcp_server_catalog;
         let server_results = join_all(server_snapshots.into_iter().map(|(server_name, view, cached_tools)| async move {
@@ -469,6 +471,7 @@ impl McpConnectionSet {
                 raw_definition_json_bytes,
             ))
         }))
+        .instrument(tracing::info_span!("mcp.binding.catalog_capture"))
         .await;
         let mut raw_definition_json_bytes = 0usize;
         for (server_name, client, server_tools, server_definition_json_bytes) in
@@ -791,6 +794,7 @@ impl McpConnectionSet {
         let managed_client = view
             .connection
             .client()
+            .instrument(tracing::info_span!("mcp.apps.client_ready_wait"))
             .await
             .context("failed to get client")?;
         let Some((tools, list_start)) = managed_client

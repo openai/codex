@@ -335,6 +335,7 @@ impl McpServerView {
 
     /// Publishes raw client tools with this view's policy, owner, and plugin attribution.
     /// Shared client catalogs stay unannotated so later views can reuse them safely.
+    #[tracing::instrument(name = "mcp.tools.prepare_for_model", skip_all)]
     fn prepare_tools_for_model(
         &self,
         tools: Vec<ToolInfo>,

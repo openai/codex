@@ -25,6 +25,7 @@ use tokio::sync::RwLock;
 use tokio::sync::RwLockReadGuard;
 use tokio::sync::watch;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 use crate::tools::ToolInfo;
 
@@ -117,6 +118,7 @@ impl ClientToolCatalog {
     }
 
     /// Captures tools and their client-local revision together, without retaining them in the client.
+    #[tracing::instrument(name = "mcp.catalog.read_snapshot", skip_all)]
     async fn read_current(&self) -> (RwLockReadGuard<'_, CatalogState>, ToolCatalogSnapshot) {
         loop {
             {
@@ -247,13 +249,28 @@ impl ClientToolCatalog {
     where
         Fut: Future<Output = Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>, C)>>,
     {
-        let _refresh = self.refresh_lock.lock().await;
-        let (tools, meta, context) = fetch().await?;
-        let _calls = self.calls.write().await;
-        let mut current = self.current.write().await;
+        let _refresh = self
+            .refresh_lock
+            .lock()
+            .instrument(tracing::info_span!("mcp.catalog.refresh_lock_wait"))
+            .await;
+        let (tools, meta, context) = fetch()
+            .instrument(tracing::info_span!("mcp.catalog.fetch"))
+            .await?;
+        let _calls = self
+            .calls
+            .write()
+            .instrument(tracing::info_span!("mcp.catalog.active_calls_wait"))
+            .await;
+        let mut current = self
+            .current
+            .write()
+            .instrument(tracing::info_span!("mcp.catalog.publication_lock_wait"))
+            .await;
         let Some(_validity) = validate() else {
             return Ok(None);
         };
+        let _publication = tracing::info_span!("mcp.catalog.publish").entered();
         let result = publish(&tools, meta.clone(), context);
         match &mut current.source {
             CatalogSource::Local {
