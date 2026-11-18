@@ -1362,7 +1362,7 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     connected_account_email: Option<String>,
     plugin_id: Option<String>,
-    tool_title: Option<String>,
+    pub(crate) tool_title: Option<String>,
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
     mcp_app_ui: Option<McpAppUi>,
@@ -1759,6 +1759,7 @@ async fn prepare_mcp_tool_approval(
         &invocation.server,
         metadata.connector_id.as_deref(),
         metadata.link_id.as_deref(),
+        Some((&invocation.tool, metadata.tool_title.as_deref())),
     );
     let action = ApprovalAction::McpToolCall {
         id: call_id.to_string(),

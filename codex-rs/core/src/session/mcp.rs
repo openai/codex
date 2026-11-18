@@ -1207,34 +1207,38 @@ async fn review_guardian_mcp_elicitation(
             .and_then(|meta| meta.get(MCP_ELICITATION_STRICT_AUTO_REVIEW_KEY)),
         Some(Value::Bool(true))
     );
+    let connector_id = elicitation_connector_id(&request.elicitation);
+    // A live Browser invocation can review a nested action with its own identity.
+    // Other hosted connectors must still review their registered outer invocation.
+    let review_outer_invocation =
+        request.server_name == CODEX_APPS_MCP_SERVER_NAME && originating_call_id.is_none();
+    let requested_tool = request
+        .elicitation
+        .meta()
+        .and_then(|meta| metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY));
+    let verified_invocation = if review_outer_invocation
+        && let Some(call_id) = call_id
+        && let Some(McpToolApprovalContext {
+            invocation: Some(invocation),
+            metadata,
+            ..
+        }) = approval_context.as_deref()
+        && invocation.server == request.server_name
+        && metadata.connector_id.as_deref() == connector_id
+        && requested_tool == Some(invocation.tool.as_str())
+    {
+        Some((call_id, invocation, metadata))
+    } else {
+        None
+    };
+    let tool = verified_invocation.map(|(_, invocation, metadata)| {
+        (invocation.tool.as_str(), metadata.tool_title.as_deref())
+    });
     let mut guardian_request: crate::guardian::ReviewAction = if strict_auto_review {
-        let connector_id = elicitation_connector_id(&request.elicitation);
-        // A live Browser invocation can review a nested action with its own identity.
-        // Other hosted connectors must still review their registered outer invocation.
-        let review_outer_invocation =
-            request.server_name == CODEX_APPS_MCP_SERVER_NAME && originating_call_id.is_none();
         let trusted_guardian_request = if review_outer_invocation {
-            let Some(call_id) = call_id else {
+            let Some((call_id, invocation, metadata)) = verified_invocation else {
                 return Ok(None);
             };
-            let Some(McpToolApprovalContext {
-                invocation: Some(invocation),
-                metadata,
-                ..
-            }) = approval_context.as_deref()
-            else {
-                return Ok(None);
-            };
-            if invocation.server != request.server_name
-                || connector_id != metadata.connector_id.as_deref()
-                || request
-                    .elicitation
-                    .meta()
-                    .and_then(|meta| metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY))
-                    != Some(invocation.tool.as_str())
-            {
-                return Ok(None);
-            }
             Some(
                 crate::mcp_tool_call::build_guardian_mcp_tool_review_request(
                     call_id,
@@ -1258,6 +1262,7 @@ async fn review_guardian_mcp_elicitation(
                 request.server_name.as_str(),
                 connector_id,
                 /*link_id*/ None,
+                tool,
             ) != ApprovalsReviewer::AutoReview
             || request
                 .elicitation
@@ -1329,8 +1334,9 @@ async fn review_guardian_mcp_elicitation(
             requested_reviewer,
             Some(review_context.model_info.slug.as_str()),
             request.server_name.as_str(),
-            elicitation_connector_id(&request.elicitation),
+            connector_id,
             /*link_id*/ None,
+            tool,
         );
         review_context.approval_policy = approval_policy;
         review_context.approvals_reviewer = approvals_reviewer;

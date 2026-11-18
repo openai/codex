@@ -237,6 +237,14 @@
           ],
           "description": "Approval mode for this tool."
         },
+        "approvals_reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer for this tool's approval prompts, overriding link-level and app-level settings."
+        },
         "enabled": {
           "description": "Whether this tool is enabled. `Some(true)` explicitly allows this tool.",
           "type": "boolean"

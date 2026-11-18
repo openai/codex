@@ -246,12 +246,7 @@ fn app_tool_policy_from_apps_config(
         .connector_id
         .and_then(|connector_id| apps_config.apps.get(connector_id));
     let tools = app.and_then(|app| app.tools.as_ref());
-    let tool_config = tools.and_then(|tools| {
-        tools
-            .tools
-            .get(input.tool_name)
-            .or_else(|| input.tool_title.and_then(|title| tools.tools.get(title)))
-    });
+    let tool_config = tools.and_then(|tools| tools.for_tool(input.tool_name, input.tool_title));
     let approval = managed_approval
         .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| {

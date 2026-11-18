@@ -499,6 +499,10 @@ pub struct AppToolConfig {
     /// Approval mode for this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode: Option<AppToolApproval>,
+
+    /// Reviewer for this tool's approval prompts, overriding link-level and app-level settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }
 
 /// Tool settings for a single app.
@@ -508,6 +512,15 @@ pub struct AppToolsConfig {
     /// Per-tool overrides keyed by tool name (for example `repos/list`).
     #[serde(default, flatten)]
     pub tools: HashMap<String, AppToolConfig>,
+}
+
+impl AppToolsConfig {
+    /// Match a tool by its raw name first and use its title as a fallback.
+    pub fn for_tool(&self, name: &str, title: Option<&str>) -> Option<&AppToolConfig> {
+        self.tools
+            .get(name)
+            .or_else(|| title.and_then(|title| self.tools.get(title)))
+    }
 }
 
 /// Approval settings for a connected account within an app.

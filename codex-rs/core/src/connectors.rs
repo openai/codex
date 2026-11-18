@@ -508,6 +508,7 @@ pub fn with_app_plugin_sources(
     connectors
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn mcp_approvals_reviewer_from_layers(
     config_layer_stack: &codex_config::ConfigLayerStack,
     requirements: &ConfigRequirements,
@@ -516,6 +517,7 @@ pub(crate) fn mcp_approvals_reviewer_from_layers(
     server_name: &str,
     connector_id: Option<&str>,
     link_id: Option<&str>,
+    tool: Option<(&str, Option<&str>)>,
 ) -> ApprovalsReviewer {
     if model.is_some_and(|model| requirements.auto_review_required_for_model(model)) {
         return ApprovalsReviewer::AutoReview;
@@ -524,9 +526,13 @@ pub(crate) fn mcp_approvals_reviewer_from_layers(
     let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         apps_config_from_layer_stack(config_layer_stack).and_then(|apps_config| {
             let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
-            link_id
-                .and_then(|link_id| app?.links.as_ref()?.links.get(link_id))
-                .and_then(|link| link.approvals_reviewer)
+            tool.and_then(|(name, title)| app?.tools.as_ref()?.for_tool(name, title))
+                .and_then(|tool| tool.approvals_reviewer)
+                .or_else(|| {
+                    link_id
+                        .and_then(|link_id| app?.links.as_ref()?.links.get(link_id))
+                        .and_then(|link| link.approvals_reviewer)
+                })
                 .or_else(|| app.and_then(|app| app.approvals_reviewer))
                 .or_else(|| {
                     apps_config

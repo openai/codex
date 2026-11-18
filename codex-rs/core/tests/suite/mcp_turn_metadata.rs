@@ -537,14 +537,32 @@ async fn wait_for_mcp_tool_call_item(
     .await
 }
 
+const DEFAULT_USER_REVIEWER_CONFIG: &str = r#"
+[apps._default]
+default_tools_approval_mode = "prompt"
+approvals_reviewer = "user"
+"#;
+
+const CALENDAR_TOOL_USER_REVIEWER_CONFIG: &str = r#"
+[apps.calendar]
+default_tools_approval_mode = "prompt"
+approvals_reviewer = "auto_review"
+
+[apps.calendar.tools.calendar_create_event]
+approvals_reviewer = "user"
+"#;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false; "without strict auto review")]
-#[test_case(true; "with strict auto review")]
+#[test_case(false, DEFAULT_USER_REVIEWER_CONFIG; "without strict auto review")]
+#[test_case(true, DEFAULT_USER_REVIEWER_CONFIG; "with strict auto review")]
+#[test_case(false, CALENDAR_TOOL_USER_REVIEWER_CONFIG; "tool reviewer overrides app reviewer")]
 async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
     strict_auto_review: bool,
+    apps_config_toml: &str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let apps_config = toml::from_str(apps_config_toml)?;
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     let call_id = "calendar-call-approval";
@@ -628,11 +646,10 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
                     .enable(Feature::RequestPermissionsTool)
                     .expect("test config should allow feature update");
             }
-            set_default_app_approval_mode_and_reviewer(
-                config,
-                AppToolApproval::Prompt,
-                ApprovalsReviewer::User,
-            );
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_config(&config.codex_home.join("config.toml").abs(), apps_config)
+                .expect("apps user config should be valid");
         });
     let test = builder.build(&server).await?;
     let root_turn_id = "originating-calendar-turn";
@@ -711,7 +728,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
         })
         .await
         else {
-            panic!("expected apps._default user to route the app approval to the user");
+            panic!("expected the configured reviewer to route the app approval to the user");
         };
 
         test.codex

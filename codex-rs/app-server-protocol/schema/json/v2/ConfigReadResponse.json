@@ -153,6 +153,16 @@
             }
           ]
         },
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "enabled": {
           "type": [
             "boolean",

@@ -2609,6 +2609,7 @@ async fn persist_codex_app_tool_approval_writes_tool_override() {
                             AppToolConfig {
                                 enabled: None,
                                 approval_mode: Some(AppToolApproval::Approve),
+                                approvals_reviewer: None,
                             },
                         )]),
                     }),
@@ -2822,6 +2823,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
         &AppToolConfig {
             enabled: None,
             approval_mode: Some(AppToolApproval::Approve),
+            approvals_reviewer: None,
         }
     );
 }

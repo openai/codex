@@ -203,6 +203,7 @@ pub struct AppsDefaultConfig {
 pub struct AppToolConfig {
     pub enabled: Option<bool>,
     pub approval_mode: Option<AppToolApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

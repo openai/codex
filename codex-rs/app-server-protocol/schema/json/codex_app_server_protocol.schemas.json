@@ -8219,6 +8219,16 @@
               }
             ]
           },
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "enabled": {
             "type": [
               "boolean",

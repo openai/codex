@@ -305,7 +305,7 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_uses_link_then_app_then_default_then_global() {
+async fn app_approvals_reviewer_uses_tool_then_link_then_app_then_default_then_global() {
     for (global, app_default, app, expected_global, expected_default, expected_app) in [
         (
             "user",
@@ -340,7 +340,16 @@ approvals_reviewer = "{app}"
 [apps.calendar.links.link_calendar]
 approvals_reviewer = "{app_default}"
 
-[apps.calendar.links.link_without_privacy]
+[apps.calendar.links.other_calendar]
+approvals_reviewer = "{app}"
+
+[apps.calendar.links.link_without_reviewer]
+
+[apps.calendar.tools."events/create"]
+approvals_reviewer = "{app_default}"
+
+[apps.calendar.tools."events/list"]
+enabled = true
 
 [apps.drive.links.link_drive]
 approvals_reviewer = "{app_default}"
@@ -362,11 +371,13 @@ approvals_reviewer = "{app}"
             .await
             .expect("config should build");
 
-        for (link_id, expected) in [
-            (Some("link_calendar"), expected_default),
-            (Some("link_without_privacy"), expected_app),
-            (Some("link_drive"), expected_app),
-            (None, expected_app),
+        for (link_id, tool_name, expected) in [
+            (Some("link_calendar"), "events/list", expected_default),
+            (Some("other_calendar"), "events/create", expected_default),
+            (Some("link_without_reviewer"), "events/list", expected_app),
+            (Some("link_drive"), "events/list", expected_app),
+            (None, "events/create", expected_default),
+            (None, "events/list", expected_app),
         ] {
             assert_eq!(
                 mcp_approvals_reviewer_from_layers(
@@ -377,6 +388,26 @@ approvals_reviewer = "{app}"
                     CODEX_APPS_MCP_SERVER_NAME,
                     Some("calendar"),
                     link_id,
+                    Some((tool_name, None)),
+                ),
+                expected
+            );
+        }
+        // The title supplies the reviewer only when there is no entry for the raw name.
+        for (name, expected) in [
+            ("calendar_create_event", expected_default),
+            ("events/list", expected_app),
+        ] {
+            assert_eq!(
+                mcp_approvals_reviewer_from_layers(
+                    &config.config_layer_stack,
+                    config.config_layer_stack.requirements(),
+                    config.approvals_reviewer,
+                    config.model.as_deref(),
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    Some("calendar"),
+                    /*link_id*/ None,
+                    Some((name, Some("events/create"))),
                 ),
                 expected
             );
@@ -391,6 +422,7 @@ approvals_reviewer = "{app}"
                     CODEX_APPS_MCP_SERVER_NAME,
                     Some(connector_id),
                     Some("link_calendar"),
+                    Some(("events/create", None)),
                 ),
                 expected_app
             );
@@ -404,6 +436,7 @@ approvals_reviewer = "{app}"
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("drive"),
                 /*link_id*/ None,
+                Some(("events/create", None)),
             ),
             expected_default
         );
@@ -416,6 +449,7 @@ approvals_reviewer = "{app}"
                 CODEX_APPS_MCP_SERVER_NAME,
                 /*connector_id*/ None,
                 /*link_id*/ None,
+                /*tool*/ None,
             ),
             expected_default
         );
@@ -428,6 +462,7 @@ approvals_reviewer = "{app}"
                 "custom_server",
                 Some("calendar"),
                 Some("link_calendar"),
+                Some(("events/create", None)),
             ),
             expected_global
         );
@@ -467,6 +502,7 @@ approvals_reviewer = "user"
             CODEX_APPS_MCP_SERVER_NAME,
             Some("calendar"),
             /*link_id*/ None,
+            /*tool*/ None,
         ),
         ApprovalsReviewer::AutoReview
     );
@@ -484,6 +520,9 @@ approvals_reviewer = "auto_review"
 approvals_reviewer = "user"
 
 [apps.calendar.links.link_calendar]
+approvals_reviewer = "user"
+
+[apps.calendar.tools."events/create"]
 approvals_reviewer = "user"
 "#,
     )
@@ -509,6 +548,7 @@ approvals_reviewer = "user"
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("calendar"),
                 link_id,
+                Some(("events/create", None)),
             ),
             ApprovalsReviewer::AutoReview
         );
