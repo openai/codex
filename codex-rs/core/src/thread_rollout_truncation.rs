@@ -45,7 +45,11 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(item)
-                if matches!(&item.item, ResponseItem::Message { .. })
+                if !item
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.realtime_session_end_input)
+                    && matches!(&item.item, ResponseItem::Message { .. })
                     && matches!(
                         event_mapping::parse_turn_item(&item.item),
                         Some(TurnItem::UserMessage(_))

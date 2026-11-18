@@ -47,6 +47,7 @@ pub(crate) struct PreparedRealtimeInput {
     consumed_event_ids: Vec<String>,
     pub(crate) input: String,
     pub(crate) new_items: Vec<RealtimeItem>,
+    pub(crate) receipt: Option<RealtimeItem>,
     pub(crate) reserved: bool,
     reserved_turn_id: Option<String>,
     pub(crate) cached_envelope: Option<ResponseItemEnvelope>,
@@ -323,6 +324,7 @@ impl RealtimeHistoryState {
             consumed_event_ids,
             input,
             new_items: self.unassigned_handoff_seals(),
+            receipt: None,
             reserved: false,
             reserved_turn_id: None,
             cached_envelope: None,
@@ -332,12 +334,77 @@ impl RealtimeHistoryState {
         Some(prepared)
     }
 
-    pub(crate) fn restore_handoffs(&mut self, items: &[codex_history::RolloutItem]) {
-        for handoff_id in items
+    pub(crate) fn prepare_carryover(&mut self, instruction: &str) -> Option<PreparedRealtimeInput> {
+        let session_id = self.active_session_id.clone()?;
+        let handoff_id = format!("tail:{session_id}");
+        if self.committed_handoff_ids.contains(&handoff_id) {
+            return None;
+        }
+        if let Some(prepared) = self.handoff_inputs.get(&handoff_id) {
+            return Some(prepared.clone());
+        }
+        let preserve_transcript = self.preserve_transcript;
+        let entries = self.seal_available_transcripts();
+        if entries.is_empty() {
+            return None;
+        }
+        let consumed_event_ids = entries
             .iter()
-            .filter_map(codex_history::RolloutItem::realtime_handoff_id)
-        {
-            self.committed_handoff_ids.insert(handoff_id.to_string());
+            .filter_map(|(id, _, _)| id.map(str::to_string))
+            .collect();
+        let (input, sources) = RealtimeDelegation::from_events(
+            instruction,
+            &entries,
+            RealtimeDelegationSource::TranscriptTailFlush,
+            preserve_transcript,
+        )?;
+        let id = Uuid::now_v7();
+        let receipt = RealtimeItem {
+            id: id.to_string(),
+            realtime_session_id: session_id.clone(),
+            observed_at_ms: Some(self.observation_clock.now_ms()),
+            content: RealtimeItemContent::SessionInputSaved {
+                reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+                source_event_ids: sources.clone(),
+                input_item_id: codex_protocol::ResponseItemId::for_admitted_user_input(id)
+                    .to_string(),
+                input: input.clone(),
+            },
+        };
+        let prepared = PreparedRealtimeInput {
+            id,
+            session_id,
+            handoff_id: handoff_id.clone(),
+            sources,
+            consumed_event_ids,
+            input,
+            new_items: self.unassigned_handoff_seals(),
+            receipt: Some(receipt),
+            reserved: false,
+            reserved_turn_id: None,
+            cached_envelope: None,
+        };
+        self.handoff_inputs.insert(handoff_id, prepared.clone());
+        Some(prepared)
+    }
+
+    pub(crate) fn restore_handoffs(&mut self, items: &[codex_history::RolloutItem]) {
+        for item in items {
+            if let Some(handoff_id) = item.realtime_handoff_id() {
+                self.committed_handoff_ids.insert(handoff_id.to_string());
+            } else if let codex_history::RolloutItem::RealtimeItem(RealtimeItem {
+                realtime_session_id,
+                content:
+                    RealtimeItemContent::SessionInputSaved {
+                        reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+                        ..
+                    },
+                ..
+            }) = item
+            {
+                self.committed_handoff_ids
+                    .insert(format!("tail:{realtime_session_id}"));
+            }
         }
     }
 

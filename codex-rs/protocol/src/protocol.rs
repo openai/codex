@@ -789,7 +789,13 @@ pub enum Op {
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
 
-    /// Close only the matching session after earlier start operations finish.
+    /// End the identified logical call, including after its transport owner is lost.
+    RealtimeConversationEnd {
+        realtime_session_id: String,
+        reply: oneshot::Sender<CodexResult<()>>,
+    },
+
+    /// Disconnect only the matching transport after earlier start operations finish.
     RealtimeConversationDetach {
         realtime_session_id: String,
         reply: oneshot::Sender<CodexResult<()>>,
@@ -1151,6 +1157,7 @@ impl Op {
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",
+            Self::RealtimeConversationEnd { .. } => "realtime_conversation_end",
             Self::RealtimeConversationDetach { .. } => "realtime_conversation_detach",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::RecoverTurn { .. } => "recover_turn",

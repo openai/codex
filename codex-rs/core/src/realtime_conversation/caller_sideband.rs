@@ -1,5 +1,6 @@
 //! Drives caller-owned existing calls without coupling inbound events to outbound backpressure.
 //! Detach stops writes and drains accepted inbound events before flushing the transcript.
+//! Caller transport closure arms the cleanup deadline even when the event queue is full.
 //! Pending writes are never replayed.
 //! Existing calls support v1/v3 only, so inbound handling does not issue v2 response-control writes.
 
@@ -14,14 +15,15 @@ use super::handle_handoff_output;
 use super::handle_realtime_server_event;
 use super::handle_text_input;
 use super::handle_user_audio_input;
-use super::realtime_transcript_delta;
 use super::report_realtime_transport_loss;
 use crate::context::RealtimeDelegation;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 pub(super) fn spawn_input_task(
     input: RealtimeInputTask,
     transcript_tail_flush: RealtimeTranscriptTailFlush,
+    caller_commands: mpsc::Sender<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let RealtimeInputTask {
@@ -50,7 +52,7 @@ pub(super) fn spawn_input_task(
                     .take_completed_transcript(&event, RealtimeDelegation::FIELD_BYTES)
                     .await;
                 handle_realtime_server_event(
-                    (event, realtime_transcript_delta(&completed)),
+                    (event, completed),
                     &writer,
                     &events_tx,
                     &handoff_state,
@@ -91,6 +93,14 @@ pub(super) fn spawn_input_task(
                     let _ = read.await;
                     Ok(())
                 },
+                _ = caller_commands.closed() => {
+                    // CCA drops both channel halves on terminal transport loss. Observe
+                    // that cutoff independently of the bounded fanout queue, then drain.
+                    stop_token.cancel();
+                    writer.close_sideband_input();
+                    let _ = read.await;
+                    Ok(())
+                },
                 result = &mut read => result,
                 result = write => {
                     writer.close_sideband_input();
@@ -102,6 +112,7 @@ pub(super) fn spawn_input_task(
         // Dropping the last writer aborts the transport pump without waiting for
         // space in the host's outgoing queue (including for a close command).
         drop(writer);
+        stop_token.cancel();
         if let Err(err) = result
             && let RealtimeInputTaskExit::TransportLost { err, .. } =
                 classify_realtime_input_error(err)

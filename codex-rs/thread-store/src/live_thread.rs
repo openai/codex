@@ -300,6 +300,25 @@ impl LiveThread {
                 .seal_realtime_items(self.thread_id, items)
                 .await;
         }
+        if items.last().is_some_and(|item| {
+            matches!(
+                item.content,
+                codex_protocol::realtime::RealtimeItemContent::SessionInputSaved {
+                    reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+                    ..
+                }
+            )
+        }) {
+            self.thread_store
+                .seal_realtime_items(self.thread_id, items.clone())
+                .await?;
+            let records = items
+                .into_iter()
+                .map(RolloutItem::RealtimeItem)
+                .collect::<Vec<_>>();
+            self.observe_appended_metadata(&records).await?;
+            return Ok(());
+        }
         let records: Vec<_> = items.into_iter().map(RolloutItem::RealtimeItem).collect();
         self.append_items(&records).await?;
         self.flush().await

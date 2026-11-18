@@ -6,9 +6,11 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_history::handoff::HandoffSettlement;
 use crate::realtime_history::handoff::PreparedRealtimeInput;
 use crate::state::SessionState;
+use codex_history::CodexHarnessMetadata;
 use codex_history::RealtimeHandoffMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
+use codex_protocol::ResponseItemId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -57,6 +59,48 @@ impl Drop for RealtimeSealGuard {
 }
 
 impl Session {
+    /// Persist and flush the projected chunk before publishing its sole model input.
+    pub(super) async fn record_realtime_chunk_input(
+        &self,
+        state: &mut SessionState,
+        mut envelope: ResponseItemEnvelope,
+        settings_event: Option<EventMsg>,
+        policy: TruncationPolicy,
+    ) -> std::io::Result<ResponseItemEnvelope> {
+        let is_chunk = envelope
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.realtime_session_input.is_some());
+        if self.conversation.history_recovery_required() || !is_chunk {
+            return Err(std::io::Error::other("invalid realtime chunk input"));
+        }
+        state.history.prepare_item_sampling(&mut envelope);
+        let staged = state.history.stage_realtime_input(&mut envelope);
+        let items = settings_event
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .chain(std::iter::once(RolloutItem::ResponseItem(envelope.clone())))
+            .collect::<Vec<_>>();
+        let live = self
+            .live_thread_for_persistence("record realtime transcript chunk")
+            .map_err(std::io::Error::other)?;
+        let mut guard = RealtimeSealGuard::new(Arc::clone(&self.conversation));
+        live.append_items(&items)
+            .await
+            .map_err(std::io::Error::other)?;
+        live.flush().await.map_err(std::io::Error::other)?;
+        if self.conversation.history_recovery_required() {
+            return Err(std::io::Error::other(
+                "realtime history recovery is required",
+            ));
+        }
+        state
+            .history
+            .record_sealed_realtime_input(&envelope, staged, policy);
+        guard.disarm();
+        Ok(envelope)
+    }
+
     pub(super) async fn record_realtime_handoff_input(
         &self,
         state: &mut SessionState,
@@ -109,6 +153,11 @@ impl Session {
             self.conversation.mark_history_recovery_required();
             seal_guard.disarm();
             return Err(std::io::Error::other(error));
+        }
+        if self.conversation.history_recovery_required() {
+            return Err(std::io::Error::other(
+                "realtime history recovery is required",
+            ));
         }
         // Fresh recording exposes the source only after capturing the review backup;
         // a cached retry replays its already persisted provenance.
@@ -222,10 +271,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn route_realtime_text_input(
-        self: &Arc<Self>,
-        text: String,
-    ) -> Result<(), &'static str> {
+    async fn route_realtime_text_input(self: &Arc<Self>, text: String) -> Result<(), &'static str> {
         let submission_id = Uuid::now_v7().to_string();
         let submission = turn_input::handle(
             self,
@@ -297,7 +343,8 @@ impl Session {
             .lock()
             .await
             .pending_handoff(id)?;
-        (prepared.reserved && prepared.input == *text).then_some(prepared)
+        (prepared.reserved && prepared.receipt.is_none() && prepared.input == *text)
+            .then_some(prepared)
     }
 
     pub(crate) async fn realtime_handoff_metadata(
@@ -405,6 +452,47 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Keep durable carryover and live model history in the same order as agent input."
+    )]
+    pub(crate) async fn record_realtime_carryover(&self, instruction: &str) -> std::io::Result<()> {
+        let history = self
+            .realtime_history
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("realtime history is disabled"))?;
+        let Some(prepared) = history.lock().await.prepare_carryover(instruction) else {
+            return Ok(());
+        };
+        let receipt = prepared
+            .receipt
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("missing realtime carryover receipt"))?;
+        let mut input = Self::realtime_carryover_input(receipt)
+            .ok_or_else(|| std::io::Error::other("invalid realtime carryover receipt"))?;
+        let mut records = prepared.new_items.clone();
+        records.push(receipt.clone());
+        let context = self.new_inject_items_context().await;
+        {
+            let mut state = self.state.lock().await;
+            self.live_thread_for_persistence("retain realtime context")
+                .map_err(std::io::Error::other)?
+                .seal_realtime_items(records.clone())
+                .await
+                .map_err(std::io::Error::other)?;
+            state.history.record_annotated_items(
+                std::slice::from_mut(&mut input),
+                context.model_info().truncation_policy.into(),
+            );
+        }
+        history
+            .lock()
+            .await
+            .finish_handoff(prepared.id, /*turn_id*/ None);
+        self.publish_realtime_acceptance(&records).await;
+        Ok(())
+    }
+
     async fn publish_realtime_acceptance(&self, records: &[RealtimeItem]) {
         for item in records {
             let event = |payload| Event {
@@ -420,5 +508,36 @@ impl Session {
             self.deliver_event_raw(event(RealtimeEvent::HistoryItemCompleted(item.clone())))
                 .await;
         }
+    }
+
+    /// Hangup has no ordinary turn input. Its receipt is the only durable copy and
+    /// reconstructs context for the next real turn without creating a boundary.
+    pub(super) fn realtime_carryover_input(item: &RealtimeItem) -> Option<ResponseItemEnvelope> {
+        let RealtimeItemContent::SessionInputSaved {
+            reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+            input_item_id,
+            input,
+            ..
+        } = &item.content
+        else {
+            return None;
+        };
+        let (mut response, _) =
+            Self::response_item_from_user_input_with_image_positions(&[ResolvedUserInput::text(
+                input.clone(),
+            )]);
+        response.set_id(Some(ResponseItemId::from_server(input_item_id.clone())));
+        if let Some(observed_at_ms) = item.observed_at_ms {
+            response.set_create_time_if_missing(serde_json::Number::from_f64(
+                observed_at_ms as f64 / 1000.0,
+            )?);
+        }
+        Some(ResponseItemEnvelope {
+            item: response,
+            metadata: Some(CodexHarnessMetadata {
+                realtime_session_end_input: true,
+                ..Default::default()
+            }),
+        })
     }
 }

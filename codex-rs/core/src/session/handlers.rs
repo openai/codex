@@ -330,8 +330,13 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(startup_prewarm) = startup_prewarm {
         startup_prewarm.abort().await;
     }
-    let _ = sess.conversation.shutdown().await;
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let (conversation_shutdown, ()) = tokio::join!(
+        sess.conversation.shutdown(),
+        sess.abort_all_tasks(TurnAbortReason::Interrupted),
+    );
+    if let Err(err) = conversation_shutdown {
+        warn!("failed to shut down realtime conversation: {err}");
+    }
     if let Some(reporting) = &sess.outcome_reporting {
         reporting.handoffs.wait().await;
     }
@@ -688,17 +693,16 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     false
                 }
+                Op::RealtimeConversationEnd { realtime_session_id, reply } => {
+                    crate::realtime_conversation::handle_end(&sess, sub.id, &realtime_session_id, reply).await;
+                    false
+                }
                 Op::RealtimeConversationDetach {
                     realtime_session_id,
                     reply,
                 } => {
-                    crate::realtime_conversation::handle_detach(
-                        &sess,
-                        Some(&realtime_session_id),
-                        &sub.id,
-                    )
-                    .await;
-                    let _ = reply.send(Ok(()));
+                    crate::realtime_conversation::handle_detach(&sess, &realtime_session_id, reply)
+                        .await;
                     false
                 }
                 Op::RealtimeConversationAudio(params) => {

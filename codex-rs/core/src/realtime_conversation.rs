@@ -82,6 +82,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -111,6 +112,7 @@ const REALTIME_INITIAL_ITEMS_MAX_COUNT: usize = 128;
 const REALTIME_INITIAL_ITEMS_MAX_TOKENS: usize = 8_192;
 const REALTIME_MODE_INSTRUCTIONS_MAX_TOKENS: usize = 8_192;
 const HANDOFF_STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
+const REALTIME_HANGUP_TIMEOUT: Duration = Duration::from_secs(30);
 const HANDOFF_STREAM_TRUNCATION_MARKER: &str = "\n…output truncated…\n";
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 const STANDALONE_HANDOFF_ID: &str = "codex";
@@ -125,11 +127,64 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.";
+const HISTORY_RECOVERY_REQUIRED: &str = "history_recovery_required";
 const HISTORY_RECOVERY_MESSAGE: &str =
     "realtime history recovery required; reload the thread before continuing";
 
 fn history_recovery_error() -> CodexErr {
     CodexErr::Fatal(HISTORY_RECOVERY_MESSAGE.into())
+}
+
+fn realtime_busy_error() -> CodexErr {
+    CodexErr::Io(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "realtime session is temporarily unavailable; retry the operation",
+    ))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryAction {
+    Retry,
+    Reload,
+    Reject,
+}
+
+enum RealtimeLifecycleError {
+    Store(codex_thread_store::ThreadStoreError),
+    Invalid(&'static str),
+    Uncertain(String),
+}
+
+impl RealtimeLifecycleError {
+    fn into_reply(self) -> (RecoveryAction, CodexErr) {
+        match self {
+            Self::Store(error @ codex_thread_store::ThreadStoreError::Retryable { .. }) => (
+                RecoveryAction::Retry,
+                CodexErr::Io(std::io::Error::new(std::io::ErrorKind::WouldBlock, error)),
+            ),
+            Self::Store(error) => (
+                RecoveryAction::Reload,
+                CodexErr::Fatal(format!("{HISTORY_RECOVERY_MESSAGE}: {error}")),
+            ),
+            Self::Invalid(message) => (
+                RecoveryAction::Reject,
+                CodexErr::InvalidRequest(message.to_owned()),
+            ),
+            Self::Uncertain(cause) => (
+                RecoveryAction::Reload,
+                CodexErr::Fatal(format!("{HISTORY_RECOVERY_MESSAGE}: {cause}")),
+            ),
+        }
+    }
+}
+
+fn realtime_session_closed(items: &[codex_protocol::realtime::RealtimeItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item.content,
+            codex_protocol::realtime::RealtimeItemContent::RealtimeSessionClosed { .. }
+        )
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +203,7 @@ enum RealtimeFanoutTaskStop {
 struct RealtimeHandoffAdmission {
     gate: Semaphore,
     retired: AtomicBool,
+    closure_failed: AtomicBool,
 }
 
 impl RealtimeHandoffAdmission {
@@ -155,26 +211,45 @@ impl RealtimeHandoffAdmission {
         Self {
             gate: Semaphore::new(1),
             retired: AtomicBool::new(false),
+            closure_failed: AtomicBool::new(false),
         }
     }
 
-    async fn route(&self, session: &Arc<Session>, text: String) -> Result<(), &'static str> {
+    async fn route(
+        &self,
+        session: &Arc<Session>,
+        handoff: &RealtimeHandoffRequested,
+        preserve_transcript: bool,
+    ) -> Result<(), &'static str> {
         let Ok(_permit) = self.gate.acquire().await else {
             return Ok(());
         };
-        if !self.retired.load(Ordering::Acquire) {
-            // Bound the layout of the handoff future while retaining the admission permit.
-            Box::pin(session.route_realtime_text_input(text)).await?;
+        if self.retired.load(Ordering::Acquire) {
+            return Ok(());
         }
+        // Stop cancels the input producer; events already parsed into fanout still own their
+        // admission attempt and are drained before carryover under the same deadline.
+        // Bound the layout of the handoff future while retaining the admission permit.
+        Box::pin(session.route_realtime_handoff(handoff, preserve_transcript)).await?;
         Ok(())
     }
 
-    async fn record_transcript(&self, session: &Session, text: String) -> std::io::Result<()> {
+    async fn record_transcript(
+        &self,
+        session: &Session,
+        text: String,
+        metadata: Option<codex_history::RealtimeSessionInputMetadata>,
+    ) -> std::io::Result<()> {
         let Ok(_permit) = self.gate.acquire().await else {
             return Ok(());
         };
+        // Fanout drains completed speech before final carryover.
         if !self.retired.load(Ordering::Acquire) {
-            transcript_tail::record(session, text).await?;
+            if let Some(metadata) = metadata {
+                transcript_tail::record_chunk(session, text, metadata).await?;
+            } else {
+                transcript_tail::record(session, text).await?;
+            }
         }
         Ok(())
     }
@@ -197,6 +272,9 @@ struct RealtimeConversationManagerState {
     mode_instructions: Option<RealtimeModeInstructions>,
     // Keep context active until the terminal transcript is recorded.
     context_active: bool,
+    closing: bool,
+    ending: bool,
+    detach_reply: Option<oneshot::Sender<CodexResult<()>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -498,7 +576,7 @@ impl RealtimeResponseCreateQueue {
 }
 
 // Any completed transcript travels with its event so the fanout persists it before later handoffs.
-type RealtimeOutput = (RealtimeEvent, Option<String>);
+type RealtimeOutput = (RealtimeEvent, Vec<RealtimeTranscriptEntry>);
 
 struct RealtimeInputTask {
     writer: RealtimeWebsocketWriter,
@@ -601,6 +679,8 @@ struct RealtimeStart {
 struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
     route_handoffs: Arc<RealtimeHandoffAdmission>,
+    stop_token: CancellationToken,
+    input_abort: tokio::task::AbortHandle,
     events_rx: Receiver<RealtimeOutput>,
     transcript_tail_rx: Receiver<String>,
     sdp: Option<String>,
@@ -614,6 +694,9 @@ impl RealtimeConversationManager {
                 conversation: None,
                 mode_instructions: None,
                 context_active: false,
+                closing: false,
+                ending: false,
+                detach_reply: None,
             }),
             recovery_required: AtomicBool::new(false),
         }
@@ -656,11 +739,31 @@ impl RealtimeConversationManager {
         self.recovery_required.store(true, Ordering::Release);
     }
 
+    fn lifecycle_error(&self, failure: RealtimeLifecycleError) -> (RecoveryAction, CodexErr) {
+        let (action, error) = failure.into_reply();
+        if action == RecoveryAction::Reload {
+            self.mark_history_recovery_required();
+        }
+        (action, error)
+    }
+
+    fn store_read_error(&self, error: codex_thread_store::ThreadStoreError) -> CodexErr {
+        self.lifecycle_error(RealtimeLifecycleError::Store(error)).1
+    }
+
     pub(crate) async fn stop_for_history_recovery(&self) {
         if self.history_recovery_required()
             && let Some(conversation) = &self.state.lock().await.conversation
         {
             conversation.stop_token.cancel();
+        }
+    }
+
+    fn require_history_recovery(&self, state: &mut RealtimeConversationManagerState) {
+        self.mark_history_recovery_required();
+        state.context_active = false;
+        if let Some(reply) = state.detach_reply.take() {
+            let _ = reply.send(Err(history_recovery_error()));
         }
     }
 
@@ -696,24 +799,104 @@ impl RealtimeConversationManager {
         sess: &Arc<Session>,
         sub_id: &str,
     ) -> CodexResult<RealtimeStartOutput> {
+        let (previous_id, closing) = {
+            let state = self.state.lock().await;
+            if self.history_recovery_required() {
+                return Err(history_recovery_error());
+            }
+            (
+                state
+                    .conversation
+                    .as_ref()
+                    .and_then(|state| state.session_id.clone()),
+                state.closing,
+            )
+        };
+        if closing {
+            return Err(realtime_busy_error());
+        }
+        if let Some(previous_id) = previous_id {
+            let (reply, result) = oneshot::channel();
+            if start.session_config.session_id.as_deref() == Some(previous_id.as_str()) {
+                handle_detach(sess, &previous_id, reply).await;
+            } else {
+                handle_end(sess, sub_id.to_owned(), &previous_id, reply).await;
+            }
+            // The caller retries after cleanup. Waiting here would block the submission
+            // dispatcher, including an interrupt needed by an admitted handoff hook.
+            drop(result);
+            return Err(realtime_busy_error());
+        }
         let previous_state = {
             let mut guard = self.state.lock().await;
+            if self.history_recovery_required() {
+                return Err(history_recovery_error());
+            }
+            if guard.closing {
+                return Err(CodexErr::InvalidRequest(
+                    "previous realtime history is still closing".into(),
+                ));
+            }
             if start.attachment_control.is_cancelled() {
                 return Err(CodexErr::TurnAborted);
             }
-            guard.conversation.take()
+            let previous = guard.conversation.take();
+            guard.closing = previous.is_some();
+            previous
         };
         if let Some(state) = previous_state {
             let previous_sub_id = state.sub_id.clone();
-            stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
-            send_realtime_conversation_closed(
-                sess,
-                previous_sub_id,
-                RealtimeConversationEnd::Requested,
-            )
+            if !stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await {
+                self.require_history_recovery(&mut *self.state.lock().await);
+                return Err(history_recovery_error());
+            }
+            sess.deliver_event_raw(Event {
+                id: previous_sub_id,
+                msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
+                    reason: Some("transport_closed".to_owned()),
+                }),
+            })
             .await;
+            self.state.lock().await.closing = false;
         }
 
+        if start.session_config.event_parser == RealtimeEventParser::FramelessBidi
+            && let Some(history) = &sess.realtime_history
+            && history.lock().await.frames_enabled()
+            && let Some(session_id) = start.session_config.session_id.as_ref()
+        {
+            let store = &sess.services.thread_store;
+            let items = store
+                .load_realtime_session(sess.thread_id(), session_id.clone())
+                .await
+                .map_err(|error| self.store_read_error(error))?;
+            if let Some(items) = items {
+                if history.lock().await.recover_session(session_id, &items)
+                    != crate::realtime_history::handoff::RecoveredSessionStatus::Open
+                {
+                    return Err(CodexErr::InvalidRequest(
+                        "realtime session has already ended".to_owned(),
+                    ));
+                }
+            } else if let Some(previous_id) = store
+                .load_realtime_session_head(sess.thread_id())
+                .await
+                .map_err(|error| self.store_read_error(error))?
+                && previous_id != *session_id
+            {
+                let previous = store
+                    .load_realtime_session(sess.thread_id(), previous_id.clone())
+                    .await
+                    .map_err(|error| self.store_read_error(error))?;
+                let closed = previous.is_some_and(|items| realtime_session_closed(&items));
+                if !closed {
+                    let (reply, result) = oneshot::channel();
+                    handle_end(sess, sub_id.to_owned(), &previous_id, reply).await;
+                    drop(result);
+                    return Err(realtime_busy_error());
+                }
+            }
+        }
         self.start_inner(start, mode_instructions, sub_id).await
     }
 
@@ -807,6 +990,7 @@ impl RealtimeConversationManager {
         };
         // Use the sideband transport passed from outside.
         let (task, sdp) = if let Some(transport) = sideband {
+            let caller_commands = transport.outgoing.clone();
             // Existing naming uses websocket, actual link is defined by the transport.
             let connection =
                 codex_api::RealtimeWebsocketConnection::from_sideband(transport, event_parser);
@@ -825,6 +1009,7 @@ impl RealtimeConversationManager {
                     stop_token: stop_token.clone(),
                 },
                 transcript_tail_flush,
+                caller_commands,
             );
             (task, None)
         } else if let Some(sdp) = sdp {
@@ -910,6 +1095,7 @@ impl RealtimeConversationManager {
             (task, None)
         };
 
+        let input_abort = task.abort_handle();
         let conversation = ConversationState {
             session_id,
             sub_id: sub_id.to_owned(),
@@ -921,7 +1107,7 @@ impl RealtimeConversationManager {
             fanout_task: None,
             realtime_active: Arc::clone(&realtime_active),
             route_handoffs: Arc::clone(&route_handoffs),
-            stop_token,
+            stop_token: stop_token.clone(),
         };
         let uncommitted = {
             let mut state = self.state.lock().await;
@@ -958,6 +1144,8 @@ impl RealtimeConversationManager {
         Ok(RealtimeStartOutput {
             realtime_active,
             route_handoffs,
+            stop_token,
+            input_abort,
             events_rx,
             transcript_tail_rx,
             sdp,
@@ -996,6 +1184,7 @@ impl RealtimeConversationManager {
         realtime_active: &Arc<AtomicBool>,
         sub_id: String,
         end: RealtimeConversationEnd,
+        reconnectable_session: bool,
     ) {
         // Keep selection and its close event together. An old fanout must not
         // close the history segment that belongs to a replacement.
@@ -1011,7 +1200,35 @@ impl RealtimeConversationManager {
             return;
         };
         stop_conversation_state(state, RealtimeFanoutTaskStop::Detach).await;
-        send_realtime_conversation_closed(sess, sub_id, end).await;
+        if guard.ending || !reconnectable_session {
+            let end = if guard.ending {
+                RealtimeConversationEnd::Requested
+            } else {
+                end
+            };
+            if let Err(err) = send_realtime_conversation_closed(sess, sub_id.clone(), end).await {
+                self.require_history_recovery(&mut guard);
+                report_history_recovery_required(sess, sub_id, &err.to_string()).await;
+                return;
+            }
+        } else {
+            let reason = match end {
+                RealtimeConversationEnd::Error => "error",
+                _ => "transport_closed",
+            };
+            sess.deliver_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
+                    reason: Some(reason.to_owned()),
+                }),
+            })
+            .await;
+        }
+        guard.ending = false;
+        guard.closing = false;
+        if let Some(reply) = guard.detach_reply.take() {
+            let _ = reply.send(Ok(()));
+        }
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
@@ -1414,34 +1631,52 @@ impl RealtimeConversationManager {
     }
 
     pub(crate) async fn shutdown(&self) -> CodexResult<()> {
-        let state = {
+        let (state, detach_reply) = {
             let mut guard = self.state.lock().await;
-            guard.conversation.take()
+            (guard.conversation.take(), guard.detach_reply.take())
         };
 
-        if let Some(state) = state {
-            stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
+        let stopped = match state {
+            Some(state) => stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await,
+            None => true,
+        };
+        if let Some(reply) = detach_reply {
+            let _ = reply.send(Err(CodexErr::TurnAborted));
         }
-        Ok(())
+        if stopped {
+            Ok(())
+        } else {
+            Err(history_recovery_error())
+        }
     }
 }
 
 async fn stop_conversation_state(
     mut state: ConversationState,
     fanout_task_stop: RealtimeFanoutTaskStop,
-) {
+) -> bool {
     state.realtime_active.store(false, Ordering::Relaxed);
     state.stop_token.cancel();
-    let _ = state.input_task.await;
+    let mut stopped = match state.input_task.await {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(%error, "realtime input task failed during shutdown");
+            false
+        }
+    };
 
     if let Some(fanout_task) = state.fanout_task.take() {
         match fanout_task_stop {
             RealtimeFanoutTaskStop::Await => {
-                let _ = fanout_task.await;
+                if let Err(error) = fanout_task.await {
+                    warn!(%error, "realtime fanout task failed during shutdown");
+                    stopped = false;
+                }
             }
             RealtimeFanoutTaskStop::Detach => {}
         }
     }
+    stopped && !state.route_handoffs.closure_failed.load(Ordering::Acquire)
 }
 
 pub(crate) async fn handle_start(
@@ -1697,7 +1932,9 @@ async fn prepare_realtime_start(
         extra_headers: Some(extra_headers),
         websocket_auth,
         client_managed_handoffs: params.client_managed_handoffs,
-        flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
+        // TODO: Remove this setting once the legacy V1/V2 protocols are gone.
+        flush_transcript_tail_on_session_end: version == RealtimeWsVersion::V3
+            || params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
         codex_response_handoff_mode: params.codex_response_handoff_mode,
@@ -1935,7 +2172,8 @@ async fn handle_start_inner(
         session_config,
         transport,
     } = prepared_start;
-    sess.initialize_realtime_history()
+    let frames_enabled = sess
+        .initialize_realtime_history()
         .or_cancel(&attachment_control.token)
         .await??;
     info!("starting realtime conversation");
@@ -1990,6 +2228,8 @@ async fn handle_start_inner(
     let RealtimeStartOutput {
         realtime_active,
         route_handoffs,
+        stop_token,
+        input_abort,
         events_rx,
         transcript_tail_rx,
         sdp,
@@ -2005,7 +2245,14 @@ async fn handle_start_inner(
     let sess_clone = Arc::clone(sess);
     let sub_id = sub_id.to_string();
     let fanout_realtime_active = Arc::clone(&realtime_active);
-    let fanout_task = tokio::spawn(async move {
+    let timeout_sess = Arc::clone(&sess_clone);
+    let timeout_sub_id = sub_id.clone();
+    let timeout_admission = Arc::clone(&route_handoffs);
+    let timeout_realtime_active = Arc::clone(&fanout_realtime_active);
+    let timeout_stop_token = stop_token.clone();
+    let reconnectable_session =
+        frames_enabled && event_parser == RealtimeEventParser::FramelessBidi;
+    let fanout = async move {
         let ev = |msg| Event {
             id: sub_id.clone(),
             msg,
@@ -2014,19 +2261,6 @@ async fn handle_start_inner(
         let mut handoff_error = None;
         // Drain already-parsed events so a queued handoff is routed before the final tail.
         while let Ok((event, completed)) = events_rx.recv().await {
-            if let Some(delta) = completed {
-                let text = wrap_realtime_delegation_input(
-                    "",
-                    Some(&delta),
-                    RealtimeDelegationSource::Handoff,
-                    /*preserve_transcript*/ true,
-                );
-                if let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await {
-                    warn!("failed to save realtime transcript: {err}");
-                    handoff_error = Some("failed to save the realtime transcript");
-                    break;
-                }
-            }
             match &event {
                 RealtimeEvent::AudioOut(_) => {}
                 _ => {
@@ -2038,17 +2272,15 @@ async fn handle_start_inner(
             if let RealtimeEvent::Error(_) = &event {
                 end = RealtimeConversationEnd::Error;
             }
-            let maybe_routed_text = match &event {
-                RealtimeEvent::HandoffRequested(handoff) => realtime_delegation_from_handoff(
-                    handoff,
-                    event_parser == RealtimeEventParser::FramelessBidi,
-                ),
-                _ => None,
-            };
-            if let Some(text) = maybe_routed_text {
-                // The routed text can contain spoken prompts or workspace secrets.
-                debug!("[realtime-text] realtime conversation text output");
-                handoff_error = route_handoffs.route(&sess_clone, text).await.err();
+            if let RealtimeEvent::HandoffRequested(handoff) = &event {
+                handoff_error = route_handoffs
+                    .route(
+                        &sess_clone,
+                        handoff,
+                        event_parser == RealtimeEventParser::FramelessBidi,
+                    )
+                    .await
+                    .err();
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
@@ -2057,17 +2289,94 @@ async fn handle_start_inner(
                     },
                 )))
                 .await;
+            if !completed.is_empty() {
+                let (entries, metadata) = if frames_enabled {
+                    if let Err(err) = sess_clone.wait_for_realtime_handoffs().await {
+                        warn!("could not settle realtime handoffs before chunk: {err}");
+                        handoff_error =
+                            Some("could not confirm realtime handoff before transcript chunk");
+                        break;
+                    }
+                    let Some(history) = &sess_clone.realtime_history else {
+                        break;
+                    };
+                    let mut history = history.lock().await;
+                    let (entries, sources) = history.prepare_recorded_chunk(&completed);
+                    let Some(session_id) = history.active_session_id().map(str::to_owned) else {
+                        break;
+                    };
+                    let metadata = codex_history::RealtimeSessionInputMetadata {
+                        event_id: uuid::Uuid::now_v7().to_string(),
+                        realtime_session_id: session_id,
+                        observed_at_ms: history.observation_clock.now_ms(),
+                        source_event_ids: sources,
+                    };
+                    (entries, Some(metadata))
+                } else {
+                    (completed.clone(), None)
+                };
+                if let Some(delta) = realtime_transcript_delta(&entries) {
+                    let text = wrap_realtime_delegation_input(
+                        "",
+                        Some(&delta),
+                        RealtimeDelegationSource::Handoff,
+                        /*preserve_transcript*/ true,
+                    );
+                    if let Err(err) = route_handoffs
+                        .record_transcript(&sess_clone, text, metadata)
+                        .await
+                    {
+                        warn!("failed to save realtime transcript: {err}");
+                        route_handoffs.closure_failed.store(true, Ordering::Release);
+                        handoff_error = Some("failed to save the realtime transcript");
+                        break;
+                    }
+                    if frames_enabled && let Some(history) = &sess_clone.realtime_history {
+                        history.lock().await.consume_recorded_chunk(&completed);
+                    }
+                }
+            }
             if handoff_error.is_some() {
                 break;
             }
         }
         drop(events_rx);
-        if handoff_error.is_none()
-            && let Ok(text) = transcript_tail_rx.recv().await
-            && let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await
+        // After the parsed event queue drains, settle admitted hooks and input persistence
+        // before deciding which transcript remains for carryover or closing the session.
+        let settlement = if frames_enabled {
+            // The producer starts the cleanup deadline on exit; this is also safe when
+            // the producer has already canceled the token for an explicit stop or EOF.
+            stop_token.cancel();
+            sess_clone.wait_for_realtime_handoffs().await
+        } else {
+            Ok(())
+        };
+        if let Err(err) = settlement {
+            warn!("could not settle realtime handoffs before closure: {err}");
+            route_handoffs.closure_failed.store(true, Ordering::Release);
+            handoff_error = Some("could not confirm realtime handoff before closure");
+        } else if handoff_error.is_none()
+            && (sess_clone.conversation.state.lock().await.ending || !reconnectable_session)
         {
-            warn!("failed to flush realtime transcript before closure: {err}");
-            handoff_error = Some("failed to save the realtime transcript before closure");
+            let text = transcript_tail_rx.recv().await.ok();
+            // Rejected speech remains pending even if the transport consumed its copy.
+            let canonical_tail = flush_transcript_tail_on_session_end && reconnectable_session;
+            if !route_handoffs.retired.load(Ordering::Acquire) {
+                let result = if canonical_tail {
+                    sess_clone
+                        .record_realtime_carryover(REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION)
+                        .await
+                } else if let Some(text) = text {
+                    transcript_tail::record(&sess_clone, text).await
+                } else {
+                    Ok(())
+                };
+                if let Err(err) = result {
+                    warn!("failed to flush realtime transcript before closure: {err}");
+                    route_handoffs.closure_failed.store(true, Ordering::Release);
+                    handoff_error = Some("failed to save the realtime transcript before closure");
+                }
+            }
         }
         // Make realtime_end eligible only after the tail has reached history.
         {
@@ -2076,6 +2385,9 @@ async fn handle_start_inner(
                 Arc::ptr_eq(&current.realtime_active, &fanout_realtime_active)
             }) {
                 state.context_active = false;
+                if route_handoffs.closure_failed.load(Ordering::Acquire) {
+                    sess_clone.conversation.require_history_recovery(&mut state);
+                }
             }
         }
         if let Some(error) = handoff_error {
@@ -2088,7 +2400,10 @@ async fn handle_start_inner(
                 )))
                 .await;
         }
-        if fanout_realtime_active.swap(false, Ordering::Relaxed) {
+        if route_handoffs.closure_failed.load(Ordering::Acquire) {
+            fanout_realtime_active.store(false, Ordering::Relaxed);
+            notify_history_recovery_required(&sess_clone, sub_id).await;
+        } else if fanout_realtime_active.swap(false, Ordering::Relaxed) {
             match end {
                 RealtimeConversationEnd::TransportClosed => {
                     info!("realtime conversation transport closed");
@@ -2097,8 +2412,71 @@ async fn handle_start_inner(
             }
             sess_clone
                 .conversation
-                .finish_if_active(&sess_clone, &fanout_realtime_active, sub_id, end)
+                .finish_if_active(
+                    &sess_clone,
+                    &fanout_realtime_active,
+                    sub_id,
+                    end,
+                    reconnectable_session,
+                )
                 .await;
+        }
+    };
+    let fanout_task = tokio::spawn(async move {
+        let timed_out = if frames_enabled {
+            tokio::select! {
+                biased;
+                () = fanout => false,
+                () = async {
+                    timeout_stop_token.cancelled().await;
+                    tokio::time::sleep(REALTIME_HANGUP_TIMEOUT).await;
+                } => true,
+            }
+        } else {
+            fanout.await;
+            false
+        };
+        if timed_out {
+            // The select has dropped fanout, canceling an uncertain seal and releasing its locks.
+            input_abort.abort();
+            timeout_admission
+                .closure_failed
+                .store(true, Ordering::Release);
+            timeout_realtime_active.store(false, Ordering::Relaxed);
+            timeout_sess.conversation.mark_history_recovery_required();
+            let turn_ids = if let Some(history) = &timeout_sess.realtime_history {
+                history.lock().await.reserved_turn_ids()
+            } else {
+                Vec::new()
+            };
+            let abort_sess = Arc::clone(&timeout_sess);
+            tokio::spawn(async move {
+                for turn_id in turn_ids {
+                    abort_sess
+                        .abort_turn_if_active(
+                            &turn_id,
+                            codex_protocol::protocol::TurnAbortReason::Replaced,
+                            /*error*/ None,
+                        )
+                        .await;
+                }
+            });
+            let notify = {
+                let mut state = timeout_sess.conversation.state.lock().await;
+                let matches = state.conversation.as_ref().is_none_or(|current| {
+                    Arc::ptr_eq(&current.realtime_active, &timeout_realtime_active)
+                });
+                if matches {
+                    timeout_sess
+                        .conversation
+                        .require_history_recovery(&mut state);
+                }
+                matches
+            };
+            if notify {
+                warn!("realtime hangup timed out; history recovery is required");
+                notify_history_recovery_required(&timeout_sess, timeout_sub_id).await;
+            }
         }
     });
     sess.conversation
@@ -2275,7 +2653,104 @@ pub(crate) async fn handle_speech(
 }
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
-    handle_detach(sess, /*expected*/ None, &sub_id).await;
+    let has_conversation = {
+        let mut state = sess.conversation.state.lock().await;
+        if sess.conversation.history_recovery_required() {
+            drop(state);
+            notify_history_recovery_required(sess, sub_id).await;
+            return;
+        }
+        if state.closing {
+            return;
+        }
+        if let Some(conversation) = &state.conversation {
+            conversation.stop_token.cancel();
+            state.closing = true;
+            state.ending = true;
+            true
+        } else {
+            false
+        }
+    };
+    if has_conversation {
+        return;
+    }
+
+    let enrolled = match sess.initialize_realtime_history().await {
+        Ok(enrolled) => enrolled,
+        Err(error) => {
+            report_thread_stop_failure(
+                sess,
+                sub_id,
+                RealtimeLifecycleError::Uncertain(error.to_string()),
+            )
+            .await;
+            return;
+        }
+    };
+    if enrolled {
+        let head = match sess
+            .services
+            .thread_store
+            .load_realtime_session_head(sess.thread_id())
+            .await
+        {
+            Ok(head) => head,
+            Err(error) => {
+                report_thread_stop_failure(sess, sub_id, RealtimeLifecycleError::Store(error))
+                    .await;
+                return;
+            }
+        };
+        if let Some(session_id) = head {
+            let (reply, result) = oneshot::channel();
+            handle_end(sess, sub_id.clone(), &session_id, reply).await;
+            // End can require an interrupt while handoffs settle, so don't wait inside
+            // the submission dispatcher. Stop acknowledges submission; closure is an event.
+            let sess = Arc::clone(sess);
+            tokio::spawn(async move {
+                if let Ok(Err(error)) = result.await {
+                    send_thread_stop_error(&sess, sub_id, error.to_string()).await;
+                }
+            });
+        }
+        return;
+    }
+
+    if let Err(error) =
+        send_realtime_conversation_closed(sess, sub_id.clone(), RealtimeConversationEnd::Requested)
+            .await
+    {
+        report_thread_stop_failure(
+            sess,
+            sub_id,
+            RealtimeLifecycleError::Uncertain(error.to_string()),
+        )
+        .await;
+    }
+}
+
+async fn send_thread_stop_error(sess: &Session, sub_id: String, message: String) {
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }),
+    })
+    .await;
+}
+
+async fn report_thread_stop_failure(
+    sess: &Session,
+    sub_id: String,
+    failure: RealtimeLifecycleError,
+) {
+    let (action, error) = sess.conversation.lifecycle_error(failure);
+    if action == RecoveryAction::Reload {
+        report_history_recovery_required(sess, sub_id, &error.to_string()).await;
+    } else {
+        send_thread_stop_error(sess, sub_id, error.to_string()).await;
+    }
 }
 
 /// Completes after the connection is published or the cancelled attempt is cleaned up.
@@ -2367,28 +2842,171 @@ pub(crate) async fn handle_attach_stream(
     handle_start_inner(sess, &sub_id, prepared).await
 }
 
-pub(crate) async fn handle_detach(sess: &Arc<Session>, expected: Option<&str>, stop_sub_id: &str) {
-    let current = {
+/// End one logical call, even when its former transport owner no longer exists.
+pub(crate) async fn handle_end(
+    sess: &Arc<Session>,
+    sub_id: String,
+    expected: &str,
+    reply: oneshot::Sender<CodexResult<()>>,
+) {
+    let check_closed = {
         let mut state = sess.conversation.state.lock().await;
-        if expected.is_some_and(|expected| {
-            state
-                .conversation
-                .as_ref()
-                .and_then(|current| current.session_id.as_deref())
-                != Some(expected)
-        }) {
+        if sess.conversation.history_recovery_required() {
+            let _ = reply.send(Err(history_recovery_error()));
             return;
         }
-        state.conversation.take()
+        if let Some(current) = &state.conversation {
+            if current.session_id.as_deref() != Some(expected) {
+                true
+            } else {
+                if state.closing || state.detach_reply.is_some() {
+                    let _ = reply.send(Err(realtime_busy_error()));
+                    return;
+                }
+                current.stop_token.cancel();
+                state.closing = true;
+                state.ending = true;
+                state.detach_reply = Some(reply);
+                return;
+            }
+        } else if state.closing {
+            let _ = reply.send(Err(realtime_busy_error()));
+            return;
+        } else {
+            state.closing = true;
+            state.ending = true;
+            false
+        }
     };
-    let sub_id = if let Some(current) = current {
-        let sub_id = current.sub_id.clone();
-        stop_conversation_state(current, RealtimeFanoutTaskStop::Await).await;
-        sub_id
-    } else {
-        stop_sub_id.to_owned()
-    };
-    send_realtime_conversation_closed(sess, sub_id, RealtimeConversationEnd::Requested).await;
+    if check_closed {
+        let read = sess
+            .services
+            .thread_store
+            .load_realtime_session(sess.thread_id(), expected.to_owned())
+            .await;
+        let (action, result) = match read {
+            Ok(Some(items)) if realtime_session_closed(&items) => (None, Ok(())),
+            Ok(_) => (
+                Some(RecoveryAction::Reject),
+                Err(CodexErr::InvalidRequest(
+                    "another realtime session is active".to_owned(),
+                )),
+            ),
+            Err(error) => {
+                let (action, error) = sess
+                    .conversation
+                    .lifecycle_error(RealtimeLifecycleError::Store(error));
+                (Some(action), Err(error))
+            }
+        };
+        let _ = reply.send(result);
+        if action == Some(RecoveryAction::Reload) {
+            notify_history_recovery_required(sess, sub_id).await;
+        }
+        return;
+    }
+    let sess = Arc::clone(sess);
+    let session_id = expected.to_owned();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            REALTIME_HANGUP_TIMEOUT,
+            end_persisted_session(&sess, &sub_id, &session_id),
+        )
+        .await;
+        let failure = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(failure)) => Some(failure),
+            Err(_) => Some(RealtimeLifecycleError::Uncertain(
+                "realtime End timed out".to_owned(),
+            )),
+        };
+        let (action, result) = match failure {
+            None => (None, Ok(())),
+            Some(failure) => {
+                let (action, error) = sess.conversation.lifecycle_error(failure);
+                (Some(action), Err(error))
+            }
+        };
+        {
+            let mut state = sess.conversation.state.lock().await;
+            state.closing = false;
+            state.ending = false;
+            let _ = reply.send(result);
+        }
+        if action == Some(RecoveryAction::Reload) {
+            notify_history_recovery_required(&sess, sub_id).await;
+        }
+    });
+}
+
+async fn end_persisted_session(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    session_id: &str,
+) -> Result<(), RealtimeLifecycleError> {
+    if !sess
+        .initialize_realtime_history()
+        .await
+        .map_err(|error| RealtimeLifecycleError::Uncertain(error.to_string()))?
+    {
+        return Err(RealtimeLifecycleError::Invalid(
+            "realtime history is disabled",
+        ));
+    }
+    let items = sess
+        .services
+        .thread_store
+        .load_realtime_session(sess.thread_id(), session_id.to_owned())
+        .await
+        .map_err(RealtimeLifecycleError::Store)?
+        .ok_or(RealtimeLifecycleError::Invalid("unknown realtime session"))?;
+    let history = sess.realtime_history.as_ref().ok_or_else(|| {
+        RealtimeLifecycleError::Uncertain("realtime history is disabled".to_owned())
+    })?;
+    let status = history.lock().await.recover_session(session_id, &items);
+    match status {
+        crate::realtime_history::handoff::RecoveredSessionStatus::Closed => return Ok(()),
+        crate::realtime_history::handoff::RecoveredSessionStatus::Open => sess
+            .record_realtime_carryover(REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION)
+            .await
+            .map_err(|error| RealtimeLifecycleError::Uncertain(error.to_string()))?,
+        crate::realtime_history::handoff::RecoveredSessionStatus::Ending => {}
+    }
+    send_realtime_conversation_closed(sess, sub_id.to_owned(), RealtimeConversationEnd::Requested)
+        .await
+        .map_err(|error| RealtimeLifecycleError::Uncertain(error.to_string()))
+}
+
+pub(crate) async fn handle_detach(
+    sess: &Arc<Session>,
+    expected: &str,
+    reply: oneshot::Sender<CodexResult<()>>,
+) {
+    {
+        let mut state = sess.conversation.state.lock().await;
+        if sess.conversation.history_recovery_required() {
+            let _ = reply.send(Err(history_recovery_error()));
+            return;
+        }
+        let Some(conversation) = state
+            .conversation
+            .as_ref()
+            .filter(|current| current.session_id.as_deref() == Some(expected))
+        else {
+            let _ = reply.send(Ok(()));
+            return;
+        };
+        if state.detach_reply.is_some() {
+            let _ = reply.send(Err(CodexErr::InvalidRequest(
+                "realtime detach already pending".into(),
+            )));
+            return;
+        }
+        conversation.stop_token.cancel();
+        state.closing = true;
+        state.detach_reply = Some(reply);
+    }
+    // Fanout drains already parsed events and completes the transport-only detach.
 }
 
 fn spawn_realtime_input_task(
@@ -2397,8 +3015,10 @@ fn spawn_realtime_input_task(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let events_tx = input.events_tx.clone();
+        let stop_token = input.stop_token.clone();
         let transcript_state = input.events.transcript_state();
         let exit = run_realtime_input_task(input, /*pending_outbound*/ None).await;
+        stop_token.cancel();
         if let RealtimeInputTaskExit::TransportLost { err, .. } = exit {
             report_realtime_transport_loss(&events_tx, err).await;
         }
@@ -2487,7 +3107,7 @@ async fn run_realtime_input_task(
                     Ok(Some(event)) => {
                         let completed = events.take_completed_transcript(&event, RealtimeDelegation::FIELD_BYTES).await;
                         handle_realtime_server_event(
-                            (event, realtime_transcript_delta(&completed)),
+                            (event, completed),
                             &writer,
                             &events_tx,
                             &handoff_state,
@@ -2604,7 +3224,7 @@ async fn report_realtime_transport_loss(events_tx: &Sender<RealtimeOutput>, err:
     let mapped_error = map_api_error(err);
     error!("realtime stream closed: {mapped_error}");
     let _ = events_tx
-        .send((RealtimeEvent::Error(mapped_error.to_string()), None))
+        .send((RealtimeEvent::Error(mapped_error.to_string()), Vec::new()))
         .await;
 }
 
@@ -3152,18 +3772,41 @@ async fn send_realtime_conversation_closed(
     sess: &Arc<Session>,
     sub_id: String,
     end: RealtimeConversationEnd,
-) {
+) -> anyhow::Result<()> {
     let reason = match end {
         RealtimeConversationEnd::Requested => Some("requested".to_string()),
         RealtimeConversationEnd::TransportClosed => Some("transport_closed".to_string()),
         RealtimeConversationEnd::Error => Some("error".to_string()),
     };
 
-    sess.send_event_raw(Event {
+    sess.seal_realtime_close(Event {
         id: sub_id,
         msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent { reason }),
     })
+    .await
+}
+
+async fn notify_history_recovery_required(sess: &Session, sub_id: String) {
+    // The transport is closed, but there is no confirmed durable close marker.
+    sess.deliver_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
+            reason: Some(HISTORY_RECOVERY_REQUIRED.into()),
+        }),
+    })
     .await;
+}
+
+async fn report_history_recovery_required(sess: &Session, sub_id: String, error: &str) {
+    warn!("could not seal realtime close: {error}");
+    sess.send_event_raw(Event {
+        id: sub_id.clone(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(HISTORY_RECOVERY_MESSAGE.into()),
+        }),
+    })
+    .await;
+    notify_history_recovery_required(sess, sub_id).await;
 }
 
 #[cfg(test)]

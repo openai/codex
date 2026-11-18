@@ -278,7 +278,6 @@ mod model_catalog_settings;
 mod model_ids;
 pub(crate) mod multi_agents;
 mod plugin_selection;
-#[expect(dead_code, reason = "Activated with hangup in the next PR")]
 mod realtime_handoff;
 mod realtime_history;
 mod retained_context;
@@ -454,6 +453,11 @@ pub(crate) enum TokenUsageContext {
 pub(crate) enum NetworkApprovalTurn {
     Originating,
     AnyActive,
+}
+
+enum RealtimeRecord<'a> {
+    Handoff(&'a crate::realtime_history::handoff::PreparedRealtimeInput),
+    Chunk,
 }
 
 /// Queue and lifecycle endpoints for a running [`Session`].
@@ -3041,7 +3045,7 @@ impl Session {
         self.deliver_event_raw(event).await;
     }
 
-    async fn deliver_event_raw(&self, event: Event) {
+    pub(crate) async fn deliver_event_raw(&self, event: Event) {
         if let Some(parent_tx) = self.parent_observer_event_tx.get() {
             let forwarded = match &event.msg {
                 EventMsg::RawResponseItem(item) => {
@@ -4017,12 +4021,10 @@ impl Session {
         &self,
         input: &[ResolvedUserInput],
     ) -> ResponseItem {
-        self.response_item_from_user_input_with_image_positions(input)
-            .0
+        Self::response_item_from_user_input_with_image_positions(input).0
     }
 
     fn response_item_from_user_input_with_image_positions(
-        &self,
         input: &[ResolvedUserInput],
     ) -> (ResponseItem, HashMap<usize, usize>) {
         let (message, image_positions) =
@@ -4108,7 +4110,7 @@ impl Session {
         model_info: &ModelInfo,
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
-        realtime: Option<crate::realtime_history::handoff::PreparedRealtimeInput>,
+        realtime: Option<RealtimeRecord<'_>>,
     ) -> std::io::Result<()> {
         // Save the originating history budget for replay.
         // Preserve any existing tool-specific override.
@@ -4136,9 +4138,7 @@ impl Session {
         let force_mcp_checkpoint = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        let cached_retry = realtime
-            .as_ref()
-            .is_some_and(|input| input.cached_envelope.is_some());
+        let cached_retry = matches!(&realtime, Some(RealtimeRecord::Handoff(input)) if input.cached_envelope.is_some());
         let mcp_revision = (!cached_retry)
             .then(|| {
                 self.services
@@ -4219,7 +4219,7 @@ impl Session {
                         });
                 }
             }
-            if let Some(prepared) = &realtime {
+            if let Some(RealtimeRecord::Handoff(prepared)) = &realtime {
                 let envelope = if let Some(cached) = &prepared.cached_envelope {
                     cached.clone()
                 } else {
@@ -4245,6 +4245,24 @@ impl Session {
                 }
                 response_items = vec![envelope.item.clone()];
                 items = vec![envelope];
+            } else if matches!(&realtime, Some(RealtimeRecord::Chunk)) {
+                let [envelope] = items.as_slice() else {
+                    return Err(std::io::Error::other(
+                        "realtime chunk must contain one input",
+                    ));
+                };
+                let envelope = self
+                    .record_realtime_chunk_input(
+                        &mut state,
+                        envelope.clone(),
+                        realtime_settings_event,
+                        policy,
+                    )
+                    .await?;
+                if realtime_initial_settings {
+                    state.take_initial_settings_pending();
+                }
+                response_items = vec![envelope.item];
             } else {
                 state
                     .pending_audio_duration_ids
@@ -4263,8 +4281,10 @@ impl Session {
                     metadata: image,
                 });
         }
-        let persisted = if let Some(prepared) = &realtime {
+        let persisted = if let Some(RealtimeRecord::Handoff(prepared)) = &realtime {
             self.finish_realtime_handoff(prepared, &items[0]).await;
+            true
+        } else if matches!(&realtime, Some(RealtimeRecord::Chunk)) {
             true
         } else {
             let settings_guard =
@@ -6098,7 +6118,7 @@ impl Session {
         // Emit full prompt telemetry only for inputs selected for recording.
         turn_context.session_telemetry.user_prompt(&display_input);
         let (mut response_item, user_image_content_indices) =
-            self.response_item_from_user_input_with_image_positions(input);
+            Self::response_item_from_user_input_with_image_positions(input);
         if let Some(uuid) = metadata.response_item_uuid {
             response_item.set_id(Some(ResponseItemId::for_admitted_user_input(uuid)));
         }
@@ -6138,7 +6158,7 @@ impl Session {
                 model_info,
                 prepared_items,
                 image_preparations,
-                realtime.clone(),
+                realtime.as_ref().map(RealtimeRecord::Handoff),
             )
             .await
         {

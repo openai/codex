@@ -547,6 +547,14 @@ impl LocalThreadStore {
 }
 
 impl ThreadStore for LocalThreadStore {
+    fn seal_realtime_items(
+        &self,
+        thread_id: ThreadId,
+        items: Vec<RealtimeItem>,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { live_writer::seal_realtime_items(self, thread_id, items).await })
+    }
+
     fn seal_realtime_input(
         &self,
         thread_id: ThreadId,

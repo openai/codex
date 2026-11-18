@@ -248,7 +248,7 @@ async fn check_remote_voice_start(
     let starts = recorded_params(&requests, "thread/realtime/start");
     assert_eq!(starts.len(), 1);
     let start = &starts[0];
-    assert_eq!(start["realtimeSessionId"], thread_id.to_string());
+    assert_eq!(start["realtimeSessionId"], "rtc_tui");
     assert_eq!(start["voiceSessionId"], voice_session_id);
     assert_eq!(
         serde_json::json!({

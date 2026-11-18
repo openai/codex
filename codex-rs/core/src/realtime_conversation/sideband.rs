@@ -107,7 +107,7 @@ pub(super) fn spawn_webrtc_sideband_input_task(
                         "failed to connect realtime sideband: {mapped_error}"
                     );
                     let _ = events_tx
-                        .send((RealtimeEvent::Error(mapped_error.to_string()), None))
+                        .send((RealtimeEvent::Error(mapped_error.to_string()), Vec::new()))
                         .await;
                     break;
                 }
@@ -187,6 +187,7 @@ pub(super) fn spawn_webrtc_sideband_input_task(
             // Cancellation may win before the task takes its already connected observer.
             close_sideband_transport(&connection).await;
         }
+        stop_token.cancel();
         let transcript_tail = transcript_state.take_transcript_tail().await;
         flush_realtime_transcript_tail(&transcript_tail_flush, &transcript_tail).await;
     })

@@ -2,7 +2,6 @@
 //! transcript boundaries and deduplication state with the history reducer.
 //! The reducer selects when its effects are persisted relative to their source event.
 
-#[expect(dead_code, reason = "Activated with hangup in the next PR")]
 pub(crate) mod handoff;
 mod presentation;
 
@@ -33,6 +32,7 @@ struct ActiveSegment {
     id: String,
     role: RealtimeTranscriptRole,
     text: String,
+    sealed_prefix: String,
     observed_at_ms: Option<i64>,
 }
 
@@ -56,8 +56,9 @@ impl ActiveTranscriptSegments {
         if self.first_active_role == Some(role) {
             self.first_active_role = self
                 .user
-                .as_ref()
-                .or(self.assistant.as_ref())
+                .iter()
+                .chain(self.assistant.iter())
+                .find(|segment| !segment.text.is_empty())
                 .map(|segment| segment.role);
         }
         segment
@@ -208,9 +209,14 @@ impl RealtimeHistoryState {
                     .clone()
                     .unwrap_or_else(|| Uuid::now_v7().to_string());
                 if self.active_session_id.as_deref() != Some(session_id.as_str()) {
+                    items.append(&mut self.pending_handoff_seals);
                     self.seal_segments(&mut items, Continuation::Finish);
+                    self.pending_transcript.clear();
+                    self.preserve_transcript =
+                        event.version == codex_protocol::protocol::RealtimeConversationVersion::V3;
                     self.active_session_id = Some(session_id.clone());
                     self.failed = false;
+                    self.v3_utterances.clear();
                     items.push(RealtimeItem {
                         // The call ID lets a reader seek directly to its opening position.
                         id: if self.frames_enabled() {
@@ -245,8 +251,17 @@ impl RealtimeHistoryState {
                     transcript_stream =
                         self.finish_segment(&mut items, RealtimeTranscriptRole::Assistant, done);
                 }
-                RealtimeEvent::HandoffRequested(_) => {
-                    if let Some(session_id) = &self.active_session_id {
+                RealtimeEvent::HandoffRequested(handoff) => {
+                    // The transport takes its transcript for every request, even if admission
+                    // fails. Rejected input remains pending for the next handoff.
+                    self.v3_utterances.clear();
+                    if !self.committed_handoff_ids.contains(&handoff.handoff_id)
+                        && !self
+                            .handoff_inputs
+                            .get(&handoff.handoff_id)
+                            .is_some_and(|input| input.reserved)
+                        && let Some(session_id) = &self.active_session_id
+                    {
                         self.pending_handoffs.push_back(session_id.clone());
                     }
                 }
@@ -312,6 +327,7 @@ impl RealtimeHistoryState {
             }
             EventMsg::RealtimeConversationClosed(_) => {
                 if let Some(session_id) = self.active_session_id.take() {
+                    items.append(&mut self.pending_handoff_seals);
                     self.seal_segments(&mut items, Continuation::Finish);
                     items.push(RealtimeItem {
                         id: Uuid::now_v7().to_string(),
@@ -329,6 +345,7 @@ impl RealtimeHistoryState {
                         },
                     });
                     self.failed = false;
+                    self.v3_utterances.clear();
                 }
             }
             _ => {}
@@ -383,7 +400,10 @@ impl RealtimeHistoryState {
         delta: &RealtimeTranscriptDelta,
     ) -> Option<RealtimeTranscriptStream> {
         let session_id = self.active_session_id.clone()?;
-        self.active_segments.first_active_role.get_or_insert(role);
+        if !delta.delta.is_empty() {
+            let _ = self.v3_utterance(role, /*start*/ true);
+            self.active_segments.first_active_role.get_or_insert(role);
+        }
         let frames_enabled = self.frames_enabled();
         let segment = self
             .active_segments
@@ -393,6 +413,7 @@ impl RealtimeHistoryState {
                 id: Uuid::now_v7().to_string(),
                 role,
                 text: String::new(),
+                sealed_prefix: String::new(),
                 observed_at_ms: None,
             });
         let observed_at_ms = frames_enabled.then(|| {
@@ -420,7 +441,20 @@ impl RealtimeHistoryState {
         role: RealtimeTranscriptRole,
         done: &RealtimeTranscriptDone,
     ) -> Option<RealtimeTranscriptStream> {
-        let Some(segment) = self.active_segments.take(role) else {
+        let stream = self.finish_transcript_frame(items, role, done);
+        if let Some(utterance) = self.v3_utterance(role, /*start*/ !done.text.is_empty()) {
+            utterance.complete = true;
+        }
+        stream
+    }
+
+    fn finish_transcript_frame(
+        &mut self,
+        items: &mut Vec<RealtimeItem>,
+        role: RealtimeTranscriptRole,
+        done: &RealtimeTranscriptDone,
+    ) -> Option<RealtimeTranscriptStream> {
+        let Some(mut segment) = self.active_segments.take(role) else {
             if done.text.is_empty() {
                 return None;
             }
@@ -435,10 +469,35 @@ impl RealtimeHistoryState {
             }
             return stream;
         };
-        // A split leaves an empty continuation; the upstream final may repeat
-        // text that was already committed before the split.
+        // A final may extend unsealed speech, but a delayed final must not replace
+        // newer deltas or replay text already committed before a split.
+        let suffix = done
+            .text
+            .strip_prefix(&segment.sealed_prefix)
+            .and_then(|tail| tail.strip_prefix(&segment.text))
+            .filter(|suffix| !suffix.is_empty())
+            .map(str::to_owned);
+        let stream = suffix.map(|delta| {
+            let started_item = segment.text.is_empty().then(|| {
+                segment.observed_at_ms = self
+                    .frames_enabled()
+                    .then(|| self.observation_clock.now_ms());
+                RealtimeItem {
+                    id: segment.id.clone(),
+                    realtime_session_id: segment.session_id.clone(),
+                    observed_at_ms: segment.observed_at_ms,
+                    content: speech(self.frames_enabled(), role, String::new()),
+                }
+            });
+            segment.text.push_str(&delta);
+            RealtimeTranscriptStream {
+                started_item,
+                item_id: segment.id.clone(),
+                delta,
+            }
+        });
         self.seal_active_segment(items, segment, Continuation::Finish);
-        None
+        stream
     }
 
     fn seal_segments(&mut self, items: &mut Vec<RealtimeItem>, continuation: Continuation) {
@@ -466,6 +525,7 @@ impl RealtimeHistoryState {
         segment: ActiveSegment,
         continuation: Continuation,
     ) {
+        let sealed_prefix = format!("{}{}", segment.sealed_prefix, segment.text);
         if !segment.text.is_empty() {
             let item = RealtimeItem {
                 id: segment.id,
@@ -482,14 +542,12 @@ impl RealtimeHistoryState {
             items.push(item);
         }
         if matches!(continuation, Continuation::Continue) {
-            self.active_segments
-                .first_active_role
-                .get_or_insert(segment.role);
             *self.active_segments.slot_mut(segment.role) = Some(ActiveSegment {
                 session_id: segment.session_id,
                 id: Uuid::now_v7().to_string(),
                 role: segment.role,
                 text: String::new(),
+                sealed_prefix,
                 observed_at_ms: None,
             });
         }

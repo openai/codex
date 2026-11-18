@@ -1,0 +1,35 @@
+---
+source: core/tests/suite/scenarios.rs
+assertion_line: 4337
+expression: "context_snapshot::format_request_history_snapshot(\"A realtime handoff consumes the exact sealed transcript referenced by its durable acceptance.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A realtime handoff consumes the exact sealed transcript referenced by its durable acceptance.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
+    [01] <realtime_conversation>
+        Realtime conversation started.
+
+        You are operating as a backend executor behind an intermediary. The user does not talk to you directly. ...ediary and may be summarized before the user sees it. [hash=5114d16b52865327]
+
+        When invoked, you receive the latest conversation transcript and any relevant mode or metadata. The inte...void verbose responses that add user-visible latency. [hash=e229c6c9120dff28]
+
+        When user text is routed from realtime, treat it as a transcript. It may be unpunctuated or contain recognition errors.
+
+        - Keep responses concise and action-oriented. Your updates should help the intermediary respond to the user.
+        </realtime_conversation>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    <realtime_delegation>
+      <input>text from realtime</input>
+      <transcript_delta>user: text from realtime</transcript_delta>
+    </realtime_delegation>

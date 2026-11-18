@@ -1273,7 +1273,15 @@ impl ContextManager {
         mut cut_idx: usize,
     ) -> usize {
         while cut_idx > first_instruction_turn_idx {
-            match &snapshot[cut_idx - 1].item {
+            let previous = &snapshot[cut_idx - 1];
+            if previous
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.realtime_session_end_input)
+            {
+                break;
+            }
+            match &previous.item {
                 ResponseItem::Message {
                     role,
                     content,
@@ -1691,9 +1699,13 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         || (role == "assistant" && is_inter_agent_instruction_content(content))
 }
 
-/// Evaluates an instruction boundary from annotated history.
+/// Session-end realtime input is saved context, not an instruction that started or steered a turn.
 pub(crate) fn is_instruction_turn_boundary(envelope: &ResponseItemEnvelope) -> bool {
-    is_user_turn_boundary(&envelope.item)
+    !envelope
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.realtime_session_end_input)
+        && is_user_turn_boundary(&envelope.item)
 }
 
 fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {

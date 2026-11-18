@@ -22,6 +22,13 @@ use codex_rollout::ResponseItemEnvelope;
 /// about dynamically registered contextual fragments that thread-store cannot
 /// depend on.
 pub(super) fn counts_as_boundary(envelope: &ResponseItemEnvelope) -> bool {
+    if envelope
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.realtime_session_end_input)
+    {
+        return false;
+    }
     let response = &envelope.item;
     if matches!(response, ResponseItem::AgentMessage { .. }) {
         return true;
@@ -62,7 +69,13 @@ pub(super) fn drop_last_n_user_turns(history: &mut Vec<ResponseItemEnvelope>, nu
     } else {
         user_positions[user_positions.len() - count]
     };
-    while cut_index > first_turn_index && is_pre_turn_context_update(&history[cut_index - 1].item) {
+    while cut_index > first_turn_index
+        && !history[cut_index - 1]
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.realtime_session_end_input)
+        && is_pre_turn_context_update(&history[cut_index - 1].item)
+    {
         cut_index -= 1;
     }
     history.truncate(cut_index);

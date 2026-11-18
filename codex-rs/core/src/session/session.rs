@@ -630,10 +630,12 @@ async fn warm_plugins_and_skills_for_session_init(
 
 impl Session {
     pub(crate) fn turn_starts_closed(&self) -> bool {
-        self.services
-            .local_agent_runtime
-            .suspension_root()
-            .is_some()
+        self.conversation.history_recovery_required()
+            || self
+                .services
+                .local_agent_runtime
+                .suspension_root()
+                .is_some()
             || self
                 .outcome_reporting
                 .as_ref()

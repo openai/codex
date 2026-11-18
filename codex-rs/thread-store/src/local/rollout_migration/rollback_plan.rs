@@ -196,7 +196,12 @@ impl RollbackPlanner {
                             content: content.clone(),
                         });
                     }
-                } else if rollback::is_pre_turn_context_update(&response.item) {
+                } else if !response
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.realtime_session_end_input)
+                    && rollback::is_pre_turn_context_update(&response.item)
+                {
                     // Until another user boundary arrives, this is trailing context for the
                     // previous turn. Keep that fallback owner so rollback drops it when there is
                     // no later turn to attach it to.

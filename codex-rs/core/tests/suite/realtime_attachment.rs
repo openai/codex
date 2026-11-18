@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use codex_api::RealtimeEvent;
+use codex_features::Feature;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
@@ -23,6 +24,7 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::net::TcpListener;
@@ -124,7 +126,10 @@ async fn initiated_sideband_delegates_without_callback() -> Result<()> {
 #[tokio::test]
 async fn initiated_sideband_backpressure_keeps_events_and_lifecycle_live() -> Result<()> {
     let api = start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&api).await?;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&api)
+        .await?;
     let mut transports = Vec::new();
     for session in ["original", "replacement"] {
         let (events, incoming) = mpsc::channel(/*buffer*/ 1);
@@ -163,6 +168,9 @@ async fn initiated_sideband_backpressure_keeps_events_and_lifecycle_live() -> Re
         })
         .await;
         transports.push((events, commands));
+        if session == "original" {
+            end(&test, session).await?;
+        }
     }
     detach(&test, "replacement").await?;
     for (events, mut commands) in transports {
@@ -174,9 +182,9 @@ async fn initiated_sideband_backpressure_keeps_events_and_lifecycle_live() -> Re
     Ok(())
 }
 
-/// Detach is a history barrier for accepted final speech, including when both caller halves disappear.
+/// Terminal stop is a history barrier for accepted final speech.
 #[tokio::test(flavor = "current_thread")]
-async fn initiated_sideband_detach_preserves_queued_transcript_in_history() -> Result<()> {
+async fn initiated_sideband_end_preserves_queued_transcript_in_history() -> Result<()> {
     let api = start_mock_server().await;
     let test = test_codex().build_with_auto_env(&api).await?;
     test.codex.ensure_rollout_materialized().await;
@@ -195,7 +203,7 @@ async fn initiated_sideband_detach_preserves_queued_transcript_in_history() -> R
         let (outgoing, commands) = mpsc::channel(32);
         let (reply, ready) = oneshot::channel();
         let mut start_params = params(&session, "ws://unused.invalid");
-        // Completed turns must persist even when the optional unfinished-tail flush is off.
+        // V3 ignores the old unfinished-tail setting.
         start_params.flush_transcript_tail_on_session_end = !completed_turn;
         test.codex
             .submit(Op::RealtimeConversationAttachStream {
@@ -211,9 +219,13 @@ async fn initiated_sideband_detach_preserves_queued_transcript_in_history() -> R
             json!({"type": "input_transcript.added", "item": {"text": text}})
         };
         events.try_send(event.to_string())?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::RealtimeConversationRealtime(_))
+        })
+        .await;
+        end(&test, &session).await?;
         drop(events);
         drop(commands);
-        detach(&test, &session).await?;
         let history = test.codex.load_history(/*include_archived*/ false).await?;
         let tails = history.items.iter().filter(|item| {
             matches!(item,
@@ -227,9 +239,692 @@ async fn initiated_sideband_detach_preserves_queued_transcript_in_history() -> R
         }).count();
         assert_eq!(
             tails, 1,
-            "detach must persist the accepted final transcript exactly once"
+            "terminal stop must persist the accepted final transcript exactly once"
         );
     }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// A task-only delegation already parsed before stop is routed while fanout drains.
+#[tokio::test]
+async fn terminal_stop_routes_a_parsed_task_only_handoff() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_thread_store::ThreadStore;
+    use core_test_support::responses;
+
+    let api = start_mock_server().await;
+    let response = responses::mount_sse_once(&api, responses::sse_completed("queued-task")).await;
+    let store = Arc::new(HostedClockStore::blocking_frame());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = false)
+        .build_with_auto_env(&api)
+        .await?;
+    let (events, incoming) = mpsc::channel(1);
+    let (outgoing, _commands) = mpsc::channel(32);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("queued", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    let completed_transcript = "earlier speech ".repeat(400);
+    events
+        .send(
+            json!({"type":"turn.done", "turn":{"role":"user", "transcript":completed_transcript}})
+                .to_string(),
+        )
+        .await?;
+    timeout(Duration::from_secs(10), store.wait_for_blocked_frame()).await?;
+    events.send(json!({"type":"delegation.created", "item":{"id":"queued-task", "type":"delegation", "target":"client", "content":[{"type":"input_text", "text":"do this task"}]}}).to_string()).await?;
+    // The one-slot input queue accepting two more events proves the delegation was parsed.
+    for _ in 0..2 {
+        events
+            .send(json!({"type":"session.started", "session":{"id":"queued"}}).to_string())
+            .await?;
+    }
+    let (reply, stopped) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationEnd {
+            realtime_session_id: "queued".to_owned(),
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), events.closed()).await?;
+    store.release_frame();
+    timeout(Duration::from_secs(10), stopped).await???;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(response.requests().len(), 1);
+    let items = store
+        .load_realtime_session(test.session_configured.thread_id, "queued".to_owned())
+        .await?
+        .expect("started session");
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| matches!(&item.content,
+                RealtimeItemContent::TurnInputAccepted { handoff_id, source_event_ids, .. }
+                    if handoff_id == "queued-task" && source_event_ids.is_empty()
+            ))
+            .count(),
+        1
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Transport loss must arm recovery even when fanout cannot drain its bounded queue.
+#[tokio::test(flavor = "current_thread")]
+async fn sideband_loss_with_saturated_fanout_requires_recovery_without_end() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+
+    let api = start_mock_server().await;
+    let store = Arc::new(HostedClockStore::blocking_frame());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    let (events, incoming) = mpsc::channel(1);
+    let (outgoing, commands) = mpsc::channel(1);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("saturated", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    events
+        .send(
+            json!({"type":"turn.done", "turn":{"role":"user", "transcript":"unfinished"}})
+                .to_string(),
+        )
+        .await?;
+    timeout(Duration::from_secs(10), store.wait_for_blocked_frame()).await?;
+    // Fanout's queue holds 256 events; the next event parks its producer, and
+    // the final event occupies the one-slot caller queue.
+    timeout(Duration::from_secs(10), async {
+        for _ in 0..258 {
+            events
+                .send(json!({"type":"session.started", "session":{"id":"saturated"}}).to_string())
+                .await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    tokio::time::pause();
+    drop(events);
+    drop(commands);
+    // Let the transport watcher and watchdog run as their deadline approaches.
+    for _ in 0..32 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
+    let closed = timeout(Duration::from_secs(10), async {
+        loop {
+            if let EventMsg::RealtimeConversationClosed(closed) = test.codex.next_event().await?.msg
+            {
+                break anyhow::Ok(closed);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(closed.reason.as_deref(), Some("history_recovery_required"));
+    store.release_frame();
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Realtime frames carry pending input over at logical end, including after detach.
+#[tokio::test]
+async fn frame_enrolled_v3_saves_input_even_when_legacy_flush_setting_is_false() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_protocol::realtime::SessionInputReason;
+    use codex_thread_store::ThreadStore;
+
+    let api = start_mock_server().await;
+    let store = Arc::new(HostedClockStore::default());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    let (events, incoming) = mpsc::channel(1);
+    let (outgoing, _commands) = mpsc::channel(1);
+    let (reply, ready) = oneshot::channel();
+    let mut start = params("no-flush", "ws://unused.invalid");
+    start.flush_transcript_tail_on_session_end = false;
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: start,
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    events
+        .send(
+            json!({"type":"input_transcript.added", "item":{"text":"save this at hangup"}})
+                .to_string(),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationRealtime(event)
+            if matches!(event.payload, codex_protocol::protocol::RealtimeEvent::InputTranscriptDelta(_)))
+    }).await;
+    end(&test, "no-flush").await?;
+    let items = store
+        .load_realtime_session(test.session_configured.thread_id, "no-flush".to_owned())
+        .await?
+        .expect("started session");
+    assert!(items.iter().any(|item| matches!(&item.content,
+        RealtimeItemContent::SessionInputSaved { reason: SessionInputReason::SessionEnd, input, .. }
+            if input.contains("save this at hangup")
+    )));
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Thread-scoped Stop recovers the latest open persisted session after Core reload.
+#[tokio::test]
+async fn thread_stop_recovers_and_finishes_the_latest_persisted_session() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_protocol::realtime::RealtimeFrameChannels;
+    use codex_protocol::realtime::RealtimeItem;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_protocol::realtime::RealtimeTranscriptRole;
+    use codex_protocol::realtime::RealtimeVoiceTranscript;
+    use codex_protocol::realtime::SessionInputReason;
+    use codex_thread_store::ThreadStore;
+    use core_test_support::responses;
+
+    let api = start_mock_server().await;
+    let model = responses::mount_sse_once(
+        &api,
+        responses::sse(vec![responses::ev_response_created("unexpected")]),
+    )
+    .await;
+    let store = Arc::new(HostedClockStore::default());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    let thread_id = test.session_configured.thread_id;
+    let session_id = "cold-stop";
+    // Populate only persisted history: this Core runtime has never attached the call.
+    store
+        .seal_realtime_items(
+            thread_id,
+            vec![
+                RealtimeItem {
+                    id: "start".to_owned(),
+                    realtime_session_id: session_id.to_owned(),
+                    observed_at_ms: Some(1),
+                    content: RealtimeItemContent::RealtimeSessionStarted,
+                },
+                RealtimeItem {
+                    id: "speech".to_owned(),
+                    realtime_session_id: session_id.to_owned(),
+                    observed_at_ms: Some(2),
+                    content: RealtimeItemContent::Frame {
+                        channels: RealtimeFrameChannels {
+                            voice_transcript: RealtimeVoiceTranscript {
+                                role: RealtimeTranscriptRole::User,
+                                text: "remember the smaller logo".to_owned(),
+                            },
+                        },
+                    },
+                },
+            ],
+        )
+        .await?;
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationClosed(_))
+    })
+    .await;
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    test.codex.shutdown_and_wait().await?;
+    let items = store
+        .load_realtime_session(thread_id, session_id.to_owned())
+        .await?
+        .expect("persisted session");
+    assert_eq!(
+        items.iter().filter(|item| matches!(&item.content,
+            RealtimeItemContent::SessionInputSaved { reason: SessionInputReason::SessionEnd, input, source_event_ids, .. }
+                if input.contains("remember the smaller logo") && source_event_ids == &["speech".to_owned()]
+        )).count(),
+        1
+    );
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| matches!(
+                item.content,
+                RealtimeItemContent::RealtimeSessionClosed { .. }
+            ))
+            .count(),
+        1
+    );
+    assert!(model.requests().is_empty());
+    Ok(())
+}
+
+/// A timeout fences an allowing steer hook and lets ordinary turn abort own cleanup.
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "current_thread")]
+async fn hangup_timeout_aborts_a_turn_with_an_allowing_steer_hook() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_core::TurnInputRequest;
+    use codex_history::RolloutItem;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_protocol::user_input::UserInput;
+    use codex_thread_store::LoadThreadHistoryParams;
+    use codex_thread_store::ThreadStore;
+    use core_test_support::responses;
+    use core_test_support::streaming_sse::StreamingSseChunk;
+    use core_test_support::streaming_sse::start_streaming_sse_server;
+
+    core_test_support::skip_if_wine_exec!(Ok(()), "the hook requires host-native Python");
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("active")]),
+        },
+        StreamingSseChunk {
+            gate: Some(response_gate),
+            body: responses::sse(vec![responses::ev_completed("active")]),
+        },
+    ]])
+    .await;
+    let store = Arc::new(HostedClockStore::default());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .with_config(core_test_support::hooks::trust_discovered_hooks)
+        .with_pre_build_hook(|home| {
+            super::hooks::write_user_prompt_submit_hook(home, "never-block", "")
+                .expect("write allowing prompt hook");
+            let script = home.join("user_prompt_submit_hook.py");
+            let original = std::fs::read_to_string(&script).expect("read hook");
+            let gate = format!(
+                "payload = json.load(sys.stdin)\nif 'steer-timeout' in payload.get('prompt', ''):\n    import time\n    Path(r\"{}\").touch()\n    while not Path(r\"{}\").exists():\n        time.sleep(0.01)",
+                home.join("hook_started").display(),
+                home.join("hook_release").display(),
+            );
+            std::fs::write(script, original.replace("payload = json.load(sys.stdin)", &gate))
+                .expect("gate allowing steer hook");
+        })
+        .build_with_streaming_server(&server)
+        .await?;
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "initial active turn".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let turn_id = match started {
+        codex_core::TurnInputSubmission::Started { turn_id, .. } => turn_id,
+        other => anyhow::bail!("expected started turn, got {other:?}"),
+    };
+    timeout(
+        Duration::from_secs(10),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await?;
+    let (events, incoming) = mpsc::channel(8);
+    let (outgoing, _commands) = mpsc::channel(8);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("hook-timeout", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    events.send(json!({"type":"delegation.created", "item":{"id":"steer-timeout", "type":"delegation", "target":"client", "content":[{"type":"input_text", "text":"steer-timeout"}]}}).to_string()).await?;
+    wait_for_event(&test.codex, |event| matches!(event,
+        EventMsg::RealtimeConversationRealtime(event)
+            if matches!(&event.payload, RealtimeEvent::HandoffRequested(handoff) if handoff.handoff_id == "steer-timeout")
+    )).await;
+    release_response.send(()).expect("first response gate");
+    let started = test.home.path().join("hook_started");
+    timeout(Duration::from_secs(10), async {
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let (reply, mut stopped) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationEnd {
+            realtime_session_id: "hook-timeout".to_owned(),
+            reply,
+        })
+        .await?;
+    assert!(
+        timeout(Duration::from_millis(100), &mut stopped)
+            .await
+            .is_err()
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31)).await;
+    let result = timeout(Duration::from_secs(10), stopped).await;
+    tokio::time::resume();
+    assert!(result??.is_err(), "timeout must require recovery");
+    std::fs::write(test.home.path().join("hook_release"), "")?;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnAborted(aborted) if aborted.turn_id.as_deref() == Some(turn_id.as_str()))).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        server.requests().await.len(),
+        1,
+        "the released steer must not sample"
+    );
+    let history = store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    assert_eq!(history.items.iter().filter(|item| matches!(item,
+        RolloutItem::EventMsg(EventMsg::TurnAborted(aborted)) if aborted.turn_id.as_deref() == Some(turn_id.as_str())
+    ) || matches!(item,
+        RolloutItem::EventMsg(EventMsg::TurnComplete(completed)) if completed.turn_id == turn_id
+    )).count(), 1);
+    let session = store
+        .load_realtime_session(test.session_configured.thread_id, "hook-timeout".to_owned())
+        .await?
+        .expect("started session");
+    assert!(!session.iter().any(|item| matches!(&item.content,
+        RealtimeItemContent::TurnInputAccepted { handoff_id, .. } if handoff_id == "steer-timeout"
+    )));
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Reattaching an open logical call does not start a second session; a later cold stop closes it.
+#[tokio::test]
+async fn reconnect_restores_sealed_pending_speech_and_rejects_closed_reuse() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_protocol::realtime::SessionInputReason;
+    use codex_thread_store::ThreadStore;
+
+    let api = start_mock_server().await;
+    let store = Arc::new(HostedClockStore::default());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    for attach in 0..2 {
+        let (events, incoming) = mpsc::channel(8);
+        let (outgoing, _commands) = mpsc::channel(8);
+        let (reply, ready) = oneshot::channel();
+        test.codex
+            .submit(Op::RealtimeConversationAttachStream {
+                params: params("reconnect", "ws://unused.invalid"),
+                transport: RealtimeSidebandTransport { incoming, outgoing },
+                reply,
+            })
+            .await?;
+        timeout(Duration::from_secs(10), ready).await???;
+        if attach == 0 {
+            events
+                .send(json!({"type":"input_transcript.added", "item":{"text":"use the smaller logo"}}).to_string())
+                .await?;
+            events
+                .send(json!({"type":"turn.done", "turn":{"role":"user","transcript":"use the smaller logo"}}).to_string())
+                .await?;
+            // Detach may discard unsealed deltas; recover only after the frame is durable.
+            wait_for_event(&test.codex, |event| {
+                matches!(event,
+                    EventMsg::RealtimeConversationRealtime(event)
+                        if matches!(&event.payload,
+                            codex_protocol::protocol::RealtimeEvent::HistoryItemCompleted(item)
+                                if matches!(&item.content, RealtimeItemContent::Frame { .. })
+                        )
+                )
+            })
+            .await;
+        }
+        detach(&test, "reconnect").await?;
+    }
+    end(&test, "reconnect").await?;
+    end(&test, "reconnect").await?;
+    let items = store
+        .load_realtime_session(test.session_configured.thread_id, "reconnect".to_owned())
+        .await?
+        .expect("started session");
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| matches!(item.content, RealtimeItemContent::RealtimeSessionStarted))
+            .count(),
+        1
+    );
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| matches!(
+                item.content,
+                RealtimeItemContent::RealtimeSessionClosed { .. }
+            ))
+            .count(),
+        1
+    );
+    let frame = items
+        .iter()
+        .find(|item| matches!(item.content, RealtimeItemContent::Frame { .. }))
+        .expect("sealed frame");
+    assert!(items.iter().any(|item| matches!(&item.content,
+        RealtimeItemContent::SessionInputSaved { reason: SessionInputReason::SessionEnd, input, source_event_ids, .. }
+            if input.contains("use the smaller logo") && source_event_ids.as_slice() == std::slice::from_ref(&frame.id)
+    )));
+    let (_events, incoming) = mpsc::channel(8);
+    let (outgoing, _commands) = mpsc::channel(8);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("reconnect", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    assert!(timeout(Duration::from_secs(10), ready).await??.is_err());
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// An uncertain but committed voice input keeps its place ahead of later typed input on replay.
+#[tokio::test]
+async fn committed_handoff_retry_preserves_live_and_recovery_input_order() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_history::RolloutItem;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_thread_store::LoadThreadHistoryParams;
+    use core_test_support::responses;
+
+    let api = start_mock_server().await;
+    let model = responses::mount_sse_sequence(
+        &api,
+        ["voice", "typed"].map(responses::sse_completed).into(),
+    )
+    .await;
+    let store = Arc::new(HostedClockStore::failing_after_input_commit());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = false)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    let (events, incoming) = mpsc::channel(32);
+    let (outgoing, _commands) = mpsc::channel(32);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("order", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    events
+        .send(json!({"type":"delegation.created","item":{"id":"handoff-A","type":"delegation","target":"client","content":[{"type":"input_text","text":"voice A"}]}}).to_string())
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(store.input_attempts(), 2);
+    test.submit_text_turn("typed B").await?;
+
+    let label = |text: &str| {
+        if text.contains("<input>voice A</input>") {
+            Some("A")
+        } else if text == "typed B" {
+            Some("B")
+        } else {
+            None
+        }
+    };
+    let live = model.requests()[1]
+        .message_input_texts("user")
+        .iter()
+        .filter_map(|text| label(text))
+        .collect::<Vec<_>>();
+    let context = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: true,
+        })
+        .await?;
+    let recovery = context
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(envelope) => match &envelope.item {
+                ResponseItem::Message { role, content, .. } if role == "user" => Some(content),
+                _ => None,
+            },
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|content| match content {
+            ContentItem::InputText { text } => label(text),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!((live, recovery), (vec!["A", "B"], vec!["A", "B"]));
+    detach(&test, "order").await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// A failed close is terminal for the current owner; retrying Stop cannot replay an uncertain write.
+#[tokio::test]
+async fn failed_close_requires_history_recovery_before_another_call() -> Result<()> {
+    use super::realtime_conversation::realtime_history_store::HostedClockStore;
+    use codex_core::TurnInputRequest;
+    use codex_history::RolloutItem;
+    use codex_protocol::error::CodexErrorDetails;
+    use codex_protocol::realtime::RealtimeItemContent;
+    use codex_protocol::user_input::UserInput;
+    use codex_thread_store::ThreadStore;
+    use core_test_support::wait_for_event_match;
+
+    let api = start_mock_server().await;
+    let store = Arc::new(HostedClockStore::failing_close());
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&api)
+        .await?;
+    let (_events, incoming) = mpsc::channel(32);
+    let (outgoing, _commands) = mpsc::channel(32);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("failed-close", "ws://unused.invalid"),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+
+    let (reply, result) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationEnd {
+            realtime_session_id: "failed-close".to_owned(),
+            reply,
+        })
+        .await?;
+    let error = timeout(Duration::from_secs(10), result)
+        .await??
+        .expect_err("an uncertain close must fail End");
+    assert!(
+        matches!(error.details(), CodexErrorDetails::Fatal(message) if message == "realtime history recovery required; reload the thread before continuing")
+    );
+    let closed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(closed.reason.as_deref(), Some("history_recovery_required"));
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let repeated = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(repeated, closed);
+    assert_eq!(store.close_attempts(), 1);
+    let history = store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    assert!(!history.items.iter().any(|item| matches!(item,
+        RolloutItem::RealtimeItem(item)
+            if matches!(item.content, RealtimeItemContent::RealtimeSessionClosed { .. })
+    )));
+
+    let (_, result) = start(&test, "next-call", "ws://unused.invalid").await?;
+    let error = timeout(Duration::from_secs(10), result)
+        .await??
+        .expect_err("a new attachment must wait for recovery");
+    assert!(matches!(error.details(), CodexErrorDetails::Fatal(_)));
+    let error = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await
+        .expect_err("turn input must wait for recovery");
+    assert!(matches!(error.details(), CodexErrorDetails::Fatal(_)));
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
@@ -333,7 +1028,7 @@ fn params(session: &str, url: &str) -> ConversationStartParams {
     ConversationStartParams {
         client_managed_handoffs: false,
         delegation_ack_filler: None,
-        flush_transcript_tail_on_session_end: false,
+        flush_transcript_tail_on_session_end: true,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
         codex_response_handoff_mode: Default::default(),
@@ -385,6 +1080,34 @@ async fn detach(test: &TestCodex, session: &str) -> Result<()> {
         .await?;
     timeout(Duration::from_secs(10), result).await???;
     Ok(())
+}
+
+async fn end(test: &TestCodex, session: &str) -> Result<()> {
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let (reply, result) = oneshot::channel();
+            test.codex
+                .submit(Op::RealtimeConversationEnd {
+                    realtime_session_id: session.to_owned(),
+                    reply,
+                })
+                .await?;
+            match result.await? {
+                Ok(()) => return anyhow::Ok(()),
+                Err(error) if is_realtime_busy(&error) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+fn is_realtime_busy(error: &codex_protocol::error::CodexErr) -> bool {
+    matches!(error.details(), codex_protocol::error::CodexErrorDetails::Io(error)
+        if error.kind() == std::io::ErrorKind::WouldBlock)
 }
 
 async fn attached(
@@ -608,11 +1331,22 @@ pub(super) async fn attachment_replacement_scenario() -> Result<Vec<ResponsesReq
         })
         .with_config(|config| {
             config.base_instructions = Some(String::new());
+            config
+                .features
+                .enable(Feature::RealtimeFramesLocal)
+                .expect("enable local realtime frames");
         });
     let test = builder.build_with_auto_env(&api).await?;
     let mut original = Sideband::new().await?;
     let mut newer = Sideband::new().await?;
     let (original_id, mut original_messages) = attached(&test, &mut original, "original").await?;
+    let (_, busy) = start(&test, "newer", &newer.url).await?;
+    assert!(is_realtime_busy(
+        &timeout(Duration::from_secs(10), busy)
+            .await??
+            .expect_err("replacement settles first")
+    ));
+    end(&test, "original").await?;
     let (newer_id, mut completion) = start(&test, "newer", &newer.url).await?;
     let connection = newer.connected().await;
     assert_eq!(
@@ -670,10 +1404,22 @@ pub(super) async fn attachment_replacement_scenario() -> Result<Vec<ResponsesReq
 #[tokio::test]
 async fn failed_attachment_leaves_core_disconnected() -> Result<()> {
     let api = start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&api).await?;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::RealtimeFramesLocal)
+                .expect("enable local realtime frames");
+        })
+        .build_with_auto_env(&api)
+        .await?;
     let mut original = Sideband::new().await?;
     let mut newer = Sideband::new().await?;
     let (_, mut current) = attached(&test, &mut original, "original").await?;
+    let (_, busy) = start(&test, "newer", &newer.url).await?;
+    assert!(timeout(Duration::from_secs(10), busy).await??.is_err());
+    end(&test, "original").await?;
     let (_, result) = start(&test, "newer", &newer.url).await?;
     let connection = newer.connected().await;
     assert_eq!(
@@ -688,10 +1434,14 @@ async fn failed_attachment_leaves_core_disconnected() -> Result<()> {
     Ok(())
 }
 
-#[test_case::test_case(true; "record unfinished tail")]
-#[test_case::test_case(false; "drop unfinished tail")]
+#[test_case::test_case(ThreadHistoryMode::Legacy, true; "legacy record unfinished tail")]
+#[test_case::test_case(ThreadHistoryMode::Legacy, false; "legacy setting ignored for v3")]
+#[test_case::test_case(ThreadHistoryMode::Paginated, true; "frames record unfinished tail")]
 #[tokio::test]
-async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool) -> Result<()> {
+async fn completed_turns_reach_history_before_the_next_handoff(
+    history_mode: ThreadHistoryMode,
+    flush_tail: bool,
+) -> Result<()> {
     use codex_protocol::protocol::RealtimeEvent;
     use core_test_support::responses;
     use core_test_support::wait_for_event;
@@ -704,7 +1454,10 @@ async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool)
         ])
     });
     let model = responses::mount_sse_sequence(&api, replies.into()).await;
-    let test = test_codex().build_with_auto_env(&api).await?;
+    let test = test_codex()
+        .with_history_mode(history_mode)
+        .build_with_auto_env(&api)
+        .await?;
     let mut sideband = Sideband::new().await?;
     let mut params = params("transcript", &sideband.url);
     params.flush_transcript_tail_on_session_end = flush_tail;
@@ -763,15 +1516,13 @@ async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool)
     let unfinished = "a".repeat(12 * 1024);
     send(json!({"type":"output_transcript.added", "item":{"text":unfinished}}))?;
     wait_for_event(&test.codex, |event| matches!(event, EventMsg::RealtimeConversationRealtime(event) if matches!(event.payload, RealtimeEvent::OutputTranscriptDelta(_)))).await;
-    detach(&test, "transcript").await?;
+    end(&test, "transcript").await?;
     test.submit_text_turn("continue").await?;
     let after_close = transcript(model.last_request().expect("text turn"));
-    assert_eq!(after_close.len(), completed.len() + usize::from(flush_tail));
+    assert_eq!(after_close.len(), completed.len() + 1);
     assert_eq!(&after_close[..completed.len()], completed.as_slice());
-    if flush_tail {
-        assert!(after_close[completed.len()].contains(&format!(
-            "<transcript_delta>assistant: {unfinished}</transcript_delta>"
-        )));
-    }
+    assert!(after_close[completed.len()].contains(&format!(
+        "<transcript_delta>assistant: {unfinished}</transcript_delta>"
+    )));
     Ok(())
 }

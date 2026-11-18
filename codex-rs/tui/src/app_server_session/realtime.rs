@@ -45,7 +45,7 @@ impl AppServerSession {
                     realtime_start_instructions: None,
                     realtime_end_instructions: None,
                     prompt: None,
-                    realtime_session_id: Some(thread_id.to_string()),
+                    realtime_session_id: Some(call_id.clone()),
                     voice_session_id: Some(voice_session_id.to_string()),
                     transport: Some(ThreadRealtimeStartTransport::ExistingCall {
                         // The TUI owns the peer connection and has already negotiated this call.

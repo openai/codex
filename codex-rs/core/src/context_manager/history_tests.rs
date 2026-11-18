@@ -2162,6 +2162,46 @@ async fn drop_last_n_user_turns_preserves_prefix() {
 }
 
 #[test]
+fn session_end_input_does_not_consume_a_rollback_turn() {
+    let first = user_input_text_msg("first turn");
+    // Even if its content happens to look like normal pre-turn context, a saved
+    // hangup belongs to the preceding turn and must survive rollback of the next.
+    let tail =
+        user_input_text_msg("<environment_context>speech saved at hangup</environment_context>");
+    let next = user_input_text_msg("next turn");
+    let mut saved_tail = ResponseItemEnvelope::new(tail.clone());
+    saved_tail.metadata = Some(CodexHarnessMetadata {
+        realtime_session_end_input: true,
+        ..Default::default()
+    });
+
+    for (mut items, expected) in [
+        (
+            vec![ResponseItemEnvelope::new(first.clone()), saved_tail.clone()],
+            Vec::new(),
+        ),
+        (
+            vec![
+                ResponseItemEnvelope::new(first.clone()),
+                saved_tail,
+                ResponseItemEnvelope::new(next),
+            ],
+            vec![first, tail],
+        ),
+    ] {
+        let mut live = ContextManager::default();
+        live.record_annotated_items(&mut items, TruncationPolicy::Tokens(10_000));
+        let mut checkpoint = ContextManager::default();
+        checkpoint.replace_annotated(live.annotated_items().to_vec());
+
+        for mut history in [live, checkpoint] {
+            history.drop_last_n_user_turns(/*num_turns*/ 1);
+            assert_eq!(raw_items(&history), expected);
+        }
+    }
+}
+
+#[test]
 fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
     let mut history = root_history();
     let original = user_msg("Staging only.");

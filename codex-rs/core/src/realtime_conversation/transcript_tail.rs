@@ -2,6 +2,8 @@
 
 use crate::session::new_submission_id;
 use crate::session::session::Session;
+use codex_history::RealtimeSessionInputMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::EventMsg;
@@ -14,11 +16,27 @@ use codex_thread_store::PersistContext;
 use codex_user_input::ResolvedUserInput;
 use std::sync::Arc;
 
+pub(super) async fn record(session: &Session, text: String) -> std::io::Result<()> {
+    record_input(session, text, /*metadata*/ None).await
+}
+
+pub(super) async fn record_chunk(
+    session: &Session,
+    text: String,
+    metadata: RealtimeSessionInputMetadata,
+) -> std::io::Result<()> {
+    record_input(session, text, Some(metadata)).await
+}
+
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "record history before the owning task can finish or a new task can start"
 )]
-pub(super) async fn record(session: &Session, text: String) -> std::io::Result<()> {
+async fn record_input(
+    session: &Session,
+    text: String,
+    metadata: Option<RealtimeSessionInputMetadata>,
+) -> std::io::Result<()> {
     let mut recording_context = session.new_inject_items_context().await;
     Arc::get_mut(&mut recording_context)
         .ok_or_else(|| std::io::Error::other("realtime transcript context is shared"))?
@@ -50,9 +68,20 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
             .await;
     }
     let item = session.response_item_from_user_input(std::slice::from_ref(&input));
-    session
-        .record_conversation_items(&turn, turn.model_info(), &[item])
-        .await;
+    if let Some(metadata) = metadata {
+        let mut envelope = ResponseItemEnvelope::new(item);
+        envelope
+            .metadata
+            .get_or_insert_default()
+            .realtime_session_input = Some(Box::new(metadata));
+        session
+            .record_realtime_session_chunk(&turn, envelope)
+            .await?;
+    } else {
+        session
+            .record_conversation_items(&turn, turn.model_info(), &[item])
+            .await;
+    }
 
     // ItemCompleted is the existing source for thread/items/list. Keep the legacy
     // equivalent too; the store selects the appropriate format for this thread.

@@ -199,6 +199,39 @@ pub(super) async fn append_items(
     .await
 }
 
+pub(super) async fn seal_realtime_items(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    items: Vec<codex_protocol::realtime::RealtimeItem>,
+) -> ThreadStoreResult<()> {
+    let id = items
+        .last()
+        .filter(|item| {
+            matches!(
+                item.content,
+                codex_protocol::realtime::RealtimeItemContent::SessionInputSaved {
+                    reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+                    ..
+                }
+            )
+        })
+        .map(|item| item.id.clone());
+    let records = items.into_iter().map(RolloutItem::RealtimeItem).collect();
+    if let Some(id) = id {
+        seal_realtime_records(store, thread_id, id, records).await
+    } else {
+        append_items(
+            store,
+            AppendThreadItemsParams {
+                thread_id,
+                items: records,
+            },
+        )
+        .await?;
+        flush_thread(store, thread_id).await
+    }
+}
+
 pub(super) async fn seal_realtime_input(
     store: &LocalThreadStore,
     thread_id: ThreadId,

@@ -12,7 +12,9 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_features::Feature;
+use codex_history::CodexHarnessMetadata;
 use codex_history::InitialHistory;
+use codex_history::RealtimeHandoffMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
@@ -87,6 +89,9 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
+
+#[path = "realtime_history_store.rs"]
+pub(super) mod realtime_history_store;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
@@ -2318,8 +2323,148 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_existing_calls_on_one_thread_keep_distinct_openings_and_saved_tails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let calls = [("rtc_first", "first tail"), ("rtc_second", "second tail")];
+    let realtime_server = start_websocket_server_with_headers(calls.iter().map(|(id, tail)| {
+        WebSocketConnectionConfig {
+            requests: vec![vec![
+                json!({"type":"session.updated", "session":{"id":id, "instructions":"fixture"}}),
+                json!({"type":"input_transcript.added", "item":{"text":tail}}),
+            ]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: false,
+        }
+    }).collect()).await;
+    let api_server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config({
+            let url = realtime_server.uri().to_string();
+            move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
+                config.experimental_realtime_ws_base_url = Some(url);
+                config.realtime.version = RealtimeWsVersion::V3;
+            }
+        });
+    let test = builder.build_with_auto_env(&api_server).await?;
+    test.codex.ensure_rollout_materialized().await;
+    for (call_id, _) in calls {
+        test.codex
+            .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                client_managed_handoffs: false,
+                delegation_ack_filler: None,
+                flush_transcript_tail_on_session_end: true,
+                codex_responses_as_items: false,
+                codex_response_item_prefix: None,
+                codex_response_handoff_mode:
+                    codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+                backend_reasoning_status: false,
+                codex_response_handoff_channel_prefixes: None,
+                model: None,
+                output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: false,
+                initial_items: Vec::new(),
+                realtime_start_instructions: None,
+                realtime_end_instructions: None,
+                prompt: None,
+                realtime_session_id: None,
+                voice_session_id: None,
+                transport: Some(ConversationStartTransport::ExistingCall {
+                    call_id: call_id.to_string(),
+                    sideband_base_url: None,
+                }),
+                version: Some(RealtimeConversationVersion::V3),
+                voice: None,
+            }))
+            .await?;
+        let started = wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationStarted(event) => Some(event.clone()),
+            _ => None,
+        })
+        .await;
+        assert_eq!(started.realtime_session_id.as_deref(), Some(call_id));
+        // Existing-call attach sends no session.update. Trigger the fixture's transcript.
+        test.codex
+            .submit(Op::RealtimeConversationText(ConversationTextParams {
+                text: "ready".into(),
+                role: ConversationTextRole::User,
+            }))
+            .await?;
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::InputTranscriptDelta(_),
+            }) => Some(()),
+            _ => None,
+        })
+        .await;
+        test.codex.submit(Op::RealtimeConversationClose).await?;
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationClosed(_) => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+
+    for (call_id, tail) in calls {
+        let page = test
+            .thread_store
+            .list_realtime(codex_thread_store::ListRealtimeParams {
+                thread_id: test.session_configured.thread_id,
+                session_id: Some(call_id.into()),
+                order: codex_app_server_protocol::ThreadRealtimeOrder::Position,
+                page_size: 20,
+                from_observed_at_ms: None,
+                to_observed_at_ms: None,
+                after_position: None,
+                event_id: None,
+                cursor: None,
+                snapshot_end: None,
+                required_through_position: None,
+            })
+            .await?;
+        let openings = page
+            .data
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.item.content,
+                    ThreadRealtimeItemContent::RealtimeSessionStarted
+                )
+            })
+            .count();
+        assert_eq!(openings, 1);
+        let tails: Vec<_> = page
+            .data
+            .iter()
+            .filter_map(|entry| match &entry.item.content {
+                ThreadRealtimeItemContent::SessionInputSaved {
+                    reason: codex_app_server_protocol::ThreadRealtimeSessionInputReason::SessionEnd,
+                    input,
+                    ..
+                } => Some(input),
+                _ => None,
+            })
+            .collect();
+        let [saved] = tails.as_slice() else {
+            panic!("expected one saved tail for {call_id}, got {tails:?}");
+        };
+        assert!(saved.contains(&format!("user: {tail}")));
+    }
+    test.codex.submit(Op::Shutdown).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
 async fn assert_transport_close_tail_flush(
     flush_transcript_tail_on_session_end: bool,
+    history_mode: ThreadHistoryMode,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2345,9 +2490,13 @@ async fn assert_transport_close_tail_flush(
     ]]])
     .await;
 
-    let mut builder = test_codex().with_config({
+    let mut builder = test_codex().with_history_mode(history_mode).with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
+            config
+                .features
+                .enable(Feature::RealtimeFramesLocal)
+                .expect("enable local realtime frames");
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
             config.realtime.version = RealtimeWsVersion::V1;
         }
@@ -2413,14 +2562,25 @@ async fn assert_transport_close_tail_flush(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
     // Closed must be a history barrier, including when there is no active turn.
-    let history = test.codex.load_history(/*include_archived*/ false).await?;
-    let tails = history.items.iter().filter(|item| {
+    let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+        &test.codex.rollout_path().expect("local rollout path"),
+    )
+    .await?;
+    assert_eq!(parse_errors, 0);
+    let ordinary_tails = history.iter().filter(|item| {
         matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope { item: ResponseItem::Message { role, content, .. }, .. })
             if role == "user" && content.iter().any(|item| matches!(item,
                 ContentItem::InputText { text } if text.contains("<source>transcript_tail_flush</source>")
                     && text.contains("user: transport tail"))))
     }).count();
-    assert_eq!(tails, usize::from(flush_transcript_tail_on_session_end));
+    let saved_tails = history.iter().filter(|item| {
+        matches!(item, RolloutItem::RealtimeItem(codex_protocol::realtime::RealtimeItem {
+                content: codex_protocol::realtime::RealtimeItemContent::SessionInputSaved { reason: codex_protocol::realtime::SessionInputReason::SessionEnd, input, .. }, ..
+            }) if input.contains("user: transport tail"))
+    }).count();
+    let expected = usize::from(flush_transcript_tail_on_session_end);
+    // Protocol V1 retains the old opt-in transcript flush in either history mode.
+    assert_eq!((ordinary_tails, saved_tails), (expected, 0));
     assert!(response_mock.requests().is_empty());
 
     test.submit_text_turn("continue in text").await?;
@@ -2438,8 +2598,18 @@ async fn assert_transport_close_tail_flush(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_transport_close_tail_flush_is_opt_in() -> Result<()> {
-    assert_transport_close_tail_flush(/*flush_transcript_tail_on_session_end*/ false).await?;
-    assert_transport_close_tail_flush(/*flush_transcript_tail_on_session_end*/ true).await?;
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        assert_transport_close_tail_flush(
+            /*flush_transcript_tail_on_session_end*/ false,
+            history_mode,
+        )
+        .await?;
+        assert_transport_close_tail_flush(
+            /*flush_transcript_tail_on_session_end*/ true,
+            history_mode,
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -4919,7 +5089,31 @@ fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    realtime_handoff_history_scenario(/*block_prompt*/ false).await?;
+    Ok(())
+}
 
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_handoff_hook_rejection_has_no_acceptance_receipt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(
+        Ok(()),
+        "the prompt hook requires host-native Python and filesystem paths"
+    );
+    realtime_handoff_history_scenario(/*block_prompt*/ true).await?;
+    Ok(())
+}
+
+pub(super) async fn realtime_handoff_history_scenario(
+    block_prompt: bool,
+) -> Result<Vec<responses::ResponsesRequest>> {
+    realtime_handoff_history_scenario_inner(block_prompt).await
+}
+
+async fn realtime_handoff_history_scenario_inner(
+    block_prompt: bool,
+) -> Result<Vec<responses::ResponsesRequest>> {
     let api_server = start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &api_server,
@@ -4931,22 +5125,27 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
     )
     .await;
 
-    let realtime_server = start_websocket_server(vec![vec![vec![
-        json!({
-            "type": "session.updated",
-            "session": { "id": "sess_inbound", "instructions": "backend prompt" }
-        }),
-        json!({
-            "type": "conversation.input_transcript.delta",
-            "delta": "text from realtime"
-        }),
-        json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_inbound",
-            "item_id": "item_inbound",
-            "input_transcript": "text from realtime"
-        }),
-    ]]])
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_inbound", "instructions": "backend prompt" }
+            }),
+            if block_prompt {
+                json!({"type":"input_transcript.added", "item":{"text":"text from realtime"}})
+            } else {
+                json!({"type":"conversation.input_transcript.delta", "delta":"text from realtime"})
+            },
+            if block_prompt {
+                json!({"type":"delegation.created", "item":{"id":"handoff_inbound", "type":"delegation", "target":"client", "content":[{"type":"input_text", "text":"text from realtime"}]}})
+            } else {
+                json!({"type":"conversation.handoff.requested", "handoff_id":"handoff_inbound", "item_id":"item_inbound", "input_transcript":"text from realtime"})
+            },
+        ]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: !block_prompt,
+    }])
     .await;
 
     let mut builder = test_codex()
@@ -4954,17 +5153,46 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
         .with_config({
             let realtime_base_url = realtime_server.uri().to_string();
             move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
+                if block_prompt {
+                    core_test_support::hooks::trust_discovered_hooks(config);
+                }
                 config.experimental_realtime_ws_base_url = Some(realtime_base_url);
-                config.realtime.version = RealtimeWsVersion::V1;
+                config.realtime.version = if block_prompt {
+                    RealtimeWsVersion::V3
+                } else {
+                    RealtimeWsVersion::V1
+                };
             }
         });
+    #[cfg(not(target_os = "windows"))]
+    {
+        builder = builder.with_pre_build_hook(move |home| {
+            if block_prompt {
+                super::hooks::write_user_prompt_submit_hook(home,
+                    "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>", "")
+                    .expect("write blocking realtime prompt hook");
+                let script = home.join("user_prompt_submit_hook.py");
+                let existing = fs::read_to_string(&script).expect("read prompt hook");
+                let gate = format!(
+                    "import time\nfrom pathlib import Path\nPath(r\"{}\").touch()\nwhile not Path(r\"{}\").exists():\n    time.sleep(0.01)\n",
+                    home.join("hook_started").display(),
+                    home.join("hook_release").display(),
+                );
+                fs::write(script, format!("{gate}{existing}")).expect("gate prompt hook");
+            }
+        });
+    }
     let test = builder.build_with_auto_env(&api_server).await?;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             client_managed_handoffs: false,
             delegation_ack_filler: None,
-            flush_transcript_tail_on_session_end: false,
+            flush_transcript_tail_on_session_end: block_prompt,
             codex_responses_as_items: false,
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
@@ -4978,7 +5206,7 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
             realtime_start_instructions: None,
             realtime_end_instructions: None,
             prompt: Some(Some("backend prompt".to_string())),
-            realtime_session_id: None,
+            realtime_session_id: Some("sess_inbound".to_owned()),
             voice_session_id: None,
             transport: None,
             version: None,
@@ -5019,11 +5247,65 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
     };
     Uuid::parse_str(&turn_id).context("realtime-routed turn ID should be a UUID")?;
 
+    if block_prompt {
+        let started = test.home.path().join("hook_started");
+        timeout(Duration::from_secs(10), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("prompt hook did not start")?;
+        let (reply, mut stopped) = oneshot::channel();
+        test.codex
+            .submit(Op::RealtimeConversationEnd {
+                realtime_session_id: "sess_inbound".to_owned(),
+                reply,
+            })
+            .await?;
+        // Terminal stop disconnects immediately but waits for the reserved handoff to settle.
+        assert!(
+            timeout(Duration::from_millis(100), &mut stopped)
+                .await
+                .is_err()
+        );
+        // An interrupt must still reach the submission dispatcher while stop is pending.
+        test.codex.submit(Op::Interrupt).await?;
+        timeout(Duration::from_secs(10), stopped).await???;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::RealtimeConversationClosed(_))
+        })
+        .await;
+        assert!(response_mock.requests().is_empty());
+        test.thread_store
+            .flush_thread(test.session_configured.thread_id)
+            .await?;
+        let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+            &test.codex.rollout_path().expect("local rollout path"),
+        )
+        .await?;
+        assert_eq!(parse_errors, 0);
+        assert!(
+            !history
+                .iter()
+                .filter_map(RolloutItem::realtime_item)
+                .any(|item| matches!(
+                    item.content,
+                    codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted { .. }
+                )),
+            "a hook-blocked prompt must not become recoverable accepted input"
+        );
+        assert!(history.iter().any(|item| matches!(item,
+            RolloutItem::RealtimeItem(codex_protocol::realtime::RealtimeItem {
+                content: codex_protocol::realtime::RealtimeItemContent::SessionInputSaved { reason: codex_protocol::realtime::SessionInputReason::SessionEnd, input, .. }, ..
+            }) if input.contains("user: text from realtime")
+        )), "rejected handoff speech remains available for closure carryover");
+        return Ok(Vec::new());
+    }
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
     test.thread_store
         .flush_thread(test.session_configured.thread_id)
         .await?;
@@ -5060,7 +5342,46 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
         }]
     );
 
+    let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+        &test.codex.rollout_path().expect("local rollout path"),
+    )
+    .await?;
+    assert_eq!(parse_errors, 0);
+    let receipt = history
+        .iter()
+        .filter_map(RolloutItem::realtime_item)
+        .map(std::borrow::Cow::into_owned)
+        .find_map(|item| match item.content {
+            codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted {
+                source_event_ids,
+                input,
+                input_item_id,
+                ..
+            } => Some((source_event_ids, input, input_item_id)),
+            _ => None,
+        })
+        .expect("accepted handoff is durable");
+    assert_eq!(receipt.0.len(), 1);
+    assert!(history.iter().any(|item| matches!(item,
+        RolloutItem::RealtimeItem(item) if item.id == receipt.0[0]
+            && matches!(&item.content, codex_protocol::realtime::RealtimeItemContent::Frame { channels } if channels.voice_transcript.text == "text from realtime")
+    )));
+    assert!(history.iter().any(|item| matches!(item,
+        RolloutItem::ResponseItem(item) if item.id().is_some_and(|id| id.as_str() == receipt.2)
+            && item.metadata.as_ref().is_some_and(|metadata| metadata.realtime_handoff.is_some())
+    )));
+    assert!(
+        !history.iter().any(|item| matches!(
+            item,
+            RolloutItem::RealtimeItem(codex_protocol::realtime::RealtimeItem {
+                content: codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted { .. },
+                ..
+            })
+        )),
+        "accepted input must not be persisted again as a standalone receipt"
+    );
     let request = response_mock.single_request();
+    assert!(request.message_input_texts("user").contains(&receipt.1));
     let turn_metadata: Value = serde_json::from_str(
         request
             .header("x-codex-turn-metadata")
@@ -5073,6 +5394,189 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
         == "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
+    Ok(response_mock.requests())
+}
+
+/// Simulate a stop after ordinary admission persisted the canonical input but
+/// before sampling. Loading the thread alone does not run inference.
+#[test_case(false; "local_rollout")]
+#[test_case(true; "hosted_clock")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_recovery_dispatches_the_committed_handoff_on_its_receiving_turn(
+    hosted_clock: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let model = responses::mount_sse_once(&server, responses::sse_completed("recovered")).await;
+    let mut builder = test_codex().with_history_mode(ThreadHistoryMode::Paginated);
+    let hosted_store = Arc::new(realtime_history_store::HostedClockStore::default());
+    let voice_server = if hosted_clock {
+        let voice = start_websocket_server(vec![vec![vec![]], vec![vec![]]]).await;
+        let url = voice.uri().to_string();
+        builder = builder
+            .with_thread_store(hosted_store.clone())
+            .with_config(move |config| {
+                config.realtime.version = RealtimeWsVersion::V2;
+                config.experimental_realtime_ws_base_url = Some(url);
+                config.experimental_realtime_ws_startup_context = Some(String::new());
+            });
+        Some(voice)
+    } else {
+        None
+    };
+    let test = builder.build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.thread_id;
+    let turn_id = "receiving-turn";
+    let accepted = "<realtime_delegation>\n  <input>recover this</input>\n</realtime_delegation>";
+    let receipt_id = uuid::Uuid::now_v7();
+    let mut input: ResponseItem = serde_json::from_value(json!({
+        "type": "message",
+        "id": codex_protocol::ResponseItemId::for_admitted_user_input(receipt_id),
+        "role": "user",
+        "content": [{"type": "input_text", "text": accepted}],
+    }))?;
+    input.set_turn_id_if_missing(turn_id);
+    test.thread_store
+        .append_items(codex_thread_store::AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                RolloutItem::EventMsg(EventMsg::TurnStarted(
+                    codex_protocol::protocol::TurnStartedEvent {
+                        turn_attribution: None,
+                        turn_id: turn_id.to_string(),
+                        root_turn_id: Some(turn_id.to_string()),
+                        trace_id: None,
+                        started_at: None,
+                        model_context_window: None,
+                        collaboration_mode_kind: Default::default(),
+                    },
+                )),
+                RolloutItem::ResponseItem(ResponseItemEnvelope {
+                    item: input,
+                    metadata: Some(CodexHarnessMetadata {
+                        realtime_handoff: Some(Box::new(RealtimeHandoffMetadata {
+                            event_id: receipt_id.to_string(),
+                            realtime_session_id: "voice".to_string(),
+                            observed_at_ms: 1_000,
+                            handoff_id: "handoff".to_string(),
+                            mode: codex_protocol::realtime::RealtimeHandoffMode::Start,
+                            source_event_ids: Vec::new(),
+                        })),
+                        ..Default::default()
+                    }),
+                }),
+            ],
+        })
+        .await?;
+    test.thread_store.flush_thread(thread_id).await?;
+    let path = test.codex.rollout_path();
+    test.codex.shutdown_and_wait().await?;
+    test.thread_manager.remove_thread(&thread_id).await;
+    let context = test
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let resumed = test
+        .thread_manager
+        .resume_thread_with_history(
+            test.config.clone(),
+            InitialHistory::Resumed(codex_history::ResumedHistory {
+                conversation_id: thread_id,
+                history: Arc::new(context.items),
+                history_revision: context.revision,
+                rollout_path: path,
+            }),
+            auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await?
+        .thread;
+    assert!(model.requests().is_empty());
+
+    let recovery = resumed
+        .recover_turn_if_idle(codex_core::RecoverTurnRequest {
+            turn_id: turn_id.into(),
+            thread_settings: Default::default(),
+            trace: None,
+            cyber_access_program: None,
+            prompt_cache_ttl: None,
+        })
+        .await?;
+    assert_eq!(
+        recovery,
+        codex_core::StartIfIdleSubmission::Started {
+            turn_id: turn_id.into(),
+            root_turn_id: turn_id.into(),
+        }
+    );
+    wait_for_event(
+        &resumed,
+        |event| matches!(event, EventMsg::TurnComplete(event) if event.turn_id == turn_id),
+    )
+    .await;
+    let messages = model.single_request().message_input_texts("user");
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|text| text.as_str() == accepted)
+            .count(),
+        1
+    );
+    if voice_server.is_some() {
+        assert_eq!(hosted_store.reads(), (0, 0));
+        for call_id in ["first-call", "second-call"] {
+            resumed
+                .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                    client_managed_handoffs: false,
+                    delegation_ack_filler: None,
+                    flush_transcript_tail_on_session_end: false,
+                    codex_responses_as_items: false,
+                    codex_response_item_prefix: None,
+                    codex_response_handoff_mode:
+                        codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+                    backend_reasoning_status: false,
+                    codex_response_handoff_channel_prefixes: None,
+                    model: None,
+                    output_modality: RealtimeOutputModality::Audio,
+                    include_startup_context: true,
+                    initial_items: Vec::new(),
+                    realtime_start_instructions: None,
+                    realtime_end_instructions: None,
+                    prompt: None,
+                    realtime_session_id: Some(call_id.to_string()),
+                    voice_session_id: None,
+                    transport: None,
+                    version: None,
+                    voice: None,
+                }))
+                .await?;
+            let observed_at_ms = wait_for_event_match(&resumed, |msg| match msg {
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::HistoryItemCompleted(item),
+                }) if item.realtime_session_id == call_id
+                    && matches!(
+                        item.content,
+                        codex_protocol::realtime::RealtimeItemContent::RealtimeSessionStarted
+                    ) =>
+                {
+                    Some(item.observed_at_ms)
+                }
+                _ => None,
+            })
+            .await;
+            assert_eq!(observed_at_ms, Some(realtime_history_store::FRAME_FLOOR_MS));
+            resumed.submit(Op::RealtimeConversationClose).await?;
+            wait_for_event(&resumed, |msg| {
+                matches!(msg, EventMsg::RealtimeConversationClosed(_))
+            })
+            .await;
+        }
+        assert_eq!(hosted_store.reads(), (1, 1));
+    }
     Ok(())
 }
 
@@ -5373,13 +5877,19 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
         close_after_requests: false,
     }])
     .await;
-    let mut builder = test_codex().with_config({
-        let realtime_base_url = realtime_server.uri().to_string();
-        move |config| {
-            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
-            config.realtime.version = RealtimeWsVersion::V1;
-        }
-    });
+    let mut builder = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config({
+            let realtime_base_url = realtime_server.uri().to_string();
+            move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
+                config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+                config.realtime.version = RealtimeWsVersion::V1;
+            }
+        });
     let test = builder.build(&api_server).await?;
 
     test.codex
@@ -5424,21 +5934,23 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let history = test.codex.load_history(/*include_archived*/ false).await?;
-    let tails = history.items.iter().filter(|item| {
-        matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope { item: ResponseItem::Message { role, content, .. }, .. })
+    let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+        &test.codex.rollout_path().expect("local rollout path"),
+    )
+    .await?;
+    assert_eq!(parse_errors, 0);
+    let tails = history.iter().filter(|item| matches!(item,
+        RolloutItem::ResponseItem(ResponseItemEnvelope { item: ResponseItem::Message { role, content, .. }, .. })
             if role == "user" && content.iter().any(|item| matches!(item,
-                ContentItem::InputText { text } if text.contains("<source>transcript_tail_flush</source>")
-                    && text.contains("assistant: remaining answer\nuser: remaining question"))))
-    }).count();
-    assert_eq!(tails, 1);
+                ContentItem::InputText { text } if text.contains("<source>transcript_tail_flush</source>") && text.contains("assistant: remaining answer\nuser: remaining question")))
+    )).count();
+    assert_eq!(
+        tails, 1,
+        "protocol V1 saves the tail through legacy history"
+    );
     assert_eq!(response_mock.requests().len(), 1);
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::RealtimeConversationClosed(_))
-    })
-    .await;
     test.submit_text_turn("continue in text").await?;
 
     let requests = response_mock.requests();
@@ -5868,13 +6380,16 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
     Ok(())
 }
 
-#[test_case(false, false; "without_tail")]
-#[test_case(true, false; "with_tail")]
-#[test_case(true, true; "interrupt_after_close")]
+#[test_case(false, false, ThreadHistoryMode::Legacy; "without_tail")]
+#[test_case(true, false, ThreadHistoryMode::Legacy; "with_tail")]
+#[test_case(true, true, ThreadHistoryMode::Legacy; "interrupt_after_close")]
+#[test_case(false, false, ThreadHistoryMode::Paginated; "v1_steer")]
+#[test_case(true, false, ThreadHistoryMode::Paginated; "v1_active_tail")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
     flush_transcript_tail_on_session_end: bool,
     interrupt: bool,
+    history_mode: ThreadHistoryMode,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -5952,13 +6467,20 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
     }])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_config({
-        let realtime_base_url = realtime_server.uri().to_string();
-        move |config| {
-            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
-            config.realtime.version = RealtimeWsVersion::V1;
-        }
-    });
+    let mut builder = test_codex()
+        .with_history_mode(history_mode)
+        .with_model("gpt-5.4")
+        .with_config({
+            let realtime_base_url = realtime_server.uri().to_string();
+            move |config| {
+                config
+                    .features
+                    .enable(Feature::RealtimeFramesLocal)
+                    .expect("enable local realtime frames");
+                config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+                config.realtime.version = RealtimeWsVersion::V1;
+            }
+        });
     let test = builder.build_with_streaming_server(&api_server).await?;
 
     let started = test
@@ -6050,6 +6572,21 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
     .await
     .context("steered request did not start")?;
 
+    if history_mode == ThreadHistoryMode::Paginated {
+        let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+            &test.codex.rollout_path().expect("local rollout path"),
+        )
+        .await?;
+        assert_eq!(parse_errors, 0);
+        assert!(history.iter().filter_map(RolloutItem::realtime_item).any(|item| matches!(
+            &item.content,
+            codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted {
+                    turn_id: receiving_turn, mode: codex_protocol::realtime::RealtimeHandoffMode::Steer,
+                    source_event_ids, input, ..
+                } if receiving_turn == &turn_id && source_event_ids.len() == 1 && input.contains("steer via realtime")
+        )), "the steering receipt must be durable before the second model request");
+    }
+
     // Closed and the persisted tail must not wait for the in-flight model response.
     test.codex.submit(Op::RealtimeConversationClose).await?;
     let closed = wait_for_event_match(&test.codex, |event| match event {
@@ -6059,13 +6596,26 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
     if flush_transcript_tail_on_session_end {
-        let history = test.codex.load_history(/*include_archived*/ false).await?;
-        assert!(history.items.iter().any(|item| {
-            matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope {
+        let (history, _, parse_errors) = codex_rollout::RolloutRecorder::load_rollout_items(
+            &test.codex.rollout_path().expect("local rollout path"),
+        )
+        .await?;
+        assert_eq!(parse_errors, 0);
+        let ordinary_tails = history
+            .iter()
+            .filter(|item| {
+                matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope {
                 item: ResponseItem::Message { role, content, .. }, ..
             }) if role == "user" && content.iter().any(|item| matches!(item,
                 ContentItem::InputText { text } if text.contains("user: final transcript tail"))))
-        }));
+            })
+            .count();
+        let saved_tails = history.iter().filter(|item| {
+            matches!(item, RolloutItem::RealtimeItem(codex_protocol::realtime::RealtimeItem {
+                    content: codex_protocol::realtime::RealtimeItemContent::SessionInputSaved { reason: codex_protocol::realtime::SessionInputReason::SessionEnd, input, .. }, ..
+                }) if input.contains("user: final transcript tail"))
+        }).count();
+        assert_eq!((ordinary_tails, saved_tails), (1, 0));
     }
     if interrupt {
         test.codex.submit(Op::Interrupt).await?;

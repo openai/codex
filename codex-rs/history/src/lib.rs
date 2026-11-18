@@ -91,6 +91,9 @@ pub struct CodexHarnessMetadata {
     /// Provenance of a transcript chunk saved in ordinary model history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_session_input: Option<Box<RealtimeSessionInputMetadata>>,
+    /// End-of-call transcript context, recorded without creating a user turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub realtime_session_end_input: bool,
 
     /// Thread-local append sequence. Compaction keeps the identities of retained inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
