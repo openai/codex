@@ -203,8 +203,7 @@ pub enum Feature {
     StandaloneWebSearch,
     /// Let the host authorize MCP search independently of native search through per-turn policy.
     HostedSearchPolicy,
-    /// Use the legacy Landlock Linux sandbox fallback instead of the default
-    /// bubblewrap pipeline.
+    /// Request the legacy Landlock mode of the Linux sandbox.
     UseLegacyLandlock,
     /// Experimental shell snapshotting.
     ShellSnapshot,

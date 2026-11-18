@@ -96,10 +96,8 @@ pub(super) async fn spawn_command_under_sandbox(
 #[cfg(target_os = "linux")]
 /// Determines whether Linux sandbox tests can run on this host.
 ///
-/// These tests require an enforceable filesystem sandbox. We run a tiny command
-/// under the production Landlock path and skip when enforcement is unavailable
-/// (for example on kernels or container profiles where Landlock is not
-/// enforced).
+/// The probe runs `/usr/bin/true` through the Linux sandbox with a read-only
+/// profile. The tests skip hosts where that command cannot start successfully.
 pub(super) async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
     let command_cwd = AbsolutePathBuf::current_dir().ok()?;
     let sandbox_cwd = command_cwd.clone();
@@ -116,16 +114,13 @@ pub(super) async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> 
         return Some(HashMap::new());
     }
 
-    eprintln!("Skipping test: Landlock is not enforceable on this host.");
+    eprintln!("Skipping test: the Linux sandbox could not run the read-only probe.");
     None
 }
 
 #[cfg(target_os = "linux")]
 /// Returns whether a minimal command can run successfully with the requested
 /// Linux sandbox policy applied.
-///
-/// This is used as a capability probe so sandbox behavior tests only run when
-/// Landlock enforcement is actually active.
 async fn can_apply_linux_sandbox_policy(
     permission_profile: &PermissionProfile,
     command_cwd: &AbsolutePathBuf,
@@ -157,7 +152,6 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     #[cfg(target_os = "linux")]
     let sandbox_env = match linux_sandbox_test_env().await {
         Some(env) => env,
-        // Skip on Linux hosts where Landlock cannot actually be enforced.
         None => return,
     };
     #[cfg(not(target_os = "linux"))]

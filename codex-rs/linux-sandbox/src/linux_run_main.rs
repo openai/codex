@@ -38,7 +38,7 @@ use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::NetworkSandboxPolicy;
-use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_sandboxing::linux::CODEX_LINUX_SANDBOX_ARG0;
 
 static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
 static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -82,9 +82,7 @@ pub struct LinuxSandboxCommand {
     )]
     pub permission_profile: Option<PermissionProfile>,
 
-    /// Opt-in: use the legacy Landlock Linux sandbox fallback.
-    ///
-    /// When not set, the helper uses the default bubblewrap pipeline.
+    /// Request legacy Landlock mode. Bubblewrap is the default.
     #[arg(long = "use-legacy-landlock", hide = true, default_value_t = false)]
     pub use_legacy_landlock: bool,
 

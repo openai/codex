@@ -5,7 +5,7 @@ use crate::bwrap::BwrapArgs;
 use crate::exec_util::make_files_inheritable;
 use crate::proxy_lifecycle::move_fd_above_stdio;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
-use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_sandboxing::linux::CODEX_LINUX_SANDBOX_ARG0;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs::File;

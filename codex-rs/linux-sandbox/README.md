@@ -87,6 +87,8 @@ commands that would enter the bubblewrap path.
   Unix sockets. Disable `features.use_legacy_landlock` when upgrading.
 - Bubblewrap preserves nested read-only and denied filesystem rules from
   `PermissionProfile`.
+- Managed proxy routes require bubblewrap's network namespace, including when
+  `features.use_legacy_landlock` is set.
 - When bubblewrap is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp filter in-process after establishing the filesystem view. Restricted
   network policies block network syscalls; filesystem-restricted policies with

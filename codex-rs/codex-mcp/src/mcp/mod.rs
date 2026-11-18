@@ -203,7 +203,7 @@ pub struct McpConfig {
     pub codex_self_exe: Option<PathBuf>,
     /// Optional path to `codex-linux-sandbox` for sandboxed MCP tool execution.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
-    /// Whether to use legacy Landlock behavior in the MCP sandbox state.
+    /// Whether the MCP sandbox state requests legacy Landlock mode.
     // TODO(anp): Reconcile this runtime-wide copy with TurnEnvironment::sandbox_context
     // for the environment that owns each MCP server.
     pub use_legacy_landlock: bool,

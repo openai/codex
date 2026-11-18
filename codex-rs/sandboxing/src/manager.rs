@@ -10,7 +10,8 @@ use crate::WindowsSandboxFilesystemOverrides;
 use crate::WindowsSandboxProxySettingsMode;
 #[cfg(target_os = "linux")]
 use crate::bwrap::WSL1_BWRAP_WARNING;
-use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use crate::linux::CODEX_LINUX_SANDBOX_ARG0;
+use crate::linux::LinuxSandboxMode;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
 #[cfg(target_os = "macos")]
@@ -20,8 +21,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
-#[cfg(target_os = "linux")]
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::sandbox::SandboxOverride;
 pub use codex_protocol::sandbox::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -776,21 +775,18 @@ impl SandboxManager {
         use_legacy_landlock: bool,
         managed_network: Option<&ManagedNetworkSandboxContext>,
     ) -> Result<(), SandboxTransformError> {
+        let mode = LinuxSandboxMode::resolve(use_legacy_landlock, managed_network);
         #[cfg(target_os = "linux")]
-        ensure_linux_bubblewrap_is_supported(
-            &exec.permission_profile.file_system_sandbox_policy(),
-            use_legacy_landlock,
-            managed_network.is_some(),
-            crate::bwrap::is_wsl1(),
-        )?;
+        if crate::bwrap::is_wsl1() {
+            mode.ensure_supported_on_wsl1(&exec.permission_profile)?;
+        }
         let program = exe.to_string_lossy().into_owned();
-        let mut args = crate::landlock::create_linux_sandbox_command_args_for_permission_profile(
+        let mut args = crate::linux::create_linux_sandbox_command_args_for_permission_profile(
             std::mem::take(&mut exec.command),
             cwd,
             &exec.permission_profile,
             policy_cwd,
-            use_legacy_landlock,
-            managed_network,
+            mode,
         );
         // Only the startup opt-in requires a helper that understands PID inheritance.
         if self.linux_sandbox_pid_namespace == LinuxSandboxPidNamespace::Inherit {
@@ -966,22 +962,6 @@ fn add_windows_sandbox_wrapper_setup_env_from_vars(
         env.retain(|existing, _| !existing.eq_ignore_ascii_case(&key));
         env.insert(key, value.to_string_lossy().into_owned());
     }
-}
-
-#[cfg(target_os = "linux")]
-fn ensure_linux_bubblewrap_is_supported(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    use_legacy_landlock: bool,
-    allow_network_for_proxy: bool,
-    is_wsl1: bool,
-) -> Result<(), SandboxTransformError> {
-    let requires_bubblewrap = allow_network_for_proxy
-        || (!use_legacy_landlock && !file_system_sandbox_policy.has_full_disk_write_access());
-    if is_wsl1 && requires_bubblewrap {
-        return Err(SandboxTransformError::Wsl1UnsupportedForBubblewrap);
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

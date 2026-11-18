@@ -1056,7 +1056,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     };
     // TODO(anp): Build this metadata from the server's captured
-    // TurnEnvironment::sandbox_context instead of the runtime-wide Landlock value.
+    // TurnEnvironment::sandbox_context instead of the runtime-wide legacy Landlock setting.
     prepared_call
         .augment_sandbox_metadata(
             &mut meta,

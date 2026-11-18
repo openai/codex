@@ -41,7 +41,7 @@ use tokio::process::Child;
 use tokio::process::Command as TokioCommand;
 use toml::Value as TomlValue;
 
-use crate::LandlockCommand;
+use crate::LinuxSandboxCommand;
 use crate::SeatbeltCommand;
 use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
@@ -97,12 +97,12 @@ pub async fn run_command_under_seatbelt(
     anyhow::bail!("Seatbelt sandbox is only available on macOS");
 }
 
-pub async fn run_command_under_landlock(
-    command: LandlockCommand,
+pub async fn run_command_under_linux_sandbox(
+    command: LinuxSandboxCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
-    let LandlockCommand {
+    let LinuxSandboxCommand {
         transparent_tcp,
         sandbox_state,
         permissions_profile,
@@ -127,7 +127,7 @@ pub async fn run_command_under_landlock(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Landlock { transparent_tcp },
+        SandboxType::Linux { transparent_tcp },
         /*log_denials*/ false,
         &[],
     )
@@ -173,7 +173,7 @@ pub async fn run_command_under_windows_sandbox(
 enum SandboxType {
     #[cfg(target_os = "macos")]
     Seatbelt,
-    Landlock {
+    Linux {
         transparent_tcp: bool,
     },
     Windows,
@@ -310,7 +310,7 @@ async fn run_command_under_sandbox(
     };
 
     let transparent_tcp = match sandbox_type {
-        SandboxType::Landlock { transparent_tcp } => {
+        SandboxType::Linux { transparent_tcp } => {
             transparent_tcp
                 || config
                     .permissions
@@ -330,7 +330,7 @@ async fn run_command_under_sandbox(
         SandboxEnforcement::Managed => match sandbox_type {
             #[cfg(target_os = "macos")]
             SandboxType::Seatbelt => SandboxBackend::MacosSeatbelt,
-            SandboxType::Landlock { .. } => SandboxBackend::LinuxSeccomp,
+            SandboxType::Linux { .. } => SandboxBackend::LinuxSeccomp,
             #[cfg(windows)]
             SandboxType::Windows if windows_sandbox_type == WindowsMxc => WindowsMxc,
             #[cfg(windows)]
