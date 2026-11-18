@@ -955,6 +955,11 @@ impl App {
     ) -> Result<()> {
         let retain_side_view = self.side_retention_enabled(tui);
         let side_parent = |id| {
+            if let Some((parent, agent)) = self.docked_agent()
+                && (id == parent || id == agent)
+            {
+                return Some(parent);
+            }
             self.side_threads
                 .get(&self.side_pair_key(id)?)
                 .map(|side| side.parent_thread_id)

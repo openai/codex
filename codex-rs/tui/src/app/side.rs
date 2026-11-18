@@ -324,8 +324,9 @@ impl App {
             return Some(focused);
         }
         let child = self.side_pair_key(focused)?;
-        (self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
-            .then_some(focused)
+        (self.docked_agent().is_some()
+            || self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
+        .then_some(focused)
     }
 
     pub(super) fn switchable_side_child(&self) -> Option<ThreadId> {
@@ -336,7 +337,11 @@ impl App {
     }
 
     pub(super) fn side_pair_key(&self, thread_id: ThreadId) -> Option<ThreadId> {
-        if self.side_threads.contains_key(&thread_id) {
+        if let Some((owner, agent)) = self.docked_agent()
+            && (thread_id == owner || thread_id == agent)
+        {
+            Some(agent)
+        } else if self.side_threads.contains_key(&thread_id) {
             Some(thread_id)
         } else {
             self.side_thread_for_parent(thread_id)
@@ -474,7 +479,13 @@ impl App {
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             return Ok(());
         };
-        let target_thread_id = if let Some(state) = self.side_threads.get(&active_thread_id) {
+        let target_thread_id = if let Some((owner, agent)) = self.docked_agent() {
+            if active_thread_id == agent {
+                owner
+            } else {
+                agent
+            }
+        } else if let Some(state) = self.side_threads.get(&active_thread_id) {
             state.parent_thread_id
         } else if let Some(side_thread_id) = self.side_thread_for_parent(active_thread_id) {
             side_thread_id
@@ -501,10 +512,18 @@ impl App {
         let Some(child) = self.current_displayed_thread_id() else {
             return Ok(());
         };
-        let Some(side) = self.side_threads.get(&child) else {
+        let parent = self
+            .side_threads
+            .get(&child)
+            .map(|side| side.parent_thread_id)
+            .or_else(|| {
+                self.docked_agent()
+                    .filter(|(_, agent)| *agent == child)
+                    .map(|(parent, _)| parent)
+            });
+        let Some(parent) = parent else {
             return Ok(());
         };
-        let parent = side.parent_thread_id;
         self.select_agent_thread(tui, app_server, parent).await?;
         if self.current_displayed_thread_id() == Some(parent) {
             self.sidebar_mut().hide();

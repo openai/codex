@@ -137,10 +137,18 @@ pub(super) fn pair_layout(
         return None;
     }
     let active = app.current_displayed_thread_id()?;
-    let side = app.side_threads.get(&child)?;
+    let owner = app
+        .side_threads
+        .get(&child)
+        .map(|side| side.parent_thread_id)
+        .or_else(|| {
+            app.docked_agent()
+                .filter(|(_, agent)| *agent == child)
+                .map(|(parent, _)| parent)
+        })?;
     let [tab_strip, sidebar] = tab_and_body(sidebar);
     let (focused, passive, passive_thread) = if active == child {
-        (sidebar, parent, side.parent_thread_id)
+        (sidebar, parent, owner)
     } else {
         (parent, sidebar, child)
     };
@@ -452,19 +460,28 @@ impl SidePaneLayout {
         frame: &mut Frame<'_>,
         collapse_turn_details: bool,
         frames: &FrameRequester,
+        watch_only: bool,
     ) {
         companion.flush_answer();
         let area = self.passive;
         // Keep the live composer's bottom hint row blank on the inactive side.
         let hint_rows = 1;
-        let composer_height = area.height.saturating_sub(hint_rows).min(3);
+        let composer_height = if watch_only {
+            0
+        } else {
+            area.height.saturating_sub(hint_rows).min(3)
+        };
         let available = area.height - composer_height;
         let footer = FooterLayout::new(
             Some(composer_height_limit(area.height)),
             hint_rows,
             /*priority_hint_rows*/ hint_rows,
         );
-        let status = companion.display.status_line.as_ref();
+        let status = companion
+            .display
+            .status_line
+            .as_ref()
+            .filter(|_| !watch_only);
         let wanted_status = status.map_or(0, |status| {
             status.height(footer.status_bounds(area.width, available))
         });

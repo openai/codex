@@ -109,6 +109,9 @@ pub(crate) fn normalize_agent_center_snapshot(text: impl AsRef<str>) -> String {
                             .replace(&windows_path, unix_path)
                             .replace(&windows_path.replace('\\', "/"), unix_path);
                     }
+                    if normalized.trim() == r"C:\" || normalized.trim() == "C:/" {
+                        normalized = normalized.replace(normalized.trim(), "/");
+                    }
                     // Only ASCII path bytes change, so this is also the removed cell width.
                     let padding = pane.len().saturating_sub(normalized.len());
                     normalized.push_str(&" ".repeat(padding));

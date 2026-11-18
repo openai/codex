@@ -369,6 +369,9 @@ impl App {
                 .paint_document_links(frame.buffer, link_pointer);
             match &self.conversation_frame.sidebar {
                 Some(sidebar::SidebarLayout::Chat(panes)) => {
+                    let watch_only = self.docked_agent().is_some_and(|(_, id)| {
+                        id == panes.passive_thread && self.agent_navigation.is_parent_owned(id)
+                    });
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
                         companion.view.image_protocol = self.transcript_view.image_protocol;
                         panes.paint_companion(
@@ -376,6 +379,7 @@ impl App {
                             frame,
                             self.local_settings.tui.collapse_turn_details,
                             &frames,
+                            watch_only,
                         );
                     }
                 }
@@ -517,21 +521,27 @@ impl App {
                         && (pane.creation.is_none()
                             || matches!(
                                 pane.visible_content(),
-                                Some(sidebar::SidebarContent::Document(_))
+                                Some(
+                                    sidebar::SidebarContent::Document(_)
+                                        | sidebar::SidebarContent::Subagents
+                                )
                             ))
                     {
-                        let document = matches!(
+                        let content_tab = matches!(
                             pane.visible_content(),
-                            Some(sidebar::SidebarContent::Document(_))
+                            Some(
+                                sidebar::SidebarContent::Document(_)
+                                    | sidebar::SidebarContent::Subagents
+                            )
                         );
-                        let chooser = if document {
+                        let chooser = if content_tab {
                             TabState::Absent
                         } else if focused {
                             TabState::Active
                         } else {
                             TabState::Inactive
                         };
-                        if document {
+                        if content_tab {
                             ratatui::widgets::Clear
                                 .render(side_pane::tab_and_body(*sidebar)[0], frame.buffer);
                         }
@@ -539,9 +549,9 @@ impl App {
                             crate::sidebar_chooser::tab_strip(
                                 *sidebar,
                                 chooser,
-                                if document && focused {
+                                if content_tab && focused {
                                     TabState::Active
-                                } else if document {
+                                } else if content_tab {
                                     TabState::Inactive
                                 } else {
                                     TabState::Absent
@@ -691,6 +701,14 @@ impl App {
         frame: &mut Frame<'_>,
         prepared: &PreparedConversation,
     ) -> PaintedConversation {
+        if self.docked_agent().is_some_and(|(_, id)| {
+            self.current_displayed_thread_id() == Some(id)
+                && self.agent_navigation.is_parent_owned(id)
+        }) && self.chat_widget.no_modal_or_popup_active()
+            && !self.chat_widget.is_read_only_view()
+        {
+            return self.paint_agent_reader(frame, prepared);
+        }
         let PreparedConversation {
             area,
             transcript_width,
@@ -875,6 +893,125 @@ impl App {
                 blossom_tick,
                 (animating || loading).then_some(Duration::from_millis(50)),
             ],
+        }
+    }
+
+    fn paint_agent_reader(
+        &mut self,
+        frame: &mut Frame<'_>,
+        prepared: &PreparedConversation,
+    ) -> PaintedConversation {
+        use crate::keymap::ListAction;
+        use ratatui::widgets::Paragraph;
+
+        let area = prepared.area;
+        ratatui::widgets::Clear.render(area, frame.buffer);
+        let back = self.keymap.list.primary_hint(ListAction::Cancel);
+        let heading = back.map_or_else(
+            || "Watch only".to_owned(),
+            |hint| format!("{} back to agents · Watch only", hint.display_label()),
+        );
+        Line::from(heading).dim().render(
+            Rect {
+                height: area.height.min(1),
+                ..area
+            },
+            frame.buffer,
+        );
+        let mut body = Rect {
+            y: area.y.saturating_add(1),
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        let view = &mut self.transcript_view;
+        let footer = self
+            .pane_resize
+            .is_none()
+            .then(|| view.footer_with_navigation(body.width, prepared.motion, "end latest"))
+            .flatten();
+        let hints = crate::footer_hint::HintLine::new(
+            [
+                Some(crate::footer_hint::shortcut("↑/↓", "read")),
+                self.keymap
+                    .pager
+                    .find
+                    .first()
+                    .map(|key| crate::footer_hint::shortcut(&key.display_label(), "find")),
+                self.keymap
+                    .primary_hint(KeymapContext::Global, "select_transcript")
+                    .map(|hint| crate::footer_hint::shortcut(&hint.display_label(), "select")),
+            ]
+            .into_iter()
+            .flatten(),
+            body.width,
+        );
+        let text = if self.pane_resize.is_some() {
+            crate::sidebar_chooser::resize_hint(side_pane::RESIZE_HINT, body.width).into()
+        } else if let Some(footer) = &footer {
+            footer.text.clone()
+        } else {
+            hints.line.into()
+        };
+        let footer_height = body.height.saturating_sub(1).min(text.height() as u16);
+        body.height -= footer_height;
+        let gap = if body.height > 1 {
+            body.height -= 1;
+            Some(Rect {
+                y: body.bottom(),
+                height: 1,
+                ..body
+            })
+        } else {
+            None
+        };
+        let bottom_area = Rect {
+            y: area.bottom() - footer_height,
+            height: footer_height,
+            ..area
+        };
+        body.width = prepared.transcript_width;
+        view.render_with_turn_tip_space(
+            body,
+            frame.buffer,
+            &self.transcript_cells,
+            /*tip*/ None,
+        );
+        view.finish_collapse_layout(&self.transcript_cells);
+        // Escape returns to the agent list, so the transcript's Escape hint would be misleading.
+        let show_follow_control = std::mem::replace(&mut view.show_follow_control, false);
+        let feedback_tick =
+            view.render_composer_gap(gap, /*hint*/ None, frame.buffer, prepared.now);
+        view.show_follow_control = show_follow_control;
+        Paragraph::new(text).render(bottom_area, frame.buffer);
+        if footer_height > 0
+            && let Some(column) = footer.and_then(|footer| footer.cursor_column)
+        {
+            frame.set_cursor_position((bottom_area.x + column, bottom_area.y));
+        }
+        self.chat_widget
+            .rendered_selection
+            .borrow_mut()
+            .areas
+            .clear();
+        self.chat_widget.note_rendered_width(area.width);
+        let first_image = frame.image_placements.len();
+        frame.image_placements.extend(view.image_placements());
+        let tick = (view.is_loading_history()
+            || (view.is_following()
+                && self
+                    .chat_widget
+                    .active_cell_transcript_key()
+                    .is_some_and(|key| key.animation_tick.is_some())))
+            && prepared.motion == MotionMode::Animated;
+        PaintedConversation {
+            image_range: first_image..frame.image_placements.len(),
+            bottom_area,
+            delayed_frames: [
+                feedback_tick,
+                None,
+                tick.then_some(Duration::from_millis(50)),
+            ],
+            ..Default::default()
         }
     }
 

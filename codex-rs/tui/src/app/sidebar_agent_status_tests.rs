@@ -292,3 +292,246 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
     server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_eyre::Result<()> {
+    use crate::app::side_focus::SidebarTarget;
+    use crate::app::sidebar::PaneFocus;
+    use crate::app::sidebar::SidebarContent;
+    use crate::app::test_support::enable_side_retention;
+    use crate::app::test_support::side_frame;
+    use crate::app::tests::make_test_app_with_channels;
+    use crate::sidebar_tab_strip::SidebarTab;
+    use crate::sidebar_tab_strip::TabTarget;
+    use crate::tui::TuiEvent;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+    use crossterm::event::KeyCode;
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEventKind;
+    use ratatui::layout::Size;
+
+    let (mut app, mut rx, _ops) = Box::pin(make_test_app_with_channels()).await;
+    enable_side_retention(&mut app)?;
+    app.local_settings.tui.animations = false;
+    let config = app.chat_widget.config_ref().clone();
+    let root = ThreadId::from_string(
+        &app_test_support::create_fake_paginated_rollout(
+            config.codex_home.as_path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            "Parent conversation",
+            Some(config.model_provider_id.as_str()),
+            /*git_info*/ None,
+        )
+        .expect("seed test rollout"),
+    )?;
+    let child = ThreadId::from_string(
+        &app_test_support::create_fake_parented_rollout_with_source(
+            config.codex_home.as_path(),
+            "2025-01-05T12-00-01",
+            "2025-01-05T12:00:01Z",
+            "Review result",
+            Some(config.model_provider_id.as_str()),
+            /*git_info*/ None,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root,
+                depth: 1,
+                agent_path: Some("/root/reviewer".parse().expect("agent path")),
+                agent_nickname: Some("Reviewer".into()),
+                agent_role: None,
+            }),
+            root.into(),
+            root,
+        )
+        .expect("seed test rollout"),
+    )?;
+    let path = app_test_support::rollout_path(
+        config.codex_home.as_path(),
+        "2025-01-05T12-00-01",
+        &child.to_string(),
+    );
+    let rollout = std::fs::read_to_string(&path)?;
+    let (metadata, messages) = rollout.split_once('\n').expect("seeded child history");
+    let mut metadata: serde_json::Value = serde_json::from_str(metadata)?;
+    metadata["payload"]["multi_agent_version"] =
+        serde_json::to_value(codex_protocol::protocol::MultiAgentVersion::V2)?;
+    std::fs::write(path, format!("{metadata}\n{messages}"))?;
+
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
+    let started = Box::pin(server.resume_thread(
+        &app.local_settings,
+        config.clone(),
+        root,
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+    ))
+    .await?;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    // Wait for the real app-server to discover the saved child before opening its row.
+    let discovery = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("app event channel");
+            if matches!(
+                event,
+                crate::app_event::AppEvent::AgentPickerThreadsLoaded { .. }
+            ) {
+                break Ok::<_, color_eyre::Report>(event);
+            }
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        }
+    })
+    .await??;
+    Box::pin(app.handle_event(&mut tui, &mut server, discovery)).await?;
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    app.sidebar_mut()
+        .show(SidebarContent::Chooser, PaneFocus::Sidebar);
+    let screen = side_frame(&mut app, &mut tui, Size::new(140, 20))?;
+    assert!(screen.contains("Subagents  1"), "{screen}");
+    let pane = app.sidebar_mut();
+    pane.choice = pane
+        .chat_tabs()
+        .agent_index(child)
+        .expect("child agent row");
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into())))
+        .await?;
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    assert_eq!(app.current_displayed_thread_id(), Some(child));
+    assert_eq!(app.docked_agent(), Some((root, child)));
+    let screen = side_frame(&mut app, &mut tui, Size::new(180, 20))?;
+    assert!(app.sidebar_has_focus());
+    insta::assert_snapshot!(
+        "watch_only_subagent",
+        crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
+            screen.replace(&child.to_string(), "[agent id]")
+        )
+    );
+    assert!(!screen.contains("direct input is disabled"), "{screen}");
+
+    app.keymap.pager.jump_top = vec![crate::key_hint::plain(KeyCode::F(6))];
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::F(6).into())))
+        .await?;
+    assert!(!app.transcript_view.is_following());
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::End.into())))
+        .await?;
+    assert!(app.transcript_view.is_following());
+
+    tui.screen_size_for_event(&TuiEvent::Resize(Size::new(180, 20)))?;
+    app.begin_pane_resize(&mut tui)?;
+    assert!(app.pane_resize.is_some());
+    let resize = side_frame(&mut app, &mut tui, Size::new(180, 20))?;
+    let footer = resize
+        .lines()
+        .find_map(|line| {
+            line.split_once('│')
+                .map(|(_, sidebar)| sidebar.trim())
+                .filter(|row| row.starts_with("Resize"))
+        })
+        .expect("agent resize footer");
+    insta::assert_snapshot!(footer, @"Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done");
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into())))
+        .await?;
+
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::F(3).into())))
+        .await?;
+    let screen = side_frame(&mut app, &mut tui, Size::new(140, 20))?;
+    assert!(screen.contains("Find:"), "{screen}");
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
+        .await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(child));
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
+        .await?;
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    assert_eq!(app.current_displayed_thread_id(), Some(root));
+    assert_eq!(app.docked_agent(), None);
+    let screen = side_frame(&mut app, &mut tui, Size::new(140, 20))?;
+    assert!(screen.contains("Subagents  1"), "{screen}");
+    let pane = app.sidebar().unwrap();
+    assert!(
+        !pane
+            .chat_tabs()
+            .ids
+            .contains(&crate::sidebar_tab_strip::SidebarTab::Subagents)
+    );
+    assert_eq!(
+        pane.chat_tabs().agent(pane.choice).map(|agent| agent.id),
+        Some(child)
+    );
+
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into())))
+        .await?;
+    assert_eq!(app.docked_agent(), Some((root, child)));
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    side_frame(&mut app, &mut tui, Size::new(140, 20))?;
+    let close = app
+        .conversation_frame
+        .sidebar_targets
+        .iter()
+        .find_map(|(target, area)| {
+            (*target == SidebarTarget::Tab(TabTarget::Close(SidebarTab::Subagents)))
+                .then_some(*area)
+        })
+        .expect("docked agent close button");
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let click = crate::app::owned_transcript::tests::mouse(kind, close.x, close.y);
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, click)).await?;
+    }
+    assert_eq!(app.current_displayed_thread_id(), Some(root));
+    assert_eq!(app.docked_agent(), None);
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    assert!(!app.side_companions.contains_key(&child));
+
+    // Closing a saved side chat can return to the last-used agent tab.
+    app.open_sidebar_agent(&mut tui, &mut server, child).await?;
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    let started = server.start_thread(&config).await?;
+    let side = started.session.thread_id;
+    let channel = crate::app::ThreadEventChannel::new(/*capacity*/ 1);
+    channel
+        .store
+        .lock()
+        .await
+        .set_session(started.session, started.turns);
+    app.thread_event_channels.insert(side, channel);
+    let mut state = crate::app::side::SideThreadState::new(root);
+    state.storage = crate::app_server_session::SideChatStorage::Attached;
+    app.side_threads.insert(side, state);
+    app.activate_sidebar_tab(&mut tui, &mut server, SidebarTab::Chat(side))
+        .await?;
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    assert_eq!(app.current_displayed_thread_id(), Some(side));
+    app.close_sidebar_tab(&mut tui, &mut server, SidebarTab::Chat(side))
+        .await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(child));
+    assert!(app.side_threads[&side].close_request.is_some());
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+
+    app.keymap.app.close_sidebar_tab = vec![crate::key_hint::plain(KeyCode::F(8))];
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::F(8).into())))
+        .await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(root));
+    assert!(app.sidebar().unwrap().agents.detail.is_none());
+    server.shutdown().await?;
+    Ok(())
+}

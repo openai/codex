@@ -1076,7 +1076,10 @@ impl App {
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::ParkSideCompanion { pair, thread_id, stream, display } => {
-                if self.side_threads.contains_key(&pair) {
+                if self.side_threads.contains_key(&pair)
+                    || self.sidebars.get(&self.primary_thread_id)
+                        .is_some_and(|pane| pane.agents.detail == Some(pair))
+                {
                     self.transcript_view.sync_history_tail(&self.transcript_cells);
                     let mut answer = None;
                     if let Some(stream) = stream {

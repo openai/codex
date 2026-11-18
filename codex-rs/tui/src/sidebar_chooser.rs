@@ -217,6 +217,7 @@ pub(crate) struct ChatTabs<'a> {
     // Chooser index zero is reserved for New side chat.
     pub(crate) choices: &'a [SideChat],
     pub(crate) agents: &'a [AgentRow],
+    pub(crate) agent_title: Option<&'a str>,
     pub(crate) latest_prompts: &'a HashMap<ThreadId, String>,
     pub(crate) selected: Option<SidebarTab>,
     pub(crate) files: &'a [FileLink],
@@ -311,6 +312,10 @@ pub(crate) fn tab_strip(
         let width = usize::from(area.width.saturating_sub(1));
         let mut title = match id {
             SidebarTab::Document(id) => Line::from(document_title(id, width)),
+            SidebarTab::Subagents => Line::from(middle_label(
+                tabs.agent_title.unwrap_or("Agent transcript"),
+                width.saturating_sub(1),
+            )),
             SidebarTab::Chat(id) => {
                 let name = match tabs.choice_index(id) {
                     Some(index) => {

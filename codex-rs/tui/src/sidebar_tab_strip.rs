@@ -14,6 +14,7 @@ use ratatui::widgets::Widget;
 pub(crate) enum SidebarTab {
     Chat(codex_protocol::ThreadId),
     Document(uuid::Uuid),
+    Subagents,
 }
 
 /// Adjacent tabs have one unpainted, noninteractive terminal column between them.

@@ -1,5 +1,8 @@
 //! Sidebar subagents follow the primary conversation's spawn tree and retain observed outcomes.
+use super::sidebar::PaneFocus;
+use super::sidebar::SidebarContent;
 use super::*;
+use crate::keymap::ListAction;
 use crate::sidebar_chooser::AgentRow;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -21,6 +24,7 @@ pub(super) struct Overview {
     states: HashMap<ThreadId, State>,
     restored_outcomes: HashSet<ThreadId>,
     pub(super) rows: Vec<AgentRow>,
+    pub(super) detail: Option<ThreadId>,
 }
 
 impl Overview {
@@ -71,6 +75,95 @@ impl Overview {
 }
 
 impl App {
+    pub(super) async fn handle_docked_agent_input(
+        &mut self,
+        tui: &mut tui::Tui,
+        server: &mut AppServerSession,
+        event: &TuiEvent,
+    ) -> bool {
+        let Some((root, agent)) = self.docked_agent() else {
+            return false;
+        };
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        if self.current_displayed_thread_id() != Some(agent)
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.transcript_view.has_active_interaction()
+        {
+            return false;
+        }
+        if self.agent_navigation.is_parent_owned(agent)
+            && self
+                .transcript_view
+                .navigate_pager(*key, &self.transcript_cells, &self.keymap.pager)
+        {
+            tui.frame_requester().schedule_frame();
+            return true;
+        }
+        if key.kind != KeyEventKind::Press
+            || self.keymap.list.action_for(*key) != Some(ListAction::Cancel)
+        {
+            return false;
+        }
+        if let Err(error) = Box::pin(self.select_agent_thread(tui, server, root)).await {
+            self.chat_widget.add_error_message(error.to_string());
+        }
+        if self.current_displayed_thread_id() == Some(root) {
+            self.side_companions.remove(&agent);
+            let pane = self.sidebar_mut();
+            if let Some(index) = pane.chat_tabs().agent_index(agent) {
+                pane.choice = index;
+                pane.chooser_scroll = Default::default();
+            }
+            pane.close_agents();
+            pane.show(SidebarContent::Chooser, PaneFocus::Sidebar);
+        }
+        tui.frame_requester().schedule_frame();
+        true
+    }
+
+    pub(super) fn docked_agent(&self) -> Option<(ThreadId, ThreadId)> {
+        let parent = self.primary_thread_id?;
+        let pane = self.sidebars.get(&Some(parent))?;
+        (pane.visible_content() == Some(SidebarContent::Subagents))
+            .then_some((parent, pane.agents.detail?))
+    }
+
+    pub(super) async fn open_sidebar_agent(
+        &mut self,
+        tui: &mut tui::Tui,
+        server: &mut AppServerSession,
+        agent: ThreadId,
+    ) -> Result<()> {
+        let Some(parent) = self.primary_thread_id else {
+            return Ok(());
+        };
+        if !self.is_sidebar_agent(agent) || self.sidebar_parent() != Some(parent) {
+            return Ok(());
+        }
+        let pane = self.sidebars.entry(Some(parent)).or_default();
+        let previous_content = pane.visible_content();
+        let previous_agent = pane.agents.detail.replace(agent);
+        pane.show(SidebarContent::Subagents, PaneFocus::Sidebar);
+        let result = Box::pin(self.select_agent_thread(tui, server, agent)).await;
+        if self.current_displayed_thread_id() != Some(agent) {
+            let pane = self.sidebars.entry(Some(parent)).or_default();
+            if previous_agent.is_none() {
+                pane.close_agents();
+            }
+            pane.agents.detail = previous_agent;
+            pane.show(
+                previous_content.unwrap_or(SidebarContent::Chooser),
+                PaneFocus::Sidebar,
+            );
+        } else if let Some(previous) = previous_agent.filter(|previous| *previous != agent) {
+            self.side_companions.remove(&previous);
+        }
+        tui.frame_requester().schedule_frame();
+        result
+    }
+
     pub(super) fn is_sidebar_agent(&self, id: ThreadId) -> bool {
         self.primary_thread_id
             .and_then(|root| self.sidebars.get(&Some(root)))

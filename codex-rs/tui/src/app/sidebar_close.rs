@@ -120,9 +120,10 @@ pub(super) async fn request(
     let Some(index) = tabs.choice_index(target) else {
         return Ok(());
     };
-    let title = crate::sidebar_chooser::side_chat_label(&tabs.choices[index - 1])
+    let ordinal = index - 1;
+    let title = crate::sidebar_chooser::side_chat_label(&tabs.choices[ordinal])
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("Side chat {index}"));
+        .unwrap_or_else(|| format!("Side chat {}", ordinal + 1));
     app.conversation_frame.close_buttons = Default::default();
     let verb = match action {
         Action::CloseTab => "Close",
@@ -232,11 +233,15 @@ async fn execute(
                 .unwrap_or(SidebarTab::Chat(parent)),
             Action::Archive => SidebarTab::Chat(parent),
         };
-        app.activate_sidebar_tab(tui, server, next).await?;
         let destination_thread = match next {
-            SidebarTab::Chat(id) => id,
-            SidebarTab::Document(_) => parent,
+            SidebarTab::Chat(id) => Some(id),
+            SidebarTab::Document(_) => Some(parent),
+            SidebarTab::Subagents => app.sidebar().and_then(|pane| pane.agents.detail),
         };
+        let Some(destination_thread) = destination_thread else {
+            return Ok(());
+        };
+        app.activate_sidebar_tab(tui, server, next).await?;
         if app.current_displayed_thread_id() != Some(destination_thread) {
             return Ok(());
         }
