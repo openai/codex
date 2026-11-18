@@ -509,6 +509,42 @@ impl Client {
         }
     }
 
+    /// Submits a single clip as the dictation endpoint's multipart file field.
+    pub async fn transcribe_audio(&self, mime: &str, bytes: &[u8]) -> Result<String> {
+        let extension = match mime {
+            "audio/wav" => "wav",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" => "m4a",
+            "audio/webm" => "webm",
+            "audio/ogg" => "ogg",
+            _ => anyhow::bail!("unsupported audio format"),
+        };
+        let url = format!("{}/transcribe", self.base_url);
+        self.auth.validate_destination(&self.base_url, &url)?;
+        let boundary = uuid::Uuid::new_v4();
+        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.{extension}\"\r\nContent-Type: {mime}\r\n\r\n").into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let response = self
+            .request(Method::POST, &url)
+            .headers(self.headers().await?)
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .await?;
+        anyhow::ensure!(response.status().is_success(), "transcription failed");
+        #[derive(serde::Deserialize)]
+        struct Transcript {
+            text: String,
+        }
+        const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+        let body = codex_http_client::bounded_response_bytes(response, MAX_RESPONSE_BYTES).await?;
+        Ok(serde_json::from_slice::<Transcript>(&body)?.text)
+    }
+
     pub async fn get_rate_limits(&self) -> Result<RateLimitSnapshot> {
         let snapshots = self.get_rate_limits_many().await?;
         let preferred = snapshots

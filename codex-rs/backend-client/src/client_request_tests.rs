@@ -21,6 +21,46 @@ use wiremock::matchers::path;
 use super::*;
 
 #[tokio::test]
+async fn transcribe_audio_posts_multipart_file_and_returns_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/transcribe"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": "Hello there."})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = Client::new(
+        format!("{}/backend-api", server.uri()),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .with_bearer_token("test-token".to_string())
+    .unwrap();
+
+    let audio = b"\0\xff\x80\r\n";
+    let text = client.transcribe_audio("audio/mp4", audio).await.unwrap();
+    assert_eq!(text, "Hello there.");
+
+    let request = server.received_requests().await.unwrap().pop().unwrap();
+    let boundary = request.headers[CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .strip_prefix("multipart/form-data; boundary=")
+        .unwrap();
+    let expected_body = [
+        format!("--{boundary}\r\n").as_bytes(),
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n",
+        b"Content-Type: audio/mp4\r\n\r\n",
+        audio,
+        format!("\r\n--{boundary}--\r\n").as_bytes(),
+    ]
+    .concat();
+    assert_eq!(request.body, expected_body);
+}
+
+#[tokio::test]
 async fn client_preserves_supplied_factory_and_typed_policy_denial() {
     let controller = codex_http_client::NetworkPolicyController::default();
     let client = Client::new(

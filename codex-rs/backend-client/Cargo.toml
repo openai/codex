@@ -29,10 +29,10 @@ codex-runtime-agent-instance = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 base64 = { workspace = true }
-uuid = { workspace = true }
 pretty_assertions = "1"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
