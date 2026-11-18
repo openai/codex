@@ -1874,6 +1874,7 @@ impl ThreadManager {
     }
 
     /// Fork an existing thread from already-loaded store history.
+    /// For an inherited session ID, use [`Self::fork_prepared_thread`] instead.
     pub async fn fork_thread_from_history<S>(
         &self,
         snapshot: S,
@@ -1932,7 +1933,7 @@ impl ThreadManager {
         let ForkHistory {
             snapshot,
             initial_history: history,
-            persistence: fork_persistence,
+            persistence: mut fork_persistence,
         } = fork_history;
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -1970,6 +1971,29 @@ impl ThreadManager {
             multi_agent_version,
         );
         options.initial_history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        if options
+            .thread_extension_init
+            .get::<InheritedSessionId>()
+            .is_some()
+            && let ForkPersistence::Referenced {
+                inherited_item_count,
+                ..
+            } = &mut fork_persistence
+            && let InitialHistory::Forked(items) = &mut options.initial_history
+        {
+            if options.disabled_plugin_ids.is_none()
+                && let Some(thread_id) = source_thread_id
+            {
+                options.disabled_plugin_ids =
+                    codex_history::latest_disabled_plugin_ids(items, thread_id)
+                        .map(<[String]>::to_vec);
+            }
+            *inherited_item_count = crate::agent::sanitize_agent_fork_prefix(
+                items,
+                *inherited_item_count,
+                multi_agent_version,
+            );
+        }
         let agent_control = self.agent_control_for_config(&options.config);
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
@@ -2623,13 +2647,18 @@ impl ThreadManagerState {
         let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         if thread_extension_init.get::<InheritedSessionId>().is_some()
-            && (!matches!(
-                &initial_history,
-                InitialHistory::New | InitialHistory::Forked(_)
-            ) || session_source.is_non_root_agent())
+            && (session_source.is_non_root_agent()
+                || !matches!(
+                    (&initial_history, &fork_persistence),
+                    (InitialHistory::New, _)
+                        | (
+                            InitialHistory::Forked(_),
+                            ForkPersistence::Referenced { .. }
+                        )
+                ))
         {
             return Err(CodexErr::InvalidRequest(
-                "an inherited agent session ID requires a new or forked thread started directly by the host"
+                "an inherited agent session ID requires a new thread or a prepared fork started directly by the host"
                     .to_string(),
             ));
         }

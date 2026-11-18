@@ -29,6 +29,7 @@ use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -41,6 +42,153 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::LoadThreadHistoryParams;
+use std::sync::Arc;
+
+fn sanitize_forked_rollout_item(
+    item: &mut RolloutItem,
+    version: MultiAgentVersion,
+    preserve_context_baselines: bool,
+    preserve_fork_prefix: bool,
+    history_mode: ThreadHistoryMode,
+    mut retain_response: impl FnMut(&mut ResponseItemEnvelope) -> bool,
+) -> bool {
+    if !((preserve_fork_prefix && matches!(item, RolloutItem::ResponseItem(_)))
+        || keep_forked_rollout_item(item, preserve_context_baselines))
+        || history_mode == ThreadHistoryMode::Paginated
+            && matches!(
+                item,
+                RolloutItem::EventMsg(
+                    EventMsg::ItemCompleted(_)
+                        | EventMsg::TokenCount(_)
+                        | EventMsg::ThreadGoalUpdated(_)
+                        | EventMsg::ThreadSettingsApplied(_)
+                )
+            )
+    {
+        return false;
+    }
+    let mut retain_envelope = |envelope: &mut ResponseItemEnvelope| {
+        let explicitly_retained = envelope.is_always_retained();
+        if preserve_fork_prefix
+            || explicitly_retained
+            || (version == MultiAgentVersion::V2
+                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant"))
+        {
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .inherited_user_message = true;
+        }
+        if let Some(metadata) = &mut envelope.metadata
+            && (metadata.sender_user_messages.take().is_some()
+                || !matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user"))
+        {
+            metadata.user_input_order = None;
+        }
+        preserve_fork_prefix || explicitly_retained || retain_response(envelope)
+    };
+    match item {
+        RolloutItem::ResponseItem(envelope) => retain_envelope(envelope),
+        RolloutItem::Compacted(compacted) => {
+            compacted.latest_token_usage_record = None;
+            if let Some(metadata) = &mut compacted.resume_metadata {
+                metadata.multi_agent_version = Some(version);
+                metadata.turn_attribution = None;
+                if !preserve_context_baselines {
+                    metadata.previous_turn_settings = None;
+                }
+            }
+            compacted.guardian_history = None;
+            compacted.retained_context =
+                (version == MultiAgentVersion::V2).then(codex_history::RetainedContext::default);
+            if let Some(history) = &mut compacted.replacement_history {
+                history.retain_mut(&mut retain_envelope);
+            }
+            true
+        }
+        RolloutItem::WorldState(world_state)
+            if version == MultiAgentVersion::V2 || preserve_fork_prefix =>
+        {
+            world_state.state.remove("multi_agent_usage_hint");
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Project an ancestor prefix as agent context without changing referenced source history.
+pub(crate) fn sanitize_agent_fork_prefix(
+    items: &mut Vec<RolloutItem>,
+    prefix_len: usize,
+    version: MultiAgentVersion,
+) -> usize {
+    let prefix_len = prefix_len.min(items.len());
+    let removed = items
+        .extract_if(..prefix_len, |item| {
+            !sanitize_forked_rollout_item(
+                item,
+                version,
+                /*preserve_context_baselines*/ true,
+                /*preserve_fork_prefix*/ true,
+                ThreadHistoryMode::Paginated,
+                |_| true,
+            )
+        })
+        .count();
+    prefix_len - removed
+}
+
+/// Project immutable ancestor ranges when reading a referenced agent fork.
+pub(crate) fn sanitize_referenced_agent_fork(
+    thread_id: ThreadId,
+    history: &mut Arc<Vec<RolloutItem>>,
+    version: MultiAgentVersion,
+) -> CodexResult<()> {
+    let Some(RolloutItem::SessionMeta(meta)) = history.first() else {
+        return Ok(());
+    };
+    let Some(history_base) = meta.meta.history_base else {
+        return Ok(());
+    };
+    if meta.meta.id != thread_id
+        || meta.meta.forked_from_id.is_none()
+        || meta.meta.subagent_history_start_ordinal.is_some()
+        || meta.meta.session_id == SessionId::from(thread_id)
+    {
+        return Ok(());
+    }
+    let boundary = history
+        .iter()
+        .position(|item| match item {
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                event.thread_id == Some(thread_id)
+            }
+            // A bounded context scan can begin at a child-owned compaction, omitting
+            // the original startup event. Its catalog snapshot identifies its owner.
+            RolloutItem::Compacted(checkpoint) => checkpoint
+                .resume_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.dynamic_tools.as_ref())
+                .is_some_and(|snapshot| snapshot.thread_id == thread_id),
+            _ => false,
+        })
+        .or_else(|| {
+            // Revert can truncate before the child's startup event. If the
+            // physical base ends inside the logical parent prefix, all surviving
+            // context is inherited.
+            meta.meta
+                .forked_from_ordinal_exclusive
+                .filter(|cutoff| history_base.end_ordinal_exclusive <= *cutoff)
+                .map(|_| history.len())
+        })
+        .ok_or_else(|| {
+            CodexErr::InvalidRequest(
+                "referenced agent fork history is missing its child boundary".to_string(),
+            )
+        })?;
+    sanitize_agent_fork_prefix(Arc::make_mut(history), boundary, version);
+    Ok(())
+}
 
 impl LocalAgentRuntime {
     pub(crate) async fn retained_items_for_fresh_child(
@@ -302,28 +450,6 @@ pub(super) async fn prepare_forked_history(
         forked_rollout_items = items;
     }
     let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
-        let explicitly_retained = envelope.is_always_retained();
-        if explicitly_retained
-            || (multi_agent_version == MultiAgentVersion::V2
-                && (preserve_fork_prefix
-                    || matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")))
-        {
-            // Resume must not recapture copied parent messages as local authorization.
-            envelope
-                .metadata
-                .get_or_insert_default()
-                .inherited_user_message = true;
-        }
-        if let Some(metadata) = &mut envelope.metadata
-            && (metadata.sender_user_messages.take().is_some()
-                || !matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user"))
-        {
-            // Assistant and tool positions belong to the parent counter, not the child.
-            metadata.user_input_order = None;
-        }
-        if preserve_fork_prefix || explicitly_retained {
-            return true;
-        }
         let response_item = &mut envelope.item;
         // Tool declarations and their comparison baseline must survive or be rebuilt together.
         // Apply this to both standalone items and compaction replacement histories.
@@ -389,74 +515,18 @@ pub(super) async fn prepare_forked_history(
         true
     };
     forked_rollout_items.retain_mut(|item| {
-        let keep = (preserve_fork_prefix && matches!(item, RolloutItem::ResponseItem(_)))
-            || keep_forked_rollout_item(item, preserve_context_baselines);
-        if !keep
-            || destination_history_mode == Some(ThreadHistoryMode::Paginated)
-                && matches!(
-                    &*item,
-                    RolloutItem::EventMsg(
-                        EventMsg::ItemCompleted(_)
-                            | EventMsg::TokenCount(_)
-                            | EventMsg::ThreadGoalUpdated(_)
-                            | EventMsg::ThreadSettingsApplied(_),
-                    )
-                )
-        {
-            return false;
+        if matches!(item, RolloutItem::Compacted(checkpoint) if checkpoint.replacement_history.is_some()) {
+            // Matches before this checkpoint cannot survive its replacement history.
+            replaced_parent_developer_instructions = false;
         }
-
-        match item {
-            RolloutItem::ResponseItem(response_item) => {
-                retain_forked_item(response_item, &mut replaced_parent_developer_instructions)
-            }
-            RolloutItem::Compacted(compacted) => {
-                // This compaction becomes part of the subagent's initial history. Rewrite its
-                // metadata to describe the child rather than the parent.
-                compacted.latest_token_usage_record = None;
-                if let Some(resume_metadata) = &mut compacted.resume_metadata {
-                    resume_metadata.multi_agent_version = Some(multi_agent_version);
-                    resume_metadata.turn_attribution = None;
-                    if !preserve_context_baselines {
-                        resume_metadata.previous_turn_settings = None;
-                    }
-                }
-                // Parent-local review evidence must not become the child's authorization.
-                // Root user authorization is collected separately by the host.
-                compacted.guardian_history = None;
-                // Only V2 fetches root authorization live. Its local scope starts known-empty;
-                // V1 must remain incomplete when inherited authorization has been stripped.
-                compacted.retained_context = (multi_agent_version == MultiAgentVersion::V2)
-                    .then(codex_history::RetainedContext::default);
-                if let Some(replacement_history) = compacted.replacement_history.as_mut() {
-                    // Matches before this checkpoint cannot survive its replacement history.
-                    replaced_parent_developer_instructions = false;
-                    replacement_history.retain_mut(|response_item| {
-                        retain_forked_item(
-                            response_item,
-                            &mut replaced_parent_developer_instructions,
-                        )
-                    });
-                }
-                true
-            }
-            RolloutItem::WorldState(world_state) => {
-                if multi_agent_version == MultiAgentVersion::V2 {
-                    world_state.state.remove("multi_agent_usage_hint");
-                }
-                true
-            }
-            RolloutItem::RealtimeItem(_) => false,
-            RolloutItem::DynamicToolsUpdated { .. }
-            | RolloutItem::EventMsg(_)
-            | RolloutItem::SessionMeta(_)
-            | RolloutItem::TurnContext(_)
-            | RolloutItem::InterAgentCommunication(_)
-            | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
-            RolloutItem::RetainedContext(_)
-            | RolloutItem::TokenUsageRecord(_)
-            | RolloutItem::SecurityRiskScore(_) => false,
-        }
+        sanitize_forked_rollout_item(
+            item,
+            multi_agent_version,
+            preserve_context_baselines,
+            preserve_fork_prefix,
+            parent_history_mode,
+            |response| retain_forked_item(response, &mut replaced_parent_developer_instructions),
+        )
     });
     if preserve_fork_prefix {
         forked_rollout_items.push(RolloutItem::ResponseItem(

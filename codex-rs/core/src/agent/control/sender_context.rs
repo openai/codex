@@ -7,10 +7,13 @@ use crate::context::GuardianSenderMessages;
 use crate::context_manager::ContextManager;
 use crate::session::session::Session;
 use codex_history::RolloutItem;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_utils_output_truncation::TruncationPolicy;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::LocalAgentRuntime;
@@ -90,29 +93,52 @@ impl LocalAgentRuntime {
                         }),
                     )
                     .await;
-                    match stored {
-                        Ok(Ok(stored)) if stored.thread_id == source_thread_id => {
-                            let meta = stored.items.iter().find_map(|item| match item {
-                                RolloutItem::SessionMeta(meta) => Some(&meta.meta),
-                                _ => None,
-                            });
-                            meta.filter(|meta| {
-                                meta.id == source_thread_id && !meta.source.is_internal()
-                            })
-                            .map(|meta| {
-                                fragment.from_storage = true;
-                                ContextManager::reconstruct_rollout(
-                                    &stored.items,
-                                    meta.history_mode,
-                                    ContextManager::new(Session::new_item_id_generator()),
-                                    // Tool bodies are not sender authorization evidence.
-                                    TruncationPolicy::Bytes(0),
-                                )
-                                .retained_context
-                            })
+                    let capture = || {
+                        let stored = stored.ok()?.ok()?;
+                        if stored.thread_id != source_thread_id {
+                            return None;
                         }
-                        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
-                    }
+                        let RolloutItem::SessionMeta(meta) = stored.items.first()? else {
+                            return None;
+                        };
+                        if meta.meta.id != source_thread_id || meta.meta.source.is_internal() {
+                            return None;
+                        }
+                        let history_mode = meta.meta.history_mode;
+                        let referenced_agent_fork = meta.meta.history_base.is_some()
+                            && meta.meta.session_id != SessionId::from(source_thread_id)
+                            && meta.meta.subagent_history_start_ordinal.is_none();
+                        let version = if referenced_agent_fork {
+                            if history_mode != ThreadHistoryMode::Paginated
+                                || meta.meta.forked_from_id.is_none()
+                            {
+                                return None;
+                            }
+                            Some(meta.meta.multi_agent_version?)
+                        } else {
+                            None
+                        };
+                        let mut history = Arc::new(stored.items);
+                        if let Some(version) = version {
+                            crate::agent::sanitize_referenced_agent_fork(
+                                source_thread_id,
+                                &mut history,
+                                version,
+                            )
+                            .ok()?;
+                        }
+                        let context = ContextManager::reconstruct_rollout(
+                            &history,
+                            history_mode,
+                            ContextManager::new(Session::new_item_id_generator()),
+                            // Tool bodies are not sender authorization evidence.
+                            TruncationPolicy::Bytes(0),
+                        )
+                        .retained_context;
+                        fragment.from_storage = true;
+                        Some(context)
+                    };
+                    capture()
                 }
             };
             if let Some(context) = context {

@@ -12,6 +12,8 @@ pub(crate) mod types;
 
 pub(crate) use codex_protocol::protocol::AgentStatus;
 pub(crate) use control::LocalAgentControl;
+pub(crate) use history::sanitize_agent_fork_prefix;
+pub(crate) use history::sanitize_referenced_agent_fork;
 pub(crate) use registry::exceeds_thread_spawn_depth_limit;
 pub(crate) use registry::next_thread_spawn_depth;
 pub(crate) use status::agent_status_from_event;

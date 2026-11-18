@@ -1,13 +1,21 @@
 //! Genuine sender context stays reviewer-only and is replaced on every delivery.
 
 use anyhow::Result;
+use codex_core::InheritedSessionId;
+use codex_core::RestrictRootCapabilities;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
+use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::turn_input::TurnInput;
+use codex_protocol::user_input::UserInput;
+use codex_thread_store::ForkBoundary;
+use codex_thread_store::PrepareForkParams;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -201,5 +209,110 @@ async fn guardian_receives_sender_user_messages_by_default(
         requests.extend(captured);
     }
     assert_eq!(requests.len(), 10);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stored_fork_sender_evidence_matches_live_sender() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let root = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("ancestor")]),
+    )
+    .await;
+    root.submit_text_turn("ancestor evidence").await?;
+    root.codex.flush_rollout().await?;
+    let prepared = root
+        .thread_store
+        .prepare_fork(PrepareForkParams {
+            thread_id: root.session_configured.thread_id,
+            boundary: ForkBoundary::Latest,
+        })
+        .await?;
+    let mut options = root.start_thread_options().await;
+    options.history_mode = Some(ThreadHistoryMode::Paginated);
+    options.session_source = Some(SessionSource::Custom("host".into()));
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(root.session_configured.session_id));
+    options
+        .thread_extension_init
+        .insert(RestrictRootCapabilities);
+    let sender = root
+        .thread_manager
+        .fork_prepared_thread(options, prepared)
+        .await?;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("sender")]),
+    )
+    .await;
+    sender
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "B-local evidence".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&sender.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    sender.thread.flush_rollout().await?;
+    let remote = test_codex()
+        .with_thread_store(root.thread_store.clone())
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&server)
+        .await?;
+    assert!(
+        remote
+            .thread_manager
+            .get_thread(sender.thread_id)
+            .await
+            .is_err()
+    );
+
+    for (index, receiver) in [&root.codex, &remote.codex].into_iter().enumerate() {
+        responses::mount_sse_once(
+            &server,
+            responses::sse(vec![responses::ev_completed("done")]),
+        )
+        .await;
+        let sender_id = sender.thread_id;
+        let delivery: ResponseItem = serde_json::from_value(json!({
+            "type": "function_call_output", "id": format!("delivery-{index}"),
+            "name": "send_message", "namespace": "cloud_threads",
+            "output": format!("<codex_delegation><source_thread_id>{sender_id}</source_thread_id><input>Inspect.</input></codex_delegation>"),
+        }))?;
+        receiver
+            .start_or_steer_turn(TurnInputRequest::new(TurnInput::ResponseItem(delivery)))
+            .await?;
+        wait_for_event(receiver, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+        let history = receiver.conversation_history_snapshot().await;
+        let evidence = &history
+            .retained_context()
+            .expect("retained context")
+            .sender_user_messages()
+            .expect("sender evidence")
+            .text;
+        assert_eq!(
+            evidence
+                .lines()
+                .filter(|line| line.starts_with("user: ") || line.starts_with("assistant: "))
+                .collect::<Vec<_>>(),
+            vec!["user: B-local evidence"]
+        );
+    }
+    sender.thread.shutdown_and_wait().await?;
+    root.codex.shutdown_and_wait().await?;
+    remote.codex.shutdown_and_wait().await?;
     Ok(())
 }
