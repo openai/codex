@@ -347,6 +347,7 @@
             "modelNotFound",
             "policyCapacityUnavailable",
             "cyberPolicy",
+            "bioPolicy",
             "misalignmentPolicyViolation",
             "tooManyDenials",
             "internalServerError",

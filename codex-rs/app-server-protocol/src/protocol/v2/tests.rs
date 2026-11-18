@@ -4966,7 +4966,7 @@ fn core_error_info_converts_to_camel_case() {
             CoreCodexErrorInfo::InferenceHookDenied,
             json!("inferenceHookDenied"),
         ),
-        (CoreCodexErrorInfo::BioPolicy, json!("other")),
+        (CoreCodexErrorInfo::BioPolicy, json!("bioPolicy")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
             CoreCodexErrorInfo::FlexUnavailable,

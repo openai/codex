@@ -586,6 +586,7 @@ class CodexErrorInfoValue(str, Enum):
     model_not_found = "modelNotFound"
     policy_capacity_unavailable = "policyCapacityUnavailable"
     cyber_policy = "cyberPolicy"
+    bio_policy = "bioPolicy"
     misalignment_policy_violation = "misalignmentPolicyViolation"
     too_many_denials = "tooManyDenials"
     internal_server_error = "internalServerError"
