@@ -295,30 +295,38 @@ fn code_mode_overrides_preserve_enabled_state_and_cell_overhead() {
 }
 
 #[test]
-fn structured_mode_overrides_preserve_disabled_state_and_mode() {
-    for (feature, selected_mode) in [
-        ("sleep_tool", "always_on"),
-        ("runtime_agent_instances", "assertion_only"),
+fn structured_feature_overrides_preserve_disabled_state_and_settings() {
+    for (feature, key, value) in [
+        ("sleep_tool", "mode", "always_on"),
+        ("runtime_agent_instances", "mode", "assertion_only"),
+        (
+            "guardianv3",
+            "reviewer.retrieval_instructions",
+            "Check revocations.",
+        ),
     ] {
         for feature_path in ["features", "profiles.work.features"] {
             let disabled = (
                 format!("{feature_path}.{feature}"),
                 TomlValue::Boolean(false),
             );
-            let mode = (
-                format!("{feature_path}.{feature}.mode"),
-                TomlValue::String(selected_mode.to_string()),
+            let setting = (
+                format!("{feature_path}.{feature}.{key}"),
+                TomlValue::String(value.to_string()),
             );
             let expected = parse_toml(&format!(
-                "[{feature_path}.{feature}]\nenabled = false\nmode = \"{selected_mode}\"\n",
+                "[{feature_path}.{feature}]\nenabled = false\n{key} = \"{value}\"\n",
             ));
-            for overrides in [vec![disabled.clone(), mode.clone()], vec![mode, disabled]] {
+            for overrides in [
+                vec![disabled.clone(), setting.clone()],
+                vec![setting, disabled],
+            ] {
                 assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
             }
 
             let boolean_layer = parse_toml(&format!("[{feature_path}]\n{feature} = false\n"));
             let table_layer = parse_toml(&format!(
-                "[{feature_path}.{feature}]\nmode = \"{selected_mode}\"\n",
+                "[{feature_path}.{feature}]\n{key} = \"{value}\"\n",
             ));
             for (mut base, overlay) in [
                 (boolean_layer.clone(), table_layer.clone()),

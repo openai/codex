@@ -199,7 +199,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
     crate::install(
         &mut registry,
         Arc::downgrade(&test.thread_manager),
-        test.config.sqlite_config().clone(),
+        &test.config,
         {
             let host = host.clone();
             move |_| host.clone()

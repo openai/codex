@@ -1371,6 +1371,24 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.shell_snapshot".to_string());
         }
+        if let Some(guardian) = features
+            .get_mut("guardianv3")
+            .and_then(TomlValue::as_table_mut)
+        {
+            if guardian.remove("max_instruction_tokens").is_some() {
+                ignored_keys.push("features.guardianv3.max_instruction_tokens".to_string());
+            }
+            for (section, key) in [
+                ("housekeeper", "routing_instructions"),
+                ("reviewer", "retrieval_instructions"),
+            ] {
+                if let Some(settings) = guardian.get_mut(section).and_then(TomlValue::as_table_mut)
+                    && settings.remove(key).is_some()
+                {
+                    ignored_keys.push(format!("features.guardianv3.{section}.{key}"));
+                }
+            }
+        }
         if let Some(multi_agent) = features
             .get_mut("multi_agent_v2")
             .and_then(TomlValue::as_table_mut)

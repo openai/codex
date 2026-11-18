@@ -9036,6 +9036,39 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
     Ok(())
 }
 
+#[test_case::test_case("", "longer than four bytes", "also longer than four bytes", None; "uncapped")]
+#[test_case::test_case("max_instruction_tokens = 1", "éé", "abcd", None; "limit_per_prompt")]
+#[test_case::test_case("max_instruction_tokens = 1", "ééx", "abcd", Some("housekeeper.routing_instructions"); "routing_over_limit")]
+#[test_case::test_case("max_instruction_tokens = 1", "éé", "abcde", Some("reviewer.retrieval_instructions"); "retrieval_over_limit")]
+fn guardian_v3_validates_each_custom_prompt(
+    cap: &str,
+    routing: &str,
+    retrieval: &str,
+    oversized_field: Option<&str>,
+) {
+    let cfg: ConfigToml = toml::from_str(&format!(
+        r#"
+        [features.guardianv3]
+        {cap}
+        [features.guardianv3.housekeeper]
+        routing_instructions = "{routing}"
+        [features.guardianv3.reviewer]
+        retrieval_instructions = "{retrieval}"
+    "#
+    ))
+    .unwrap();
+    let result = resolve_guardian_v3_config(cfg.features.unwrap().guardianv3);
+    match oversized_field {
+        Some(field) => assert_eq!(
+            result.unwrap_err().to_string(),
+            format!(
+                "features.guardianv3.{field} is 2 estimated tokens, exceeding max_instruction_tokens = 1"
+            )
+        ),
+        None => assert!(result.unwrap().is_some()),
+    }
+}
+
 #[test]
 fn config_toml_deserializes_auto_review_policy() {
     let cfg = toml::from_str::<ConfigToml>(

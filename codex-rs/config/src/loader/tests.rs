@@ -1310,6 +1310,55 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
 }
 
 #[test]
+fn project_config_cannot_supply_guardian_v3_prompts_or_their_cap() {
+    let mut project: TomlValue = toml::toml! {
+        [features.guardianv3]
+        max_instruction_tokens = 1
+        [features.guardianv3.housekeeper]
+        routing_instructions = "Use project routing"
+        batch_timeout_ms = 15000
+        [features.guardianv3.reviewer]
+        retrieval_instructions = "Use project retrieval"
+    }
+    .into();
+    let mut user: TomlValue = toml::toml! {
+        [features.guardianv3]
+        max_instruction_tokens = 200
+        [features.guardianv3.housekeeper]
+        routing_instructions = "Use my routing"
+    }
+    .into();
+
+    let ignored = sanitize_project_config(
+        &mut project,
+        CredentialBrokerProjectState::Unconfigured,
+        &[],
+    );
+    merge_toml_values(&mut user, &project);
+
+    assert_eq!(
+        ignored,
+        [
+            "features.guardianv3.max_instruction_tokens",
+            "features.guardianv3.housekeeper.routing_instructions",
+            "features.guardianv3.reviewer.retrieval_instructions",
+        ]
+    );
+    assert_eq!(
+        user,
+        toml::toml! {
+            [features.guardianv3]
+            max_instruction_tokens = 200
+            [features.guardianv3.housekeeper]
+            routing_instructions = "Use my routing"
+            batch_timeout_ms = 15000
+            [features.guardianv3.reviewer]
+        }
+        .into()
+    );
+}
+
+#[test]
 fn project_config_cannot_change_system_proxy_routing_or_credential_masking() {
     for key in [
         "respect_system_proxy",

@@ -6,6 +6,7 @@
 
 use crate::guardian_review::ReviewRetrieval;
 use codex_protocol::openai_models::CatalogModel;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -61,7 +62,7 @@ pub fn build_guardian_review_session_config(
         ),
         template => template,
     };
-    let retrieval_guidance = match retrieval {
+    let retrieval_guidance = match &retrieval {
         ReviewRetrieval::ConversationHistory
             if guardian_config
                 .features
@@ -75,9 +76,10 @@ pub fn build_guardian_review_session_config(
             }
             .render()
             .into_text()
+            .map(Cow::Owned)
         }
         ReviewRetrieval::ConversationHistory => None,
-        ReviewRetrieval::Extension(prompt) => Some(prompt.to_owned()),
+        ReviewRetrieval::Extension(prompt) => Some(Cow::Borrowed(prompt.as_ref())),
     };
     let instructions = reviewer_instructions(
         guardian_config.guardian_transcript_mode,

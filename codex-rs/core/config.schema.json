@@ -2508,6 +2508,44 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "housekeeper": {
+          "$ref": "#/definitions/GuardianV3HousekeeperConfigToml"
+        },
+        "max_instruction_tokens": {
+          "description": "Maximum estimated tokens per custom routing or retrieval prompt. Unset means uncapped. Ignored in project config.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reviewer": {
+          "$ref": "#/definitions/GuardianV3ReviewerConfigToml"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV3HousekeeperConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_timeout_ms": {
+          "description": "Time budget for routing one batch, in milliseconds. Defaults to 90,000.",
+          "format": "uint32",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "routing_instructions": {
+          "description": "Guidance for grouping originals into channels and describing their topics. Ignored in project config.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV3ReviewerConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "retrieval_instructions": {
+          "description": "Guidance for searching the Guardian board and managing channel subscriptions. Ignored in project config.",
+          "type": "string"
         }
       },
       "type": "object"

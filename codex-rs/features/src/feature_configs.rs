@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
 
 /// Connection settings for a remote message board.
@@ -316,6 +317,32 @@ where
 pub struct GuardianV3ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub housekeeper: Option<GuardianV3HousekeeperConfigToml>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<GuardianV3ReviewerConfigToml>,
+    /// Maximum estimated tokens per custom routing or retrieval prompt. Unset means uncapped. Ignored in project config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_instruction_tokens: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV3HousekeeperConfigToml {
+    /// Guidance for grouping originals into channels and describing their topics. Ignored in project config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_instructions: Option<String>,
+    /// Time budget for routing one batch, in milliseconds. Defaults to 90,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_timeout_ms: Option<NonZeroU32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV3ReviewerConfigToml {
+    /// Guidance for searching the Guardian board and managing channel subscriptions. Ignored in project config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_instructions: Option<String>,
 }
 
 impl FeatureConfig for GuardianV3ConfigToml {

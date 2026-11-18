@@ -9,6 +9,7 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::guardian_review::PreparedGuardianContext;
 use codex_core::guardian_review::ReviewPreparationError;
+use codex_core::guardian_review::ReviewRetrieval;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_protocol::AgentPath;
@@ -29,6 +30,7 @@ pub struct ActorReviewer {
     root: ThreadId,
     actor: ThreadId,
     path: AgentPath,
+    retrieval: ReviewRetrieval,
     slot: Arc<Mutex<Option<Conversation>>>,
     lifetime: ReviewerTasks,
 }
@@ -57,12 +59,14 @@ impl ActorReviewer {
         root: ThreadId,
         actor: ThreadId,
         path: AgentPath,
+        retrieval: ReviewRetrieval,
     ) -> Self {
         Self {
             manager,
             root,
             actor,
             path,
+            retrieval,
             slot: Default::default(),
             lifetime: Default::default(),
         }
@@ -228,11 +232,11 @@ impl codex_core::guardian_review::AttachedReviewer for ActorReviewer {
             }
         });
         codex_core::guardian_review::BoundReviewer {
+            retrieval: self.retrieval.clone(),
             preparation: Arc::new(BoundActorReview {
                 actor: self,
                 routed: ready,
             }),
-            retrieval: crate::BOARD_RETRIEVAL,
         }
     }
 }

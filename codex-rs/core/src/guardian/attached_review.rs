@@ -34,9 +34,10 @@ impl AttachedApproval {
         cancel: &CancellationToken,
     ) -> Result<Self, ReviewPreparationError> {
         let prepare = async {
-            let config = guardian_review_session_config(parent, context, provider.retrieval)
-                .await
-                .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
+            let config =
+                guardian_review_session_config(parent, context, provider.retrieval.clone())
+                    .await
+                    .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
             let reserved = Self::reserve(&provider, &config, parent, context, cancel).await?;
             Ok(Self {
                 provider,
