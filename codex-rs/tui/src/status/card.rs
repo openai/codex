@@ -830,12 +830,11 @@ impl StatusHistoryCell {
             let value = if remote_connection.is_local_daemon {
                 Line::from("Local background server")
             } else {
-                Line::from(vec![
-                    Span::from(remote_connection.address.clone()),
-                    Span::from(" (").dim(),
-                    Span::from(remote_connection.version.clone()).dim(),
-                    Span::from(")").dim(),
-                ])
+                let mut spans = vec![remote_connection.address.clone().into()];
+                if let Some(version) = &remote_connection.version {
+                    spans.push(format!(" ({version})").dim());
+                }
+                Line::from(spans)
             };
             let wrapped_remote = word_wrap_lines([value], RtOptions::new(value_width.max(1)));
             let mut wrapped_remote = wrapped_remote.into_iter();

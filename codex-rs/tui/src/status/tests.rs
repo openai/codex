@@ -17,6 +17,7 @@ use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::pager_overlay::TranscriptOverlay;
 use crate::status::StatusAccountDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
+use crate::status::remote_connection::remote_connection_status_value;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
@@ -1744,22 +1745,46 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
         .single()
         .expect("timestamp");
-    for (is_local_daemon, snapshot) in [
+    let connections = [
         (
             None,
             "status_snapshot_uses_default_reasoning_when_config_empty",
         ),
         (Some(false), "status_snapshot_remote_server"),
         (Some(true), "status_snapshot_local_background_server"),
-    ] {
+    ]
+    .map(|(is_local_daemon, snapshot)| {
         let remote_connection = is_local_daemon.map(|is_local_daemon| RemoteConnectionStatus {
             address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock"
                 .to_string(),
-            version: "v0.133.0".to_string(),
+            version: Some("v0.133.0".to_string()),
             is_local_daemon,
             is_managed_daemon: is_local_daemon,
         });
-
+        (remote_connection, snapshot)
+    });
+    for (remote_connection, snapshot) in connections.into_iter().chain([
+        (
+            remote_connection_status_value(
+                &crate::AppServerTarget::Cloud,
+                /*server_version*/ None,
+            ),
+            "status_snapshot_cloud_server",
+        ),
+        (
+            remote_connection_status_value(&crate::AppServerTarget::Cloud, Some("0.133.0")),
+            "status_snapshot_cloud_server_with_version",
+        ),
+        (
+            remote_connection_status_value(
+                &crate::AppServerTarget::Remote {
+                    endpoint: crate::resolve_remote_addr("ws://devbox.example.com:4500").unwrap(),
+                },
+                /*server_version*/ None,
+            ),
+            "status_snapshot_remote_server_without_version",
+        ),
+    ]) {
         let model_slug = get_model_offline_for_tests(config.model.as_deref());
         let token_info = token_info_for(&model_slug, &config, &usage);
         let (composite, _) = new_status_output_with_rate_limits_handle(

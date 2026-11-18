@@ -1306,7 +1306,7 @@ async fn startup_config_warning_is_not_repeated_by_thread() {
             chat.remote_connection =
                 Some(crate::status::remote_connection::RemoteConnectionStatus {
                     address: "local".into(),
-                    version: "v0.153.0".into(),
+                    version: Some("v0.153.0".into()),
                     is_local_daemon: true,
                     is_managed_daemon: managed_daemon,
                 });

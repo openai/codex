@@ -1509,8 +1509,9 @@ async fn remote_overview_startup_hides_disabled_older_server_notice() -> Result<
             .remote_connection
             .as_ref()
             .expect("remote status")
-            .version,
-        "v2.0.0"
+            .version
+            .as_deref(),
+        Some("v2.0.0")
     );
     app.local_settings.tui.show_server_version_notice = true;
     app.refresh_server_version_overview_notice("2.1.0");
