@@ -1160,7 +1160,11 @@ pub fn invalidate_cached_remote_plugin_catalog_scopes(
     }
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(
+    name = "plugins.recommendations.read_tooling_marker",
+    level = "info",
+    skip_all
+)]
 pub(crate) async fn fetch_tooling_changed_at(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -1181,7 +1185,11 @@ pub(crate) async fn fetch_tooling_changed_at(
         })
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(
+    name = "plugins.recommendations.fetch_catalog",
+    level = "info",
+    skip_all
+)]
 pub async fn fetch_recommended_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,

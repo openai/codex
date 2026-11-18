@@ -2228,7 +2228,7 @@ pub(super) enum PreparedToolRecommendations {
 }
 
 impl PreparedToolRecommendations {
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(name = "plugins.recommendations.load", level = "info", skip_all)]
     pub(super) async fn load(sess: &Session, turn_context: &TurnContext) -> Self {
         let auth = sess.services.auth_manager.auth().await;
         let endpoint_candidates = sess

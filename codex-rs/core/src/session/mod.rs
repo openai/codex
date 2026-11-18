@@ -5284,7 +5284,14 @@ impl Session {
                 .features
                 .plugin_recommendations_enabled()
         {
-            match PreparedToolRecommendations::load(self, turn_context).await {
+            let started_at = std::time::Instant::now();
+            let recommendations = PreparedToolRecommendations::load(self, turn_context).await;
+            turn_context.session_telemetry.record_duration(
+                "codex.initial_context.plugin_recommendations_wait_ms",
+                started_at.elapsed(),
+                &[],
+            );
+            match recommendations {
                 PreparedToolRecommendations::Endpoint(tools) => Some(tools),
                 PreparedToolRecommendations::Legacy(_) => None,
             }
