@@ -4,6 +4,7 @@ use chrono::DateTime;
 #[cfg(test)]
 use chrono::Utc;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_utils_path_uri::LegacyAppPathString;
 
 #[cfg(test)]
 pub(crate) async fn read_summary_from_rollout(
@@ -172,12 +173,20 @@ pub(crate) fn thread_response_active_permission_profile(
     active_permission_profile.map(Into::into)
 }
 
+pub(super) fn thread_cwd_for_api(
+    cwd: &AbsolutePathBuf,
+) -> Result<LegacyAppPathString, JSONRPCErrorError> {
+    cwd.to_str()
+        .map(LegacyAppPathString::from_string)
+        .ok_or_else(|| internal_error("cannot encode thread cwd: path contains invalid UTF-8"))
+}
+
 pub(crate) fn thread_settings_from_config_snapshot(
     config_snapshot: &ThreadConfigSnapshot,
-) -> ThreadSettings {
-    ThreadSettings {
+) -> Result<ThreadSettings, JSONRPCErrorError> {
+    Ok(ThreadSettings {
         disabled_plugin_ids: config_snapshot.disabled_plugin_ids.clone(),
-        cwd: config_snapshot.cwd().clone(),
+        cwd: thread_cwd_for_api(config_snapshot.cwd())?,
         environments: Some(
             config_snapshot
                 .environment_selections()
@@ -199,7 +208,7 @@ pub(crate) fn thread_settings_from_config_snapshot(
         collaboration_mode: config_snapshot.collaboration_mode.clone(),
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         personality: config_snapshot.personality,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -289,7 +298,7 @@ pub(crate) fn summary_to_thread(
         recency_at: updated_at.map(|dt| dt.timestamp()),
         status: ThreadStatus::NotLoaded,
         path: (!path.as_os_str().is_empty()).then_some(path),
-        cwd,
+        cwd: cwd.into(),
         cli_version,
         agent_nickname: source.get_nickname(),
         agent_role: source.get_agent_role(),

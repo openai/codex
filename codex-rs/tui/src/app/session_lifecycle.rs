@@ -485,10 +485,16 @@ impl App {
                 }
                 (started.session, started.turns, true)
             }
-            PreparedAttachment::ReplayOnly { thread, read_only } => {
+            PreparedAttachment::ReplayOnly {
+                thread,
+                cwd,
+                read_only,
+            } => {
                 external_writer |=
                     read_only == Some(crate::chatwidget::ReadOnlyThread::ExternalWriter);
-                let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
+                let mut session = self
+                    .session_state_for_thread_read(thread_id, &thread, cwd)
+                    .await;
                 // Reads have no settings. Keep this cached thread's permissions rather than
                 // inferring them from the conversation that is currently displayed.
                 if let Some(channel) = self.thread_event_channels.get(&thread_id)
@@ -555,8 +561,13 @@ impl App {
             }
         }
         let mut store = channel.store.lock().await;
-        if let Some(settings) = incoming.and_then(|updates| updates.settings.as_ref()) {
-            super::thread_settings::apply_thread_settings_to_session(&mut session, settings);
+        if let Some(settings) = incoming.and_then(|updates| updates.settings.as_ref())
+            && let Ok(cwd) = crate::app_server_session::decode_thread_cwd(
+                &settings.cwd,
+                app_server.path_convention(),
+            )
+        {
+            super::thread_settings::apply_thread_settings_to_session(&mut session, settings, &cwd);
         }
         let live_turn = incoming.filter(|updates| updates.turn_changed).map(|_| {
             (
@@ -622,6 +633,7 @@ impl App {
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
         chat_widget.thread_params_mode = self.chat_widget.thread_params_mode;
+        chat_widget.app_server_path_convention = self.chat_widget.app_server_path_convention;
         chat_widget.pending_cloud_turn_settings =
             self.chat_widget.pending_cloud_turn_settings.clone();
         chat_widget.set_local_worktree_operations(self.chat_widget.local_worktree_operations);

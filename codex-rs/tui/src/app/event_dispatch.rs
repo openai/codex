@@ -265,7 +265,7 @@ impl App {
             AppEvent::CloseMisalignmentReview => self.chat_widget.show_misalignment_policy_precaution(),
             AppEvent::SkillsListLoaded { ref cwd, .. }
                 if app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud
-                    || cwds_differ(cwd, self.config.cwd.as_path()) =>
+                    || self.chat_widget.session_cwd() != cwd =>
             {
                 self.skill_load_warnings.startup_complete = true;
             }
@@ -1411,15 +1411,14 @@ impl App {
             // The Cloud preview does not have a skills catalog.
             AppEvent::CodexOp(AppCommand::ListSkills { .. })
                 if app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud => {}
-            AppEvent::CodexOp(AppCommand::ListSkills { cwds, force_reload: true })
+            AppEvent::CodexOp(AppCommand::ListSkills { cwd, force_reload: true })
                 if self.awaiting_side_replay(tui)
                     && let Some(thread_id) = self.active_thread_id
                     && self.side_pair_key(thread_id).is_some()
                     && !self.thread_unavailable(thread_id) =>
             {
                 // Session replay refreshes skill metadata. Let focus paint while that RPC is pending.
-                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-                if cwds.contains(&cwd) {
+                if &cwd == self.chat_widget.session_cwd() {
                     let request_id = Uuid::new_v4();
                     app_server.pending_side_skills_refresh = Some(request_id);
                     let rpc_id = app_server.next_request_id();
@@ -1429,7 +1428,7 @@ impl App {
                         let result = background_requests::fetch_skills_list(
                             request_handle,
                             rpc_id,
-                            SkillsListParams { cwds, force_reload: true },
+                            SkillsListParams { cwds: vec![cwd.to_path_buf()], force_reload: true },
                         )
                         .await
                         .map_err(|err| format!("{err:#}"));
@@ -1661,7 +1660,7 @@ impl App {
                     .await?;
             }
             AppEvent::DiffResult(cwd, text) => {
-                if cwds_differ(&cwd, self.chat_widget.config_ref().cwd.as_path()) {
+                if &cwd != self.chat_widget.session_cwd() {
                     return Ok(AppRunControl::Continue);
                 }
                 // Clear the in-progress state in the bottom pane
@@ -2103,7 +2102,7 @@ impl App {
                     app_server.pending_side_skills_refresh = None;
                     if !self.awaiting_side_replay(tui)
                         && self.current_displayed_thread_id() == Some(thread_id)
-                        && !cwds_differ(&cwd, self.chat_widget.config_ref().cwd.as_path())
+                        && self.chat_widget.session_cwd() == &cwd
                     {
                         self.handle_skills_list_result(
                             result.map_err(|err| color_eyre::eyre::eyre!(err)),
@@ -3482,7 +3481,7 @@ impl App {
                         };
                         let manager = pending.manager.clone();
                         let cwd = AbsolutePathBuf::try_from(checkout.cwd.clone())?;
-                        return Box::pin(self.start_agents_overview_session(tui, app_server, Some(cwd), Some((manager, checkout)), /*startup_draft*/ None)).await;
+                        return Box::pin(self.start_agents_overview_session(tui, app_server, Some(cwd.into()), Some((manager, checkout)), /*startup_draft*/ None)).await;
                     }
                     Err(error) => self.add_agents_overview_error(error),
                 }

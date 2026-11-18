@@ -652,7 +652,7 @@ fn session_configured_event(model: &str) -> ThreadSessionState {
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/tmp/project").abs(),
+        cwd: codex_utils_path_uri::PathUri::parse("file:///tmp/project").unwrap(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -790,13 +790,8 @@ async fn session_info_uses_availability_nux_tooltip_override() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "snapshot path rendering differs on Windows"
-)]
 async fn session_info_availability_nux_tooltip_snapshot() {
-    let mut config = test_config().await;
-    config.cwd = test_path_buf("/tmp/project").abs();
+    let config = test_config().await;
     let cell = new_session_info(
         &config,
         &crate::local_settings::LocalSettings::from(&config),

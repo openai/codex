@@ -110,7 +110,7 @@ async fn thread_environments_follow_the_loaded_thread_selection() -> Result<()> 
         timeout(DEFAULT_READ_TIMEOUT, second.read_response(request)).await??;
     let expected = Some(vec![ThreadEnvironment {
         environment_id: second.auto_env_params()?.environment_id,
-        cwd: resumed.cwd.clone().into(),
+        cwd: resumed.cwd.clone(),
         runtime_workspace_roots: resumed
             .runtime_workspace_roots
             .iter()

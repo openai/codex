@@ -164,7 +164,7 @@ impl ChatWidget {
         self.permission_popup_request_id = Some(request_id);
         self.app_event_tx.send(AppEvent::FetchPermissionProfiles {
             request_id,
-            thread_cwd: self.thread_id.and(self.current_cwd.clone()),
+            thread_cwd: self.thread_id.map(|_| self.session_cwd().to_path_buf()),
         });
     }
 

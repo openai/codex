@@ -333,7 +333,7 @@ impl ChatWidget {
                 usage: self.into(),
                 workspace: StatuslineStateWorkspace {
                     cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
-                        self.status_line_workspace_cwd(),
+                        &self.status_line_workspace_cwd(),
                     ),
                 },
                 approval,

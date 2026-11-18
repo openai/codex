@@ -93,8 +93,8 @@ impl ChatWidget {
         if previous_thread_id != Some(session.thread_id) || self.cloud_picker_selection.is_some() {
             self.dismiss_stale_model_picker();
         }
-        let connector_scope_changed = previous_thread_id != Some(session.thread_id)
-            || self.config.cwd.as_path() != session.cwd.as_path();
+        let cwd_changed = self.current_cwd != session.cwd;
+        let connector_scope_changed = previous_thread_id != Some(session.thread_id) || cwd_changed;
         self.thread_id = Some(session.thread_id);
         self.read_only_history = session.read_only_history;
         self.thread_settings_confirmed = session.thread_settings_confirmed;
@@ -119,7 +119,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
-            if (previous_thread_id.is_some() || self.config.cwd != session.cwd)
+            if (previous_thread_id.is_some() || cwd_changed)
                 && self.status_account_display == Some(StatusAccountDisplay::ApiKey)
             {
                 self.refresh_account_scoped_models();
@@ -144,8 +144,10 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.primary_environment_cwd
             .clone_from(&session.primary_environment_cwd);
-        self.current_cwd = Some(session.cwd.to_path_buf());
-        self.config.cwd = session.cwd.clone();
+        self.current_cwd = session.cwd.clone();
+        if let Ok(native_cwd) = session.cwd.to_abs_path() {
+            self.config.cwd = native_cwd;
+        }
         self.config.model_provider_id = session.model_provider_id.clone();
         if previous_thread_id.is_none()
             && let Some(event) = crate::app::provider::refresh_list_if_present(self)

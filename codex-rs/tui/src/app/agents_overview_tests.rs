@@ -721,7 +721,7 @@ pub(in crate::app) fn overview_thread(
         recency_at: Some(*OVERVIEW_TIMESTAMP),
         status,
         path: None,
-        cwd: test_path_buf("/tmp/project").abs(),
+        cwd: test_path_buf("/tmp/project").abs().into(),
         cli_version: "0.0.0".to_string(),
         source: parent_thread_id.map_or(SessionSource::Cli, |parent_thread_id| {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1740,7 +1740,7 @@ async fn worktrees_overview_groups_by_project_or_directory() {
             title,
             ThreadStatus::Idle,
         );
-        thread.cwd = AbsolutePathBuf::from_absolute_path(cwd).unwrap();
+        thread.cwd = AbsolutePathBuf::from_absolute_path(cwd).unwrap().into();
         thread
     })
     .collect::<Vec<_>>();
@@ -2036,9 +2036,11 @@ async fn shared_overview_shows_only_root_sessions() {
             }
             candidate.updated_at = index;
             candidate.cwd = if index == 0 {
-                test_path_buf("/tmp/project-selected").abs()
+                test_path_buf("/tmp/project-selected").abs().into()
             } else {
-                test_path_buf(&format!("/tmp/project-{}", index % 3)).abs()
+                test_path_buf(&format!("/tmp/project-{}", index % 3))
+                    .abs()
+                    .into()
             };
             candidate
         })
@@ -2658,7 +2660,7 @@ async fn overview_cold_resume_honors_working_directory_selection() -> Result<()>
         .session;
         assert_eq!(
             (app.config.cwd.clone(), observed.cwd),
-            (expected_cwd.clone(), expected_cwd),
+            (expected_cwd.clone(), expected_cwd.into()),
         );
         app_server.shutdown().await?;
     }
@@ -3925,7 +3927,7 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     );
     let owner = BackendId::new();
     app.backend_registry.observe(owner, id);
-    target.cwd = test_path_buf("/tmp/checkout/subdir").abs();
+    target.cwd = test_path_buf("/tmp/checkout/subdir").abs().into();
     app.agents_overview.pins_by_backend =
         [(crate::backend_id::BackendId::new(), Some(Vec::new()))].into();
     let mut view = app.agents_overview_view(vec![target.clone()], Some(id));
@@ -3936,11 +3938,11 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     for grouping_index in 0..3 {
         view.handle_key_event(KeyCode::Char('n').into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd == target.cwd)
+            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd.as_path() == target.cwd.as_path())
         );
         view.handle_key_event(KeyCode::Char('w').into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd == target.cwd)
+            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { backend_id: Some(id), cwd: Some(cwd) }) if id == owner && cwd.as_path() == target.cwd.as_path())
         );
         view.handle_key_event(KeyCode::Char('g').into());
         if grouping_index == 0 {

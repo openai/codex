@@ -145,7 +145,7 @@ impl ChatWidget {
             self.status_line_branch_pending = false;
             self.status_line_branch_lookup_complete = false;
         } else {
-            let cwd = self.status_line_cwd().to_path_buf();
+            let cwd = self.session_cwd().to_path_buf();
             self.sync_status_line_branch_state(&cwd);
             if !self.status_line_branch_lookup_complete {
                 self.request_status_line_branch(cwd);
@@ -157,7 +157,7 @@ impl ChatWidget {
             self.status_line_git_summary_pending = false;
             self.status_line_git_summary_lookup_complete = false;
         } else {
-            let cwd = self.status_line_cwd().to_path_buf();
+            let cwd = self.session_cwd().to_path_buf();
             self.sync_status_line_git_summary_state(&cwd);
             if !self.status_line_git_summary_lookup_complete {
                 self.request_status_line_git_summary(cwd);
@@ -428,7 +428,7 @@ impl ChatWidget {
         if !selections.uses_git_branch() {
             return;
         }
-        let cwd = self.status_line_cwd().to_path_buf();
+        let cwd = self.session_cwd().to_path_buf();
         self.sync_status_line_branch_state(&cwd);
         self.request_status_line_branch(cwd);
     }
@@ -438,7 +438,7 @@ impl ChatWidget {
         if !selections.uses_git_summary() {
             return;
         }
-        let cwd = self.status_line_cwd().to_path_buf();
+        let cwd = self.session_cwd().to_path_buf();
         self.sync_status_line_git_summary_state(&cwd);
         self.request_status_line_git_summary(cwd);
     }
@@ -487,17 +487,16 @@ impl ChatWidget {
             })
     }
 
-    pub(super) fn status_line_cwd(&self) -> &Path {
-        self.current_cwd
-            .as_deref()
-            .unwrap_or(self.config.cwd.as_path())
+    /// Working directory reported by the server, falling back to config during startup.
+    pub(crate) fn session_cwd(&self) -> &PathUri {
+        &self.current_cwd
     }
 
-    pub(super) fn status_line_workspace_cwd(&self) -> &Path {
+    pub(super) fn status_line_workspace_cwd(&self) -> PathBuf {
         self.primary_environment_cwd
             .as_ref()
-            .map(|cwd| Path::new(cwd.path.as_str()))
-            .unwrap_or_else(|| self.status_line_cwd())
+            .map(|cwd| cwd.path.to_path_buf())
+            .unwrap_or_else(|| self.session_cwd().to_path_buf())
     }
 
     fn workspace_directory_display(&self) -> String {
@@ -512,7 +511,7 @@ impl ChatWidget {
                 .as_ref()
                 .is_none_or(|cwd| cwd.is_server_local)
         {
-            format_directory_display(cwd, /*max_width*/ None)
+            format_directory_display(&cwd, /*max_width*/ None)
         } else {
             cwd.display().to_string()
         }
@@ -549,7 +548,14 @@ impl ChatWidget {
 
     /// Returns a cached project-root display name for the active cwd.
     fn status_line_project_root_name(&mut self) -> Option<String> {
-        let cwd = self.status_line_cwd().to_path_buf();
+        if self
+            .remote_connection
+            .as_ref()
+            .is_some_and(|connection| !connection.is_local_daemon)
+        {
+            return None;
+        }
+        let cwd = self.session_cwd().to_abs_path().ok()?.into_path_buf();
         if let Some(cache) = &self.status_line_project_root_name_cache
             && cache.cwd == cwd
         {
@@ -569,14 +575,11 @@ impl ChatWidget {
     /// This prefers the cached project-root name and falls back to the current
     /// directory name when no project root can be inferred.
     fn terminal_title_project_name(&mut self) -> Option<String> {
-        let project = self.status_line_project_root_name().or_else(|| {
-            let cwd = self.status_line_cwd();
-            Some(
-                cwd.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| format_directory_display(cwd, /*max_width*/ None)),
-            )
-        })?;
+        let project = self.status_line_project_root_name().unwrap_or_else(|| {
+            self.session_cwd()
+                .basename()
+                .unwrap_or_else(|| self.session_cwd().inferred_native_path_string())
+        });
         Some(Self::truncate_terminal_title_part(
             project, /*max_chars*/ 24,
         ))

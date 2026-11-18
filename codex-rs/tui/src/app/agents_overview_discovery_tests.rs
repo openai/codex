@@ -342,7 +342,7 @@ async fn overview_local_enter_drops_the_displayed_cloud_list_before_detach() -> 
         "Local saved chat",
         ThreadStatus::Idle,
     );
-    local_row.cwd = local_session.cwd;
+    local_row.cwd = local_session.cwd.into();
 
     let cloud_owner = BackendId::new();
     let cloud_id = ThreadId::new();

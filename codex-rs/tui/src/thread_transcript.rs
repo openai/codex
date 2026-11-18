@@ -20,8 +20,8 @@ use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::items::UserMessageItem;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize as _;
+use std::path::Path;
 
 mod activity_pages;
 mod computer_groups;
@@ -105,7 +105,7 @@ pub(crate) fn thread_to_transcript_cells(
         .flat_map(|turn| {
             let mut cells = thread_items_to_transcript_cells(
                 thread_id,
-                &cwd,
+                cwd.as_path(),
                 turn.items.into_iter().map(|entry| entry.payload),
                 raw_reasoning_visibility,
                 config,
@@ -128,7 +128,7 @@ pub(crate) fn thread_to_transcript_cells(
 
 pub(crate) fn thread_items_to_transcript_cells(
     thread_id: Option<ThreadId>,
-    cwd: &AbsolutePathBuf,
+    cwd: &Path,
     items: impl IntoIterator<Item = ThreadItemPayload>,
     raw_reasoning_visibility: RawReasoningVisibility,
     config: Option<&Config>,
@@ -226,7 +226,7 @@ pub(crate) fn thread_items_to_transcript_cells(
 /// Project one item without changing the active widget or its turn lifecycle.
 fn item_to_cells(
     item: ThreadItemPayload,
-    cwd: &AbsolutePathBuf,
+    cwd: &Path,
     raw_reasoning_visibility: RawReasoningVisibility,
     inline_visualization_context: Option<InlineVisualizationContext>,
 ) -> TranscriptCells {
@@ -272,7 +272,7 @@ fn item_to_cells(
                 item.local_image_paths(),
                 item.image_urls(),
             );
-            cells.push(Arc::new(cell.with_async_replies(replies, cwd.as_path())));
+            cells.push(Arc::new(cell.with_async_replies(replies, cwd)));
         }
         ThreadItemPayload::AgentMessage {
             text,
@@ -280,12 +280,12 @@ fn item_to_cells(
             phase,
             ..
         } => {
-            let parsed = parse_assistant_markdown(&text, cwd.as_path());
+            let parsed = parse_assistant_markdown(&text, cwd);
             if !parsed.visible_markdown.trim().is_empty() {
                 cells.push(Arc::new(
                     AgentMarkdownCell::new_with_inline_visualizations(
                         parsed.visible_markdown,
-                        cwd.as_path(),
+                        cwd,
                         inline_visualization_context,
                     )
                     .with_phase(phase)
@@ -314,10 +314,7 @@ fn item_to_cells(
         }
         ThreadItemPayload::Plan { text, .. } => {
             if !text.trim().is_empty() {
-                cells.push(Arc::new(crate::history_cell::new_proposed_plan(
-                    text,
-                    cwd.as_path(),
-                )));
+                cells.push(Arc::new(crate::history_cell::new_proposed_plan(text, cwd)));
             }
         }
         ThreadItemPayload::Reasoning {
@@ -335,12 +332,8 @@ fn item_to_cells(
                 text.push_str(&content.join("\n\n"));
             }
             if !text.trim().is_empty() {
-                let mut cell = ReasoningSummaryCell::new(
-                    header,
-                    text,
-                    cwd.as_path(),
-                    /*transcript_only*/ true,
-                );
+                let mut cell =
+                    ReasoningSummaryCell::new(header, text, cwd, /*transcript_only*/ true);
                 cell.set_source_item_id(id);
                 cells.push(Arc::new(cell));
             }

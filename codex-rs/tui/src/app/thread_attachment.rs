@@ -26,6 +26,7 @@ pub(crate) enum PreparedAttachment {
     Live(Box<AppServerStartedThread>),
     ReplayOnly {
         thread: Box<Thread>,
+        cwd: Option<codex_utils_path_uri::PathUri>,
         read_only: Option<ReadOnlyThread>,
     },
 }
@@ -247,8 +248,15 @@ pub(super) async fn prepare(
                     "Agent thread {thread_id} is not yet available for replay or live attach."
                 ));
             }
+            let convention = app_server.path_convention();
+            let cwd = match crate::app_server_session::decode_thread_cwd(&thread.cwd, convention) {
+                Ok(cwd) => Some(cwd),
+                Err(error) if convention.is_some() => return Err(error.into()),
+                Err(_) => None,
+            };
             Ok(PreparedAttachment::ReplayOnly {
                 thread: Box::new(thread),
+                cwd,
                 read_only: if crate::session_start::is_archived_session_error(
                     &resume_err,
                     thread_id,

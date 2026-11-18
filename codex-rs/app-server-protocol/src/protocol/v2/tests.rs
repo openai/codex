@@ -324,7 +324,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             recency_at: Some(1),
             status: ThreadStatus::Idle,
             path: None,
-            cwd: absolute_path("tmp"),
+            cwd: absolute_path("tmp").into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Exec,
             can_accept_direct_input: None,
@@ -339,7 +339,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: absolute_path("tmp"),
+        cwd: absolute_path("tmp").into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AskForApproval::OnRequest,
@@ -5162,6 +5162,11 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
 
 #[test]
 fn thread_lifecycle_responses_default_missing_optional_fields() {
+    let cwd = if cfg!(windows) {
+        "/home/alice/repo"
+    } else {
+        r"D:\repo"
+    };
     let response = json!({
         "thread": {
             "id": "thread-id",
@@ -5174,7 +5179,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
             "updatedAt": 1,
             "status": { "type": "idle" },
             "path": null,
-            "cwd": absolute_path_string("tmp"),
+            "cwd": cwd,
             "cliVersion": "0.0.0",
             "source": "exec",
             "agentNickname": null,
@@ -5186,7 +5191,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "model": "gpt-5",
         "modelProvider": "openai",
         "serviceTier": null,
-        "cwd": absolute_path_string("tmp"),
+        "cwd": cwd,
         "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
         "sandbox": { "type": "dangerFullAccess" },
@@ -5200,6 +5205,10 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     let fork: ThreadForkResponse =
         serde_json::from_value(response.clone()).expect("thread/fork response");
 
+    for encoded in [json!(start), json!(resume), json!(fork)] {
+        assert_eq!(encoded["thread"]["cwd"], cwd);
+        assert_eq!(encoded["cwd"], cwd);
+    }
     assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());
     assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(start.thread.recency_at, None);

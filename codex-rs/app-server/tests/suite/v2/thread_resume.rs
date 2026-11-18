@@ -901,7 +901,7 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
     assert_eq!(
         (cwd, runtime_workspace_roots),
-        (initial_cwd.clone(), expected_roots)
+        (initial_cwd.clone().into(), expected_roots)
     );
 
     Ok(())
@@ -1019,7 +1019,7 @@ sandbox = "unelevated"
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
         assert_eq!(
             (resumed.cwd, resumed.runtime_workspace_roots),
-            (expected_cwd.clone(), expected_roots.clone())
+            (expected_cwd.clone().into(), expected_roots.clone())
         );
         if index < 3 {
             mcp.start_turn_and_wait_for_completion(TurnStartParams {
@@ -1236,7 +1236,7 @@ async fn cold_resume_workspace_roots_validate_foreign_startup_paths() -> Result<
             } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
             assert_eq!(
                 (thread.id, cwd, runtime_workspace_roots),
-                (thread_id, local_cwd.clone(), expected_roots)
+                (thread_id, local_cwd.clone().into(), expected_roots)
             );
         } else {
             let error = timeout(
@@ -2930,7 +2930,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.model_provider, "mock_provider");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd.as_path(), cwd.as_path());
-    assert_eq!(cwd, test_absolute_path("/"));
+    assert_eq!(cwd, test_absolute_path("/").into());
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -5211,7 +5211,10 @@ async fn thread_resume_checkpoints_settings_without_advancing_recency() -> Resul
         .await?;
     let ThreadResumeResponse { cwd, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
-    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
+    assert_eq!(
+        cwd,
+        AbsolutePathBuf::from_absolute_path(codex_home.path())?.into()
+    );
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {

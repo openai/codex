@@ -195,7 +195,7 @@ impl TaskSearch {
                     thread_id: thread.id,
                     title,
                     label_style,
-                    cwd: thread.cwd.to_string_lossy().into_owned(),
+                    cwd: thread.cwd.into_string(),
                     snippet: result.snippet,
                 })
             })

@@ -2,6 +2,26 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_thread_store::ThreadStoreError;
 use pretty_assertions::assert_eq;
 
+#[cfg(unix)]
+#[test]
+fn thread_cwd_rejects_invalid_utf8() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(OsStr::from_bytes(
+        b"/workspace-\xFF",
+    ))
+    .expect("absolute native path");
+    assert_eq!(
+        super::thread_cwd_for_api(&cwd).expect_err("cwd cannot be represented as a wire string"),
+        JSONRPCErrorError {
+            code: crate::error_code::INTERNAL_ERROR_CODE,
+            message: "cannot encode thread cwd: path contains invalid UTF-8".into(),
+            data: None,
+        }
+    );
+}
+
 #[test]
 fn storage_failure_classification_does_not_change_mutation_error_policy() {
     for error in [

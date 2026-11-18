@@ -3609,7 +3609,10 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
         mcp.read_notification("thread/settings/updated"),
     )
     .await??;
-    assert_eq!(settings_updated.thread_settings.cwd, second_cwd.abs());
+    assert_eq!(
+        settings_updated.thread_settings.cwd,
+        second_cwd.abs().into()
+    );
 
     let command_exec_item = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {

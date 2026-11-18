@@ -36,7 +36,7 @@ async fn resumed_initial_messages_render_history() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -90,7 +90,7 @@ async fn resumed_initial_messages_render_history() {
     chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     chat.show_welcome_banner = false;
     chat.local_settings.tui.show_tooltips = false;
-    chat.config.cwd = configured.cwd.clone();
+    chat.config.cwd = configured.cwd.to_abs_path().ok().unwrap();
     chat.transcript.active_cell = Some(ChatWidget::placeholder_session_header_cell(&chat.config));
     configured.thread_id = ThreadId::new();
     chat.handle_thread_session(configured);
@@ -201,7 +201,7 @@ async fn restored_conversation_ultra_remains_selected_after_switching_to_plan() 
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
@@ -527,7 +527,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -603,7 +603,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -709,7 +709,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
-        cwd: expected_cwd.clone(),
+        cwd: expected_cwd.clone().into(),
         runtime_workspace_roots: vec![expected_cwd.clone()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -734,8 +734,8 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.handle_manage_skills_closed();
     assert!(matches!(
         ops.try_recv(),
-        Ok(AppCommand::ListSkills { cwds, force_reload: true })
-            if cwds == vec![expected_cwd.to_path_buf()]
+        Ok(AppCommand::ListSkills { cwd, force_reload: true })
+            if cwd == PathUri::from_abs_path(&expected_cwd)
     ));
 
     let updated_profile = PermissionProfile::workspace_write();
@@ -791,7 +791,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: session_permission_profile.clone(),
         active_permission_profile: None,
-        cwd: session_cwd.clone(),
+        cwd: session_cwd.clone().into(),
         runtime_workspace_roots: session_runtime_workspace_roots.clone(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -839,7 +839,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/external").abs(),
+        cwd: test_path_buf("/home/user/external").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -882,7 +882,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -946,7 +946,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1307,7 +1307,7 @@ async fn replayed_reasoning_item_preserves_summary_parts_and_hides_raw_reasoning
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_project_path().abs(),
+        cwd: test_project_path().abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -1362,7 +1362,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_project_path().abs(),
+        cwd: test_project_path().abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,

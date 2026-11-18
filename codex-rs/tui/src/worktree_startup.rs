@@ -191,7 +191,7 @@ pub(super) async fn prepare(
         shutdown?;
         cli.fork_session_id = Some(thread.id);
         if cli.cwd.is_none() {
-            let cwd = latest_thread_cwd(thread.path, thread.cwd.into_path_buf()).await;
+            let cwd = latest_thread_cwd(thread.path, PathBuf::from(thread.cwd.into_string())).await;
             let cwd = AbsolutePathBuf::from_absolute_path(cwd)?;
             let bootstrap = load_bootstrap_config_or_exit(
                 &source.codex_home,

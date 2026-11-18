@@ -983,7 +983,7 @@ impl App {
                 if !enter {
                     self.side_companions
                         .entry(child_thread_id)
-                        .or_insert_with(|| SideCompanion::empty(forked.session.cwd.clone()));
+                        .or_insert_with(|| SideCompanion::empty(forked.session.cwd.to_path_buf()));
                 }
                 let channel = self.ensure_thread_channel(child_thread_id);
                 channel.backend_id = Some(app_server.backend_id());

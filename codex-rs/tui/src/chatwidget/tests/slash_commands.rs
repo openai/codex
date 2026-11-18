@@ -3389,6 +3389,11 @@ async fn slash_pwd_and_cwd_alias_display_current_working_directory_from_composer
     let mut output = Vec::new();
     for (command, side) in [("/pwd", false), ("/cwd", true), ("/pwd x", false)] {
         let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        if side {
+            chat.current_cwd =
+                PathUri::try_from(LegacyAppPathString::from_string(r"D:\workspace\remote"))
+                    .expect("absolute server path");
+        }
         chat.set_side_conversation_active(side);
         chat.bottom_pane.set_task_running(!side);
         chat.bottom_pane
@@ -3400,7 +3405,7 @@ async fn slash_pwd_and_cwd_alias_display_current_working_directory_from_composer
     }
     insta::assert_snapshot!(output.join(""), @r"
 • Current working directory: /tmp/project
-• Current working directory: /tmp/project
+• Current working directory: D:\workspace\remote
 ■ Usage: /pwd
 ");
 }

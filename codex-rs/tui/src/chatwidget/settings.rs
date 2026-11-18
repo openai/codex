@@ -534,12 +534,23 @@ impl ChatWidget {
 
     fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
         self.invalidate_permission_discovery();
-        let cwd_changed = self.config.cwd != settings.cwd;
         if let Some(environments) = &settings.environments {
             self.primary_environment_cwd =
                 crate::session_state::primary_environment_cwd(environments);
         }
-        self.apply_thread_settings_cwd(settings.cwd.clone());
+        let Ok(cwd) = crate::app_server_session::decode_thread_cwd(
+            &settings.cwd,
+            self.app_server_path_convention,
+        ) else {
+            tracing::warn!("Invalid cwd in thread settings");
+            return;
+        };
+        let cwd_changed = self.current_cwd != cwd;
+        self.status_line_project_root_name_cache = None;
+        if let Ok(local) = cwd.to_abs_path() {
+            self.apply_thread_settings_cwd(local);
+        }
+        self.current_cwd = cwd;
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_daybreak_enabled(self.daybreak_enabled);
         self.set_service_tier(settings.service_tier.clone());
@@ -614,9 +625,6 @@ impl ChatWidget {
         if previous_cwd != cwd {
             self.permission_discovery = None;
         }
-        self.current_cwd = Some(cwd.to_path_buf());
-        self.status_line_project_root_name_cache = None;
-
         if !self.config.workspace_roots.contains(&previous_cwd) {
             return;
         }

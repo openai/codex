@@ -415,7 +415,7 @@ async fn live_center_pages_visible_rows_without_wrapping() {
                 );
                 thread.updated_at -= index as i64;
                 if index >= 10 {
-                    thread.cwd = test_path_buf("/tmp/second-project").abs();
+                    thread.cwd = test_path_buf("/tmp/second-project").abs().into();
                 }
                 thread
             })
@@ -477,7 +477,9 @@ async fn live_center_navigates_sections() {
                 ThreadStatus::Idle,
             );
             thread.updated_at -= index as i64;
-            thread.cwd = test_path_buf(&format!("/tmp/project-{}", index / 2)).abs();
+            thread.cwd = test_path_buf(&format!("/tmp/project-{}", index / 2))
+                .abs()
+                .into();
             thread
         })
         .collect();

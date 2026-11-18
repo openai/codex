@@ -281,7 +281,7 @@ impl ChatWidget {
                         self.bottom_pane.status_elapsed().unwrap_or_default(),
                     )
                 }),
-            cwd: self.config.cwd.clone(),
+            cwd: self.session_cwd().to_path_buf(),
             visualizations,
         };
         (stream, display)

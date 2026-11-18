@@ -267,20 +267,24 @@ impl App {
     /// app-server RPC finishes. User-initiated skills refreshes still use the blocking app command path so
     /// callers that explicitly asked for fresh skill state do not race ahead of their own refresh.
     pub(super) fn refresh_startup_skills(&mut self, app_server: &AppServerSession) {
-        if app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud {
+        // A remote session refreshes its skills when thread/start supplies its cwd.
+        if app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud
+            || (app_server.thread_params_mode() == crate::ThreadParamsMode::Remote
+                && self.chat_widget.thread_id().is_none())
+        {
             self.skill_load_warnings.startup_complete = true;
             return;
         }
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        let cwd = self.config.cwd.to_path_buf();
+        let cwd = self.chat_widget.session_cwd().clone();
         tokio::spawn(async move {
             let request_id = RequestId::String(format!("startup-skills-list-{}", Uuid::new_v4()));
             let result = fetch_skills_list(
                 request_handle,
                 request_id,
                 SkillsListParams {
-                    cwds: vec![cwd.clone()],
+                    cwds: vec![cwd.to_path_buf()],
                     force_reload: true,
                 },
             )

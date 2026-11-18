@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -186,6 +187,16 @@ impl LegacyAppPathString {
         } else {
             None
         }
+    }
+
+    /// Borrows the API string as a path without validating it for this host.
+    pub fn as_path(&self) -> &Path {
+        Path::new(&self.0)
+    }
+
+    /// Copies the API path text into a path buffer without normalization.
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.as_path().to_owned()
     }
 
     pub fn as_str(&self) -> &str {

@@ -81,7 +81,7 @@ stream_max_retries = 0
                 app_server.remote_cwd_override = Some(remote_cwd.to_path_buf());
                 let started = app_server.start_thread(&client_config).await?;
                 let thread_id = started.session.thread_id;
-                assert_eq!(started.session.cwd, remote_cwd);
+                assert_eq!(started.session.cwd, remote_cwd.clone().into());
                 assert_eq!(started.session.runtime_workspace_roots, expected_roots);
 
                 let (mut chat, _sender, _events, _commands) =
@@ -178,7 +178,7 @@ stream_max_retries = 0
                 app_server.remote_cwd_override = None;
                 let started = app_server.start_thread(&client_config).await?;
                 let default_cwd = AbsolutePathBuf::current_dir()?;
-                assert_eq!(started.session.cwd, default_cwd);
+                assert_eq!(started.session.cwd, default_cwd.clone().into());
                 assert_eq!(started.session.runtime_workspace_roots, vec![default_cwd]);
                 app_server.shutdown().await?;
                 Ok(())

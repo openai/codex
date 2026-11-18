@@ -372,7 +372,7 @@ async fn embedded_session_switch_routes_background_approval_and_restores_draft()
     app.start_agents_overview_session(
         &mut tui,
         &mut server,
-        Some(cwd.clone().abs()),
+        Some(cwd.clone()),
         /*managed_worktree*/ None,
         /*startup_draft*/ None,
     )
@@ -387,7 +387,7 @@ async fn embedded_session_switch_routes_background_approval_and_restores_draft()
     app.start_agents_overview_session(
         &mut tui,
         &mut server,
-        Some(cwd.abs()),
+        Some(cwd),
         /*managed_worktree*/ None,
         /*startup_draft*/ None,
     )
@@ -547,10 +547,13 @@ stream_max_retries = 0
             crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
         )
         .await?;
-    for cwd in [&app.config.cwd, &other.session.cwd] {
+    for cwd in [
+        app.config.cwd.to_path_buf(),
+        other.session.cwd.to_path_buf(),
+    ] {
         crate::legacy_core::config::set_project_trust_level(
             app.config.codex_home.as_path(),
-            cwd.as_path(),
+            &cwd,
             codex_protocol::config_types::TrustLevel::Trusted,
         )
         .map_err(std::io::Error::other)?;

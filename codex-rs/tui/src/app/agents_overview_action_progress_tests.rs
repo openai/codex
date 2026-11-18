@@ -34,7 +34,7 @@ async fn modal_consumes_input_and_finishes_after_input_closes() -> color_eyre::R
                 .expect("materialize task"),
             )?;
             let mut thread = server.thread_read(id, /*include_turns*/ false).await?;
-            thread.cwd = test_path_buf("/tmp/project").abs();
+            thread.cwd = test_path_buf("/tmp/project").abs().into();
             app.agents_overview.threads.insert(id, Some(thread));
         }
         let threads = app

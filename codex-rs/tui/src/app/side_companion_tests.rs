@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 
 #[test]
 fn buffered_answer_requires_a_paint_before_wheel_input() {
-    let cwd = AbsolutePathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+    let cwd = std::env::current_dir().unwrap();
     let mut pane = SideCompanion::empty(cwd);
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 4,

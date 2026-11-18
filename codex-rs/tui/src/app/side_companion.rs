@@ -14,7 +14,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::items::AsyncUserInputQuestion;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -59,7 +59,7 @@ impl SideCompanion {
                 .can_scroll_without_refresh(&self.cells, /*live_key*/ None)
     }
 
-    pub(super) fn empty(cwd: AbsolutePathBuf) -> Self {
+    pub(super) fn empty(cwd: PathBuf) -> Self {
         Self {
             display: CapturedSideDisplay {
                 rendered_completion_turn_ids: Default::default(),

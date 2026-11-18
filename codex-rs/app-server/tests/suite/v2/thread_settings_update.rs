@@ -87,8 +87,8 @@ url = "ws://127.0.0.1:2"
     let started: ThreadStartResponse = mcp.read_response(request_id).await?;
     let environment_a = ThreadEnvironment {
         environment_id: "remote-a".to_string(),
-        cwd: started.cwd.clone().into(),
-        runtime_workspace_roots: vec![started.cwd.clone().into()],
+        cwd: started.cwd.clone(),
+        runtime_workspace_roots: vec![started.cwd.clone()],
     };
     let environment_b = ThreadEnvironment {
         environment_id: "remote-b".to_string(),

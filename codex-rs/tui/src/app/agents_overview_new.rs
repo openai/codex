@@ -42,7 +42,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
     ) -> Result<AppRunControl> {
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             return Ok(AppRunControl::Continue);
@@ -59,13 +59,10 @@ impl App {
                     StartupDraftSessionAction::NewWhileRunning,
                 ))
             });
-        let mut display_config = self.chat_widget.config_ref().clone();
-        if let Some(cwd) = cwd.as_ref() {
-            display_config.cwd = cwd.clone();
-        }
         draft.apply_settings(
-            &crate::local_settings::LocalSettings::from(&display_config),
-            display_config.cwd.as_path(),
+            &crate::local_settings::LocalSettings::from(self.chat_widget.config_ref()),
+            cwd.as_deref()
+                .unwrap_or(&self.chat_widget.session_cwd().to_path_buf()),
         );
         draft.show(tui)?;
         // Keep the large session-start future off the TUI's stack in dev builds.
@@ -97,7 +94,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
         managed_worktree: Option<(
             codex_worktree::WorktreeManager,
             codex_worktree::ManagedWorktree,
@@ -207,15 +204,16 @@ impl App {
                 .insert(thread_id, selected.profile_id);
         }
         if let Some((manager, checkout)) = &managed_worktree {
-            let result =
-                if crate::session_resume::cwds_differ(started.session.cwd.as_path(), &checkout.cwd)
-                {
-                    Err(anyhow::anyhow!(
-                        "The server did not apply the worktree directory."
-                    ))
-                } else {
-                    manager.bind_thread(&checkout.root, &thread_id.to_string())
-                };
+            let result = if crate::session_resume::cwds_differ(
+                &started.session.cwd.to_path_buf(),
+                &checkout.cwd,
+            ) {
+                Err(anyhow::anyhow!(
+                    "The server did not apply the worktree directory."
+                ))
+            } else {
+                manager.bind_thread(&checkout.root, &thread_id.to_string())
+            };
             if let Err(error) = result {
                 let _ = app_server.thread_unsubscribe(thread_id).await;
                 self.agents_overview_retained_worktree_error(checkout, /*title*/ None, error);
@@ -273,7 +271,12 @@ impl App {
             return;
         }
         let Some((config, _)) = self
-            .agents_overview_session_config(tui, app_server, cwd, /*startup_draft*/ None)
+            .agents_overview_session_config(
+                tui,
+                app_server,
+                cwd.map(Into::into),
+                /*startup_draft*/ None,
+            )
             .await
         else {
             return;

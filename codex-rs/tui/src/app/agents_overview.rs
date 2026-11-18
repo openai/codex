@@ -1256,7 +1256,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
         mut startup_draft: Option<&mut StartupDraftPump>,
     ) -> Option<(Config, Option<PathBuf>)> {
         if self
@@ -1269,17 +1269,12 @@ impl App {
             );
             return None;
         }
-        let remote = app_server.uses_remote_workspace();
-        let remote_cwd = cwd
-            .as_ref()
-            .filter(|_| remote)
-            .map(AbsolutePathBuf::to_path_buf);
-        let local_cwd = if remote {
-            self.config.cwd.to_path_buf()
+        let (local_cwd, remote_cwd) = if app_server.uses_remote_workspace() {
+            (self.config.cwd.to_path_buf(), cwd)
         } else {
-            cwd.map_or_else(
-                || self.chat_widget.config_ref().cwd.to_path_buf(),
-                |cwd| cwd.to_path_buf(),
+            (
+                cwd.unwrap_or_else(|| self.chat_widget.session_cwd().to_path_buf()),
+                None,
             )
         };
         let mut config = match StartupDraftPump::run_with_optional_draft(

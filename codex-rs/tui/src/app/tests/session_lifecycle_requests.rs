@@ -50,6 +50,35 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 
 #[tokio::test]
+async fn diff_result_matches_the_server_session_cwd() -> Result<()> {
+    use codex_utils_path_uri::LegacyAppPathString;
+    use codex_utils_path_uri::PathUri;
+
+    let mut app = make_test_app().await;
+    let (client, _commands, _events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::ThreadParamsMode::Cloud,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let foreign_cwd = if cfg!(windows) { "/repo" } else { r"D:\repo" };
+    let cwd = PathUri::try_from(LegacyAppPathString::from_string(foreign_cwd))?;
+    let mut session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    session.cwd = cwd.clone();
+    app.chat_widget.handle_thread_session(session);
+    let stale = AppEvent::DiffResult(app.config.cwd.clone().into(), "old diff".into());
+    Box::pin(app.handle_event(&mut tui, &mut server, stale)).await?;
+    assert!(app.overlay.is_none());
+
+    let current = AppEvent::DiffResult(cwd, "current diff".into());
+    Box::pin(app.handle_event(&mut tui, &mut server, current)).await?;
+    assert!(app.overlay.is_some());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cloud_skips_skills_refresh_and_ignores_stale_local_result() -> Result<()> {
     use futures::FutureExt;
 
@@ -74,7 +103,7 @@ async fn cloud_skips_skills_refresh_and_ignores_stale_local_result() -> Result<(
     for event in [
         AppEvent::CodexOp(refresh),
         AppEvent::SkillsListLoaded {
-            cwd,
+            cwd: app.config.cwd.clone().into(),
             result: Err("stale local skills refresh".into()),
         },
     ] {
@@ -401,7 +430,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
         "Original",
         ThreadStatus::Idle,
     );
-    original_thread.cwd = app.config.cwd.clone();
+    original_thread.cwd = app.config.cwd.clone().into();
     original_thread.turns = vec![test_turn(
         turn_id,
         TurnStatus::Completed,
@@ -415,7 +444,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             active_flags: Vec::new(),
         },
     );
-    other_thread.cwd = app.config.cwd.clone();
+    other_thread.cwd = app.config.cwd.clone().into();
     other_thread.turns = vec![ongoing_turn];
 
     let (client, mut commands, _server_events) =
@@ -5999,18 +6028,18 @@ async fn change_directory_scenario() -> Result<()> {
     let earlier_skills_requests = recorded_params(&requests, "skills/list");
     app.submit_active_thread_op(
         &mut server,
-        AppCommand::list_skills(vec![current.clone()], /*force_reload*/ true),
+        AppCommand::list_skills(current.clone().abs().into(), /*force_reload*/ true),
     )
     .await?;
     assert_eq!(
         recorded_params(&requests, "skills/list"),
         earlier_skills_requests
     );
-    let (cwd, result) = (current.clone(), Err("stale skills".into()));
+    let (cwd, result) = (current.clone().abs().into(), Err("stale skills".into()));
     let skills = AppEvent::SkillsListLoaded { cwd, result };
     let (cwd, plugins) = (current.clone(), Some(vec![]));
     let plugins = AppEvent::PluginMentionsLoaded { cwd, plugins };
-    let diff = AppEvent::DiffResult(current.clone(), "stale diff".to_string());
+    let diff = AppEvent::DiffResult(current.clone().abs().into(), "stale diff".to_string());
     let branch = AppEvent::SyncThreadGitBranch {
         thread_id: original,
         branch: "stale".to_string(),
@@ -6051,7 +6080,7 @@ async fn change_directory_scenario() -> Result<()> {
     let found = |id: ThreadId| removed.iter().any(|p| p["threadId"] == id.to_string());
     assert!([original, child].into_iter().all(found));
     let retained = server.thread_read(original, /*include_turns*/ false);
-    assert_eq!(retained.await?.cwd, current.abs().canonicalize()?);
+    assert_eq!(retained.await?.cwd, current.abs().canonicalize()?.into());
     assert_eq!(app.chat_widget.config_ref().cwd, trusted.clone().abs());
     assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("SessionStart"));
     app.chat_widget

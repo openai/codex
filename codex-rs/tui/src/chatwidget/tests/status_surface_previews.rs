@@ -565,6 +565,17 @@ async fn missing_project_root_uses_different_status_and_title_preview_sources() 
 
     assert_eq!(status_preview, "my-project");
     assert_eq!(title_preview, "project");
+
+    chat.remote_connection = crate::status::remote_connection::remote_connection_status_value(
+        &crate::AppServerTarget::Cloud,
+        /*server_version*/ None,
+    );
+    chat.current_cwd = PathUri::try_from(LegacyAppPathString::from_string(r"D:\workspace\remote"))
+        .expect("absolute server path");
+    assert_snapshot!(
+        title_preview_line(&mut chat, &[TerminalTitleItem::Project]),
+        @"remote"
+    );
 }
 
 #[tokio::test]

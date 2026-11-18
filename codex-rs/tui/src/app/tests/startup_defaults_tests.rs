@@ -702,15 +702,13 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         )
         .await?;
         assert_eq!(started.session.model, selected_model);
+        let cwd = started.session.cwd.to_path_buf();
         assert!(
             !started
                 .session
                 .permission_profile
                 .file_system_sandbox_policy()
-                .can_write_local_path_with_cwd(
-                    started.session.cwd.as_path(),
-                    started.session.cwd.as_path()
-                )
+                .can_write_local_path_with_cwd(&cwd, &cwd)
         );
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), if remote { 1 } else { 2 });

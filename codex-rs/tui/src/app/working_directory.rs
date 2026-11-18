@@ -493,7 +493,7 @@ impl App {
                     == config.permissions.active_permission_profile()
         };
         if session.thread_id == thread_id
-            || crate::session_resume::cwds_differ(session.cwd.as_path(), cwd.as_path())
+            || crate::session_resume::cwds_differ(&session.cwd.to_path_buf(), cwd.as_path())
             || session.runtime_workspace_roots != config.workspace_roots
             || !permissions_match
         {

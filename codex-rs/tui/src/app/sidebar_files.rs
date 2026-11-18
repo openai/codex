@@ -315,7 +315,7 @@ impl App {
                     .as_ref()
                     .is_none_or(|environment| environment.is_server_local);
             let cwd = if inspect_local_paths {
-                Some(PathUri::from_abs_path(&session.cwd))
+                Some(session.cwd.clone())
             } else {
                 session
                     .primary_environment_cwd

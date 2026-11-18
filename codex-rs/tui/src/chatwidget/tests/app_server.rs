@@ -17,7 +17,7 @@ fn thread_settings_for_test(
         thread_settings: codex_app_server_protocol::ThreadSettings {
             disabled_plugin_ids: Vec::new(),
             environments: None,
-            cwd: test_path_buf("/tmp/thread-settings").abs(),
+            cwd: test_path_buf("/tmp/thread-settings").abs().into(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -65,7 +65,7 @@ pub(super) fn configured_thread_session(
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/tmp/thread-settings").abs(),
+        cwd: test_path_buf("/tmp/thread-settings").abs().into(),
         runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -693,7 +693,7 @@ async fn statusline_workspace_follows_primary_executor_and_legacy_settings() {
     let id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(id));
     let mut update = thread_settings_for_test("gpt-5.2", id);
-    let host = update.thread_settings.cwd.to_string_lossy().into_owned();
+    let host = update.thread_settings.cwd.to_string();
     let remote = r"C:\executor\checkout";
     let primary = codex_app_server_protocol::ThreadEnvironment {
         environment_id: "remote".into(),
@@ -763,7 +763,7 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
-    session.cwd = test_path_buf("/tmp/original-workspace").abs();
+    session.cwd = test_path_buf("/tmp/original-workspace").abs().into();
     session.thread_settings_confirmed = false;
     chat.handle_thread_session(session);
     chat.config.permissions.approval_policy =
@@ -776,11 +776,20 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     });
     let _ = drain_insert_history(&mut rx);
 
+    let remote_cwd = if cfg!(windows) {
+        "/home/alice/repo"
+    } else {
+        r"D:\repo"
+    };
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.cwd =
+        codex_utils_path_uri::LegacyAppPathString::from_string(remote_cwd);
     chat.handle_server_notification(
-        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-5.4", thread_id)),
+        ServerNotification::ThreadSettingsUpdated(notification),
         /*replay_kind*/ None,
     );
 
+    assert_eq!(chat.session_cwd().inferred_native_path_string(), remote_cwd);
     assert_ne!(chat.connector_scope_generation(), previous_generation);
     assert!(chat.connectors_for_mentions().is_none());
     assert!(chat.connectors.mention_refresh_in_flight);

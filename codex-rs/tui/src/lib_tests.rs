@@ -597,7 +597,7 @@ async fn startup_resume_and_fork_use_configured_or_explicit_cwd() -> color_eyre:
         };
 
         assert!(!session_resume::cwds_differ(
-            started.session.cwd.as_path(),
+            &started.session.cwd.to_path_buf(),
             &expected_cwd,
         ));
         app_server.shutdown().await?;

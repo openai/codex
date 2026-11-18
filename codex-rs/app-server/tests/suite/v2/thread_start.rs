@@ -575,7 +575,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(req_id)).await??;
 
-    assert_eq!(response_cwd, cwd.abs());
+    assert_eq!(response_cwd, cwd.abs().into());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
     #[cfg(windows)]
     let _ = sandbox;

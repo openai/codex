@@ -53,7 +53,7 @@ pub(crate) struct ThreadSessionState {
     /// Named or implicit built-in profile that produced `permission_profile`,
     /// when the server knows it.
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) cwd: PathUri,
     /// Native cwd of the primary executor, which can differ from the app-server cwd.
     pub(crate) primary_environment_cwd: Option<EnvironmentCwd>,
     pub(crate) runtime_workspace_roots: Vec<AbsolutePathBuf>,
@@ -90,11 +90,12 @@ impl ThreadSessionState {
         self.forked_from_id = parent;
     }
 
-    pub(crate) fn set_cwd_retargeting_implicit_runtime_workspace_root(
-        &mut self,
-        cwd: AbsolutePathBuf,
-    ) {
-        let previous_cwd = std::mem::replace(&mut self.cwd, cwd.clone());
+    pub(crate) fn set_cwd_retargeting_implicit_runtime_workspace_root(&mut self, cwd: PathUri) {
+        let previous_cwd = std::mem::replace(&mut self.cwd, cwd);
+        let (Ok(previous_cwd), Ok(cwd)) = (previous_cwd.to_abs_path(), self.cwd.to_abs_path())
+        else {
+            return;
+        };
         if !self.runtime_workspace_roots.contains(&previous_cwd) {
             return;
         }

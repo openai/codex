@@ -17,7 +17,7 @@ use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ pub(super) struct AgentsOverviewDetails {
     pub(super) latest_prompt: Option<String>,
     pub(super) lines: Vec<Line<'static>>,
     pub(super) usage_lines: Vec<Line<'static>>,
-    pub(super) last_message: Option<(String, AbsolutePathBuf)>,
+    pub(super) last_message: Option<(String, LegacyAppPathString)>,
 }
 
 pub(super) fn preview_text(text: &str) -> String {

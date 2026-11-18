@@ -204,7 +204,7 @@ pub(crate) fn new_session_info(
     let header = SessionHeaderHistoryCell::new(
         model_display_name.to_string(),
         session.reasoning_effort.clone(),
-        config.cwd.to_path_buf(),
+        session.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
     .with_yolo_mode(has_yolo_permissions(

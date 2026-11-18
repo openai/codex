@@ -270,7 +270,7 @@ pub(super) struct HistorySearch {
 
 pub(super) fn matches_query(thread: &Thread, query: &str) -> bool {
     let name = thread.name.as_deref().unwrap_or_default();
-    let cwd = thread.cwd.display();
+    let cwd = &thread.cwd;
     format!("{name} {} {cwd}", thread.preview)
         .to_lowercase()
         .contains(query)

@@ -351,7 +351,7 @@ async fn start_listener(
         .await;
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
-    let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
+    let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot).ok();
     let thread_state = Arc::clone(listener_state.state());
     let (mut listener_command_rx, listener_generation, mut unloading_state, attached) = {
         let (created, connection_ids, raw_events_enabled) = match &startup {
@@ -1258,7 +1258,13 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     let config_snapshot = pending.config_snapshot;
     let sandbox = config_snapshot.sandbox_policy().into();
-    let cwd = config_snapshot.cwd().clone();
+    let cwd = match thread_cwd_for_api(config_snapshot.cwd()) {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+    };
     let ThreadConfigSnapshot {
         model,
         disabled_plugin_ids,

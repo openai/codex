@@ -196,7 +196,9 @@ pub struct ThreadStartResponse {
     /// Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    #[schemars(with = "AbsolutePathBuf")]
+    #[ts(as = "AbsolutePathBuf")]
+    pub cwd: LegacyAppPathString,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
@@ -314,7 +316,9 @@ pub struct ThreadSettings {
     /// Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    #[schemars(with = "AbsolutePathBuf")]
+    #[ts(as = "AbsolutePathBuf")]
+    pub cwd: LegacyAppPathString,
     /// Environments configured for future turns, in priority order, primary first.
     /// `null` means the server does not expose the selection; [] means none are selected.
     #[experimental("thread/settings.environments")]
@@ -455,7 +459,9 @@ pub struct ThreadResumeResponse {
     /// Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    #[schemars(with = "AbsolutePathBuf")]
+    #[ts(as = "AbsolutePathBuf")]
+    pub cwd: LegacyAppPathString,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
@@ -672,7 +678,9 @@ pub struct ThreadForkResponse {
     /// Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    #[schemars(with = "AbsolutePathBuf")]
+    #[ts(as = "AbsolutePathBuf")]
+    pub cwd: LegacyAppPathString,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]

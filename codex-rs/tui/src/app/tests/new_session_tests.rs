@@ -559,7 +559,7 @@ async fn widget_replacement_preserves_mention_usage_with_history_disabled() -> R
         /*initial_user_message*/ None,
     );
     app.replace_chat_widget(ChatWidget::new_with_app_event(init));
-    app.chat_widget.set_skills_from_response(&skills);
+    app.chat_widget.set_skills_from_response(skills.clone());
     app.chat_widget.insert_str("$status");
     app.chat_widget.handle_key_event(KeyCode::Enter.into());
 
@@ -569,7 +569,7 @@ async fn widget_replacement_preserves_mention_usage_with_history_disabled() -> R
         /*initial_user_message*/ None,
     );
     app.replace_chat_widget(ChatWidget::new_with_app_event(init));
-    app.chat_widget.set_skills_from_response(&skills);
+    app.chat_widget.set_skills_from_response(skills);
     app.chat_widget.insert_str("$stat");
     insta::assert_snapshot!(normalize_snapshot_paths(render_bottom_popup(
         &app.chat_widget,

@@ -169,12 +169,12 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
     let token = resumed.token;
     chat.primary_environment_cwd = Some(crate::session_state::EnvironmentCwd {
-        path: LegacyAppPathString::from_path(chat.config.cwd.join("executor-checkout").as_path()),
+        path: chat.config.cwd.join("executor-checkout").into(),
         is_server_local: false,
     });
     chat.refresh_status_line();
     assert!(read_events(&mut rx).is_empty());
-    chat.current_cwd = Some(chat.config.cwd.join("another-project").to_path_buf());
+    chat.current_cwd = chat.config.cwd.join("another-project").into();
     let (reply, snapshot) = oneshot::channel();
     chat.handle_statusline_read(
         StatuslineReadEvent {

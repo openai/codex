@@ -6,6 +6,8 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::backend_id::BackendId;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_protocol::ThreadId;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::Platform;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -62,6 +64,11 @@ impl BackendRegistry {
 
     pub(super) fn disconnect(&mut self, owner: BackendId) {
         self.connections.remove(&owner);
+    }
+
+    pub(super) fn thread_path_convention(&self, thread_id: ThreadId) -> Option<PathConvention> {
+        let handle = self.connections.get(&self.owner(thread_id)?)?;
+        Platform::from_platform_os(handle.platform_os()).path_convention()
     }
 
     pub(super) fn request_handle(&self, owner: BackendId) -> Option<AppServerRequestHandle> {

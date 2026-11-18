@@ -11,11 +11,11 @@ use crate::multi_agents;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::WebSearchAction;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize as _;
+use std::path::Path;
 use std::sync::Arc;
 
-pub(super) fn cells(item: ThreadItemPayload, cwd: &AbsolutePathBuf) -> TranscriptCells {
+pub(super) fn cells(item: ThreadItemPayload, cwd: &Path) -> TranscriptCells {
     let mut cells: TranscriptCells = Vec::new();
     match item {
         ThreadItemPayload::FileChange {
@@ -25,11 +25,8 @@ pub(super) fn cells(item: ThreadItemPayload, cwd: &AbsolutePathBuf) -> Transcrip
         } => match status {
             PatchApplyStatus::Completed if !changes.is_empty() => {
                 cells.push(Arc::new(
-                    history_cell::new_patch_event(
-                        file_update_changes_to_display(changes),
-                        cwd.as_path(),
-                    )
-                    .with_activity_id(id),
+                    history_cell::new_patch_event(file_update_changes_to_display(changes), cwd)
+                        .with_activity_id(id),
                 ));
             }
             PatchApplyStatus::Completed => {}

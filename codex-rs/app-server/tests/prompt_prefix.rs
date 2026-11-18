@@ -110,7 +110,7 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         let environment = app.auto_env_params()?;
         for (value, replacement) in [
             (environment.cwd.as_str(), "<ENVIRONMENT_CWD>"),
-            (thread.cwd.to_string_lossy().as_ref(), "<CWD>"),
+            (thread.cwd.as_str(), "<CWD>"),
             (home.path().to_string_lossy().as_ref(), "<CODEX_HOME>"),
             (thread.id.as_str(), "<THREAD_ID>"),
             (thread.session_id.as_str(), "<SESSION_ID>"),

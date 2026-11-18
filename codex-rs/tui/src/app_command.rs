@@ -20,6 +20,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_utils_path_uri::PathUri;
 use serde::Serialize;
 use serde::Serializer;
 use serde_json::Value;
@@ -188,7 +189,7 @@ pub(crate) enum AppCommand {
     },
     ReloadUserConfig,
     ListSkills {
-        cwds: Vec<PathBuf>,
+        cwd: PathUri,
         force_reload: bool,
     },
     Compact,
@@ -357,8 +358,8 @@ impl AppCommand {
         Self::ReloadUserConfig
     }
 
-    pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
-        Self::ListSkills { cwds, force_reload }
+    pub(crate) fn list_skills(cwd: PathUri, force_reload: bool) -> Self {
+        Self::ListSkills { cwd, force_reload }
     }
 
     pub(crate) fn compact() -> Self {

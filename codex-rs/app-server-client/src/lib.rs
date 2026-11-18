@@ -382,6 +382,17 @@ pub enum AppServerRequestHandle {
     Remote(crate::remote::RemoteAppServerRequestHandle),
 }
 
+impl AppServerRequestHandle {
+    /// Operating system reported by the app-server that serves these requests.
+    pub fn platform_os(&self) -> Option<&str> {
+        match self {
+            Self::InProcess(_) => Some(std::env::consts::OS),
+            Self::Remote(client) => client.platform_os.as_deref(),
+            Self::Cloud(_) => None,
+        }
+    }
+}
+
 pub enum AppServerClient {
     Cloud(CloudClient),
     InProcess(InProcessAppServerClient),

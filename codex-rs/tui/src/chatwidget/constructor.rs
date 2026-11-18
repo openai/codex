@@ -69,7 +69,7 @@ impl ChatWidget {
         let header = Self::placeholder_session_header_cell(&config);
         let active_cell = Some(header);
 
-        let current_cwd = Some(config.cwd.to_path_buf());
+        let current_cwd = PathUri::from_abs_path(&config.cwd);
         let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
             &config,
             &local_settings.notices,
@@ -148,6 +148,7 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             remote_connection: None,
+            app_server_path_convention: None,
             statusline_read: None,
             statusline_disconnected: false,
             snapshot_local_images: false,

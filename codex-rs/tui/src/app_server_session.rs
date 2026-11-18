@@ -166,7 +166,11 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::LegacyAppPathStringError;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
+use codex_utils_path_uri::Platform;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use futures::FutureExt;
@@ -617,6 +621,10 @@ pub(crate) enum CloudThreadStart<'a> {
 }
 
 impl AppServerSession {
+    pub(crate) fn path_convention(&self) -> Option<PathConvention> {
+        Platform::from_platform_os(self.request_handle.platform_os()).path_convention()
+    }
+
     /// Platform of the app-server process, not necessarily its executor.
     pub(crate) fn app_server_platform_family(&self) -> Option<&str> {
         self.connection_owner
@@ -1248,6 +1256,7 @@ impl AppServerSession {
             local_settings,
             config,
             self.thread_params_mode(),
+            self.path_convention(),
         )
         .await?;
         if let Some(permissions) = selected_permissions {
@@ -1625,6 +1634,7 @@ impl AppServerSession {
             local_settings,
             &config,
             self.thread_params_mode(),
+            self.path_convention(),
         )
         .await?;
         if let Some(permissions) = selected_permissions {
@@ -2405,9 +2415,14 @@ pub(crate) async fn start_thread_with_request_handle(
             .map_err(|err| {
                 bootstrap_request_error("thread/start failed during TUI bootstrap", err)
             })?;
-    let mut started =
-        started_thread_from_start_response(response, local_settings, &config, thread_params_mode)
-            .await?;
+    let mut started = started_thread_from_start_response(
+        response,
+        local_settings,
+        &config,
+        thread_params_mode,
+        Platform::from_platform_os(request_handle.platform_os()).path_convention(),
+    )
+    .await?;
     started.task_tools_available = task_tools_available;
     Ok(started)
 }
@@ -2953,6 +2968,7 @@ async fn started_thread_from_start_response(
     local_settings: &LocalSettings,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<AppServerStartedThread> {
     let blocks_direct_input = thread_blocks_direct_input(&response.thread);
     let session = thread_session_state_from_thread_start_response(
@@ -2960,6 +2976,7 @@ async fn started_thread_from_start_response(
         local_settings,
         config,
         thread_params_mode,
+        cwd_convention,
     )
     .await
     .map_err(color_eyre::eyre::Report::msg)?;
@@ -2974,16 +2991,13 @@ async fn started_thread_from_start_response(
 async fn started_thread_from_resume_response(
     response: ThreadResumeResponse,
     local_settings: &LocalSettings,
-    thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<AppServerStartedThread> {
     let blocks_direct_input = thread_blocks_direct_input(&response.thread);
-    let session = thread_session_state_from_thread_resume_response(
-        &response,
-        local_settings,
-        thread_params_mode,
-    )
-    .await
-    .map_err(color_eyre::eyre::Report::msg)?;
+    let session =
+        thread_session_state_from_thread_resume_response(&response, local_settings, cwd_convention)
+            .await
+            .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
@@ -2997,6 +3011,7 @@ async fn started_thread_from_fork_response(
     local_settings: &LocalSettings,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<AppServerStartedThread> {
     let blocks_direct_input = thread_blocks_direct_input(&response.thread);
     let session = thread_session_state_from_thread_fork_response(
@@ -3004,6 +3019,7 @@ async fn started_thread_from_fork_response(
         local_settings,
         config,
         thread_params_mode,
+        cwd_convention,
     )
     .await
     .map_err(color_eyre::eyre::Report::msg)?;
@@ -3020,6 +3036,7 @@ async fn thread_session_state_from_thread_start_response(
     local_settings: &LocalSettings,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<ThreadSessionState, String> {
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
@@ -3040,7 +3057,7 @@ async fn thread_session_state_from_thread_start_response(
         response.approvals_reviewer.to_core(),
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
-        response.cwd.clone(),
+        decode_thread_cwd(&response.cwd, cwd_convention).map_err(|err| err.to_string())?,
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
@@ -3057,7 +3074,7 @@ async fn thread_session_state_from_thread_start_response(
 async fn thread_session_state_from_thread_resume_response(
     response: &ThreadResumeResponse,
     local_settings: &LocalSettings,
-    _thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<ThreadSessionState, String> {
     // The server owns restored rules. This legacy projection is for display only;
     // normal turns do not send it back as an execution override.
@@ -3078,7 +3095,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.approvals_reviewer.to_core(),
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
-        response.cwd.clone(),
+        decode_thread_cwd(&response.cwd, cwd_convention).map_err(|err| err.to_string())?,
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
@@ -3095,6 +3112,7 @@ async fn thread_session_state_from_thread_fork_response(
     local_settings: &LocalSettings,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    cwd_convention: Option<PathConvention>,
 ) -> Result<ThreadSessionState, String> {
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
@@ -3115,7 +3133,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.approvals_reviewer.to_core(),
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
-        response.cwd.clone(),
+        decode_thread_cwd(&response.cwd, cwd_convention).map_err(|err| err.to_string())?,
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
@@ -3151,6 +3169,16 @@ fn display_permission_profile_from_thread_response(
     }
 }
 
+pub(crate) fn decode_thread_cwd(
+    cwd: &LegacyAppPathString,
+    convention: Option<PathConvention>,
+) -> Result<PathUri, LegacyAppPathStringError> {
+    match convention {
+        Some(convention) => cwd.to_path_uri(convention),
+        None => PathUri::try_from(cwd.clone()),
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "session mapping keeps explicit fields"
@@ -3168,7 +3196,7 @@ async fn thread_session_state_from_thread_response(
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
     active_permission_profile: Option<ActivePermissionProfile>,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -3962,7 +3990,7 @@ mod tests {
                     started.session.permission_profile.network_sandbox_policy(),
                     started.session.model.as_str(),
                     started.session.approval_policy,
-                    started.session.cwd.as_path(),
+                    started.session.cwd.to_path_buf().as_path(),
                 ),
                 (
                     NetworkSandboxPolicy::Restricted,
@@ -5131,7 +5159,7 @@ mod tests {
                 recency_at: Some(2),
                 status: ThreadStatus::Idle,
                 path: None,
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: test_path_buf("/tmp/project").abs().into(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Cli,
                 can_accept_direct_input: None,
@@ -5177,7 +5205,7 @@ mod tests {
             model: "gpt-5.5".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            cwd: test_path_buf("/tmp/project").abs(),
+            cwd: test_path_buf("/tmp/project").abs().into(),
             runtime_workspace_roots: vec![
                 test_path_buf("/tmp/project").abs(),
                 test_path_buf("/tmp/project/extra").abs(),
@@ -5210,7 +5238,7 @@ mod tests {
         let started = started_thread_from_resume_response(
             response.clone(),
             &LocalSettings::from(&config),
-            ThreadParamsMode::Remote,
+            /*cwd_convention*/ None,
         )
         .await
         .expect("resume response should map");
@@ -5264,7 +5292,7 @@ mod tests {
         let started = started_thread_from_resume_response(
             response.clone(),
             &LocalSettings::from(&embedded_config),
-            ThreadParamsMode::Embedded,
+            /*cwd_convention*/ None,
         )
         .await
         .expect("embedded resume response should map");
@@ -5273,14 +5301,24 @@ mod tests {
         let mut thread = response.thread.clone();
         let mut empty_roots_response = response;
         empty_roots_response.runtime_workspace_roots = Vec::new();
+        let server_cwd = r"/\repo";
+        empty_roots_response.cwd = LegacyAppPathString::from_string(server_cwd);
         let started = started_thread_from_resume_response(
             empty_roots_response,
             &LocalSettings::from(&config),
-            ThreadParamsMode::Remote,
+            Some(PathConvention::Posix),
         )
         .await
         .expect("resume response should map");
         assert_eq!(started.session.runtime_workspace_roots, Vec::new());
+        assert_eq!(
+            started.session.cwd.infer_path_convention(),
+            Some(PathConvention::Posix)
+        );
+        assert_eq!(
+            started.session.cwd.inferred_native_path_string(),
+            server_cwd
+        );
 
         // Cloud can filter every item in its newest page while older prompts remain.
         thread.history_mode = ThreadHistoryMode::Paginated;
@@ -5419,7 +5457,7 @@ mod tests {
             codex_protocol::config_types::ApprovalsReviewer::User,
             PermissionProfile::read_only(),
             /*active_permission_profile*/ None,
-            test_path_buf("/tmp/project").abs(),
+            test_path_buf("/tmp/project").abs().into(),
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
@@ -5455,7 +5493,7 @@ mod tests {
             codex_protocol::config_types::ApprovalsReviewer::User,
             PermissionProfile::read_only(),
             /*active_permission_profile*/ None,
-            test_path_buf("/tmp/project").abs(),
+            test_path_buf("/tmp/project").abs().into(),
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,

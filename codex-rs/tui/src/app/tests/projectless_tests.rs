@@ -212,7 +212,7 @@ sandbox = "unelevated"
     std::fs::create_dir(untrusted.path().join(".codex"))?;
     std::fs::write(untrusted.path().join(".codex/config.toml"), "")?;
     crate::config_update::write_trusted_project(server.request_handle(), untrusted.path()).await?;
-    app.new_agents_overview_session(&mut tui, &mut server, Some(untrusted.path().abs()))
+    app.new_agents_overview_session(&mut tui, &mut server, Some(untrusted.path().to_path_buf()))
         .await?;
     server
         .thread_inject_items(

@@ -173,7 +173,7 @@ impl ThreadState {
         shutdown_drain: watch::Receiver<bool>,
         conversation: &Arc<CodexThread>,
         watch_registration: WatchRegistration,
-        thread_settings_baseline: ThreadSettings,
+        thread_settings_baseline: Option<ThreadSettings>,
         history_mode: ThreadHistoryMode,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
@@ -185,7 +185,7 @@ impl ThreadState {
         self.shutdown_drain = Some(shutdown_drain);
         self.listener_generation = self.listener_generation.wrapping_add(1);
         self.listener_shutdown = false;
-        self.last_thread_settings = Some(thread_settings_baseline);
+        self.last_thread_settings = thread_settings_baseline;
         self.history_mode = history_mode;
         self.evict_superseded_agent_text =
             history_mode == ThreadHistoryMode::Paginated && conversation.rollout_path().is_some();
@@ -393,7 +393,9 @@ mod tests {
         ThreadSettings {
             disabled_plugin_ids: Vec::new(),
             environments: Some(Vec::new()),
-            cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
+            cwd: AbsolutePathBuf::from_absolute_path("/tmp")
+                .expect("absolute path")
+                .into(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::ReadOnly {

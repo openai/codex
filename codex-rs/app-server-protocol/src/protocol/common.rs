@@ -3379,7 +3379,7 @@ mod tests {
                     recency_at: Some(3),
                     status: v2::ThreadStatus::Idle,
                     path: None,
-                    cwd: cwd.clone(),
+                    cwd: cwd.clone().into(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
                     can_accept_direct_input: None,
@@ -3394,7 +3394,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
-                cwd,
+                cwd: cwd.into(),
                 runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![
                     codex_utils_path_uri::LegacyAppPathString::from_abs_path(&absolute_path(
@@ -4644,7 +4644,7 @@ mod tests {
                 thread_settings: v2::ThreadSettings {
                     disabled_plugin_ids: Vec::new(),
                     environments: Some(Vec::new()),
-                    cwd: absolute_path("/tmp/repo"),
+                    cwd: absolute_path("/tmp/repo").into(),
                     approval_policy: v2::AskForApproval::Never,
                     approvals_reviewer: v2::ApprovalsReviewer::User,
                     sandbox_policy: v2::SandboxPolicy::DangerFullAccess,

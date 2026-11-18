@@ -215,19 +215,25 @@ impl App {
         thread_id: ThreadId,
         settings: &ThreadSettings,
     ) {
+        let Ok(cwd) = crate::app_server_session::decode_thread_cwd(
+            &settings.cwd,
+            self.backend_registry.thread_path_convention(thread_id),
+        ) else {
+            return;
+        };
         if let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id) {
-            apply_thread_settings_to_session(&mut blank.session, settings);
+            apply_thread_settings_to_session(&mut blank.session, settings, &cwd);
         }
         if self.primary_thread_id == Some(thread_id)
             && let Some(session) = self.primary_session_configured.as_mut()
         {
-            apply_thread_settings_to_session(session, settings);
+            apply_thread_settings_to_session(session, settings, &cwd);
         }
 
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             if let Some(session) = store.session.as_mut() {
-                apply_thread_settings_to_session(session, settings);
+                apply_thread_settings_to_session(session, settings, &cwd);
             }
         }
     }
@@ -276,6 +282,7 @@ impl App {
 pub(super) fn apply_thread_settings_to_session(
     session: &mut ThreadSessionState,
     settings: &ThreadSettings,
+    cwd: &codex_utils_path_uri::PathUri,
 ) {
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
@@ -294,7 +301,7 @@ pub(super) fn apply_thread_settings_to_session(
         session.primary_environment_cwd =
             crate::session_state::primary_environment_cwd(environments);
     }
-    session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
+    session.set_cwd_retargeting_implicit_runtime_workspace_root(cwd.clone());
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
         .settings

@@ -407,7 +407,7 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
                         &title,
                         ThreadStatus::Idle,
                     );
-                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
                     thread.model = Some(format!("model-{index}"));
                     thread.updated_at = index as i64;
                     app.agents_overview.threads.insert(id, Some(thread.clone()));
@@ -611,7 +611,7 @@ async fn external_removals_preserve_adjacent_selection() {
                         if index == 1 { "Other" } else { "Task" },
                         ThreadStatus::Idle,
                     );
-                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
                     thread.model = Some(format!("model-{index}"));
                     thread.updated_at = index as i64;
                     thread
@@ -704,7 +704,7 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
                 ThreadStatus::Idle,
             );
             thread.name = Some(format!("{} {index}", thread.preview));
-            thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+            thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
             thread.model = Some(format!("model-{index}"));
             thread.updated_at = index as i64;
             thread

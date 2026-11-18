@@ -25,8 +25,7 @@ use codex_config::types::StatusLineProviderId;
 use codex_config::types::StatusLineSelection;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
-use codex_utils_path_uri::LegacyAppPathString;
-use std::path::PathBuf;
+use codex_utils_path_uri::PathUri;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -41,7 +40,7 @@ pub(super) struct ActiveStatuslineRead {
     thread: Option<ThreadId>,
     selection: ProviderId,
     provider_from_picker: Option<StatuslineProvider>,
-    host_cwd: PathBuf,
+    host_cwd: PathUri,
     startup: watch::Sender<()>,
     cancel: CancellationToken,
 }
@@ -145,7 +144,7 @@ impl ChatWidget {
             thread: self.thread_id,
             selection,
             provider_from_picker,
-            host_cwd: self.status_line_cwd().to_owned(),
+            host_cwd: self.session_cwd().clone(),
             startup,
             cancel: CancellationToken::new(),
         });
@@ -236,7 +235,7 @@ impl ActiveStatuslineRead {
                 self.selection.server.as_str() == id.server
                     && self.selection.tool.as_str() == id.tool
             })
-            && self.host_cwd == chat.status_line_cwd()
+            && &self.host_cwd == chat.session_cwd()
     }
 
     pub(super) fn server_ready(&self, server: &str) {
@@ -258,12 +257,11 @@ impl ActiveStatuslineRead {
         let events = events.clone();
         let client = owner.request_handle();
         let backend = owner.backend_id();
-        let cwd = LegacyAppPathString::from_path(&self.host_cwd).to_inferred_path_uri();
+        let cwd = self.host_cwd.clone();
         let cancel = self.cancel.clone();
         tokio::spawn(async move {
             let result: Option<Result<(), Failure>> = cancel
                 .run_until_cancelled(async {
-                    let cwd = cwd.ok_or(Failure::LookupUnavailable)?;
                     let deadline = Instant::now() + LOOKUP_TIMEOUT;
                     let provider = loop {
                         let choice = provider_from_picker

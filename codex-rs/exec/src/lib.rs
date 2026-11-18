@@ -122,6 +122,7 @@ use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_worktree::CreateWorktree;
 use codex_worktree::WorktreeManager;
 use codex_worktree::WorktreeSettings;
@@ -1852,7 +1853,7 @@ fn session_configured_from_thread_response(
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
     active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = SessionId::from_string(session_id)
@@ -1882,7 +1883,7 @@ fn session_configured_from_thread_response(
         approvals_reviewer,
         permission_profile,
         active_permission_profile,
-        cwd,
+        cwd: AbsolutePathBuf::try_from(cwd).map_err(|err| err.to_string())?,
         reasoning_effort,
         network_proxy: None,
         rollout_path,
