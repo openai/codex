@@ -1,5 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 
+#[path = "guardian_automation_metrics_tests.rs"]
+mod automation_metrics;
+
 use anyhow::Context;
 use anyhow::Result;
 use chrono::DateTime;

@@ -178,6 +178,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             codex_guardian_reviewer::ReviewReport::new(codex_guardian_reviewer::ReviewMetadata {
                 thread_id: session.thread_id.to_string(),
                 turn_id: assessment_turn_id,
+                turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
                 review_id: review_id.to_owned(),
                 target_item_id,
                 plugin_id,

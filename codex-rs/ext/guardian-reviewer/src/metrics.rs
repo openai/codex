@@ -41,6 +41,7 @@ pub(crate) fn emit_guardian_review_metrics(
     result: &GuardianReviewAnalyticsResult,
     approval_request_source: GuardianApprovalRequestSource,
     reviewed_action: &GuardianReviewedAction,
+    turn_origin: &'static str,
     elapsed: Duration,
 ) {
     let tags = guardian_review_metric_tags(result, approval_request_source, reviewed_action);
@@ -62,6 +63,7 @@ pub(crate) fn emit_guardian_review_metrics(
     let mut counter_tag_refs = tag_refs.clone();
     counter_tag_refs.extend(mcp_tags.iter().map(|(key, value)| (*key, value.as_str())));
     counter_tag_refs.push(("context_changed", bool_tag(result.context_changed)));
+    counter_tag_refs.push(("turn_origin", turn_origin));
     session_telemetry.counter(
         GUARDIAN_REVIEW_COUNT_METRIC,
         /*inc*/ 1,
@@ -499,6 +501,7 @@ mod tests {
             &result,
             GuardianApprovalRequestSource::DelegatedSubagent,
             &reviewed_action,
+            "unknown",
             Duration::from_millis(456),
         );
 
@@ -529,6 +532,7 @@ mod tests {
         let mut expected_counter_tags = expected_base_tags.clone();
         expected_counter_tags.extend(expected_mcp_tags);
         expected_counter_tags.insert("context_changed".to_string(), "false".to_string());
+        expected_counter_tags.insert("turn_origin".to_string(), "unknown".to_string());
         assert_eq!((attrs, value), (expected_counter_tags, 1));
 
         let AggregatedMetrics::F64(MetricData::Histogram(histogram)) =

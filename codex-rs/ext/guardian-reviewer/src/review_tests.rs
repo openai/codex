@@ -58,6 +58,7 @@ impl ReviewHost for GatedHost {
             ReviewReport::new(ReviewMetadata {
                 thread_id: "thread".into(),
                 turn_id: "turn".into(),
+                turn_trigger: None,
                 review_id: approval_id.into(),
                 target_item_id: Some("call".into()),
                 plugin_id: None,

@@ -17,7 +17,118 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::time::Duration;
+
+#[test_case::test_case(Some("automation"), "automation"; "automation")]
+#[test_case::test_case(Some("mcp_event"), "automation"; "webhook")]
+#[test_case::test_case(Some("automation_cron_scheduled"), "automation"; "scheduled")]
+#[test_case::test_case(Some("automation_cron_run_now"), "automation"; "run_now")]
+#[test_case::test_case(Some("automation_heartbeat_scheduled"), "automation"; "heartbeat_scheduled")]
+#[test_case::test_case(Some("automation_heartbeat_run_now"), "automation"; "heartbeat_run_now")]
+#[test_case::test_case(Some("composer"), "other"; "user")]
+#[test_case::test_case(Some("arbitrary client supplied value"), "other"; "bounded_labels")]
+#[test_case::test_case(Some(""), "unknown"; "empty")]
+#[test_case::test_case(None, "unknown"; "missing")]
+fn review_report_bounds_turn_origin_on_both_verdicts(
+    turn_trigger: Option<&str>,
+    expected_origin: &str,
+) {
+    use codex_analytics::GuardianReviewDecision;
+    use codex_analytics::GuardianReviewTerminalStatus;
+    use codex_protocol::protocol::GuardianAssessmentOutcome;
+
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", InMemoryMetricExporter::default())
+            .with_runtime_reader(),
+    )
+    .unwrap();
+    let telemetry = SessionTelemetry::new(
+        ThreadId::new(),
+        "test-model",
+        "test-model",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics.clone());
+    let report = ReviewReport::new(ReviewMetadata {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        turn_trigger: turn_trigger.map(str::to_owned),
+        review_id: "review".into(),
+        target_item_id: None,
+        plugin_id: None,
+        script_path: None,
+        approval_request_source: GuardianApprovalRequestSource::MainTurn,
+        reviewed_action: GuardianReviewedAction::NativeToolCall {},
+        action: None,
+        review_reason: GuardianReviewReason::Policy,
+        model_context: ModelInvocationContext {
+            model_slug: "test-model".into(),
+            reasoning_effort: None,
+        },
+        timeout: None,
+    });
+    for (decision, terminal_status, outcome) in [
+        (
+            GuardianReviewDecision::Approved,
+            GuardianReviewTerminalStatus::Approved,
+            GuardianAssessmentOutcome::Allow,
+        ),
+        (
+            GuardianReviewDecision::Denied,
+            GuardianReviewTerminalStatus::Denied,
+            GuardianAssessmentOutcome::Deny,
+        ),
+    ] {
+        report.track(
+            &telemetry,
+            &AnalyticsEventsClient::disabled(),
+            GuardianReviewAnalyticsResult {
+                decision,
+                terminal_status,
+                outcome: Some(outcome),
+                ..GuardianReviewAnalyticsResult::without_session()
+            },
+            /*completed_at_ms*/ 1_792_141_011_000,
+            Duration::from_millis(10),
+        );
+    }
+    let snapshot = metrics.snapshot().unwrap();
+    let metric = snapshot
+        .scope_metrics()
+        .flat_map(ScopeMetrics::metrics)
+        .find(|metric| metric.name() == GUARDIAN_REVIEW_COUNT_METRIC)
+        .unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(counter)) = metric.data() else {
+        panic!("expected review counter");
+    };
+    let observed = counter
+        .data_points()
+        .map(|point| {
+            let tags = point
+                .attributes()
+                .map(|tag| (tag.key.as_str(), tag.value.as_str().to_string()))
+                .collect::<BTreeMap<_, _>>();
+            (
+                (tags["turn_origin"].clone(), tags["outcome"].clone()),
+                point.value(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        observed,
+        BTreeMap::from([
+            ((expected_origin.to_string(), "allow".to_string()), 1),
+            ((expected_origin.to_string(), "deny".to_string()), 1),
+        ])
+    );
+}
 
 #[test_case::test_case(
     Some(GuardianAssessmentAction::NetworkAccess {
@@ -57,6 +168,7 @@ fn review_completion_uses_one_monotonic_duration(
     let mut report = ReviewReport::new(ReviewMetadata {
         thread_id: "thread".to_string(),
         turn_id: "turn".to_string(),
+        turn_trigger: None,
         review_id: "review".to_string(),
         target_item_id: None,
         plugin_id: None,
