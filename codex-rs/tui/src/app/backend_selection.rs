@@ -226,6 +226,8 @@ impl App {
                 environment.map(|env| (owner, env)),
             ),
         };
+        self.cancel_cloud_inventory_refresh(backends.session_at(slot))
+            .await;
         let destination = backends.session_at_mut(slot);
         let clipboard_after_bootstrap = if destination.remote_cwd_override().is_some() {
             // An explicit remote directory can open the trust prompt after bootstrap.
@@ -443,11 +445,9 @@ impl App {
                 };
                 input_states.remove(&thread_id);
                 self.remove_agents_overview_thread(thread_id);
-                if let Err(error) = backends
-                    .session_at_mut(outgoing_slot)
-                    .thread_unsubscribe(thread_id)
-                    .await
-                {
+                let outgoing = backends.session_at_mut(outgoing_slot);
+                self.cancel_cloud_inventory_refresh(outgoing).await;
+                if let Err(error) = outgoing.thread_unsubscribe(thread_id).await {
                     tracing::warn!(%error, "failed to unsubscribe replaced blank thread {thread_id}");
                 }
                 self.discard_thread_local_state(thread_id).await;
@@ -510,11 +510,9 @@ impl App {
             channel.backend_id.get_or_insert(outgoing);
         }
         backends.settings.insert(outgoing, self.backend_settings());
-        self.detach_current_thread_for_navigation(
-            backends.session_at_mut(backends.displayed),
-            Some(thread_id),
-        )
-        .await;
+        let outgoing_session = backends.session_at_mut(backends.displayed);
+        self.detach_current_thread_for_navigation(outgoing_session, Some(thread_id))
+            .await;
         let destination = backends.session_at_mut(destination_slot);
         self.store_active_thread_receiver().await;
         self.clear_active_thread().await;
@@ -560,6 +558,24 @@ impl App {
         );
     }
 
+    pub(super) async fn cancel_cloud_inventory_refresh(&mut self, session: &AppServerSession) {
+        let owner = session.backend_id();
+        if (self
+            .agents_overview
+            .active_refresh
+            .is_some_and(|(_, backend)| backend == owner)
+            || self
+                .agents_overview
+                .pending_refresh_backends
+                .contains(&owner))
+            && matches!(session.request_handle(), AppServerRequestHandle::Cloud(_))
+            && let Some(task) = self.cancel_agents_overview_refresh(owner)
+        {
+            // The native worker can release a held list once its caller is dropped.
+            let _ = task.await;
+        }
+    }
+
     pub(super) fn resume_backend_session<'a>(
         &'a mut self,
         tui: &'a mut tui::Tui,
@@ -577,6 +593,8 @@ impl App {
                 return Ok(AppRunControl::Continue);
             }
             if owner == outgoing {
+                self.cancel_cloud_inventory_refresh(backends.session_at(displayed_session))
+                    .await;
                 return self
                     .apply_resume_picker_selection(
                         tui,
@@ -611,6 +629,7 @@ impl App {
                 return Ok(AppRunControl::Continue);
             };
             let destination = backends.session_at_mut(destination_slot);
+            self.cancel_cloud_inventory_refresh(destination).await;
             let bootstrap = match destination.bootstrap(&settings.config).await {
                 Ok(bootstrap) => bootstrap,
                 Err(error) => {

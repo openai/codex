@@ -146,6 +146,7 @@ use crate::test_support::test_path_display;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::CloudClient;
+use codex_app_server_client::CloudCommand;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
@@ -176,6 +177,19 @@ use ratatui::layout::Rect;
 
 static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
+
+fn overview_session_stub(
+    owner: BackendId,
+    mode: ThreadParamsMode,
+) -> (
+    AppServerSession,
+    tokio::sync::mpsc::Receiver<CloudCommand>,
+    tokio::sync::mpsc::UnboundedSender<AppServerEvent>,
+) {
+    let (client, commands, events) = CloudClient::channel(/*capacity*/ 1);
+    let session = AppServerSession::new(owner, AppServerClient::Cloud(client), mode);
+    (session, commands, events)
+}
 
 #[tokio::test]
 async fn refreshing_one_backends_pins_preserves_cross_backend_rank() {
@@ -392,12 +406,8 @@ async fn queued_overview_page_survives_a_focus_change() {
 #[tokio::test]
 async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
     let mut app = make_test_app().await;
-    let stub = |owner, mode| {
-        let (client, commands, events) = CloudClient::channel(/*capacity*/ 1);
-        let session = AppServerSession::new(owner, AppServerClient::Cloud(client), mode);
-        (session, (commands, events))
-    };
-    let (mut displayed, (mut commands, _events)) = stub(BackendId::new(), ThreadParamsMode::Cloud);
+    let (mut displayed, mut commands, _events) =
+        overview_session_stub(BackendId::new(), ThreadParamsMode::Cloud);
     let remote_owner = BackendId::new();
     let [local_id, remote_id, colliding_id] = std::array::from_fn(|_| ThreadId::new());
     let [local, remote, colliding] = [
@@ -535,7 +545,8 @@ async fn overview_keeps_rows_and_routes_actions_to_the_owner() -> Result<()> {
 
     // Reverse the foreground so the backend that supports pinning is displayed.
     app.chat_widget.handle_key_event(KeyCode::Enter.into());
-    let (mut foreground, _foreground_transport) = stub(remote_owner, ThreadParamsMode::Embedded);
+    let (mut foreground, _foreground_commands, _foreground_events) =
+        overview_session_stub(remote_owner, ThreadParamsMode::Embedded);
     app.app_server_backend_id = Some(remote_owner);
     app.repaint_agents_overview();
     let selected = app

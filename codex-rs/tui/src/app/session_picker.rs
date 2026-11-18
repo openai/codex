@@ -42,6 +42,17 @@ impl App {
     ) -> Result<AppRunControl> {
         let displayed_session = backends.displayed;
         let displayed_owner = backends.displayed_owner();
+        // Remove queued refreshes before aborting the active one, so cancellation
+        // cannot start another Cloud page ahead of the picker's list requests.
+        let active_owner = self.agents_overview.active_refresh.map(|(_, owner)| owner);
+        for session in backends.picker_views() {
+            if Some(session.backend_id()) != active_owner {
+                self.cancel_cloud_inventory_refresh(&session).await;
+            }
+        }
+        if let Some(session) = active_owner.and_then(|owner| backends.session(owner)) {
+            self.cancel_cloud_inventory_refresh(session).await;
+        }
         let selection =
             crate::resume_picker::run_resume_picker_from_existing_session_with_app_servers(
                 crate::uses_remote_workspace_or_environment(

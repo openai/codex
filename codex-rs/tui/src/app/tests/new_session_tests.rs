@@ -897,6 +897,76 @@ async fn plan_implementation_handles_unavailable_attachment() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn plan_implementation_cancels_only_its_cloud_inventory_refresh() -> Result<()> {
+    for (owned, queued) in [(true, false), (false, false), (false, true)] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let (client, mut commands, _server_events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let backend_id = crate::backend_id::BackendId::new();
+        let mut server = AppServerSession::new(
+            backend_id,
+            codex_app_server_client::AppServerClient::Cloud(client),
+            crate::app_server_session::ThreadParamsMode::Embedded,
+        );
+        let refresh_owner = if owned {
+            backend_id
+        } else {
+            crate::backend_id::BackendId::new()
+        };
+        app.backend_registry.connect(&server);
+        if queued {
+            app.agents_overview
+                .pending_refresh_backends
+                .push_back(backend_id);
+        }
+        let request_id = uuid::Uuid::new_v4();
+        app.agents_overview.active_refresh = Some((request_id, refresh_owner));
+        let (guard, mut dropped) = tokio::sync::oneshot::channel::<()>();
+        app.agents_overview.refresh_task = Some(tokio::spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        }));
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let (result, ()) = tokio::join!(
+            app.implement_plan_in_fresh_session(&mut tui, &mut server, "# Plan".into()),
+            async {
+                let request = commands.recv().await.expect("fresh session config request");
+                assert!(matches!(
+                    request.operation,
+                    codex_app_server_client::CloudOperation::Request(request)
+                        if matches!(*request, codex_app_server_protocol::ClientRequest::ConfigRead { .. })
+                ));
+                if owned {
+                    assert!(matches!(
+                        dropped.try_recv(),
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+                    ));
+                } else {
+                    assert!(matches!(
+                        dropped.try_recv(),
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                    ));
+                }
+                request
+                    .response
+                    .send(Err(std::io::Error::other("config unavailable")))
+                    .unwrap();
+            }
+        );
+        result?;
+        assert_eq!(
+            app.agents_overview.active_refresh,
+            (!owned).then_some((request_id, refresh_owner))
+        );
+        assert!(app.agents_overview.pending_refresh_backends.is_empty());
+        if let Some(task) = app.agents_overview.refresh_task.take() {
+            task.abort();
+        }
+    }
+    Ok(())
+}
+
 async fn assert_plan_implementation_with_unavailable_attachment(
     write_fails: bool,
     oversized: bool,

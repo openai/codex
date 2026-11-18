@@ -515,6 +515,82 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
 }
 
 #[tokio::test]
+async fn archiving_keeps_another_backends_page_in_flight() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.backend_registry.connect(&app_server);
+    let rollout_id = app_test_support::create_fake_rollout(
+        &app.config.codex_home,
+        "2025-01-01T12-00-00",
+        "2025-01-01T12:00:00Z",
+        "Local task",
+        Some(&app.config.model_provider_id),
+        /*git_info*/ None,
+    )
+    .map_err(color_eyre::eyre::Report::msg)?;
+    let thread_id = ThreadId::from_string(&rollout_id)?;
+    app.backend_registry
+        .observe(app_server.backend_id(), thread_id);
+    let foreign = crate::backend_id::BackendId::new();
+    let foreign_thread = ThreadId::new();
+    app.backend_registry.observe(foreign, foreign_thread);
+    let foreign_request = Uuid::new_v4();
+    app.agents_overview.active_refresh = Some((foreign_request, foreign));
+    app.agents_overview.refresh_show_more = true;
+    for id in [thread_id, foreign_thread] {
+        app.track_agents_overview_notification(&ServerNotification::ThreadStarted(
+            codex_app_server_protocol::ThreadStartedNotification {
+                thread: overview_thread(
+                    id,
+                    /*parent_thread_id*/ None,
+                    "Task",
+                    ThreadStatus::Idle,
+                ),
+            },
+        ));
+    }
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+
+    Box::pin(app.run_agents_overview_action(
+        &mut tui,
+        &mut app_server,
+        thread_id,
+        AgentsOverviewAction::Archive,
+    ))
+    .await?;
+
+    let overview = &app.agents_overview;
+    assert!(overview.removed_threads.contains(&thread_id));
+    assert_eq!(overview.active_refresh, Some((foreign_request, foreign)));
+    assert!(overview.refresh_show_more);
+    assert!(!overview.refresh_notifications.contains_key(&thread_id));
+    assert!(overview.refresh_notifications.contains_key(&foreign_thread));
+    assert!(
+        overview
+            .pending_refresh_backends
+            .contains(&app_server.backend_id())
+    );
+    app.apply_agents_overview_thread_refresh(
+        &app_server,
+        foreign_request,
+        Ok(crate::app_event::AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
+            threads: HashMap::new(),
+            last_messages: HashMap::new(),
+            recent_seed_complete: true,
+            discovery: None,
+            pinned_thread_ids: None,
+        }),
+    );
+    assert!(app.agents_overview.removed_threads.contains(&thread_id));
+    assert!(!app.agents_overview.threads.contains_key(&thread_id));
+    assert!(app.agents_overview.threads.contains_key(&foreign_thread));
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_removals_preserve_adjacent_selection() {
     for grouping in [
         AgentsOverviewGrouping::Project,

@@ -114,6 +114,7 @@ impl App {
             }
             return Ok(AppRunControl::Continue);
         }
+        self.cancel_cloud_inventory_refresh(app_server).await;
         // Keep folder consent and config loading off the session-start stack frame.
         let Some((config, remote_cwd)) = Box::pin(self.agents_overview_session_config(
             tui,

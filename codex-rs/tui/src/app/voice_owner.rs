@@ -148,6 +148,7 @@ impl App {
             {
                 continue;
             }
+            self.cancel_cloud_inventory_refresh(app_server).await;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }

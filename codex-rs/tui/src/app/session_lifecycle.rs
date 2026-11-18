@@ -1298,6 +1298,7 @@ impl App {
             }
             return;
         }
+        self.cancel_cloud_inventory_refresh(app_server).await;
         // Resolve trust before loading defaults and applying explicit permission choices.
         if self.current_displayed_thread_id().is_none() {
             let mut config = self.chat_widget.config_ref().clone();
@@ -1472,6 +1473,7 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(());
         }
+        self.cancel_cloud_inventory_refresh(app_server).await;
         let prepared = match self
             .prepare_fresh_session(app_server, Some(ThreadStartSource::Clear))
             .await

@@ -72,7 +72,7 @@ pub(super) struct AgentsOverviewState {
     pub(super) active_refresh_thread_ids: HashSet<ThreadId>,
     pub(super) pins_by_backend: std::collections::BTreeMap<BackendId, Option<Vec<ThreadId>>>,
     pub(super) pending_pin_change: Option<(Uuid, BackendId)>,
-    pub(super) refresh_task: Option<tokio::task::AbortHandle>,
+    pub(super) refresh_task: Option<tokio::task::JoinHandle<()>>,
     pub(super) refresh_notifications: HashMap<ThreadId, Vec<ServerNotification>>,
     pub(super) rendered_full_screen: bool,
     pub(super) visible_thread_ids: Vec<ThreadId>,
@@ -383,13 +383,18 @@ impl App {
             .is_some_and(|owner| overview.has_more_for(&self.backend_registry, owner));
     }
 
-    pub(super) fn cancel_agents_overview_refresh(&mut self, backend_id: BackendId) {
+    pub(super) fn cancel_agents_overview_refresh(
+        &mut self,
+        backend_id: BackendId,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let overview = &mut self.agents_overview;
+        let mut canceled = None;
         if overview
             .active_refresh
             .is_some_and(|(_, owner)| owner == backend_id)
         {
-            if let Some(task) = overview.refresh_task.take() {
+            canceled = overview.refresh_task.take();
+            if let Some(task) = &canceled {
                 task.abort();
             }
             overview.active_refresh = None;
@@ -434,6 +439,7 @@ impl App {
             });
         }
         self.repaint_agents_overview();
+        canceled
     }
 
     pub(super) fn repaint_agents_overview(&mut self) {
@@ -711,6 +717,7 @@ impl App {
         if self.current_displayed_thread_id() == Some(root_thread_id)
             && (!self.thread_unavailable(root_thread_id) || self.chat_widget.is_read_only_view())
         {
+            self.cancel_cloud_inventory_refresh(app_server).await;
             // Keep the displayed read-only snapshot frozen; R explicitly retries attachment.
             if let Ok(mut state) = self.agents_overview.view_state.lock() {
                 state.completion = Some(crate::bottom_pane::ViewCompletion::Accepted);

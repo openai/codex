@@ -1345,7 +1345,20 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
+                    let overview_id = agents_overview::AGENTS_OVERVIEW_VIEW_ID;
+                    let overview_was_open = self
+                        .chat_widget
+                        .selected_index_for_present_view(overview_id)
+                        .is_some();
                     self.handle_key_event(tui, app_server, key_event).await;
+                    if overview_was_open
+                        && self
+                            .chat_widget
+                            .selected_index_for_present_view(overview_id)
+                            .is_none()
+                    {
+                        self.cancel_cloud_inventory_refresh(app_server).await;
+                    }
                 }
                 TuiEvent::Paste(pasted) => {
                     // Pasted text may contain CRLF pairs or bare CRs (e.g., from iTerm2),
