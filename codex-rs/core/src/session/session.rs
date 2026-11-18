@@ -82,6 +82,8 @@ pub(crate) struct Session {
     pub(crate) parent_observer_event_tx: OnceLock<Sender<Event>>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
+    /// Serializes initial prefix publication until its reference context is installed.
+    pub(super) initial_context_publication: Semaphore,
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
     pub(super) thread_settings_persistence: Semaphore,
@@ -2001,6 +2003,7 @@ impl Session {
                 parent_observer_event_tx: OnceLock::new(),
                 agent_status,
                 state: Mutex::new(state),
+                initial_context_publication: Semaphore::new(/*permits*/ 1),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 code_mode_message_tasks: CodeModeMessageTasks::default(),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),

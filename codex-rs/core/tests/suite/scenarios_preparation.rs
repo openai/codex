@@ -134,3 +134,152 @@ async fn prepared_context_reaches_first_request_and_survives_follow_up(
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+#[test_case(true; "turn_prepares_first")]
+#[test_case(false; "injection_prepares_first")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_and_raw_injection_publish_one_initial_prefix(
+    turn_prepares_first: bool,
+) -> Result<()> {
+    use codex_extension_api::ContextContributor;
+    use codex_extension_api::ExtensionFuture;
+    use codex_extension_api::PreviousWorldStateSection;
+    use codex_extension_api::RenderedWorldStateFragment;
+    use codex_extension_api::WorldStateContributionInput;
+    use codex_extension_api::WorldStateSectionContribution;
+    use codex_extension_api::input_text;
+    use core_test_support::responses;
+    use futures::FutureExt;
+    use std::sync::OnceLock;
+    use tokio::sync::Notify;
+
+    const INITIAL: &str = "Instructions for the new window.";
+    const INJECTED: &str = "Caller-provided context.";
+    skip_if_no_network!(Ok(()));
+
+    struct OverlappingInitializers {
+        paused_turn_id: OnceLock<String>,
+        entered: Notify,
+        resume: Notify,
+    }
+    impl ContextContributor for OverlappingInitializers {
+        fn contribute_world_state<'a>(
+            &'a self,
+            input: WorldStateContributionInput<'a>,
+        ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+            Box::pin(async move {
+                // Hold the first caller after it observes the missing reference context.
+                if self.paused_turn_id.set(input.turn_id.to_owned()).is_ok() {
+                    self.entered.notify_one();
+                    self.resume.notified().await;
+                }
+                let current =
+                    if self.paused_turn_id.get().map(String::as_str) == Some(input.turn_id) {
+                        "paused"
+                    } else {
+                        "other"
+                    };
+                vec![WorldStateSectionContribution::new(
+                    "race_state",
+                    move |previous| {
+                        let previous = match previous {
+                            PreviousWorldStateSection::Known(value) => {
+                                value.as_str().unwrap_or("invalid")
+                            }
+                            PreviousWorldStateSection::Absent => "absent",
+                            PreviousWorldStateSection::Unknown => "unknown",
+                        };
+                        if previous == current {
+                            return (None, None);
+                        }
+                        (
+                            Some(json!(current)),
+                            Some(RenderedWorldStateFragment::new(
+                                "developer",
+                                ("", ""),
+                                input_text(format!("Race state: {previous} -> {current}")),
+                            )),
+                        )
+                    },
+                )]
+            })
+        }
+    }
+
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    let overlap = Arc::new(OverlappingInitializers {
+        paused_turn_id: OnceLock::new(),
+        entered: Notify::new(),
+        resume: Notify::new(),
+    });
+    extensions.prompt_contributor(overlap.clone());
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| config.developer_instructions = Some(INITIAL.to_string()))
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = responses::mount_response_handler(&server, |_| {
+        responses::sse_response(sse(vec![ev_completed("done")]))
+    })
+    .await;
+    let item = serde_json::from_value(json!({
+        "type": "message", "role": "developer",
+        "content": [{"type": "input_text", "text": INJECTED}]
+    }))?;
+    let turn = test.submit_text_turn("First turn.").boxed();
+    let injection = async { Ok(test.codex.inject_response_items(vec![item]).await?) }.boxed();
+    let (first, second) = if turn_prepares_first {
+        (turn, injection)
+    } else {
+        (injection, turn)
+    };
+    tokio::try_join!(first, async {
+        overlap.entered.notified().await;
+        let result = second.await;
+        overlap.resume.notify_one();
+        result
+    })?;
+    let transitions: Vec<_> = mock.requests()[0]
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.starts_with("Race state:"))
+        .collect();
+    let mut expected = vec!["Race state: absent -> other"];
+    if turn_prepares_first {
+        // Injection installed its snapshot. The real turn must publish its diff before sampling.
+        expected.push("Race state: other -> paused");
+    }
+    assert_eq!(transitions, expected);
+    test.submit_text_turn("Follow up.").await?;
+    let texts = mock
+        .last_request()
+        .expect("follow-up request")
+        .message_input_texts("developer");
+    for expected in [INITIAL, INJECTED] {
+        assert_eq!(
+            texts.iter().filter(|text| text.contains(expected)).count(),
+            1,
+            "{expected}"
+        );
+    }
+    if !turn_prepares_first {
+        // A losing injection appends only caller-provided items.
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text == "Race state: other -> paused")
+        );
+    }
+    let history = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items;
+    let full_snapshots = history
+        .iter()
+        .filter(|item| matches!(item, RolloutItem::WorldState(state) if state.full))
+        .count();
+    assert_eq!(full_snapshots, 1);
+    Ok(())
+}

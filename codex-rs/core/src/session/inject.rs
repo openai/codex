@@ -39,8 +39,7 @@ impl Session {
             let step = self
                 .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
                 .await?;
-            self.record_context_updates_and_set_reference_context_item(step.as_ref())
-                .await?;
+            self.try_publish_initial_context(step.as_ref()).await?;
         }
         Ok(turn)
     }
