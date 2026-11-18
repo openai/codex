@@ -50,6 +50,15 @@ impl SideAnswer {
 }
 
 impl SideCompanion {
+    pub(super) fn can_scroll_without_refresh(&self) -> bool {
+        self.answer
+            .as_ref()
+            .is_none_or(|answer| answer.pending.is_empty())
+            && self
+                .view
+                .can_scroll_without_refresh(&self.cells, /*live_key*/ None)
+    }
+
     pub(super) fn empty(cwd: AbsolutePathBuf) -> Self {
         Self {
             display: CapturedSideDisplay {
@@ -321,3 +330,7 @@ impl SideCompanion {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "side_companion_tests.rs"]
+mod tests;

@@ -749,7 +749,7 @@ impl App {
         } else if let Some(target) = zoom_target {
             self.zoomed_thread = (self.zoomed_thread != Some(target)).then_some(target);
             tui.frame_requester().schedule_frame();
-            Ok(())
+            self.refresh_owned_transcript(tui)
         } else if panel_focus.is_some() {
             if hide || (sidebar && panel_focus == Some(PaneFocus::Sidebar)) {
                 self.zoomed_thread = None;

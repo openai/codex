@@ -12,6 +12,7 @@ use crossterm::event::MouseEventKind::ScrollUp;
 use crossterm::event::MouseEventKind::Up;
 
 use super::App;
+use super::side_companion::SideCompanion;
 use crate::transcript_view::ViewAction;
 use crate::tui::PointerShape;
 use crate::tui::Tui;
@@ -107,7 +108,14 @@ impl App {
                 TuiEvent::Mouse(mouse)
                     if matches!(mouse.kind, Drag(Left) | Up(Left) | ScrollUp | ScrollDown) =>
                 {
-                    self.refresh_owned_transcript(tui)?;
+                    if !matches!(mouse.kind, ScrollUp | ScrollDown)
+                        || !self
+                            .side_companions
+                            .get(&id)
+                            .is_some_and(SideCompanion::can_scroll_without_refresh)
+                    {
+                        self.refresh_owned_transcript(tui)?;
+                    }
                     if self
                         .conversation_frame
                         .side_pane()

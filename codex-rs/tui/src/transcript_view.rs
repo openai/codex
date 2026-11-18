@@ -179,6 +179,17 @@ impl Default for TranscriptView {
 }
 
 impl TranscriptView {
+    pub(crate) fn can_scroll_without_refresh(
+        &self,
+        cells: &[Arc<dyn HistoryCell>],
+        live_key: Option<ActiveCellTranscriptKey>,
+    ) -> bool {
+        !self.area.is_empty()
+            && !self.cache.has_mutable_source()
+            && self.last_tail == cells.last().map(EntryKey::cell)
+            && self.live_key.map(|(_, key)| key) == live_key
+    }
+
     /// Rows left after the last render, including all startup notices and live entries.
     /// Callers can paint temporary UI here without changing selection or saved history.
     pub(crate) fn remaining_area(&self) -> Rect {
@@ -688,8 +699,7 @@ impl TranscriptView {
         }
         // Anchor visible content, not a hidden header that stays ahead of every older page.
         let index = self.next_nonempty(cells, index).unwrap_or(index);
-        let bottom = self.bottom_start(cells);
-        if rows > 0 && (index, row) >= bottom {
+        if rows > 0 && (index, row) >= self.bottom_start(cells) {
             if self.selection.is_none() && !self.search.is_active() {
                 self.jump_to_latest();
             } else {

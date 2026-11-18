@@ -984,6 +984,23 @@ impl HistoryCell for MutableHistoryCell {
 }
 
 #[test]
+fn cached_mutable_history_prevents_reusing_painted_geometry() {
+    let mutable: Arc<dyn HistoryCell> = Arc::new(MutableHistoryCell {
+        version: Arc::new(AtomicUsize::new(/*v*/ 1)),
+        renders: Arc::default(),
+    });
+    let cells = vec![mutable, cell("static tail")];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells, /*width*/ 24, /*height*/ 16);
+    assert!(!view.can_scroll_without_refresh(&cells, /*live_key*/ None));
+    drop(cells);
+
+    let cells = vec![cell("static tail")];
+    render(&mut view, &cells, /*width*/ 24, /*height*/ 16);
+    assert!(view.can_scroll_without_refresh(&cells, /*live_key*/ None));
+}
+
+#[test]
 fn mutable_history_formats_once_per_frame_and_refreshes_the_next_frame() {
     let version = Arc::new(AtomicUsize::new(/*v*/ 1));
     let renders = Arc::new(AtomicUsize::new(/*v*/ 0));

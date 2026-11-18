@@ -85,6 +85,34 @@ fn wheel_at_edges_preserves_caret_following_or_browsing_after_resize() {
 }
 
 #[test]
+fn wheel_after_edit_starts_at_the_caret_and_accumulates_without_painting() {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 3,
+    );
+    let up = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: area.x,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let mut t = TextArea::new();
+    t.insert_str("one\ntwo\nthree\nfour\nfive");
+    let mut state = TextAreaState::default();
+    render(&t, area, &mut state);
+    assert!(t.scroll_mouse(up, &mut state));
+    t.insert_str("\nsix\nseven\neight");
+    state.follow_cursor();
+
+    let mut painted = state;
+    render(&t, area, &mut painted);
+    for _ in 0..2 {
+        assert!(t.scroll_mouse(up, &mut state));
+        assert!(t.scroll_mouse(up, &mut painted));
+    }
+    assert_eq!(render(&t, area, &mut state), render(&t, area, &mut painted));
+}
+
+#[test]
 fn mouse_click_maps_wrapping_unicode_tabs_and_empty_lines() {
     let area = Rect::new(
         /*x*/ 3, /*y*/ 2, /*width*/ 8, /*height*/ 8,

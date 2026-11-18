@@ -4991,8 +4991,10 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     }
     let zoom = KeyEvent::from(KeyCode::Char('z'));
     keys!(prefix, zoom);
+    assert!(app.conversation_frame.side_pane().is_none());
     let zoomed = side_frame(&mut app, &mut tui, wide)?;
     keys!(prefix, zoom);
+    assert!(app.conversation_frame.side_pane().is_some());
     let restored = side_frame(&mut app, &mut tui, wide)?;
     assert_eq!(divider_at(&tui, 0), 197);
     keys!(prefix, zoom);

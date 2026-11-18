@@ -1009,7 +1009,24 @@ impl App {
         }
         if let TuiEvent::Mouse(mouse) = event {
             let composer_ready = self.chat_widget.prepare_composer_mouse(*mouse);
-            if mouse.kind != crossterm::event::MouseEventKind::Moved {
+            // Apply wheel bursts against painted geometry and schedule their accumulated movement.
+            let wheel_ready = is_vertical_wheel && {
+                let passive = self
+                    .conversation_frame
+                    .side_pane()
+                    .filter(|panes| panes.passive.contains((mouse.column, mouse.row).into()));
+                if let Some(pane) =
+                    passive.and_then(|panes| self.side_companions.get(&panes.passive_thread))
+                {
+                    pane.can_scroll_without_refresh()
+                } else {
+                    self.transcript_view.can_scroll_without_refresh(
+                        &self.transcript_cells,
+                        self.chat_widget.active_cell_transcript_key(),
+                    )
+                }
+            };
+            if mouse.kind != MouseEventKind::Moved && !wheel_ready {
                 self.refresh_owned_transcript(tui)?;
             }
             if self

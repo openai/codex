@@ -325,6 +325,15 @@ impl TranscriptView {
 }
 
 impl LayoutCache {
+    pub(super) fn has_mutable_source(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry
+                .source
+                .upgrade()
+                .is_some_and(|cell| !cell.has_stable_transcript_height())
+        })
+    }
+
     pub(super) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(/*rhs*/ 1);
         let state = RenderState {
