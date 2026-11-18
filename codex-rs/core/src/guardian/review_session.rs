@@ -591,14 +591,6 @@ async fn run_review_on_session(
         items,
         params.schema.clone(),
     );
-    let store = &review_session.session.services.thread_extension_data;
-    if params
-        .spawn_config
-        .features
-        .enabled(Feature::GuardianDenialReconsideration)
-    {
-        store.insert(codex_guardian_reviewer::DenialResample::default());
-    }
     let result = review_session
         .run_sync_verdict(
             &params.parent_context,
@@ -615,7 +607,6 @@ async fn run_review_on_session(
             &mut analytics_result,
         )
         .await;
-    let resample = store.remove::<codex_guardian_reviewer::DenialResample>();
     let (turn_result, transcript_admitted) = match result {
         Ok(completed) => completed,
         Err(outcome) => {
@@ -625,12 +616,6 @@ async fn run_review_on_session(
                 analytics: analytics_result,
             };
         }
-    };
-    let turn_result = match resample {
-        Some(resample) => {
-            resample.finish(turn_result, &params.parent_context.turn().session_telemetry)
-        }
-        None => turn_result,
     };
     let completed_review = matches!(
         turn_result.outcome,
@@ -800,6 +785,13 @@ impl GuardianReviewSession {
         analytics: &mut GuardianReviewAnalyticsResult,
     ) -> Result<(ReviewTurnResult, bool), GuardianReviewSessionOutcome> {
         let store = &self.session.services.thread_extension_data;
+        if self
+            .reuse_key
+            .features
+            .enabled(Feature::GuardianDenialReconsideration)
+        {
+            store.insert(codex_guardian_reviewer::DenialResample::default());
+        }
         store.insert(turn.evidence);
         store.insert(super::PendingReviewRouting(context.parent_response.clone()));
         let mut observation =
@@ -826,7 +818,14 @@ impl GuardianReviewSession {
         .await;
         store.remove::<super::PendingReviewRouting>();
         let admitted = store.remove::<PendingReviewContext>().is_none();
-        result.map(|turn| (turn, admitted))
+        let resample = store.remove::<codex_guardian_reviewer::DenialResample>();
+        result.map(|turn| {
+            let turn = match resample {
+                Some(resample) => resample.finish(turn, &context.turn().session_telemetry),
+                None => turn,
+            };
+            (turn, admitted)
+        })
     }
 
     pub(super) fn analytics(

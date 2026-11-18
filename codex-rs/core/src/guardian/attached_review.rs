@@ -15,6 +15,7 @@ use codex_analytics::GuardianReviewSessionKind;
 use codex_guardian_context::ComposedContext;
 use codex_guardian_reviewer::GuardianReviewSessionOutcome;
 use codex_guardian_reviewer::SessionDisposition;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::user_input::UserInput;
 use tokio::sync::Mutex;
 
@@ -84,7 +85,7 @@ impl AttachedApproval {
         let mut reservation = None;
         let mut analytics = GuardianReviewAnalyticsResult::without_session();
         let mut usage_at_start = None;
-        let operation = async {
+        let prepare = async {
             let first = self.first.lock().await.take();
             let (authorization, model) = match first {
                 Some(first) => first,
@@ -97,7 +98,8 @@ impl AttachedApproval {
                         &approval.context,
                         cancel,
                     )
-                    .await?,
+                    .await
+                    .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?,
                 ),
             };
             let model = reservation.insert(model);
@@ -113,18 +115,21 @@ impl AttachedApproval {
             );
             if let Some(stale) = authorization.invalidation(parent, Some(cancel)).await {
                 analytics.context_changed = stale.context_changed;
-                return anyhow::Ok((stale.outcome, SessionDisposition::Discard));
+                return Err(stale.outcome);
             }
             let action = codex_guardian_reviewer::build_guardian_planned_action(
                 &approval.request,
                 reasons.retry.clone().or_else(|| reasons.approval.clone()),
                 approval.context.enclosing_invocation_id.as_deref(),
-            )?;
+            )
+            .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?;
             let permissions = super::super::super::permissions::for_request(
                 &approval.request,
                 Some(&approval.context),
-            )?;
-            let action_context = ComposedContext::for_pending_action(action, permissions.as_ref())?;
+            )
+            .map_err(GuardianReviewSessionOutcome::PromptBuildFailed)?;
+            let action_context = ComposedContext::for_pending_action(action, permissions.as_ref())
+                .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?;
             let request = review_turn(
                 parent,
                 &approval.context,
@@ -149,38 +154,50 @@ impl AttachedApproval {
             if matches!(kind, GuardianReviewSessionKind::TrunkReused) {
                 ensure_guardian_followup_reminder(runtime).await;
             }
-            let result = async {
-                prepare_verdict_session(
-                    runtime,
-                    &approval.context,
-                    approval.category,
-                    &config.node_repl_policy,
-                )
-                .await
-                .map_err(GuardianReviewSessionOutcome::PromptBuildFailed)?;
-                runtime
-                    .run_sync_verdict(
-                        &approval.context,
-                        turn,
-                        deadline,
-                        Some(cancel),
-                        &mut analytics,
-                    )
-                    .await
-            }
-            .await;
-            if let Some(stale) = authorization.invalidation(parent, Some(cancel)).await {
-                analytics.context_changed |= stale.context_changed;
-                return Ok((stale.outcome, SessionDisposition::Discard));
-            }
-            Ok(match result {
-                Ok((turn, _)) => (turn.outcome, turn.disposition),
-                Err(outcome) => (outcome, SessionDisposition::Discard),
-            })
-        };
-        let result = run_before_review_deadline(deadline, Some(cancel), operation)
+            prepare_verdict_session(
+                runtime,
+                &approval.context,
+                approval.category,
+                &config.node_repl_policy,
+            )
             .await
-            .and_then(|inner| inner.map_err(GuardianReviewSessionOutcome::PromptBuildFailed));
+            .map_err(GuardianReviewSessionOutcome::PromptBuildFailed)?;
+            Ok((runtime, authorization, turn))
+        };
+        let prepared = run_before_review_deadline(deadline, Some(cancel), prepare).await;
+        let result = async {
+            let (runtime, authorization, turn) = prepared??;
+            // Let the runner interrupt and drain the turn before it finalizes a provisional denial.
+            let (turn, _) = runtime
+                .run_sync_verdict(&approval.context, turn, deadline, Some(cancel), &mut analytics)
+                .await?;
+            let stale = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(GuardianReviewSessionOutcome::Aborted),
+                _ = deadline.wait() => {
+                    // An interrupted second sample may still carry the first denial.
+                    let recovered_denial = match &turn.outcome {
+                        GuardianReviewSessionOutcome::Completed(Ok(Some(response))) if !turn.turn_completed => {
+                            response.assessment().is_ok_and(|assessment| {
+                                assessment.outcome == GuardianAssessmentOutcome::Deny
+                            })
+                        }
+                        _ => false,
+                    };
+                    if !recovered_denial {
+                        return Err(GuardianReviewSessionOutcome::TimedOut);
+                    }
+                    None
+                }
+                stale = authorization.invalidation(parent, Some(cancel)) => stale,
+            };
+            if let Some(stale) = stale {
+                analytics.context_changed |= stale.context_changed;
+                return Err(stale.outcome);
+            }
+            Ok((turn.outcome, turn.disposition))
+        }
+        .await;
         let (outcome, disposition) =
             result.unwrap_or_else(|outcome| (outcome, SessionDisposition::Discard));
         let Some(model) = reservation else {

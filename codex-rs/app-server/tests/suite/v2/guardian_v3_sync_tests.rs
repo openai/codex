@@ -14,6 +14,7 @@ use test_case::test_case;
 
 enum ReviewCase {
     V3,
+    V3WithReconsideration,
     V3RoutingFailure,
     EphemeralV3,
     Native,
@@ -49,22 +50,31 @@ fn received_user_instruction(request: &responses::ResponsesRequest, text: &str) 
 }
 
 #[test_case(ReviewCase::V3; "v3_follows_subscribed_revocation_and_reapproval")]
+#[test_case(ReviewCase::V3WithReconsideration; "v3_resamples_a_terminal_denial_once")]
 #[test_case(ReviewCase::V3RoutingFailure; "v3_denies_when_pending_routing_fails")]
 #[test_case(ReviewCase::Native; "native_without_v3")]
 #[test_case(ReviewCase::EphemeralV3; "ephemeral_uses_native_with_v3")]
 #[tokio::test]
 async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let uses_board = matches!(case, ReviewCase::V3 | ReviewCase::V3RoutingFailure);
+    let reconsider = matches!(case, ReviewCase::V3WithReconsideration);
+    let uses_board = matches!(
+        case,
+        ReviewCase::V3 | ReviewCase::V3WithReconsideration | ReviewCase::V3RoutingFailure
+    );
     let routing_failure = matches!(case, ReviewCase::V3RoutingFailure);
     let server_enabled = !matches!(case, ReviewCase::Native);
     let server = responses::start_mock_server().await;
     const REVOCATION: &str = "I revoke permission for the release. Do not deploy.";
     const REAPPROVAL: &str =
         "I understand the release risk. I explicitly approve this release action.";
+    const FINAL_REVOCATION: &str = "Stop the release again. Do not deploy.";
+    const FIRST_DENIAL_REASON: &str = "The user explicitly stopped this deployment.";
     let next_call = Arc::new(Mutex::new(None));
     let actor_call = Arc::clone(&next_call);
     let ask_to_subscribe = AtomicBool::new(uses_board);
+    let deny_first_reapproval = AtomicBool::new(reconsider);
+    let first_final_sample = AtomicBool::new(true);
     let requests = responses::mount_response_handler(&server, move |request| {
         let body = request.body_json();
         let arguments = &body["text"]["format"]["schema"]["properties"];
@@ -102,20 +112,31 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
                     responses::ev_completed("subscribe"),
                 ]));
             }
-            let decision = if received_user_instruction(&request, REVOCATION)
-                && !received_user_instruction(&request, REAPPROVAL)
-            {
-                "deny"
+            let final_revocation = received_user_instruction(&request, FINAL_REVOCATION);
+            let denied = if final_revocation {
+                first_final_sample.swap(false, Ordering::SeqCst)
+            } else if received_user_instruction(&request, REAPPROVAL) {
+                deny_first_reapproval.swap(false, Ordering::SeqCst)
             } else {
-                "allow"
+                received_user_instruction(&request, REVOCATION)
             };
-            let text =
-                json!({"outcome":decision,"rationale":"Checked the requested release action."})
-                    .to_string();
-            responses::sse(vec![
+            let decision = if denied { "deny" } else { "allow" };
+            let rationale = if final_revocation && denied {
+                FIRST_DENIAL_REASON
+            } else {
+                "Checked the requested release action."
+            };
+            let text = json!({"outcome":decision,"rationale":rationale}).to_string();
+            let response = responses::sse_response(responses::sse(vec![
                 responses::ev_assistant_message("verdict", &text),
                 responses::ev_completed_with_tokens("verdict", /*total_tokens*/ 31),
-            ])
+            ]));
+            return if final_revocation && !denied {
+                // Only the second verdict request stalls past the shared review deadline.
+                response.set_delay(TIMEOUT)
+            } else {
+                response
+            };
         } else if let Some(call_id) = actor_call.lock().expect("next actor call").take() {
             responses::sse(vec![
                 responses::ev_function_call_with_namespace(
@@ -171,6 +192,13 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
         .with_extra_config(
             "[apps.connector_openai_browser]\ndefault_tools_approval_mode = \"prompt\"",
         );
+    config = if reconsider {
+        config
+            .enable_feature(Feature::GuardianDenialReconsideration)
+            .with_root_config("auto_review.timeout_ms = 10000")
+    } else {
+        config.disable_feature(Feature::GuardianDenialReconsideration)
+    };
     if uses_board {
         config = config
             .with_extra_config("[analytics]\nenabled = true")
@@ -214,8 +242,17 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
             ),
         ]);
     }
+    if reconsider {
+        turns.push((
+            "release-reconsideration-timeout",
+            FINAL_REVOCATION,
+            GuardianApprovalReviewStatus::Denied,
+        ));
+    }
     let mut previous_reviewer = None;
     let mut previous_review_id = None;
+    let mut denied_turns = Vec::new();
+    let mut seen_requests = 0;
     for (call_id, prompt, status) in turns {
         // Keep the revocation out of the board until the pending action requests its review.
         let gate = if prompt == REVOCATION {
@@ -258,10 +295,11 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
             timeout(TIMEOUT, app.read_notification("turn/completed")).await??;
         assert_eq!(completed.turn.id, started.turn.id);
         let calls = requests.requests();
-        let assessments: Vec<_> = calls
+        let assessments: Vec<_> = calls[seen_requests..]
             .iter()
             .filter(|r| expects_field(r, "outcome"))
             .collect();
+        seen_requests = calls.len();
         assert!(!calls.iter().any(|r| expects_field(r, "channels")));
         if routing_failure {
             let denied = wait_for_mcp_tool_call_completed(&mut app, call_id).await?;
@@ -302,6 +340,25 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
             (&thread.id, &completed.turn.id, status)
         );
         previous_review_id = Some(review.review_id);
+        if status == GuardianApprovalReviewStatus::Denied {
+            denied_turns.push(review.turn_id);
+        }
+        if prompt == FINAL_REVOCATION {
+            assert_eq!(
+                review.review.rationale.as_deref(),
+                Some(FIRST_DENIAL_REASON)
+            );
+        }
+        if prompt == REVOCATION || prompt == REAPPROVAL || prompt == FINAL_REVOCATION {
+            if reconsider {
+                let [first, second] = assessments.as_slice() else {
+                    anyhow::bail!("expected exactly two verdict samples for {call_id}");
+                };
+                assert_eq!(first.input(), second.input());
+            } else {
+                assert_eq!(assessments.len(), 1);
+            }
+        }
         // A subscription tool call can add a sampling step. Every assessment must
         // use the one reviewer route chosen for this actor.
         assert!(assessments.iter().all(|r| {
@@ -392,9 +449,15 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
             &[codex_protocol::ThreadId::from_string(&thread.id)?],
         )
         .await;
-        let record: Value =
-            serde_json::from_slice(&failures.attachment.expect("denial feedback").buffer)?;
-        assert_eq!(record["status"], "denied");
+        let attachment = failures.attachment.expect("denial feedback");
+        let mut records =
+            serde_json::Deserializer::from_slice(&attachment.buffer).into_iter::<Value>();
+        for turn_id in denied_turns {
+            let record = records.next().expect("feedback for each denied turn")?;
+            assert_eq!(record["reviewed_turn_id"], turn_id);
+            assert_eq!(record["status"], "denied");
+        }
+        assert!(records.next().is_none(), "unexpected extra feedback record");
     }
     app.shutdown_gracefully().await?;
     Ok(())
