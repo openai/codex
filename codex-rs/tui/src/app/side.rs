@@ -847,6 +847,7 @@ impl App {
         let fork = app_server.sidebar_fork(
             self.local_settings.clone(),
             self.side_fork_config(),
+            Some(self.chat_widget.session_workspace_roots().to_vec()),
             parent_thread_id,
             self.selected_server_profile(parent_thread_id),
             if workspace && app_server.can_list_saved_side_chats(parent_thread_id) {

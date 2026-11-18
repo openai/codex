@@ -77,6 +77,7 @@ async fn temporary_side_chat_sends_policy_on_its_first_request() -> Result<()> {
         .sidebar_fork(
             app.local_settings.clone(),
             app.side_fork_config(),
+            /*workspace_roots*/ None,
             parent,
             /*profile*/ None,
             crate::app_server_session::SideChatStorage::Temporary,

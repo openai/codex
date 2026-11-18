@@ -710,7 +710,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
         cwd: expected_cwd.clone().into(),
-        runtime_workspace_roots: vec![expected_cwd.clone()],
+        runtime_workspace_roots: vec![expected_cwd.clone().into()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
@@ -792,7 +792,10 @@ async fn session_configured_preserves_profile_workspace_roots() {
         permission_profile: session_permission_profile.clone(),
         active_permission_profile: None,
         cwd: session_cwd.clone().into(),
-        runtime_workspace_roots: session_runtime_workspace_roots.clone(),
+        runtime_workspace_roots: session_runtime_workspace_roots
+            .iter()
+            .map(PathUri::from_abs_path)
+            .collect(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,

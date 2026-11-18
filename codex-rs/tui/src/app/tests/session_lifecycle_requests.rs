@@ -2259,6 +2259,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
             .fork_side_thread(
                 &app.local_settings,
                 side_config.clone(),
+                /*workspace_roots*/ None,
                 thread_id,
                 /*selected_profile*/ None,
                 crate::app_server_session::SideChatStorage::Temporary,
@@ -2277,6 +2278,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
                 .fork_side_thread(
                     &app.local_settings,
                     side_config,
+                    /*workspace_roots*/ None,
                     thread_id,
                     /*selected_profile*/ None,
                     crate::app_server_session::SideChatStorage::Temporary,
@@ -2788,6 +2790,7 @@ async fn archive_current_thread_returns_to_agents() -> Result<()> {
                 .fork_side_thread(
                     &app.local_settings,
                     side_config,
+                    /*workspace_roots*/ None,
                     thread_id,
                     /*selected_profile*/ None,
                     crate::app_server_session::SideChatStorage::Temporary,
@@ -4738,6 +4741,7 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     Box::pin(app_server.fork_side_thread(
         &crate::local_settings::LocalSettings::from(&side_config),
         side_config,
+        /*workspace_roots*/ None,
         paginated_thread_id,
         /*selected_profile*/ None,
         crate::app_server_session::SideChatStorage::Temporary,
@@ -5723,19 +5727,26 @@ terminal_visualization_instructions = true
 
 #[test]
 fn changing_directory_preserves_project_trust_permissions_history_and_hooks() -> Result<()> {
+    run_embedded_tui_scenario("tui-change-directory", change_directory_scenario)
+}
+
+fn run_embedded_tui_scenario(
+    name: &str,
+    scenario: impl AsyncFnOnce() -> Result<()> + Send + 'static,
+) -> Result<()> {
     // The TUI and embedded app-server load full configurations on the same test thread.
     const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
     std::thread::Builder::new()
-        .name("tui-change-directory".into())
+        .name(name.to_owned())
         .stack_size(TEST_STACK_SIZE_BYTES)
-        .spawn(|| {
+        .spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(boxed_future!(change_directory_scenario()))
+                .block_on(boxed_future!(scenario()))
         })?
         .join()
-        .expect("directory change test thread panicked")
+        .expect("embedded TUI test thread panicked")
 }
 
 async fn change_directory_scenario() -> Result<()> {

@@ -26,6 +26,7 @@ use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use color_eyre::eyre::Result;
 
 // Bound recovery to recent messages when item paging is unavailable.
@@ -93,7 +94,7 @@ impl AppServerSession {
             config.permissions.permission_profile().clone(),
             config.permissions.active_permission_profile(),
             super::decode_thread_cwd(&thread.cwd, self.path_convention())?,
-            config.workspace_roots.clone(),
+            LegacyAppPathString::from_abs_paths(&config.workspace_roots),
             Vec::new(),
             thread.reasoning_effort,
             local_settings,

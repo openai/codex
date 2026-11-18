@@ -494,7 +494,12 @@ impl App {
         };
         if session.thread_id == thread_id
             || crate::session_resume::cwds_differ(&session.cwd.to_path_buf(), cwd.as_path())
-            || session.runtime_workspace_roots != config.workspace_roots
+            || session.runtime_workspace_roots
+                != config
+                    .workspace_roots
+                    .iter()
+                    .map(codex_utils_path_uri::PathUri::from_abs_path)
+                    .collect::<Vec<_>>()
             || !permissions_match
         {
             if session.thread_id != thread_id {

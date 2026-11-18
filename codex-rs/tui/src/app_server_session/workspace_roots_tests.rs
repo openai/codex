@@ -8,6 +8,60 @@ use codex_app_server_protocol::ServerNotification;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 
+#[tokio::test]
+async fn thread_start_preserves_foreign_workspace_and_writable_roots() -> Result<()> {
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    let temp = tempfile::tempdir()?;
+    let config = ConfigBuilder::default()
+        .codex_home(temp.path().to_path_buf())
+        .build()
+        .await?;
+    let (cwd, workspace, writable) = if cfg!(windows) {
+        ("/repo", "/workspaces/shared", "/output")
+    } else {
+        (r"D:\repo", r"D:\workspaces\shared", r"E:\output")
+    };
+    let id = ThreadId::new();
+    let response = serde_json::from_value(serde_json::json!({
+        "thread": {
+            "id": id, "sessionId": id, "preview": "", "ephemeral": false,
+            "modelProvider": "openai", "createdAt": 0, "updatedAt": 0,
+            "status": { "type": "idle" }, "cwd": cwd, "cliVersion": "test",
+            "source": "cli", "turns": []
+        },
+        "cwd": cwd, "model": "model", "modelProvider": "openai",
+        "approvalPolicy": "on-request", "approvalsReviewer": "user",
+        "runtimeWorkspaceRoots": [workspace],
+        "sandbox": { "type": "workspaceWrite", "writableRoots": [writable] }
+    }))?;
+    let path_uri = |text: &str| PathUri::try_from(LegacyAppPathString::from_string(text));
+    let started = started_thread_from_start_response(
+        response,
+        &LocalSettings::from(&config),
+        &config,
+        ThreadParamsMode::Remote,
+        path_uri(cwd)?,
+    )
+    .await?;
+    assert_eq!(started.session.cwd, path_uri(cwd)?);
+    assert_eq!(
+        started.session.runtime_workspace_roots,
+        vec![path_uri(workspace)?]
+    );
+    let (mut chat, _sender, _events, _commands) =
+        crate::chatwidget::tests::helpers::make_chatwidget_manual_with_sender().await;
+    chat.handle_thread_session(started.session);
+    let policy = chat.config_ref().permissions.file_system_sandbox_policy();
+    for root in [workspace, writable] {
+        assert!(policy.entries.contains(&FileSystemSandboxEntry::new(
+            path_uri(root)?.into(),
+            FileSystemAccessMode::Write,
+        )));
+    }
+    Ok(())
+}
+
 #[test]
 fn remote_workspace_roots_survive_start_turn_resume_and_fork() -> Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
@@ -74,6 +128,8 @@ stream_max_retries = 0
                     .await?;
                 let local_settings = LocalSettings::from(&client_config);
                 let expected_roots = vec![remote_cwd.clone(), extra_root.clone()];
+                let expected_uris: Vec<PathUri> =
+                    expected_roots.iter().map(PathUri::from_abs_path).collect();
                 let mut app_server =
                     crate::start_embedded_app_server_for_picker(&server_config).await?;
                 // Exercise remote request semantics with a real server and separate client config.
@@ -82,7 +138,7 @@ stream_max_retries = 0
                 let started = app_server.start_thread(&client_config).await?;
                 let thread_id = started.session.thread_id;
                 assert_eq!(started.session.cwd, remote_cwd.clone().into());
-                assert_eq!(started.session.runtime_workspace_roots, expected_roots);
+                assert_eq!(started.session.runtime_workspace_roots, expected_uris);
 
                 let (mut chat, _sender, _events, _commands) =
                     crate::chatwidget::tests::helpers::make_chatwidget_manual_with_sender().await;
@@ -102,7 +158,7 @@ stream_max_retries = 0
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
                         TurnPermissionsOverride::Preserve,
-                        config.permissions.user_visible_workspace_roots(),
+                        /*workspace_roots*/ &[],
                         "gpt-5.2".to_string(),
                         /*effort*/ None,
                         /*summary*/ None,
@@ -138,11 +194,11 @@ stream_max_retries = 0
                         ResumeModelSettings::RestoreFromThread,
                     )
                     .await?;
-                assert_eq!(resumed.session.runtime_workspace_roots, expected_roots);
+                assert_eq!(resumed.session.runtime_workspace_roots, expected_uris);
                 let forked = app_server
                     .fork_thread(&local_settings, client_config.clone(), thread_id)
                     .await?;
-                assert_eq!(forked.session.runtime_workspace_roots, expected_roots);
+                assert_eq!(forked.session.runtime_workspace_roots, expected_uris);
 
                 // Existing tasks may retain roots that are no longer in the server defaults.
                 let config_path = server_home.path().join("config.toml");
@@ -151,11 +207,14 @@ stream_max_retries = 0
                     "writable_roots = []",
                 );
                 std::fs::write(config_path, updated_config)?;
-                let session_config = chat.config_ref().clone();
+                let mut session_config = chat.config_ref().clone();
+                // A foreign session has no host-local workspace roots.
+                session_config.workspace_roots.clear();
                 let forked = app_server
                     .fork_thread_at(
                         &local_settings,
                         session_config.clone(),
+                        Some(chat.session_workspace_roots()),
                         thread_id,
                         /*last_turn_id*/ None,
                         /*before_turn_id*/ None,
@@ -163,23 +222,27 @@ stream_max_retries = 0
                         /*selected_profile*/ None,
                     )
                     .await?;
-                assert_eq!(forked.session.runtime_workspace_roots, expected_roots);
+                assert_eq!(forked.session.runtime_workspace_roots, expected_uris);
                 let side = app_server
                     .fork_side_thread(
                         &local_settings,
                         session_config,
+                        Some(chat.session_workspace_roots()),
                         thread_id,
                         /*selected_profile*/ None,
                         crate::app_server_session::SideChatStorage::Temporary,
                     )
                     .await?;
-                assert_eq!(side.session.runtime_workspace_roots, expected_roots);
+                assert_eq!(side.session.runtime_workspace_roots, expected_uris);
 
                 app_server.remote_cwd_override = None;
                 let started = app_server.start_thread(&client_config).await?;
                 let default_cwd = AbsolutePathBuf::current_dir()?;
                 assert_eq!(started.session.cwd, default_cwd.clone().into());
-                assert_eq!(started.session.runtime_workspace_roots, vec![default_cwd]);
+                assert_eq!(
+                    started.session.runtime_workspace_roots,
+                    vec![default_cwd.into()]
+                );
                 app_server.shutdown().await?;
                 Ok(())
             })
@@ -199,7 +262,7 @@ async fn embedded_lifecycle_requests_preserve_explicit_workspace_roots() -> Resu
         })
         .build()
         .await?;
-    let expected = Some(config.workspace_roots.clone());
+    let expected = Some(LegacyAppPathString::from_abs_paths(&config.workspace_roots));
     let thread_id = ThreadId::new();
     let start = thread_start_params_from_config(
         &config,

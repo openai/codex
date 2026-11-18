@@ -1599,7 +1599,10 @@ impl App {
             .permissions
             .set_permission_profile_from_session_snapshot(
                 PermissionProfileSnapshot::from_session_snapshot(
-                    session.permission_profile.clone(),
+                    crate::session_state::display_profile_for_roots(
+                        session.permission_profile.clone(),
+                        &session.runtime_workspace_roots,
+                    ),
                     session.active_permission_profile.clone(),
                 ),
             )
@@ -1608,12 +1611,10 @@ impl App {
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         if !self.app_server_target.uses_remote_workspace() {
-            self.config
-                .workspace_roots
-                .clone_from(&session.runtime_workspace_roots);
-            self.config
-                .permissions
-                .set_workspace_roots(session.runtime_workspace_roots.clone());
+            crate::session_state::sync_local_workspace_roots(
+                &mut self.config,
+                &session.runtime_workspace_roots,
+            );
         }
 
         let thread_id = session.thread_id;

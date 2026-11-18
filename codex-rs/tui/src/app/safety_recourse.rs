@@ -60,6 +60,7 @@ pub(super) async fn continue_with_rewrite(
             .fork_thread_at(
                 &app.local_settings,
                 config.clone(),
+                Some(app.chat_widget.session_workspace_roots()),
                 thread_id,
                 /*last_turn_id*/ None,
                 /*before_turn_id*/ Some(turn_id.clone()),

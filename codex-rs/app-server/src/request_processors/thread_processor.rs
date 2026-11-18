@@ -61,6 +61,7 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::StoredThreadSearchResult;
 use codex_thread_store::ThreadSearchObserver;
 use codex_thread_store::ThreadSearchSourceKind;
+use codex_utils_path_uri::LegacyAppPathString;
 use std::ops::ControlFlow;
 use tokio::sync::mpsc;
 
@@ -164,11 +165,30 @@ struct ThreadRevertRuntimeSnapshot {
     client_mcp_extensions: ClientMcpExtensions,
 }
 
+fn native_runtime_workspace_roots(
+    roots: Vec<LegacyAppPathString>,
+) -> Result<Vec<AbsolutePathBuf>, JSONRPCErrorError> {
+    let roots = roots
+        .into_iter()
+        .map(|root| {
+            if !root.as_path().is_absolute() {
+                return Err(invalid_request(format!(
+                    "invalid runtimeWorkspaceRoots: path is not absolute: {}",
+                    root.as_str(),
+                )));
+            }
+            AbsolutePathBuf::try_from(root)
+                .map_err(|err| invalid_request(format!("invalid runtimeWorkspaceRoots: {err}")))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(resolve_runtime_workspace_roots(roots))
+}
+
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
     selected_service_tier: Option<&str>,
-) -> Vec<String> {
+) -> Result<Vec<String>, JSONRPCErrorError> {
     let mut mismatch_details = Vec::new();
 
     if let Some(requested_model) = request.model.as_deref()
@@ -206,7 +226,8 @@ fn collect_resume_override_mismatches(
         }
     }
     if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
-        let requested_runtime_workspace_roots = requested_runtime_workspace_roots.to_vec();
+        let requested_runtime_workspace_roots =
+            native_runtime_workspace_roots(requested_runtime_workspace_roots.to_vec())?;
         if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
             mismatch_details.push(format!(
                 "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
@@ -279,7 +300,7 @@ fn collect_resume_override_mismatches(
             "developerInstructions override was provided and ignored while running".to_string(),
         );
     }
-    mismatch_details
+    Ok(mismatch_details)
 }
 
 fn merge_persisted_resume_metadata(
@@ -1359,7 +1380,9 @@ impl ThreadRequestProcessor {
                 return Err(invalid_request(format!("project not found: {project_id}")));
             }
         }
-        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let runtime_workspace_roots = runtime_workspace_roots
+            .map(native_runtime_workspace_roots)
+            .transpose()?;
         let environment_requests =
             resolve_turn_environment_requests(self.thread_manager.as_ref(), environments)?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -1790,7 +1813,9 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd,
-            runtime_workspace_roots: config_snapshot.workspace_roots,
+            runtime_workspace_roots: LegacyAppPathString::from_abs_paths(
+                &config_snapshot.workspace_roots,
+            ),
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
@@ -4307,8 +4332,9 @@ impl ThreadRequestProcessor {
         let history_cwd = history_settings
             .map(|settings| settings.cwd.to_path_buf())
             .or_else(|| thread_history.session_cwd());
-        let mut runtime_workspace_roots =
-            runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let mut runtime_workspace_roots = runtime_workspace_roots
+            .map(native_runtime_workspace_roots)
+            .transpose()?;
         if runtime_workspace_roots.is_none() {
             // A retained owned snapshot is authoritative. Only use startup metadata when
             // no such snapshot exists; missing roots do not resurrect an older selection.
@@ -4694,7 +4720,9 @@ impl ThreadRequestProcessor {
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
                     cwd: thread_cwd_for_api(&session_configured.cwd)?,
-                    runtime_workspace_roots: config_snapshot.workspace_roots,
+                    runtime_workspace_roots: LegacyAppPathString::from_abs_paths(
+                        &config_snapshot.workspace_roots,
+                    ),
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
@@ -4877,7 +4905,7 @@ impl ThreadRequestProcessor {
                 params,
                 &config_snapshot,
                 selected_service_tier.as_deref(),
-            );
+            )?;
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
                     .thread_state_manager
@@ -5692,7 +5720,9 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
-        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let runtime_workspace_roots = runtime_workspace_roots
+            .map(native_runtime_workspace_roots)
+            .transpose()?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -6081,7 +6111,9 @@ impl ThreadRequestProcessor {
             model_provider: session_configured.model_provider_id,
             service_tier: config_snapshot.service_tier.clone(),
             cwd: thread_cwd_for_api(&session_configured.cwd)?,
-            runtime_workspace_roots: config_snapshot.workspace_roots,
+            runtime_workspace_roots: LegacyAppPathString::from_abs_paths(
+                &config_snapshot.workspace_roots,
+            ),
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),

@@ -755,6 +755,7 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Working directory of the displayed session.
     current_cwd: PathUri,
+    current_workspace_roots: Vec<PathUri>,
     primary_environment_cwd: Option<crate::session_state::EnvironmentCwd>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,

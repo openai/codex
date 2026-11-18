@@ -1156,7 +1156,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             first_turn_cwd = None;
             resumed_workspace_roots = Some(permissions.workspace_roots);
             if !overrides.additional_writable_roots.is_empty() {
-                let mut roots = response.runtime_workspace_roots;
+                let mut roots = response
+                    .runtime_workspace_roots
+                    .into_iter()
+                    .map(AbsolutePathBuf::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
                 roots.extend(overrides.additional_writable_roots.into_iter().map(|path| {
                     AbsolutePathBuf::resolve_path_against_base(path, config.cwd.as_path())
                 }));
@@ -1221,7 +1225,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     model: config.model.clone(),
                     model_provider: Some(config.model_provider_id.clone()),
                     cwd: Some(config.cwd.to_string_lossy().to_string()),
-                    runtime_workspace_roots: Some(config.workspace_roots.clone()),
+                    runtime_workspace_roots: Some(LegacyAppPathString::from_abs_paths(
+                        &config.workspace_roots,
+                    )),
                     approval_policy: Some(config.permissions.approval_policy.value().into()),
                     approvals_reviewer: resume_approvals_reviewer_override,
                     sandbox: sandbox.flatten(),
@@ -1641,7 +1647,7 @@ fn thread_start_params_from_config(
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
-        runtime_workspace_roots: Some(config.workspace_roots.clone()),
+        runtime_workspace_roots: Some(LegacyAppPathString::from_abs_paths(&config.workspace_roots)),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: Some(config.approvals_reviewer.into()),
         sandbox: sandbox.flatten(),
@@ -1698,7 +1704,8 @@ fn thread_resume_params_from_config(
             .and_then(|settings| settings.get("writable_roots"))
             .is_some()
         {
-            runtime_workspace_roots = Some(config.workspace_roots.clone());
+            runtime_workspace_roots =
+                Some(LegacyAppPathString::from_abs_paths(&config.workspace_roots));
         }
     }
     ThreadResumeParams {

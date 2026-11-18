@@ -80,7 +80,13 @@ async fn check_fork_dispatch(mode: ThreadParamsMode) -> Result<()> {
         )
         .await?;
     let expected_roots = vec![remote_cwd, server_root];
-    assert_eq!(started.session.runtime_workspace_roots, expected_roots);
+    assert_eq!(
+        started.session.runtime_workspace_roots,
+        expected_roots
+            .iter()
+            .map(codex_utils_path_uri::PathUri::from_abs_path)
+            .collect::<Vec<_>>()
+    );
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
     app.thread_event_listener_tasks

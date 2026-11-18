@@ -420,6 +420,7 @@ async fn custom_permission_selection_scenario() -> Result<()> {
         server.fork_side_thread(
             &app.local_settings,
             app.config.clone(),
+            /*workspace_roots*/ None,
             thread_id,
             app.agents_overview
                 .requested_permission_profiles

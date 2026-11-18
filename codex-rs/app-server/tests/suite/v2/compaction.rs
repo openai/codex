@@ -36,6 +36,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -604,7 +605,10 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
     assert_eq!(
         (cwd.as_path(), runtime_workspace_roots),
-        (updated_cwd.path(), updated_roots)
+        (
+            updated_cwd.path(),
+            LegacyAppPathString::from_abs_paths(&updated_roots)
+        )
     );
 
     Ok(())

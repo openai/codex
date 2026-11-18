@@ -5231,6 +5231,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "cwd": cwd,
         "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
+        "runtimeWorkspaceRoots": [cwd],
         "sandbox": { "type": "workspaceWrite", "writableRoots": [cwd] },
         "reasoningEffort": null
     });
@@ -5245,6 +5246,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     for encoded in [json!(start), json!(resume), json!(fork)] {
         assert_eq!(encoded["thread"]["cwd"], cwd);
         assert_eq!(encoded["cwd"], cwd);
+        assert_eq!(encoded["runtimeWorkspaceRoots"], json!([cwd]));
         assert_eq!(encoded["sandbox"]["writableRoots"], json!([cwd]));
     }
     assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());

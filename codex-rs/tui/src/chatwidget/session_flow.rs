@@ -158,11 +158,12 @@ impl ChatWidget {
         if connector_scope_changed {
             self.invalidate_connector_scope();
         }
-        let runtime_workspace_roots = session.runtime_workspace_roots.clone();
-        self.config.workspace_roots = runtime_workspace_roots.clone();
-        self.config
-            .permissions
-            .set_workspace_roots(runtime_workspace_roots);
+        self.current_workspace_roots
+            .clone_from(&session.runtime_workspace_roots);
+        crate::session_state::sync_local_workspace_roots(
+            &mut self.config,
+            &self.current_workspace_roots,
+        );
         self.config.service_tier = session.service_tier.clone();
         self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
@@ -176,7 +177,10 @@ impl ChatWidget {
                 Constrained::allow_only(session.approval_policy.to_core());
         }
         let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
-            session.permission_profile.clone(),
+            crate::session_state::display_profile_for_roots(
+                session.permission_profile.clone(),
+                &session.runtime_workspace_roots,
+            ),
             session.active_permission_profile.clone(),
         );
         let permission_sync = self

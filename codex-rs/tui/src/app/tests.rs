@@ -3361,6 +3361,7 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
         .fork_side_thread(
             &app.local_settings,
             config.clone(),
+            /*workspace_roots*/ None,
             parent,
             /*selected_profile*/ None,
             SideChatStorage::Attached,
@@ -3372,6 +3373,7 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
         .sidebar_fork(
             app.local_settings.clone(),
             config.clone(),
+            /*workspace_roots*/ None,
             parent,
             /*profile*/ None,
             SideChatStorage::Attached,
@@ -3382,6 +3384,7 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
         .fork_side_thread(
             &app.local_settings,
             config.clone(),
+            /*workspace_roots*/ None,
             parent,
             /*selected_profile*/ None,
             SideChatStorage::Attached,
@@ -7586,7 +7589,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         windows_sandbox_host: WindowsSandboxHost::Local,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone(), shared_root.clone()],
+        runtime_workspace_roots: vec![primary_cwd.clone().into(), shared_root.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
 
@@ -7671,7 +7674,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     assert_eq!(session.cwd.to_path_buf(), test_path_buf("/tmp/agent"));
     assert_eq!(
         session.runtime_workspace_roots,
-        vec![test_path_buf("/tmp/agent").abs(), shared_root]
+        vec![test_path_buf("/tmp/agent").abs().into(), shared_root.into()]
     );
     assert_eq!(session.rollout_path, Some(rollout_path));
     assert_eq!(
@@ -7711,7 +7714,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone()],
+        runtime_workspace_roots: vec![primary_cwd.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
 
@@ -7801,7 +7804,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone()],
+        runtime_workspace_roots: vec![primary_cwd.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
 
@@ -7857,7 +7860,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     assert_eq!(session.cwd.to_path_buf(), test_path_buf("/tmp/read"));
     assert_eq!(
         session.runtime_workspace_roots,
-        vec![test_path_buf("/tmp/read").abs()]
+        vec![test_path_buf("/tmp/read").abs().into()]
     );
     let expected_permission_profile = app
         .chat_widget

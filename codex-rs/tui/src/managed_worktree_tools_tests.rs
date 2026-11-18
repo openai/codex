@@ -141,6 +141,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
     let saved_side = Box::pin(server.fork_side_thread(
         &LocalSettings::from(&config),
         config.clone(),
+        /*workspace_roots*/ None,
         started.session.thread_id,
         /*selected_profile*/ None,
         SideChatStorage::Attached,

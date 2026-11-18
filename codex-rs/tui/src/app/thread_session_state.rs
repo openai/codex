@@ -112,7 +112,12 @@ impl App {
                 cwd: cwd
                     .clone()
                     .unwrap_or_else(|| self.config.cwd.clone().into()),
-                runtime_workspace_roots: self.config.workspace_roots.clone(),
+                runtime_workspace_roots: self
+                    .config
+                    .workspace_roots
+                    .iter()
+                    .map(codex_utils_path_uri::PathUri::from_abs_path)
+                    .collect(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 collaboration_mode: None,
@@ -206,7 +211,7 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: cwd.abs().into(),
-            runtime_workspace_roots: vec![cwd.abs()],
+            runtime_workspace_roots: vec![cwd.abs().into()],
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,

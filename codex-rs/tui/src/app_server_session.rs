@@ -242,9 +242,11 @@ impl SideChatStorage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ForkConfigSource {
+enum ForkConfigSource<'a> {
     Local,
-    Session,
+    Session {
+        workspace_roots: Option<&'a [PathUri]>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,11 +526,18 @@ impl ThreadParamsMode {
         }
     }
 
-    fn workspace_roots_from_config(self, config: &Config) -> Option<Vec<AbsolutePathBuf>> {
+    fn workspace_roots_from_config(self, config: &Config) -> Option<Vec<LegacyAppPathString>> {
+        self.local_workspace_roots(&config.workspace_roots)
+            .map(LegacyAppPathString::from_abs_paths)
+    }
+
+    pub(crate) fn local_workspace_roots(
+        self,
+        roots: &[AbsolutePathBuf],
+    ) -> Option<&[AbsolutePathBuf]> {
+        // A remote server owns its workspace roots. A client config can only hold local paths.
         match self {
-            Self::Embedded => Some(config.workspace_roots.clone()),
-            // Client config paths belong to the client host. Let the server resolve its
-            // defaults or restore the saved roots, then adopt the roots in its response.
+            Self::Embedded => Some(roots),
             Self::Remote | Self::Cloud => None,
         }
     }
@@ -1313,6 +1322,7 @@ impl AppServerSession {
         &mut self,
         local_settings: &LocalSettings,
         config: Config,
+        workspace_roots: Option<&[PathUri]>,
         thread_id: ThreadId,
         last_turn_id: Option<String>,
         before_turn_id: Option<String>,
@@ -1329,7 +1339,7 @@ impl AppServerSession {
             ForkPresentation::Regular,
             selected_profile,
             ForkPermissionMode::InheritSaved,
-            ForkConfigSource::Session,
+            ForkConfigSource::Session { workspace_roots },
         )
         .await
     }
@@ -1355,7 +1365,9 @@ impl AppServerSession {
             ForkPresentation::Regular,
             selected_profile,
             permission_mode,
-            ForkConfigSource::Session,
+            ForkConfigSource::Session {
+                workspace_roots: None,
+            },
         )
         .await
     }
@@ -1366,6 +1378,7 @@ impl AppServerSession {
         &self,
         settings: LocalSettings,
         config: Config,
+        workspace_roots: Option<Vec<PathUri>>,
         parent: ThreadId,
         profile: Option<PermissionProfileSelection>,
         preferred_storage: SideChatStorage,
@@ -1388,7 +1401,14 @@ impl AppServerSession {
                 storage = SideChatStorage::Attached;
             }
             let fork = view
-                .fork_side_thread(&settings, config.clone(), parent, profile.as_ref(), storage)
+                .fork_side_thread(
+                    &settings,
+                    config.clone(),
+                    workspace_roots.as_deref(),
+                    parent,
+                    profile.as_ref(),
+                    storage,
+                )
                 .await;
             let thread = match fork {
                 Err(err)
@@ -1396,8 +1416,15 @@ impl AppServerSession {
                         && side_chat_history::is_attached_thread_store_unsupported(&err) =>
                 {
                     storage = SideChatStorage::Temporary;
-                    view.fork_side_thread(&settings, config, parent, profile.as_ref(), storage)
-                        .await?
+                    view.fork_side_thread(
+                        &settings,
+                        config,
+                        workspace_roots.as_deref(),
+                        parent,
+                        profile.as_ref(),
+                        storage,
+                    )
+                    .await?
                 }
                 result => result?,
             };
@@ -1452,6 +1479,7 @@ impl AppServerSession {
         &mut self,
         local_settings: &LocalSettings,
         mut config: Config,
+        workspace_roots: Option<&[PathUri]>,
         thread_id: ThreadId,
         selected_profile: Option<&PermissionProfileSelection>,
         storage: SideChatStorage,
@@ -1467,7 +1495,7 @@ impl AppServerSession {
             ForkPresentation::SideConversation(storage),
             selected_profile,
             ForkPermissionMode::InheritSaved,
-            ForkConfigSource::Session,
+            ForkConfigSource::Session { workspace_roots },
         )
         .await
     }
@@ -1487,7 +1515,7 @@ impl AppServerSession {
         presentation: ForkPresentation,
         selected_profile: Option<&PermissionProfileSelection>,
         permission_mode: ForkPermissionMode,
-        config_source: ForkConfigSource,
+        config_source: ForkConfigSource<'_>,
     ) -> Result<AppServerStartedThread> {
         if self.thread_params_mode == ThreadParamsMode::Cloud {
             color_eyre::eyre::bail!("Cloud conversations cannot be forked in the TUI yet.");
@@ -1537,12 +1565,18 @@ impl AppServerSession {
                 .model_provider_override
                 .clone()
                 .or(params.model_provider),
-            ForkConfigSource::Session => Some(config.model_provider_id.clone()),
+            ForkConfigSource::Session { .. } => Some(config.model_provider_id.clone()),
         };
-        if config_source == ForkConfigSource::Session {
-            // Active-session config has already adopted the server's roots. Fork does
-            // not restore saved roots when omitted, so preserve this explicit selection.
-            params.runtime_workspace_roots = Some(config.workspace_roots.clone());
+        if let ForkConfigSource::Session { workspace_roots } = config_source {
+            // Omitting roots on fork lets the server recompute them from its current defaults.
+            params.runtime_workspace_roots = Some(match workspace_roots {
+                Some(roots) => roots
+                    .iter()
+                    .cloned()
+                    .map(LegacyAppPathString::from)
+                    .collect(),
+                None => LegacyAppPathString::from_abs_paths(&config.workspace_roots),
+            });
             if permission_mode == ForkPermissionMode::InheritSaved && selected_profile.is_none() {
                 params.approvals_reviewer = None;
                 if let Some(overrides) = params.config.as_mut() {
@@ -1947,7 +1981,10 @@ impl AppServerSession {
             let (sandbox_policy, permissions) =
                 turn_permissions_overrides(permissions_override, cwd.as_path())?;
             params.cwd = Some(cwd);
-            params.runtime_workspace_roots = Some(workspace_roots.to_vec());
+            params.runtime_workspace_roots = self
+                .thread_params_mode
+                .local_workspace_roots(workspace_roots)
+                .map(<[_]>::to_vec);
             params.approval_policy = approval_policy;
             params.approvals_reviewer = approvals_reviewer;
             params.sandbox_policy = sandbox_policy;
@@ -3253,7 +3290,7 @@ async fn thread_session_state_from_thread_response(
     permission_profile: PermissionProfile,
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: PathUri,
-    runtime_workspace_roots: Vec<AbsolutePathBuf>,
+    runtime_workspace_roots: Vec<LegacyAppPathString>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     local_settings: &LocalSettings,
@@ -3290,7 +3327,11 @@ async fn thread_session_state_from_thread_response(
         permission_profile,
         active_permission_profile,
         cwd,
-        runtime_workspace_roots,
+        runtime_workspace_roots: runtime_workspace_roots
+            .into_iter()
+            .map(PathUri::try_from)
+            .collect::<Result<_, _>>()
+            .map_err(|err| err.to_string())?,
         instruction_source_paths,
         reasoning_effort,
         collaboration_mode: None,
@@ -4083,7 +4124,7 @@ mod tests {
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(
             params.runtime_workspace_roots,
-            Some(config.workspace_roots.clone())
+            Some(LegacyAppPathString::from_abs_paths(&config.workspace_roots))
         );
         assert_eq!(params.sandbox, None);
         assert_eq!(
@@ -4849,6 +4890,7 @@ mod tests {
             .fork_side_thread(
                 &LocalSettings::from(&ephemeral_config),
                 ephemeral_config,
+                /*workspace_roots*/ None,
                 source_thread_id,
                 /*selected_profile*/ None,
                 crate::app_server_session::SideChatStorage::Temporary,
@@ -4977,6 +5019,7 @@ mod tests {
             .fork_side_thread(
                 &LocalSettings::from(&side_config),
                 side_config,
+                /*workspace_roots*/ None,
                 source_thread_id,
                 /*selected_profile*/ None,
                 crate::app_server_session::SideChatStorage::Temporary,
@@ -5081,6 +5124,7 @@ mod tests {
             .fork_side_thread(
                 &LocalSettings::from(&config),
                 config,
+                /*workspace_roots*/ None,
                 thread_id,
                 /*selected_profile*/ None,
                 crate::app_server_session::SideChatStorage::Temporary,
@@ -5263,8 +5307,8 @@ mod tests {
             service_tier: None,
             cwd: test_path_buf("/tmp/project").abs().into(),
             runtime_workspace_roots: vec![
-                test_path_buf("/tmp/project").abs(),
-                test_path_buf("/tmp/project/extra").abs(),
+                test_path_buf("/tmp/project").abs().into(),
+                test_path_buf("/tmp/project/extra").abs().into(),
             ],
             instruction_sources: vec![LegacyAppPathString::from_abs_path(
                 &test_path_buf("/tmp/project/AGENTS.md").abs(),
@@ -5301,7 +5345,13 @@ mod tests {
         assert_eq!(started.session.forked_from_id, Some(forked_from_id));
         assert_eq!(
             started.session.runtime_workspace_roots,
-            response.runtime_workspace_roots
+            response
+                .runtime_workspace_roots
+                .clone()
+                .into_iter()
+                .map(PathUri::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
         );
         assert_eq!(
             started.session.instruction_source_paths,

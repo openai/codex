@@ -784,7 +784,7 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             cwd: Some(initial_cwd.to_string_lossy().into_owned()),
-            runtime_workspace_roots: Some(initial_roots.clone()),
+            runtime_workspace_roots: Some(LegacyAppPathString::from_abs_paths(&initial_roots)),
             environments: Some(explicit_environments.clone()),
             ..Default::default()
         })
@@ -828,7 +828,7 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
         runtime_workspace_roots,
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
-    assert_eq!(runtime_workspace_roots, vec![explicit_cwd.clone()]);
+    assert_eq!(runtime_workspace_roots, vec![explicit_cwd.clone().into()]);
 
     // A cwd-only update must retain the fallback's additional folder, not the live roots.
     mcp.clear_message_buffer();
@@ -901,7 +901,10 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
     assert_eq!(
         (cwd, runtime_workspace_roots),
-        (initial_cwd.clone().into(), expected_roots)
+        (
+            initial_cwd.clone().into(),
+            LegacyAppPathString::from_abs_paths(&expected_roots)
+        )
     );
 
     Ok(())
@@ -1003,7 +1006,9 @@ sandbox = "unelevated"
             .send_thread_resume_request(ThreadResumeParams {
                 thread_id: thread_id.clone(),
                 cwd: cwd_override.map(|cwd| cwd.to_string_lossy().into_owned()),
-                runtime_workspace_roots: roots_override,
+                runtime_workspace_roots: roots_override
+                    .as_deref()
+                    .map(LegacyAppPathString::from_abs_paths),
                 service_tier: (index == 2).then_some(Some("priority".to_string())),
                 personality: (index == 2).then_some(Personality::None),
                 config: (index == 1).then(|| {
@@ -1019,7 +1024,10 @@ sandbox = "unelevated"
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
         assert_eq!(
             (resumed.cwd, resumed.runtime_workspace_roots),
-            (expected_cwd.clone().into(), expected_roots.clone())
+            (
+                expected_cwd.clone().into(),
+                LegacyAppPathString::from_abs_paths(&expected_roots)
+            )
         );
         if index < 3 {
             mcp.start_turn_and_wait_for_completion(TurnStartParams {
@@ -1236,7 +1244,11 @@ async fn cold_resume_workspace_roots_validate_foreign_startup_paths() -> Result<
             } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
             assert_eq!(
                 (thread.id, cwd, runtime_workspace_roots),
-                (thread_id, local_cwd.clone().into(), expected_roots)
+                (
+                    thread_id,
+                    local_cwd.clone().into(),
+                    LegacyAppPathString::from_abs_paths(&expected_roots)
+                )
             );
         } else {
             let error = timeout(
@@ -1983,7 +1995,7 @@ async fn cold_resume_reresolves_persisted_active_permission_profile() -> Result<
         );
         assert_eq!(
             runtime_workspace_roots,
-            vec![previous_workspace_root.path().abs()]
+            vec![previous_workspace_root.path().abs().into()]
         );
     }
     Ok(())

@@ -1292,7 +1292,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
-        runtime_workspace_roots: workspace_roots,
+        runtime_workspace_roots: codex_utils_path_uri::LegacyAppPathString::from_abs_paths(
+            &workspace_roots,
+        ),
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),

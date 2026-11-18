@@ -169,8 +169,10 @@ impl App {
                 return;
             };
             params.cwd = Some(cwd);
-            params.runtime_workspace_roots =
-                Some(config.permissions.user_visible_workspace_roots().to_vec());
+            params.runtime_workspace_roots = app_server
+                .thread_params_mode()
+                .local_workspace_roots(config.permissions.user_visible_workspace_roots())
+                .map(<[_]>::to_vec);
             params.approval_policy = Some(config.permissions.approval_policy.value().into());
             params.sandbox_policy = sandbox_policy;
             params.permissions = permissions;

@@ -60,6 +60,11 @@ impl LegacyAppPathString {
         Self::from_path(path.as_path())
     }
 
+    /// Renders host-native absolute paths for a legacy API path list.
+    pub fn from_abs_paths(paths: &[AbsolutePathBuf]) -> Vec<Self> {
+        paths.iter().map(Self::from_abs_path).collect()
+    }
+
     /// Renders a path URI using the requested native path convention.
     ///
     /// Rendering fails when the URI shape does not match the convention, such

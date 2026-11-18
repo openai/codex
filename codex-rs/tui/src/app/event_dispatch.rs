@@ -777,11 +777,6 @@ impl App {
                         .await;
                     let mut fork_config = self.config.clone();
                     fork_config.daybreak_enabled = self.chat_widget.daybreak_enabled;
-                    if app_server.uses_remote_workspace() {
-                        fork_config.workspace_roots.clone_from(
-                            &self.chat_widget.config_ref().workspace_roots,
-                        );
-                    }
                     fork_config.model_provider_id.clone_from(&self.chat_widget.config_ref().model_provider_id);
                     fork_config.model = Some(self.chat_widget.current_model().to_string());
                     fork_config.model_reasoning_effort =
@@ -790,6 +785,7 @@ impl App {
                     match app_server.fork_thread_at(
                         &self.local_settings,
                         fork_config,
+                        app_server.uses_remote_workspace().then(|| self.chat_widget.session_workspace_roots()),
                         thread_id,
                         /*last_turn_id*/ None,
                         /*before_turn_id*/ None,

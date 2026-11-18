@@ -23,6 +23,25 @@ fn thread_cwd_rejects_invalid_utf8() {
 }
 
 #[test]
+fn runtime_workspace_roots_reject_home_relative_paths() {
+    use codex_utils_absolute_path::AbsolutePathBufGuard;
+    use codex_utils_path_uri::LegacyAppPathString;
+
+    let home = std::env::current_dir().expect("current directory");
+    let result = AbsolutePathBufGuard::with_home_directory(&home, || {
+        super::native_runtime_workspace_roots(vec![LegacyAppPathString::from_string("~/extra")])
+    });
+    assert_eq!(
+        result.expect_err("runtime workspace root must be absolute"),
+        JSONRPCErrorError {
+            code: crate::error_code::INVALID_REQUEST_ERROR_CODE,
+            message: "invalid runtimeWorkspaceRoots: path is not absolute: ~/extra".into(),
+            data: None,
+        }
+    );
+}
+
+#[test]
 fn storage_failure_classification_does_not_change_mutation_error_policy() {
     for error in [
         ThreadStoreError::Internal {
@@ -791,7 +810,8 @@ mod thread_processor_behavior_tests {
                 &request,
                 &config_snapshot,
                 /* selected_service_tier */ Some("flex"),
-            ),
+            )
+            .unwrap(),
             vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
         );
     }

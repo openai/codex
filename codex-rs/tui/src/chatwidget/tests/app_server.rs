@@ -66,7 +66,7 @@ pub(super) fn configured_thread_session(
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/tmp/thread-settings").abs().into(),
-        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
+        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs().into()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
@@ -764,6 +764,7 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
     session.cwd = test_path_buf("/tmp/original-workspace").abs().into();
+    session.runtime_workspace_roots = vec![session.cwd.clone()];
     session.thread_settings_confirmed = false;
     chat.handle_thread_session(session);
     chat.config.permissions.approval_policy =
@@ -790,6 +791,11 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     );
 
     assert_eq!(chat.session_cwd().inferred_native_path_string(), remote_cwd);
+    assert_eq!(
+        chat.current_workspace_roots.as_slice(),
+        std::slice::from_ref(chat.session_cwd())
+    );
+    assert!(chat.config_ref().workspace_roots.is_empty());
     assert_ne!(chat.connector_scope_generation(), previous_generation);
     assert!(chat.connectors_for_mentions().is_none());
     assert!(chat.connectors.mention_refresh_in_flight);

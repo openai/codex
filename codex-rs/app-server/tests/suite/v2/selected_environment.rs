@@ -1,3 +1,4 @@
+use codex_utils_path_uri::LegacyAppPathString;
 use std::path::Path;
 use std::time::Duration;
 
@@ -73,7 +74,7 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         (
             // TODO(anp): Return the selected environment's native cwd from thread/start.
             host_cwd,
-            selected_workspace_roots,
+            LegacyAppPathString::from_abs_paths(&selected_workspace_roots),
             // TODO(anp): Report the implicit built-in permission profile instead of None.
             None,
         )

@@ -492,6 +492,10 @@ impl ChatWidget {
         &self.current_cwd
     }
 
+    pub(crate) fn session_workspace_roots(&self) -> &[PathUri] {
+        &self.current_workspace_roots
+    }
+
     pub(super) fn status_line_workspace_cwd(&self) -> PathBuf {
         self.primary_environment_cwd
             .as_ref()
