@@ -251,7 +251,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
         sse(vec![
             ev_assistant_message(
                 "route1",
-                r#"{"routes":[["release","releases-copy"]],"descriptions":{}}"#,
+                r#"{"routes":[["release","releases-copy"]],"descriptions":[]}"#,
             ),
             ev_completed("route1"),
         ]),
@@ -284,7 +284,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts() -> anyho
     let _second_route = mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("route2", r#"{"routes":[["release"]],"descriptions":{}}"#),
+            ev_assistant_message("route2", r#"{"routes":[["release"]],"descriptions":[]}"#),
             ev_completed("route2"),
         ]),
     )

@@ -55,6 +55,9 @@ enum RoutingCase {
     WriteFailure,
     MissingNewDescription,
     UnroutedDescription,
+    DuplicateDescription,
+    DuplicateDestination,
+    EmptyRoute,
     UpsertDeadline,
     InvalidResponse,
 }
@@ -65,6 +68,9 @@ enum RoutingCase {
 #[test_case::test_case(RoutingCase::WriteFailure; "write_failure")]
 #[test_case::test_case(RoutingCase::MissingNewDescription; "new_destination_needs_description")]
 #[test_case::test_case(RoutingCase::UnroutedDescription; "only_routed_channels_can_be_edited")]
+#[test_case::test_case(RoutingCase::DuplicateDescription; "rejects_duplicate_channel_descriptions_before_writing")]
+#[test_case::test_case(RoutingCase::DuplicateDestination; "writes_once_per_distinct_destination_and_continues_routing")]
+#[test_case::test_case(RoutingCase::EmptyRoute; "rejects_an_original_without_a_destination")]
 #[test_case::test_case(RoutingCase::UpsertDeadline; "stalled_channel_creation")]
 #[test_case::test_case(RoutingCase::InvalidResponse; "redacted_model_error")]
 #[tokio::test]
@@ -174,18 +180,25 @@ async fn routes_captured_originals_and_updates_descriptions(
     let cancellation = CancellationToken::new();
     let reply = match case {
         RoutingCase::MissingNewDescription => {
-            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy"}}"#
+            r#"{"routes":[["release","_audit"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#
         }
         RoutingCase::UnroutedDescription => {
-            r#"{"routes":[["_audit"]],"descriptions":{"_audit":"","release":"Unrelated edit"}}"#
+            r#"{"routes":[["_audit"]],"descriptions":[{"channel":"_audit","description":""},{"channel":"release","description":"Unrelated edit"}]}"#
         }
+        RoutingCase::DuplicateDescription => {
+            r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"first"},{"channel":"release","description":"second"}]}"#
+        }
+        RoutingCase::DuplicateDestination => {
+            r#"{"routes":[["release","_audit","release"]],"descriptions":[{"channel":"release","description":"Release policy"},{"channel":"_audit","description":""}]}"#
+        }
+        RoutingCase::EmptyRoute => r#"{"routes":[[]],"descriptions":[]}"#,
         RoutingCase::InvalidResponse => r#"{"private-evidence-canary":true}"#,
         RoutingCase::Success
         | RoutingCase::RetryExhausted
         | RoutingCase::WindowPressure
         | RoutingCase::WriteFailure
         | RoutingCase::UpsertDeadline => {
-            r#"{"routes":[["release","_audit"]],"descriptions":{"release":"Release policy","_audit":""}}"#
+            r#"{"routes":[["release","_audit"]],"descriptions":[{"channel":"release","description":"Release policy"},{"channel":"_audit","description":""}]}"#
         }
     };
     let mut events = Vec::new();
@@ -279,7 +292,10 @@ async fn routes_captured_originals_and_updates_descriptions(
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
-    if !matches!(case, RoutingCase::Success | RoutingCase::WindowPressure) {
+    if !matches!(
+        case,
+        RoutingCase::Success | RoutingCase::WindowPressure | RoutingCase::DuplicateDestination
+    ) {
         let error = routed.expect_err("routing should fail");
         if matches!(case, RoutingCase::InvalidResponse) {
             let diagnostic = format!("{error:#}");
@@ -289,6 +305,8 @@ async fn routes_captured_originals_and_updates_descriptions(
             case,
             RoutingCase::MissingNewDescription
                 | RoutingCase::UnroutedDescription
+                | RoutingCase::DuplicateDescription
+                | RoutingCase::EmptyRoute
                 | RoutingCase::RetryExhausted
         ) {
             // Failed batches stop after the catalog read, before any board writes.
@@ -305,6 +323,13 @@ async fn routes_captured_originals_and_updates_descriptions(
         return Ok(());
     }
     assert_eq!(routed?, 1);
+    if matches!(case, RoutingCase::DuplicateDestination) {
+        // One catalog read, two description upserts, and one append per distinct channel.
+        assert_eq!(
+            host.agent_path_calls.load(Ordering::SeqCst) - calls_before,
+            5
+        );
+    }
     assert_eq!(housekeeper.route_next(&snapshot, &cancellation).await?, 0);
     assert!(housekeeper.cursor().pending(&snapshot)?.is_empty());
     let next = housekeeper
@@ -322,7 +347,7 @@ async fn routes_captured_originals_and_updates_descriptions(
                 .get("x-openai-subagent")
                 .is_some_and(|value| value == "guardian")
     }));
-    assert_eq!(request.body_json()["text"]["format"]["strict"], false);
+    assert_eq!(request.body_json()["text"]["format"]["strict"], true);
     assert!(
         request.body_json()["tools"]
             .as_array()
@@ -411,9 +436,9 @@ async fn routes_captured_originals_and_updates_descriptions(
     for (index, source) in next.records().iter().enumerate() {
         // Omission preserves the description. A redundant echo is harmless too.
         let reply = if index == 0 {
-            r#"{"routes":[["release"]],"descriptions":{}}"#
+            r#"{"routes":[["release"]],"descriptions":[]}"#
         } else {
-            r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#
+            r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#
         };
         let response = mount_sse_once(
             &server,
@@ -540,7 +565,7 @@ async fn root_shutdown_waits_for_the_accepted_evidence_append() -> anyhow::Resul
         vec![vec![
             ev_assistant_message(
                 "route",
-                r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
+                r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#,
             ),
             ev_completed("route"),
         ]],
@@ -725,7 +750,7 @@ async fn command_token_rotation_between_batches_reauthenticates_the_housekeeper(
     let route = vec![
         ev_assistant_message(
             "route",
-            r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
+            r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#,
         ),
         ev_completed("route"),
     ];
@@ -912,7 +937,7 @@ async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle(
         &server,
         vec![
             sse(vec![
-                ev_assistant_message("route", r#"{"routes":[["release"]],"descriptions":{}}"#),
+                ev_assistant_message("route", r#"{"routes":[["release"]],"descriptions":[]}"#),
                 ev_completed("route"),
             ]),
             sse(vec![

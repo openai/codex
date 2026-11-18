@@ -229,7 +229,7 @@ impl HousekeeperSampler {
             prompt_cache_key: Some(self.conversation.to_string()),
             prompt_cache_options: None,
             text: codex_api::create_text_param_for_request(
-                /*verbosity*/ None, schema, /*output_schema_strict*/ false,
+                /*verbosity*/ None, schema, /*output_schema_strict*/ true,
             ),
             client_metadata: None,
             access_programs: None,

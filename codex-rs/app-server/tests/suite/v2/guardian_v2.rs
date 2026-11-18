@@ -75,6 +75,9 @@ use super::mcp_tool::TEST_TOOL_NAME;
 use super::mcp_tool::start_mcp_server;
 use super::mcp_tool::start_mcp_server_with_tools;
 
+#[path = "guardian_v3_sync_tests.rs"]
+mod v3_sync;
+
 #[path = "guardian_sync_session_tests.rs"]
 mod sync_sessions;
 

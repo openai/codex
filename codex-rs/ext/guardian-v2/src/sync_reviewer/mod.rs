@@ -157,6 +157,10 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if input.session_source.is_internal()
+                || input
+                    .thread_store
+                    .get::<Arc<dyn codex_core::guardian_review::AttachedReviewer>>()
+                    .is_some()
                 || !matches!(
                     input.config.permissions.approval_policy.value(),
                     AskForApproval::OnRequest | AskForApproval::Granular(_)

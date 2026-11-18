@@ -167,7 +167,9 @@ impl ThreadLifecycleContributor<Config> for Host {
             };
             let actor_reviewer =
                 Arc::new(ActorReviewer::new(self.manager.clone(), root, actor, path));
-            input.thread_store.insert_arc(actor_reviewer);
+            input.thread_store.insert_arc(Arc::clone(&actor_reviewer));
+            let attached: Arc<dyn codex_core::guardian_review::AttachedReviewer> = actor_reviewer;
+            input.thread_store.insert(attached);
             if actor != root {
                 return;
             }

@@ -14,6 +14,7 @@ use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadGuardianReviewParams;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListResponse;
@@ -36,7 +37,7 @@ use tokio::sync::oneshot;
 
 const ALLOW: &str = r#"{"outcome":"allow","rationale":"completed seed assessment"}"#;
 
-fn sync_config(responses_url: &str) -> MockResponsesConfig {
+pub(super) fn sync_config(responses_url: &str) -> MockResponsesConfig {
     MockResponsesConfig::new(responses_url)
         .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
@@ -64,6 +65,85 @@ fn tool_response(server: &str, tool: &str, calls: &[&str]) -> String {
 enum ReviewEnding {
     Complete,
     Interrupt,
+}
+
+#[tokio::test]
+async fn unavailable_guardian_board_reports_why_review_preparation_failed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            tool_response(TEST_SERVER_NAME, TEST_TOOL_NAME, &["check"]),
+            assistant_response("Done.")?,
+        ],
+    )
+    .await;
+    let (mcp_url, mcp_server) = start_mcp_server(/*sensitive_action*/ None).await?;
+    let home = TempDir::new()?;
+    // A directory at the database path prevents SQLite from opening the board.
+    std::fs::create_dir(home.path().join("message_board_guardian_1.sqlite"))?;
+    sync_config(&server.uri())
+        .with_root_config(&format!("sqlite_home = {}", serde_json::to_string(home.path())?))
+        .with_extra_config("[features.guardianv3]\nenabled = true")
+        .with_extra_config(&format!(
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\""
+        ))
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_json_logging("warn,codex_core::guardian=info")
+        .build_initialized_with_timeout(TIMEOUT)
+        .await?;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id,
+        input: vec![UserInput::Text {
+            text: "Run the check.".into(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })
+    .await?;
+
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1].function_call_output("check")["output"]
+            .to_string()
+            .contains("Guardian V3 could not prepare the evidence for this action: Guardian board evidence is unavailable")
+    );
+    let started = app
+        .wait_for_matching_json_log_event(
+            "preparation started",
+            |event| event["fields"]["message"] == "Guardian V3 review preparation started",
+            TIMEOUT,
+        )
+        .await?;
+    let finished = app
+        .wait_for_matching_json_log_event(
+            "preparation finished",
+            |event| event["fields"]["message"] == "Guardian V3 review preparation finished",
+            TIMEOUT,
+        )
+        .await?;
+    let review_id = started["fields"]["review_id"].as_str().expect("review ID");
+    assert_eq!(finished["fields"]["review_id"], review_id);
+    assert_eq!(finished["fields"]["ready"], false);
+    assert_eq!(
+        finished["fields"]["failure_reason"],
+        "Guardian board evidence is unavailable"
+    );
+    app.shutdown_gracefully().await?;
+    mcp_server.abort();
+    Ok(())
 }
 
 #[tokio::test]
@@ -819,7 +899,7 @@ async fn v3_routes_the_first_live_message_while_the_actor_is_still_sampling(
     let (first, first_gate) = oneshot::channel();
     let (second, second_gate) = oneshot::channel();
     let response = assistant_response(
-        r#"{"routes":[["release"]],"descriptions":{"release":"Release policy"}}"#,
+        r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#,
     )?;
     let (server, _) = start_streaming_sse_server(
         [first_gate, second_gate]

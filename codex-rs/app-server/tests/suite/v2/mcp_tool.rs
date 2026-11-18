@@ -1726,7 +1726,7 @@ async fn serve_environment_until_shutdown(
     }
 }
 
-async fn wait_for_mcp_tool_call_completed(
+pub(super) async fn wait_for_mcp_tool_call_completed(
     mcp: &mut TestAppServer,
     call_id: &str,
 ) -> Result<ItemCompletedNotification> {

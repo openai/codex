@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use anyhow::Context;
+use codex_analytics::GuardianReviewSessionKind;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::guardian_review::PreparedGuardianContext;
+use codex_core::guardian_review::ReviewPreparationError;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_protocol::AgentPath;
@@ -32,6 +34,7 @@ pub struct ActorReviewer {
 }
 
 pub struct PreparedReviewer {
+    kind: GuardianReviewSessionKind,
     conversation: Conversation,
     slot: OwnedMutexGuard<Option<Conversation>>,
 }
@@ -117,33 +120,40 @@ impl ActorReviewer {
         &self,
         setup: &PreparedGuardianContext,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<PreparedReviewer> {
+    ) -> Result<PreparedReviewer, ReviewPreparationError> {
         let _task = self.lifetime.tasks.token();
         let reserve = async {
-            let manager = self.manager.upgrade().context("Guardian host stopped")?;
-            let root = manager.get_thread(self.root).await?;
+            let manager = self
+                .manager
+                .upgrade()
+                .ok_or(ReviewPreparationError::ReviewerUnavailable)?;
+            let root = manager
+                .get_thread(self.root)
+                .await
+                .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
             let data = root.thread_extension_data();
             let worker = data
                 .get::<RootWorker>()
-                .context("Guardian board unavailable")?;
+                .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
             let evidence = data
                 .get::<RootEvidence>()
-                .context("Guardian intake unavailable")?;
+                .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
             let inbox = evidence.delivery.inbox(self.actor);
             let mut slot = self.slot.clone().lock_owned().await;
-            let mut conversation = match slot.take() {
+            let (mut conversation, kind) = match slot.take() {
                 Some(previous)
                     if Arc::ptr_eq(&previous.inbox, &inbox)
                         && setup.matches_session_configuration(&previous.runtime) =>
                 {
-                    previous
+                    (previous, GuardianReviewSessionKind::TrunkReused)
                 }
                 _ => {
                     let binding = LiveRetrievalBinding::new(
                         worker.reader.clone(),
                         self.actor,
                         self.path.clone(),
-                    )?;
+                    )
+                    .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
                     let stop = self.lifetime.cancellation.child_token();
                     let conversation = Conversation::start(
                         &manager,
@@ -153,27 +163,116 @@ impl ActorReviewer {
                         Arc::clone(&inbox),
                         stop.clone(),
                     )
-                    .await?;
+                    .await
+                    .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
                     self.observe_inbox(
                         Arc::clone(&worker.reader),
                         &inbox,
                         Arc::clone(&conversation.thread),
                         stop,
                     );
-                    conversation
+                    (conversation, GuardianReviewSessionKind::TrunkNew)
                 }
             };
             conversation
                 .deliver(self.actor, worker.reader.as_ref())
-                .await?;
-            Ok(PreparedReviewer { conversation, slot })
+                .await
+                .map_err(|_| ReviewPreparationError::DeliveryFailed)?;
+            Ok(PreparedReviewer {
+                conversation,
+                slot,
+                kind,
+            })
         };
         tokio::select! {
             biased;
-            _ = self.lifetime.cancellation.cancelled() => anyhow::bail!("Guardian actor stopped"),
-            _ = setup.history_reset.cancelled() => anyhow::bail!("Guardian actor history reset"),
-            _ = cancel.cancelled() => anyhow::bail!("Guardian review cancelled"),
+            _ = self.lifetime.cancellation.cancelled() => Err(ReviewPreparationError::Cancelled),
+            _ = setup.history_reset.cancelled() => Err(ReviewPreparationError::Cancelled),
+            _ = cancel.cancelled() => Err(ReviewPreparationError::Cancelled),
             result = reserve => result,
         }
+    }
+}
+
+/// One intake request shared by all verdict attempts for the same action.
+struct BoundActorReview {
+    actor: Arc<ActorReviewer>,
+    routed: tokio::sync::watch::Receiver<Option<Arc<ActorInbox>>>,
+}
+
+impl codex_core::guardian_review::AttachedReviewer for ActorReviewer {
+    fn bind(self: Arc<Self>) -> codex_core::guardian_review::BoundReviewer {
+        let (routed, ready) = tokio::sync::watch::channel(None);
+        let actor = Arc::clone(&self);
+        self.lifetime.tasks.spawn(async move {
+            // Start capture at request time even if a previous verdict occupies the slot.
+            let catch_up = async {
+                let manager = actor.manager.upgrade().context("Guardian host stopped")?;
+                let root = manager.get_thread(actor.root).await?;
+                let evidence = root
+                    .thread_extension_data()
+                    .get::<RootEvidence>()
+                    .context("Guardian intake unavailable")?;
+                evidence.request_catch_up().await?.await?;
+                anyhow::Ok(evidence.delivery.inbox(actor.actor))
+            };
+            tokio::select! {
+                biased;
+                _ = routed.closed() => (),
+                _ = actor.lifetime.cancellation.cancelled() => (),
+                result = catch_up => {
+                    if let Ok(inbox) = result {
+                        routed.send_replace(Some(inbox));
+                    }
+                }
+            }
+        });
+        codex_core::guardian_review::BoundReviewer {
+            preparation: Arc::new(BoundActorReview {
+                actor: self,
+                routed: ready,
+            }),
+            retrieval: crate::BOARD_RETRIEVAL,
+        }
+    }
+}
+
+impl codex_core::guardian_review::ReviewerPreparation for BoundActorReview {
+    fn prepare<'a>(
+        &'a self,
+        setup: &'a PreparedGuardianContext,
+        cancel: &'a CancellationToken,
+    ) -> codex_extension_api::ExtensionFuture<
+        'a,
+        Result<Box<dyn codex_core::guardian_review::PreparedAssessment>, ReviewPreparationError>,
+    > {
+        Box::pin(async move {
+            let mut routed = self.routed.clone();
+            let inbox = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(ReviewPreparationError::Cancelled),
+                _ = setup.history_reset.cancelled() => return Err(ReviewPreparationError::Cancelled),
+                result = routed.wait_for(Option::is_some) => result.ok().and_then(|value| value.clone()),
+            }.ok_or(ReviewPreparationError::EvidenceUnavailable)?;
+            // All matching originals through the requested position are queued. The
+            // reservation drains this guardian's inbox before submitting the action.
+            let reviewer = self.actor.reserve(setup, cancel).await?;
+            if !Arc::ptr_eq(&inbox, &reviewer.conversation.inbox) {
+                return Err(ReviewPreparationError::EvidenceUnavailable);
+            }
+            Ok(Box::new(reviewer) as Box<dyn codex_core::guardian_review::PreparedAssessment>)
+        })
+    }
+}
+
+impl codex_core::guardian_review::PreparedAssessment for PreparedReviewer {
+    fn runtime(&self) -> &codex_core::guardian_review::GuardianReviewSession {
+        &self.conversation.runtime
+    }
+    fn session_kind(&self) -> GuardianReviewSessionKind {
+        self.kind
+    }
+    fn finish(self: Box<Self>, disposition: SessionDisposition) {
+        PreparedReviewer::finish(*self, disposition);
     }
 }
