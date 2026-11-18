@@ -4,6 +4,7 @@
 import type { ThreadRealtimeBemItemPresentation } from "./ThreadRealtimeBemItemPresentation";
 import type { ThreadRealtimeFrameChannels } from "./ThreadRealtimeFrameChannels";
 import type { ThreadRealtimeHandoffMode } from "./ThreadRealtimeHandoffMode";
+import type { ThreadRealtimeSessionInputReason } from "./ThreadRealtimeSessionInputReason";
 import type { ThreadRealtimeSessionOutcome } from "./ThreadRealtimeSessionOutcome";
 import type { ThreadRealtimeTranscriptRole } from "./ThreadRealtimeTranscriptRole";
 
@@ -14,4 +15,4 @@ export type ThreadRealtimeItem = { id: string, realtimeSessionId: string,
 /**
  * Canonical observation time in Unix milliseconds for eligible voice calls.
  */
-observedAtMs?: number, } & ({ "type": "realtimeSessionStarted" } | { "type": "frame", channels: ThreadRealtimeFrameChannels, } | { "type": "transcriptSegment", role: ThreadRealtimeTranscriptRole, text: string, } | { "type": "bemItemPromoted", turnId: string, itemId: string, presentation: ThreadRealtimeBemItemPresentation, } | { "type": "realtimeSessionClosed", outcome: ThreadRealtimeSessionOutcome, } | { "type": "turnInputAccepted", handoffId: string, turnId: string, mode: ThreadRealtimeHandoffMode, sourceEventIds: Array<string>, inputItemId: string, input: string, } | { "type": "sessionEndInputSaved", sourceEventIds: Array<string>, inputItemId: string, input: string, });
+observedAtMs?: number, } & ({ "type": "realtimeSessionStarted" } | { "type": "frame", channels: ThreadRealtimeFrameChannels, } | { "type": "transcriptSegment", role: ThreadRealtimeTranscriptRole, text: string, } | { "type": "bemItemPromoted", turnId: string, itemId: string, presentation: ThreadRealtimeBemItemPresentation, } | { "type": "realtimeSessionClosed", outcome: ThreadRealtimeSessionOutcome, } | { "type": "turnInputAccepted", handoffId: string, turnId: string, mode: ThreadRealtimeHandoffMode, sourceEventIds: Array<string>, inputItemId: string, input: string, } | { "type": "sessionInputSaved", reason: ThreadRealtimeSessionInputReason, sourceEventIds: Array<string>, inputItemId: string, input: string, });

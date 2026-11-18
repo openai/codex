@@ -28,6 +28,12 @@ fn observation_time_survives_clock_rollback_and_owner_restart() {
             observed_at_ms: Some(110),
             content: RealtimeItemContent::RealtimeSessionStarted,
         }),
+        serde_json::from_value(serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "message", "id": "msg_input_1", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+            "metadata": {"realtime_handoff": {"event_id": "receipt", "realtime_session_id": "voice", "observed_at_ms": 115, "handoff_id": "handoff", "mode": "start", "source_event_ids": []}}
+        }))
+        .expect("read annotated handoff input"),
         RolloutItem::RealtimeItem(RealtimeItem {
             id: "legacy".into(),
             realtime_session_id: "legacy-voice".into(),
@@ -40,7 +46,7 @@ fn observation_time_survives_clock_rollback_and_owner_restart() {
             clock.observe(/*wall_clock_ms*/ 80),
             clock.observe(/*wall_clock_ms*/ 120)
         ],
-        [110, 120]
+        [115, 120]
     );
 }
 

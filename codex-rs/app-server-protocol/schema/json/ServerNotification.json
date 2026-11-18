@@ -6341,6 +6341,9 @@
             "input_item_id": {
               "type": "string"
             },
+            "reason": {
+              "$ref": "#/definitions/ThreadRealtimeSessionInputReason"
+            },
             "source_event_ids": {
               "items": {
                 "type": "string"
@@ -6349,19 +6352,20 @@
             },
             "type": {
               "enum": [
-                "sessionEndInputSaved"
+                "sessionInputSaved"
               ],
-              "title": "SessionEndInputSavedThreadRealtimeItemType",
+              "title": "SessionInputSavedThreadRealtimeItemType",
               "type": "string"
             }
           },
           "required": [
             "input",
             "input_item_id",
+            "reason",
             "source_event_ids",
             "type"
           ],
-          "title": "SessionEndInputSavedThreadRealtimeItem",
+          "title": "SessionInputSavedThreadRealtimeItem",
           "type": "object"
         }
       ],
@@ -6484,6 +6488,13 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadRealtimeSessionInputReason": {
+      "enum": [
+        "chunk",
+        "sessionEnd"
+      ],
+      "type": "string"
     },
     "ThreadRealtimeSessionOutcome": {
       "enum": [

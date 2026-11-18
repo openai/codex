@@ -45,7 +45,10 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
+use codex_protocol::realtime::RealtimeHandoffMode;
 use codex_protocol::realtime::RealtimeItem;
+use codex_protocol::realtime::RealtimeItemContent;
+use codex_protocol::realtime::SessionInputReason;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_protocol::turn_input::InjectedResponseItem;
 use codex_protocol::turn_input::ItemRetention;
@@ -81,6 +84,14 @@ pub enum ModelSearchState {
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct CodexHarnessMetadata {
+    /// Realtime provenance for an accepted ordinary turn input. Never model-visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_handoff: Option<Box<RealtimeHandoffMetadata>>,
+
+    /// Provenance of a transcript chunk saved in ordinary model history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_session_input: Option<Box<RealtimeSessionInputMetadata>>,
+
     /// Thread-local append sequence. Compaction keeps the identities of retained inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_sequence: Option<u64>,
@@ -200,6 +211,26 @@ pub struct CodexHarnessMetadata {
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
 }
 
+/// Facts that connect an ordinary accepted input to its originating realtime frames.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct RealtimeHandoffMetadata {
+    pub event_id: String,
+    pub realtime_session_id: String,
+    pub observed_at_ms: i64,
+    pub handoff_id: String,
+    pub mode: RealtimeHandoffMode,
+    pub source_event_ids: Vec<String>,
+}
+
+/// Realtime provenance for a saved transcript chunk; the response item owns its text.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct RealtimeSessionInputMetadata {
+    pub event_id: String,
+    pub realtime_session_id: String,
+    pub observed_at_ms: i64,
+    pub source_event_ids: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct ImageReplaySource {
     pub prepared_url_digest: Vec<u8>,
@@ -247,6 +278,70 @@ impl CodexHarnessMetadata {
 }
 
 impl ResponseItemEnvelope {
+    /// Projects the realtime view of an accepted input without storing a second copy.
+    pub fn realtime_handoff_item(&self) -> Option<RealtimeItem> {
+        let metadata = self.metadata.as_ref()?.realtime_handoff.as_ref()?;
+        let ResponseItem::Message {
+            id: Some(id),
+            role,
+            content,
+            ..
+        } = &self.item
+        else {
+            return None;
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            return None;
+        };
+        if role != "user" {
+            return None;
+        }
+        Some(RealtimeItem {
+            id: metadata.event_id.clone(),
+            realtime_session_id: metadata.realtime_session_id.clone(),
+            observed_at_ms: Some(metadata.observed_at_ms),
+            content: RealtimeItemContent::TurnInputAccepted {
+                handoff_id: metadata.handoff_id.clone(),
+                turn_id: self.item.turn_id()?.to_string(),
+                mode: metadata.mode,
+                source_event_ids: metadata.source_event_ids.clone(),
+                input_item_id: id.to_string(),
+                input: text.clone(),
+            },
+        })
+    }
+
+    /// Projects a chunk receipt from its canonical model input.
+    pub fn realtime_session_input_item(&self) -> Option<RealtimeItem> {
+        let metadata = self.metadata.as_ref()?.realtime_session_input.as_ref()?;
+        let ResponseItem::Message {
+            id: Some(id),
+            role,
+            content,
+            ..
+        } = &self.item
+        else {
+            return None;
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            return None;
+        };
+        if role != "user" {
+            return None;
+        }
+        Some(RealtimeItem {
+            id: metadata.event_id.clone(),
+            realtime_session_id: metadata.realtime_session_id.clone(),
+            observed_at_ms: Some(metadata.observed_at_ms),
+            content: RealtimeItemContent::SessionInputSaved {
+                reason: SessionInputReason::Chunk,
+                source_event_ids: metadata.source_event_ids.clone(),
+                input_item_id: id.to_string(),
+                input: text.clone(),
+            },
+        })
+    }
+
     /// Whether the client requested that this item survive context-window changes and forks.
     pub fn is_always_retained(&self) -> bool {
         self.metadata
@@ -337,6 +432,20 @@ impl RolloutItem {
     pub fn realtime_observed_at_ms(&self) -> Option<i64> {
         match self {
             Self::RealtimeItem(item) => item.observed_at_ms,
+            Self::ResponseItem(envelope) => envelope
+                .metadata
+                .as_ref()?
+                .realtime_handoff
+                .as_ref()
+                .map(|metadata| metadata.observed_at_ms)
+                .or_else(|| {
+                    envelope
+                        .metadata
+                        .as_ref()?
+                        .realtime_session_input
+                        .as_ref()
+                        .map(|metadata| metadata.observed_at_ms)
+                }),
             _ => None,
         }
     }
@@ -345,6 +454,10 @@ impl RolloutItem {
     pub fn realtime_item(&self) -> Option<Cow<'_, RealtimeItem>> {
         match self {
             Self::RealtimeItem(item) => Some(Cow::Borrowed(item)),
+            Self::ResponseItem(envelope) => envelope
+                .realtime_handoff_item()
+                .or_else(|| envelope.realtime_session_input_item())
+                .map(Cow::Owned),
             _ => None,
         }
     }

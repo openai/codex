@@ -485,7 +485,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 if matches!(
                     &item.content,
                     codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted { .. }
-                        | codex_protocol::realtime::RealtimeItemContent::SessionEndInputSaved { .. }
+                        | codex_protocol::realtime::RealtimeItemContent::SessionInputSaved { .. }
                 ) => {}
             RealtimeEvent::HistoryItemStarted(item) => {
                 outgoing

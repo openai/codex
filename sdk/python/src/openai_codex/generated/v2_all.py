@@ -6520,27 +6520,6 @@ class TurnInputAcceptedThreadRealtimeItem(BaseModel):
     ]
 
 
-class SessionEndInputSavedThreadRealtimeItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    observed_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="observedAtMs",
-            description="Canonical observation time in Unix milliseconds for eligible voice calls.",
-        ),
-    ] = None
-    realtime_session_id: Annotated[str, Field(alias="realtimeSessionId")]
-    input: str
-    input_item_id: str
-    source_event_ids: list[str]
-    type: Annotated[
-        Literal["sessionEndInputSaved"], Field(title="SessionEndInputSavedThreadRealtimeItemType")
-    ]
-
-
 class ThreadRealtimeItemAddedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6577,6 +6556,11 @@ class ThreadRealtimeSdpNotification(BaseModel):
     )
     sdp: str
     thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadRealtimeSessionInputReason(Enum):
+    chunk = "chunk"
+    session_end = "sessionEnd"
 
 
 class ThreadRealtimeSessionOutcome(Enum):
@@ -11405,6 +11389,28 @@ class RealtimeSessionClosedThreadRealtimeItem(BaseModel):
     ]
 
 
+class SessionInputSavedThreadRealtimeItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: str
+    observed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="observedAtMs",
+            description="Canonical observation time in Unix milliseconds for eligible voice calls.",
+        ),
+    ] = None
+    realtime_session_id: Annotated[str, Field(alias="realtimeSessionId")]
+    input: str
+    input_item_id: str
+    reason: ThreadRealtimeSessionInputReason
+    source_event_ids: list[str]
+    type: Annotated[
+        Literal["sessionInputSaved"], Field(title="SessionInputSavedThreadRealtimeItemType")
+    ]
+
+
 class ThreadRealtimeItem(
     RootModel[
         RealtimeSessionStartedThreadRealtimeItem
@@ -11413,7 +11419,7 @@ class ThreadRealtimeItem(
         | BemItemPromotedThreadRealtimeItem
         | RealtimeSessionClosedThreadRealtimeItem
         | TurnInputAcceptedThreadRealtimeItem
-        | SessionEndInputSavedThreadRealtimeItem
+        | SessionInputSavedThreadRealtimeItem
     ]
 ):
     root: Annotated[
@@ -11423,7 +11429,7 @@ class ThreadRealtimeItem(
         | BemItemPromotedThreadRealtimeItem
         | RealtimeSessionClosedThreadRealtimeItem
         | TurnInputAcceptedThreadRealtimeItem
-        | SessionEndInputSavedThreadRealtimeItem,
+        | SessionInputSavedThreadRealtimeItem,
         Field(
             description="EXPERIMENTAL - a thread-scoped realtime item in the canonical timeline."
         ),

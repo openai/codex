@@ -16,6 +16,98 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn accepted_realtime_input_projects_from_the_canonical_response_item() -> Result<()> {
+    let mut item: ResponseItem = serde_json::from_value(json!({
+        "type": "message",
+        "id": "msg_input_123",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "use the smaller logo"}]
+    }))?;
+    item.set_turn_id_if_missing("turn-1");
+    let rollout = RolloutItem::ResponseItem(ResponseItemEnvelope {
+        item,
+        metadata: Some(CodexHarnessMetadata {
+            realtime_handoff: Some(Box::new(RealtimeHandoffMetadata {
+                event_id: "receipt-1".to_string(),
+                realtime_session_id: "call-1".to_string(),
+                observed_at_ms: 42,
+                handoff_id: "handoff-1".to_string(),
+                mode: RealtimeHandoffMode::Start,
+                source_event_ids: vec!["frame-1".to_string()],
+            })),
+            ..Default::default()
+        }),
+    });
+    let persisted = serde_json::to_value(&rollout)?;
+    assert_eq!(persisted["type"], "response_item");
+    assert_eq!(
+        persisted["payload"]["content"][0]["text"],
+        "use the smaller logo"
+    );
+    assert_eq!(
+        persisted["metadata"]["realtime_handoff"]["event_id"],
+        "receipt-1"
+    );
+    let restored: RolloutItem = serde_json::from_value(persisted)?;
+    assert_eq!(
+        restored.realtime_item().map(Cow::into_owned),
+        Some(RealtimeItem {
+            id: "receipt-1".to_string(),
+            realtime_session_id: "call-1".to_string(),
+            observed_at_ms: Some(42),
+            content: RealtimeItemContent::TurnInputAccepted {
+                handoff_id: "handoff-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                mode: RealtimeHandoffMode::Start,
+                source_event_ids: vec!["frame-1".to_string()],
+                input_item_id: "msg_input_123".to_string(),
+                input: "use the smaller logo".to_string(),
+            },
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn transcript_chunk_projects_from_its_only_model_input() -> Result<()> {
+    let mut item: ResponseItem = serde_json::from_value(json!({
+        "type": "message", "id": "msg_chunk", "role": "user",
+        "content": [{"type": "input_text", "text": "user: hello"}]
+    }))?;
+    item.set_turn_id_if_missing("turn-1");
+    let rollout = RolloutItem::ResponseItem(ResponseItemEnvelope {
+        item,
+        metadata: Some(CodexHarnessMetadata {
+            realtime_session_input: Some(Box::new(RealtimeSessionInputMetadata {
+                event_id: "receipt-1".to_string(),
+                realtime_session_id: "call-1".to_string(),
+                observed_at_ms: 42,
+                source_event_ids: vec!["frame-1".to_string()],
+            })),
+            ..Default::default()
+        }),
+    });
+    let persisted = serde_json::to_value(&rollout)?;
+    assert_eq!(persisted["type"], "response_item");
+    assert_eq!(persisted["payload"]["content"][0]["text"], "user: hello");
+    assert_eq!(
+        rollout.realtime_item().map(Cow::into_owned),
+        Some(RealtimeItem {
+            id: "receipt-1".to_string(),
+            realtime_session_id: "call-1".to_string(),
+            observed_at_ms: Some(42),
+            content: RealtimeItemContent::SessionInputSaved {
+                reason: SessionInputReason::Chunk,
+                source_event_ids: vec!["frame-1".to_string()],
+                input_item_id: "msg_chunk".to_string(),
+                input: "user: hello".to_string(),
+            },
+        })
+    );
+    Ok(())
+}
+
 fn thread_settings_snapshot(disabled_plugin_ids: Vec<String>) -> Result<ThreadSettingsSnapshot> {
     Ok(serde_json::from_value(json!({
         "model": "gpt-5",

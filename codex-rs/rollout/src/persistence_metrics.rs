@@ -285,7 +285,7 @@ fn rollout_item_type(item: &RolloutItem) -> String {
             codex_protocol::realtime::RealtimeItemContent::TurnInputAccepted { .. } => {
                 "realtime.turn_input_accepted".to_string()
             }
-            codex_protocol::realtime::RealtimeItemContent::SessionEndInputSaved { .. } => {
+            codex_protocol::realtime::RealtimeItemContent::SessionInputSaved { .. } => {
                 "realtime.session_end_input_saved".to_string()
             }
         },

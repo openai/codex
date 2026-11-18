@@ -63,12 +63,21 @@ pub enum RealtimeItemContent {
         input_item_id: String,
         input: String,
     },
-    /// End-of-call input recorded in model history without starting or steering a turn.
-    SessionEndInputSaved {
+    /// Transcript input saved in model history without starting or steering an agent turn.
+    SessionInputSaved {
+        reason: SessionInputReason,
         source_event_ids: Vec<String>,
         input_item_id: String,
         input: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SessionInputReason {
+    Chunk,
+    SessionEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]

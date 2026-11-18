@@ -13,6 +13,7 @@ use codex_protocol::realtime::RealtimeItem as CoreRealtimeItem;
 use codex_protocol::realtime::RealtimeItemContent as CoreRealtimeItemContent;
 use codex_protocol::realtime::RealtimeSessionOutcome as CoreRealtimeSessionOutcome;
 use codex_protocol::realtime::RealtimeTranscriptRole as CoreRealtimeTranscriptRole;
+use codex_protocol::realtime::SessionInputReason as CoreSessionInputReason;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -66,7 +67,8 @@ pub enum ThreadRealtimeItemContent {
         input_item_id: String,
         input: String,
     },
-    SessionEndInputSaved {
+    SessionInputSaved {
+        reason: ThreadRealtimeSessionInputReason,
         source_event_ids: Vec<String>,
         input_item_id: String,
         input: String,
@@ -79,6 +81,14 @@ pub enum ThreadRealtimeItemContent {
 pub enum ThreadRealtimeHandoffMode {
     Start,
     Steer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadRealtimeSessionInputReason {
+    Chunk,
+    SessionEnd,
 }
 
 /// EXPERIMENTAL - how an existing agent item appears in a realtime conversation.
@@ -225,11 +235,18 @@ impl ThreadRealtimeItem {
                 input_item_id,
                 input,
             },
-            CoreRealtimeItemContent::SessionEndInputSaved {
+            CoreRealtimeItemContent::SessionInputSaved {
+                reason,
                 source_event_ids,
                 input_item_id,
                 input,
-            } => ThreadRealtimeItemContent::SessionEndInputSaved {
+            } => ThreadRealtimeItemContent::SessionInputSaved {
+                reason: match reason {
+                    CoreSessionInputReason::Chunk => ThreadRealtimeSessionInputReason::Chunk,
+                    CoreSessionInputReason::SessionEnd => {
+                        ThreadRealtimeSessionInputReason::SessionEnd
+                    }
+                },
                 source_event_ids,
                 input_item_id,
                 input,
