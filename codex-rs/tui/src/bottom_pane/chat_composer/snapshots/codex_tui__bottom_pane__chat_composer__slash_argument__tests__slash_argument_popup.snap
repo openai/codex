@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/chat_composer/slash_argument_tests.rs
+expression: terminal.backend()
+---
+"› on    "
+"  off   "

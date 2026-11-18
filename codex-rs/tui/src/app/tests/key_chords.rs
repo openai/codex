@@ -303,6 +303,24 @@ async fn completed_global_chords_toggle_output_and_request_external_editor() -> 
 }
 
 #[tokio::test]
+async fn composer_submit_chord_works_with_slash_argument_popup() -> Result<()> {
+    let (mut app, mut tui, mut app_server) = chord_app().await?;
+    let config = toml::from_str("[composer]\nsubmit = 'ctrl-x enter'")?;
+    app.keymap = RuntimeKeymap::from_config(&config).expect("valid composer submit chord");
+    app.chat_widget.apply_keymap_update(config, &app.keymap);
+    app.chat_widget.set_raw_output_mode(/*enabled*/ true);
+    app.chat_widget.apply_external_edit("/raw off".to_owned());
+    assert!(!app.chat_widget.no_modal_or_popup_active());
+
+    press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
+    assert!(app.key_chord_matcher.is_pending());
+    assert!(app.chat_widget.raw_output_mode());
+    press(&mut app, &mut tui, &mut app_server, KeyCode::Enter.into()).await?;
+    assert!(!app.chat_widget.raw_output_mode());
+    Ok(())
+}
+
+#[tokio::test]
 async fn wrong_second_stroke_passes_through_but_escape_is_consumed() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
 

@@ -254,3 +254,43 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn argument_popup_tracks_thread_availability_before_the_next_key() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let id = ThreadId::new();
+    app.active_thread_id = Some(id);
+    app.primary_thread_id = Some(id);
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:1")?,
+    };
+    app.chat_widget
+        .handle_thread_session(test_thread_session(id, app.config.cwd.to_path_buf()));
+    app.ensure_thread_channel(id).mark_live();
+    app.chat_widget
+        .restore_user_message_to_composer("/mcp ".into());
+    assert!(!app.chat_widget.no_modal_or_popup_active());
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let size = tui.terminal.last_known_screen_size;
+
+    app.ensure_thread_channel(id).mark_replay_only();
+    app.handle_draw_pre_render(&mut tui, size)?;
+    app.chat_widget.pre_draw_tick();
+    assert!(app.chat_widget.no_modal_or_popup_active());
+
+    app.ensure_thread_channel(id).mark_live();
+    app.handle_draw_pre_render(&mut tui, size)?;
+    app.chat_widget.pre_draw_tick();
+    assert!(!app.chat_widget.no_modal_or_popup_active());
+
+    app.reconnect.offline = true;
+    app.handle_draw_pre_render(&mut tui, size)?;
+    app.chat_widget.pre_draw_tick();
+    assert!(app.chat_widget.no_modal_or_popup_active());
+
+    app.reconnect.offline = false;
+    app.handle_draw_pre_render(&mut tui, size)?;
+    app.chat_widget.pre_draw_tick();
+    assert!(!app.chat_widget.no_modal_or_popup_active());
+    Ok(())
+}

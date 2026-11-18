@@ -28,6 +28,7 @@ use ratatui::text::Line;
 
 use super::App;
 use super::InitialHistoryReplayBuffer;
+use crate::bottom_pane::RestrictedInputMode;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::HistoryLineWrapPolicy;
@@ -430,6 +431,18 @@ impl App {
         tui: &mut tui::Tui,
         size: ratatui::layout::Size,
     ) -> Result<()> {
+        let input_mode = if self.reconnect.offline {
+            Some(RestrictedInputMode::Disconnected)
+        } else if self
+            .current_displayed_thread_id()
+            .is_some_and(|id| self.thread_unavailable(id))
+        {
+            Some(RestrictedInputMode::UnavailableThread)
+        } else {
+            None
+        };
+        self.chat_widget
+            .set_composer_restricted_input_mode(input_mode);
         self.flush_native_history(tui);
         if tui.is_owned_screen() {
             self.transcript_reflow.note_width(size.width);

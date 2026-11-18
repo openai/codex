@@ -1139,6 +1139,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_composer_restricted_input_mode(&mut self, mode: Option<RestrictedInputMode>) {
+        self.composer.set_restricted_input_mode(mode);
+    }
+
     pub(crate) fn pre_draw_tick(&mut self) {
         self.pre_draw_tick_at(Instant::now());
     }

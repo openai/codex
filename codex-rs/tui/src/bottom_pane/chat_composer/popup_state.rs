@@ -1,6 +1,7 @@
 //! Popup lifecycle state for the chat composer.
 //! Tracks the single active popup plus dismissal/query state used to synchronize it.
 
+use super::slash_argument::ArgumentPopup;
 use crate::bottom_pane::command_popup::CommandPopup;
 use crate::bottom_pane::file_search_popup::FileSearchPopup;
 use crate::bottom_pane::mentions_v2::MentionV2Popup;
@@ -91,6 +92,8 @@ pub(super) struct PopupState {
     pub(super) active: ActivePopup,
     pub(super) daybreak_command_description: Option<&'static str>,
     pub(super) dismissed_command_token: Option<String>,
+    pub(super) dismissed_argument_token: Option<String>,
+    pub(super) restricted_input_mode: Option<super::RestrictedInputMode>,
     pub(super) dismissed_file_token: Option<DismissedToken>,
     pub(super) current_file_query: Option<String>,
     pub(super) dismissed_mention_token: Option<DismissedToken>,
@@ -108,6 +111,7 @@ pub(super) enum ActivePopup {
     #[default]
     None,
     Command(CommandPopup),
+    Argument(ArgumentPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
     MentionV2(MentionV2Popup),
@@ -123,6 +127,7 @@ impl ActivePopup {
         match self {
             Self::None => footer_total_height,
             Self::Command(popup) => popup.calculate_required_height(width) + footer_total_height,
+            Self::Argument(popup) => popup.calculate_required_height(width) + footer_total_height,
             Self::File(popup) => popup.calculate_required_height() + footer_total_height,
             Self::Skill(popup) => popup.calculate_required_height(width) + footer_total_height,
             Self::MentionV2(popup) => popup.calculate_required_height(width) + footer_total_height,

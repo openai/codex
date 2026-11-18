@@ -545,7 +545,9 @@ pub(super) fn selected_command_completion(
     command: &CommandItem,
 ) -> Option<String> {
     let selected_command_text = format!("/{}", command.command());
-    (!first_line.trim_start().starts_with(&selected_command_text))
+    let exact_with_arguments = first_line == selected_command_text
+        && matches!(command, CommandItem::Builtin(cmd) if !super::slash_argument::choices(*cmd).is_empty());
+    (exact_with_arguments || !first_line.trim_start().starts_with(&selected_command_text))
         .then(|| format!("{selected_command_text} "))
 }
 

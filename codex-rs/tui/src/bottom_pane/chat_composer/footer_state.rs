@@ -251,6 +251,7 @@ impl super::ChatComposer {
         match &self.popups.active {
             ActivePopup::None => composer,
             ActivePopup::Command(_)
+            | ActivePopup::Argument(_)
             | ActivePopup::File(_)
             | ActivePopup::Skill(_)
             | ActivePopup::MentionV2(_) => None,

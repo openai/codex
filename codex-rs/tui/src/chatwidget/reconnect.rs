@@ -210,6 +210,10 @@ impl ChatWidget {
         cancellation
     }
 
+    pub(crate) fn set_composer_restricted_input_mode(&mut self, mode: Option<RestrictedInputMode>) {
+        self.bottom_pane.set_composer_restricted_input_mode(mode);
+    }
+
     pub(crate) fn handle_restricted_key(
         &mut self,
         key: KeyEvent,
