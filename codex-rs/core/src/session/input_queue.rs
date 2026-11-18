@@ -30,6 +30,9 @@ pub struct UserInputMetadata {
     /// Optional host-assigned UUID for this particular Responses user item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_item_uuid: Option<uuid::Uuid>,
+    /// Core-assigned handoff identity carried through the input queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_handoff_id: Option<uuid::Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used_dictation: Option<bool>,
     #[serde(

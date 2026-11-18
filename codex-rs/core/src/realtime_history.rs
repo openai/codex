@@ -2,6 +2,8 @@
 //! transcript boundaries and deduplication state with the history reducer.
 //! The reducer selects when its effects are persisted relative to their source event.
 
+#[expect(dead_code, reason = "Activated with hangup in the next PR")]
+pub(crate) mod handoff;
 mod presentation;
 
 use crate::observation_clock::ObservationClock;
@@ -21,6 +23,8 @@ use codex_protocol::user_input::UserInput;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,9 +101,17 @@ enum Continuation {
 /// Retains only live session state; durable history is served by the rollout index.
 #[derive(Default)]
 pub(crate) struct RealtimeHistoryState {
+    pending_transcript: VecDeque<RealtimeItem>,
+    recovered_frame_ids: HashSet<String>,
+    pending_handoff_seals: Vec<RealtimeItem>,
+    v3_utterances: VecDeque<handoff::V3Utterance>,
+    handoff_inputs: HashMap<String, handoff::PreparedRealtimeInput>,
+    handoff_settled: Arc<Notify>,
+    committed_handoff_ids: HashSet<String>,
     pub(crate) observation_clock: ObservationClock,
     /// Resolved once at the first call. Unresolved and unenrolled threads write legacy history.
     pub(crate) frame_enrollment: Option<bool>,
+    preserve_transcript: bool,
     active_session_id: Option<String>,
     active_segments: ActiveTranscriptSegments,
     streaming_agent_message: Option<StreamingAgentMessage>,
@@ -455,12 +467,19 @@ impl RealtimeHistoryState {
         continuation: Continuation,
     ) {
         if !segment.text.is_empty() {
-            items.push(RealtimeItem {
+            let item = RealtimeItem {
                 id: segment.id,
                 realtime_session_id: segment.session_id.clone(),
                 observed_at_ms: segment.observed_at_ms,
                 content: speech(self.frames_enabled(), segment.role, segment.text),
-            });
+            };
+            if self.frames_enabled() {
+                if let Some(utterance) = self.v3_utterance(segment.role, /*start*/ true) {
+                    utterance.frames.push(item.id.clone());
+                }
+                self.remember_transcript(item.clone());
+            }
+            items.push(item);
         }
         if matches!(continuation, Continuation::Continue) {
             self.active_segments

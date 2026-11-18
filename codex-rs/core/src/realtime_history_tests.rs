@@ -619,6 +619,73 @@ fn promotes_successful_dynamic_tools_and_splits_active_transcripts() {
     assert_eq!(resumed[0].realtime_session_id, "voice-2");
 }
 
+#[test]
+fn overlapping_committed_handoffs_seal_each_frame_once_and_rejection_releases_it() {
+    use codex_protocol::protocol::RealtimeHandoffRequested;
+
+    let mut state = started_state();
+    state.frame_enrollment = Some(true);
+    let request = |id: &str| RealtimeHandoffRequested {
+        handoff_id: id.to_owned(),
+        item_id: id.to_owned(),
+        input_transcript: String::new(),
+        active_transcript: Vec::new(),
+    };
+    let first_frame = observe_realtime(
+        &mut state,
+        RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "first".to_owned(),
+        }),
+    )
+    .transcript_stream
+    .unwrap()
+    .item_id;
+    let first = state.prepare_handoff(&request("first")).unwrap();
+    assert!(state.reserve_handoff(first.id));
+    let second_frame = observe_realtime(
+        &mut state,
+        RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: " second".to_owned(),
+        }),
+    )
+    .transcript_stream
+    .unwrap()
+    .item_id;
+    let second = state.prepare_handoff(&request("second")).unwrap();
+    assert!(state.reserve_handoff(second.id));
+
+    assert_eq!(
+        first
+            .new_items
+            .iter()
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+        vec![&first_frame]
+    );
+    assert_eq!(
+        second
+            .new_items
+            .iter()
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+        vec![&second_frame]
+    );
+    state.finish_handoff(first.id, Some("turn-first"));
+    state.finish_handoff(second.id, Some("turn-second"));
+
+    observe_realtime(
+        &mut state,
+        RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: " third".to_owned(),
+        }),
+    );
+    let rejected = state.prepare_handoff(&request("rejected")).unwrap();
+    assert!(state.reserve_handoff(rejected.id));
+    state.reject_handoff(rejected.id);
+    let retry = state.prepare_handoff(&request("retry")).unwrap();
+    assert_eq!(retry.new_items, rejected.new_items);
+}
+
 #[test_case(|item| EventMsg::ItemStarted(ItemStartedEvent {
     thread_id: ThreadId::new(),
     turn_id: "turn-1".to_string(),
@@ -681,4 +748,81 @@ fn typed_input_seals_both_roles_but_realtime_delegation_does_not(
     ] {
         assert!(observe_realtime(&mut state, event).items.is_empty());
     }
+}
+
+#[test]
+fn recovered_v3_speech_excludes_exact_consumed_frames_and_precedes_new_chunks() {
+    use super::handoff::RecoveredSessionStatus;
+    use codex_protocol::protocol::RealtimeTranscriptEntry;
+    use codex_protocol::realtime::SessionInputReason;
+    let item = |id: &str, content| RealtimeItem {
+        id: id.to_owned(),
+        realtime_session_id: "call".to_owned(),
+        observed_at_ms: Some(1),
+        content,
+    };
+    let frame = |id: &str, role, text: &str| {
+        item(
+            id,
+            RealtimeItemContent::Frame {
+                channels: RealtimeFrameChannels {
+                    voice_transcript: RealtimeVoiceTranscript {
+                        role,
+                        text: text.to_owned(),
+                    },
+                },
+            },
+        )
+    };
+    let items = vec![
+        item("start", RealtimeItemContent::RealtimeSessionStarted),
+        frame("a1", RealtimeTranscriptRole::User, "first"),
+        frame("b1", RealtimeTranscriptRole::Assistant, "pending"),
+        frame("a2", RealtimeTranscriptRole::User, "last"),
+        item(
+            "chunk",
+            RealtimeItemContent::SessionInputSaved {
+                reason: SessionInputReason::Chunk,
+                source_event_ids: vec!["a1".to_owned(), "a2".to_owned()],
+                input_item_id: "input".to_owned(),
+                input: "first last".to_owned(),
+            },
+        ),
+    ];
+    let mut state = RealtimeHistoryState::default();
+    assert_eq!(
+        state.recover_session("call", &items),
+        RecoveredSessionStatus::Open
+    );
+    let new = vec![RealtimeTranscriptEntry {
+        role: "user".to_owned(),
+        text: "new".to_owned(),
+    }];
+    assert_eq!(
+        state.prepare_recorded_chunk(&new),
+        (
+            vec![
+                RealtimeTranscriptEntry {
+                    role: "assistant".to_owned(),
+                    text: "pending".to_owned()
+                },
+                new[0].clone()
+            ],
+            vec!["b1".to_owned()]
+        )
+    );
+    let mut ending = items;
+    ending.push(item(
+        "end",
+        RealtimeItemContent::SessionInputSaved {
+            reason: SessionInputReason::SessionEnd,
+            source_event_ids: vec!["b1".to_owned()],
+            input_item_id: "tail".to_owned(),
+            input: "pending".to_owned(),
+        },
+    ));
+    assert_eq!(
+        state.recover_session("call", &ending),
+        RecoveredSessionStatus::Ending
+    );
 }

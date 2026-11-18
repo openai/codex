@@ -1159,7 +1159,7 @@ fn dictation_metadata_is_captured_per_input_and_removed_from_responses() {
             "false".to_owned(),
         )])));
     assert_eq!(
-        user_input_metadata(&mut request).used_dictation,
+        user_input_metadata(&mut request, /*realtime_handoff_id*/ None).used_dictation,
         Some(false)
     );
     assert_eq!(
@@ -1227,7 +1227,8 @@ async fn scored_prompt_keeps_its_submission_item_id() {
                 metadata,
                 codex_thread_store::PersistContext::Standard,
             )
-            .await;
+            .await
+            .expect("record user input");
     }
     let history = session.clone_history().await;
     let ids: Vec<_> = history

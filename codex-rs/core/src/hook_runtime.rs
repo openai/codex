@@ -759,7 +759,7 @@ pub(crate) async fn record_pending_input(
     pending_input: TurnInput,
     additional_contexts: Vec<codex_hooks::HookContext>,
     persist_context: PersistContext,
-) {
+) -> std::io::Result<()> {
     match pending_input {
         TurnInput::UserInput {
             content,
@@ -774,7 +774,7 @@ pub(crate) async fn record_pending_input(
                 metadata,
                 persist_context,
             )
-            .await;
+            .await?;
         }
         TurnInput::ResponseItem(item) => {
             sess.record_annotated_conversation_items(turn_context, model_info, vec![item])
@@ -809,6 +809,7 @@ pub(crate) async fn record_pending_input(
         }
     }
     record_additional_contexts(sess, turn_context, additional_contexts).await;
+    Ok(())
 }
 
 /// Processes finished async hook results at a safe turn boundary.

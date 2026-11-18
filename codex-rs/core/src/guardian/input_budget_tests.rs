@@ -344,7 +344,8 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
             },
             codex_thread_store::PersistContext::Standard,
         )
-        .await;
+        .await
+        .expect("record review input");
     let collected = super::super::prompt::collect_guardian_prompt_items_with_parent_turn(
         &session,
         super::super::prompt::GuardianTranscriptHistory::Retained(

@@ -416,6 +416,8 @@ impl Session {
             (task_kind == TaskKind::Regular).then(|| turn_context.attribution()),
         )
         .await;
+        self.bind_realtime_handoffs_to_turn(&input, &turn_context.sub_id)
+            .await;
         let host_admission = self.host_turn_admission();
         let (agent_execution_guard, task_input, pending_initial_input) = match &host_admission {
             Some(_) => (None, Vec::new(), Some(input)),
@@ -867,6 +869,8 @@ impl Session {
             PersistContext::Standard,
         )
         .await;
+        self.reject_realtime_handoffs_for_turn(&turn_context.sub_id)
+            .await;
         if let Some(task) = unadmitted_task {
             // The task never ran. Unwind setup such as entering review mode.
             task.abort(Arc::clone(self), Arc::clone(&turn_context))
@@ -1257,6 +1261,9 @@ impl Session {
             )
             .await;
         }
+
+        self.reject_realtime_handoffs_for_turn(&task.turn_context.sub_id)
+            .await;
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))

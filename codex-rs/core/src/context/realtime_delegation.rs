@@ -2,6 +2,7 @@ use super::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
+use codex_protocol::realtime::RealtimeTranscriptRole;
 
 const TRUNCATION_MARKER: &str = "…";
 
@@ -21,6 +22,66 @@ pub(crate) struct RealtimeDelegation<'a> {
 
 impl<'a> RealtimeDelegation<'a> {
     pub(crate) const FIELD_BYTES: usize = 4 * 1024;
+
+    /// Render and attribute the same fields, so omitted transcript rows
+    /// cannot accidentally appear in the accepted source list.
+    pub(crate) fn from_events(
+        input: &str,
+        entries: &[(Option<&str>, RealtimeTranscriptRole, &str)],
+        source: RealtimeDelegationSource,
+        preserve_transcript: bool,
+    ) -> Option<(String, Vec<String>)> {
+        if input.is_empty() && entries.is_empty() {
+            return None;
+        }
+        let mut transcript = String::new();
+        let mut ranges = Vec::new();
+        let mut escaped_len = 0;
+        for (id, role, text) in entries {
+            if !transcript.is_empty() {
+                transcript.push('\n');
+                escaped_len += 1;
+            }
+            let role = match role {
+                RealtimeTranscriptRole::User => "user",
+                RealtimeTranscriptRole::Assistant => "assistant",
+            };
+            let line = format!("{role}: {text}");
+            let start = escaped_len;
+            escaped_len += escape_xml_text(&line).len();
+            transcript.push_str(&line);
+            ranges.push((*id, start..escaped_len));
+        }
+        let escaped_transcript = escape_xml_text(&transcript);
+        let delta_start = if preserve_transcript {
+            0
+        } else {
+            retained_range(&escaped_transcript, Retain::End).start
+        };
+        let input_end = retained_range(&escaped_transcript, Retain::Start).end;
+        let input_source = entries
+            .iter()
+            .rfind(|(_, role, text)| {
+                *role == RealtimeTranscriptRole::User && text.trim() == input.trim()
+            })
+            .and_then(|(id, _, _)| *id);
+        let sources = ranges
+            .into_iter()
+            .filter(|(id, range)| {
+                range.end > delta_start
+                    || (input.is_empty() && range.start < input_end)
+                    || (id.is_some() && *id == input_source)
+            })
+            .filter_map(|(id, _)| id.map(str::to_string))
+            .collect();
+        let input = if input.is_empty() { &transcript } else { input };
+        Some((
+            RealtimeDelegation::new(input, Some(&transcript), source, preserve_transcript)
+                .render()
+                .into_text()?,
+            sources,
+        ))
+    }
 
     pub(crate) fn new(
         input: &'a str,
@@ -124,3 +185,7 @@ fn escape_xml_text(input: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+
+#[cfg(test)]
+#[path = "realtime_delegation_tests.rs"]
+mod tests;

@@ -1161,17 +1161,21 @@ pub(crate) async fn run_hooks_and_record_inputs(
 ) -> CodexResult<bool> {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
+    let mut input_error = None;
     for input_item in recordable_inputs(sess, model_info, input) {
         let input_item = input_item?;
         let hook_outcome = inspect_pending_input(sess, turn_context, &input_item).await;
+        let realtime_handoff_id = match input_item.as_ref() {
+            TurnInput::UserInput { metadata, .. } => metadata.realtime_handoff_id,
+            _ => None,
+        };
         if hook_outcome.should_stop {
+            if let Some(id) = realtime_handoff_id {
+                sess.reject_realtime_handoff(id).await;
+            }
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if matches!(input_item.as_ref(), TurnInput::UserInput { content, .. } if !content.is_empty())
-            {
-                accepted_user_input = true;
-            }
             // Tool outputs retain their durability barrier, including in mixed input batches.
             let input_persist_context = if persist_context == PersistContext::SteeredUserInput
                 && matches!(input_item.as_ref(), TurnInput::FunctionCallOutput(_))
@@ -1180,7 +1184,8 @@ pub(crate) async fn run_hooks_and_record_inputs(
             } else {
                 persist_context
             };
-            record_pending_input(
+            let is_user_input = matches!(input_item.as_ref(), TurnInput::UserInput { content, .. } if !content.is_empty());
+            if let Err(error) = record_pending_input(
                 sess,
                 turn_context,
                 model_info,
@@ -1188,13 +1193,23 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 hook_outcome.additional_contexts,
                 input_persist_context,
             )
-            .await;
+            .await
+            {
+                // The batch has left the queue. Persist its unrelated siblings before failing.
+                input_error.get_or_insert(error);
+            } else if is_user_input {
+                accepted_user_input = true;
+            }
         }
     }
     // The batch has left the input queue. Persist every accepted item before the
     // optional lookup can suspend this task long enough for an interrupt to abort it.
     if !input.is_empty() {
         super::file_audio::resolve_pending(sess).await;
+    }
+    if let Some(error) = input_error {
+        sess.conversation.stop_for_history_recovery().await;
+        return Err(CodexErr::Io(error));
     }
     Ok(blocked_input && !accepted_user_input)
 }

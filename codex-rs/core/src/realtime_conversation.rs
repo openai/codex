@@ -125,6 +125,12 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.";
+const HISTORY_RECOVERY_MESSAGE: &str =
+    "realtime history recovery required; reload the thread before continuing";
+
+fn history_recovery_error() -> CodexErr {
+    CodexErr::Fatal(HISTORY_RECOVERY_MESSAGE.into())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -183,6 +189,7 @@ impl RealtimeHandoffAdmission {
 
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<RealtimeConversationManagerState>,
+    recovery_required: AtomicBool,
 }
 
 struct RealtimeConversationManagerState {
@@ -608,6 +615,7 @@ impl RealtimeConversationManager {
                 mode_instructions: None,
                 context_active: false,
             }),
+            recovery_required: AtomicBool::new(false),
         }
     }
 
@@ -630,6 +638,30 @@ impl RealtimeConversationManager {
             .conversation
             .as_ref()
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
+    }
+
+    pub(crate) fn history_recovery_required(&self) -> bool {
+        self.recovery_required.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn check_history_recovery(&self) -> CodexResult<()> {
+        if self.history_recovery_required() {
+            Err(history_recovery_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn mark_history_recovery_required(&self) {
+        self.recovery_required.store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn stop_for_history_recovery(&self) {
+        if self.history_recovery_required()
+            && let Some(conversation) = &self.state.lock().await.conversation
+        {
+            conversation.stop_token.cancel();
+        }
     }
 
     pub(crate) async fn is_running_v2(&self) -> bool {
@@ -2111,7 +2143,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or_else(|| realtime_transcript_delta_from_handoff(handoff))
 }
 
-fn realtime_delegation_from_handoff(
+pub(crate) fn realtime_delegation_from_handoff(
     handoff: &RealtimeHandoffRequested,
     preserve_transcript: bool,
 ) -> Option<String> {

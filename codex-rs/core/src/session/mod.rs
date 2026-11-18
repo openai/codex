@@ -278,6 +278,7 @@ mod model_catalog_settings;
 mod model_ids;
 pub(crate) mod multi_agents;
 mod plugin_selection;
+#[expect(dead_code, reason = "Activated with hangup in the next PR")]
 mod realtime_handoff;
 mod realtime_history;
 mod retained_context;
@@ -1984,11 +1985,9 @@ impl Session {
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
         if let Some(history) = &self.realtime_history {
-            history
-                .lock()
-                .await
-                .observation_clock
-                .restore(rollout_items);
+            let mut history = history.lock().await;
+            history.observation_clock.restore(rollout_items);
+            history.restore_handoffs(rollout_items);
         }
         let rollout_reconstruction::RolloutReconstruction {
             mut history,
@@ -4084,9 +4083,33 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
-        mut items: Vec<ResponseItemEnvelope>,
+        items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
+        // Ordinary history persistence retains its existing best-effort behavior.
+        let _ = self
+            .record_prepared_items(
+                turn_context,
+                model_info,
+                items,
+                image_preparations,
+                /*realtime*/ None,
+            )
+            .await;
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "a durable realtime admission must publish history atomically with respect to other history writers"
+    )]
+    async fn record_prepared_items(
+        &self,
+        turn_context: &TurnContext,
+        model_info: &ModelInfo,
+        mut items: Vec<ResponseItemEnvelope>,
+        image_preparations: Vec<ImagePreparationMetadata>,
+        realtime: Option<crate::realtime_history::handoff::PreparedRealtimeInput>,
+    ) -> std::io::Result<()> {
         // Save the originating history budget for replay.
         // Preserve any existing tool-specific override.
         let policy: codex_utils_output_truncation::TruncationPolicy =
@@ -4113,10 +4136,16 @@ impl Session {
         let force_mcp_checkpoint = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        let mcp_revision = self
-            .services
-            .executed_tool_calls
-            .mcp_attribution_checkpoint(force_mcp_checkpoint)
+        let cached_retry = realtime
+            .as_ref()
+            .is_some_and(|input| input.cached_envelope.is_some());
+        let mcp_revision = (!cached_retry)
+            .then(|| {
+                self.services
+                    .executed_tool_calls
+                    .mcp_attribution_checkpoint(force_mcp_checkpoint)
+            })
+            .flatten()
             .and_then(|(attribution, revision)| {
                 let first_persisted = items
                     .iter()
@@ -4133,15 +4162,30 @@ impl Session {
                 }
                 Some(revision)
             });
-        let response_items = items
+        // Thread settings precede the first accepted input. Keep the persistence lock
+        // through its seal, and clear the pending flag only after the seal succeeds.
+        let realtime_settings_guard = if realtime.is_some()
+            && force_mcp_checkpoint
+            && self.reference_context_item().await.is_none()
+        {
+            Some(thread_settings::acquire_persistence_lock(self).await)
+        } else {
+            None
+        };
+        let realtime_initial_settings = realtime_settings_guard.is_some()
+            && self.reference_context_item().await.is_none()
+            && self.state.lock().await.initial_settings_pending();
+        let realtime_settings_event = if realtime_initial_settings {
+            Some(thread_settings::applied_event(self).await)
+        } else {
+            None
+        };
+        let mut response_items = items
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>();
         {
             let mut state = self.state.lock().await;
-            state
-                .current_time_reminder
-                .note_recorded_items(&response_items);
             let pending_orders = turn_context
                 .extension_data
                 .get::<retained_context::PendingAssistantMessageOrders>();
@@ -4175,12 +4219,41 @@ impl Session {
                         });
                 }
             }
+            if let Some(prepared) = &realtime {
+                let envelope = if let Some(cached) = &prepared.cached_envelope {
+                    cached.clone()
+                } else {
+                    let [envelope] = items.as_slice() else {
+                        return Err(std::io::Error::other(
+                            "realtime admission must contain one input",
+                        ));
+                    };
+                    envelope.clone()
+                };
+                let envelope = self
+                    .record_realtime_handoff_input(
+                        &mut state,
+                        &turn_context.sub_id,
+                        envelope,
+                        prepared,
+                        realtime_settings_event,
+                        policy,
+                    )
+                    .await?;
+                if realtime_initial_settings {
+                    state.take_initial_settings_pending();
+                }
+                response_items = vec![envelope.item.clone()];
+                items = vec![envelope];
+            } else {
+                state
+                    .pending_audio_duration_ids
+                    .extend(file_audio::file_ids(&items).cloned());
+                state.history.record_annotated_items(&mut items, policy);
+            }
             state
-                .pending_audio_duration_ids
-                .extend(file_audio::file_ids(&items).cloned());
-            state
-                .history
-                .record_annotated_items(&mut items, model_info.truncation_policy.into());
+                .current_time_reminder
+                .note_recorded_items(&response_items);
         }
         for image in image_preparations {
             self.services
@@ -4190,27 +4263,32 @@ impl Session {
                     metadata: image,
                 });
         }
-        let settings_guard =
-            if force_mcp_checkpoint && self.reference_context_item().await.is_none() {
-                Some(thread_settings::acquire_persistence_lock(self).await)
+        let persisted = if let Some(prepared) = &realtime {
+            self.finish_realtime_handoff(prepared, &items[0]).await;
+            true
+        } else {
+            let settings_guard =
+                if force_mcp_checkpoint && self.reference_context_item().await.is_none() {
+                    Some(thread_settings::acquire_persistence_lock(self).await)
+                } else {
+                    None
+                };
+            let initial_settings = if settings_guard.is_some()
+                && self.reference_context_item().await.is_none()
+                && self.state.lock().await.take_initial_settings_pending()
+            {
+                Some(thread_settings::applied_event(self).await)
             } else {
                 None
             };
-        let initial_settings = if settings_guard.is_some()
-            && self.reference_context_item().await.is_none()
-            && self.state.lock().await.take_initial_settings_pending()
-        {
-            Some(thread_settings::applied_event(self).await)
-        } else {
-            None
+            let rollout_items = initial_settings
+                .into_iter()
+                .map(RolloutItem::EventMsg)
+                .chain(items.into_iter().map(RolloutItem::ResponseItem))
+                .collect::<Vec<_>>();
+            self.persist_rollout_items(&rollout_items).await
         };
-        let rollout_items = initial_settings
-            .into_iter()
-            .map(RolloutItem::EventMsg)
-            .chain(items.into_iter().map(RolloutItem::ResponseItem))
-            .collect::<Vec<_>>();
-        let persisted = self.persist_rollout_items(&rollout_items).await;
-        drop(settings_guard);
+        drop(realtime_settings_guard);
         if persisted && let Some(revision) = mcp_revision {
             self.services
                 .executed_tool_calls
@@ -4225,6 +4303,7 @@ impl Session {
         }
         self.send_raw_response_items(turn_context, &response_items)
             .await;
+        Ok(())
     }
 
     pub(crate) async fn record_step_world_state_if_changed(
@@ -6006,7 +6085,11 @@ impl Session {
         client_id: Option<String>,
         metadata: UserInputMetadata,
         persist_context: PersistContext,
-    ) {
+    ) -> std::io::Result<()> {
+        let realtime = match metadata.realtime_handoff_id {
+            Some(id) => self.pending_realtime_handoff(id, input).await,
+            None => None,
+        };
         let display_input = input
             .iter()
             .map(ResolvedUserInput::to_user_input)
@@ -6049,18 +6132,28 @@ impl Session {
             &prepared_items,
             &user_image_content_indices,
         );
-        self.record_prepared_conversation_items(
-            turn_context,
-            model_info,
-            prepared_items,
-            image_preparations,
-        )
-        .await;
+        if let Err(error) = self
+            .record_prepared_items(
+                turn_context,
+                model_info,
+                prepared_items,
+                image_preparations,
+                realtime.clone(),
+            )
+            .await
+        {
+            if let Some(prepared) = realtime {
+                self.reject_realtime_handoff(prepared.id).await;
+            }
+            return Err(error);
+        }
         if metadata.origin.is_user() {
             self.services
                 .analytics_events_client
                 .track_accepted_user_input(&turn_context.sub_id, metadata.used_dictation);
         }
+        // Existing clients use this accepted input item to identify delegated turns.
+        // The realtime receipt adds provenance without changing that live contract.
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
@@ -6072,6 +6165,7 @@ impl Session {
         )
         .await;
         self.ensure_rollout_materialized(persist_context).await;
+        Ok(())
     }
 
     pub(crate) async fn notify_stream_error(

@@ -208,6 +208,10 @@ impl SessionState {
         pending
     }
 
+    pub(crate) fn initial_settings_pending(&self) -> bool {
+        self.initial_settings_pending
+    }
+
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }

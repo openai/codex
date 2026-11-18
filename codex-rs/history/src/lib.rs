@@ -278,11 +278,10 @@ impl CodexHarnessMetadata {
 }
 
 impl ResponseItemEnvelope {
-    /// Projects the realtime view of an accepted input without storing a second copy.
-    pub fn realtime_handoff_item(&self) -> Option<RealtimeItem> {
-        let metadata = self.metadata.as_ref()?.realtime_handoff.as_ref()?;
+    fn validated_realtime_handoff(&self) -> Option<(&RealtimeHandoffMetadata, &str)> {
+        let metadata = self.metadata.as_ref()?.realtime_handoff.as_deref()?;
         let ResponseItem::Message {
-            id: Some(id),
+            id: Some(_),
             role,
             content,
             ..
@@ -293,9 +292,15 @@ impl ResponseItemEnvelope {
         let [ContentItem::InputText { text }] = content.as_slice() else {
             return None;
         };
-        if role != "user" {
+        if role != "user" || self.item.turn_id().is_none() {
             return None;
         }
+        Some((metadata, text))
+    }
+
+    /// Projects the realtime view of an accepted input without storing a second copy.
+    pub fn realtime_handoff_item(&self) -> Option<RealtimeItem> {
+        let (metadata, text) = self.validated_realtime_handoff()?;
         Some(RealtimeItem {
             id: metadata.event_id.clone(),
             realtime_session_id: metadata.realtime_session_id.clone(),
@@ -305,8 +310,8 @@ impl ResponseItemEnvelope {
                 turn_id: self.item.turn_id()?.to_string(),
                 mode: metadata.mode,
                 source_event_ids: metadata.source_event_ids.clone(),
-                input_item_id: id.to_string(),
-                input: text.clone(),
+                input_item_id: self.item.id()?.to_string(),
+                input: text.to_string(),
             },
         })
     }
@@ -428,6 +433,20 @@ pub enum RolloutItem {
 }
 
 impl RolloutItem {
+    /// Returns the handoff ID only when the rollout item is a valid acceptance receipt.
+    pub fn realtime_handoff_id(&self) -> Option<&str> {
+        match self {
+            Self::RealtimeItem(RealtimeItem {
+                content: RealtimeItemContent::TurnInputAccepted { handoff_id, .. },
+                ..
+            }) => Some(handoff_id),
+            Self::ResponseItem(envelope) => envelope
+                .validated_realtime_handoff()
+                .map(|(metadata, _)| metadata.handoff_id.as_str()),
+            _ => None,
+        }
+    }
+
     /// Returns the canonical realtime observation time without constructing a projection.
     pub fn realtime_observed_at_ms(&self) -> Option<i64> {
         match self {
