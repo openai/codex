@@ -95,10 +95,12 @@ def test_schema_refresh_only_updates_python_for_repository_schemas(monkeypatch, 
     runpy.run_path(str(script), run_name="__main__")
 
     assert [args[0] for args, _kwargs in calls] == (
-        ["cargo", "uv"] if mode == "repository" else ["cargo"]
+        ["cargo", sys.executable] if mode == "repository" else ["cargo"]
     )
     assert all(kwargs["check"] for _args, kwargs in calls)
     if mode == "repository":
+        runner = ROOT.parents[1] / "codex-rs/scripts/run_locked_python_tool.py"
+        assert calls[1][0][1] == str(runner)
         assert calls[1][0][-3:] == [
             "generate-types",
             "--schema-dir",

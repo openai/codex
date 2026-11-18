@@ -190,18 +190,16 @@ def test_root_format_driver_covers_all_formatter_groups(
         len(group.commands) for group in formatters
     ]
     sdk_uv_run_args = (
-        "uv",
-        "run",
-        "--frozen",
+        sys.executable,
+        "codex-rs/scripts/run_locked_python_tool.py",
         "--project",
         "sdk/python",
         "--only-group",
         "format",
     )
     scripts_uv_run_args = (
-        "uv",
-        "run",
-        "--frozen",
+        sys.executable,
+        "codex-rs/scripts/run_locked_python_tool.py",
         "--project",
         "scripts",
     )
