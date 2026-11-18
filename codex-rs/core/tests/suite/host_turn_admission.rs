@@ -347,6 +347,93 @@ async fn interrupt_before_admission_skips_submit_hook_and_uninspected_prompt() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn injected_child_final_survives_parent_interrupt() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let sampling = Arc::new(Notify::new());
+    let sampled = Arc::clone(&sampling);
+    let model = responses::mount_response_handler(&server, move |request| {
+        let response = responses::sse_response(responses::sse_completed("done"));
+        if request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "Continue work.")
+        {
+            response
+        } else {
+            sampled.notify_one();
+            response.set_delay(Duration::from_secs(60))
+        }
+    })
+    .await;
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::InstantInterrupt)
+            .expect("keep mail queued during sampling");
+        // Mail must be durable even when no interruption marker is written.
+        config.agent_interrupt_message_enabled = false;
+    });
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let (_, grant) = start(&test, &mut attempts, "Start work.").await?;
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    sampling.notified().await;
+    let message: ResponseItem = serde_json::from_value(json!({
+        "type": "agent_message", "id": "agent_child-final", "author": "/root/worker", "recipient": "/root",
+        "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe worker finished."}]
+    }))?;
+    // Injection has acknowledged the final, but the blocked sample has not consumed it.
+    test.codex
+        .inject_response_items(vec![message.clone()])
+        .await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let history = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let persisted = history
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(envelope)
+                if matches!(envelope.item, ResponseItem::AgentMessage { .. }) =>
+            {
+                Some(responses::strip_metadata(envelope.item))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted, vec![message.clone()]);
+
+    let (_, grant) = start(&test, &mut attempts, "Continue work.").await?;
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    let mail = model
+        .requests()
+        .iter()
+        .map(|request| request.inputs_of_type("agent_message"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        responses::strip_metadata_from_json(json!(mail)),
+        json!([[], [message]])
+    );
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "An acknowledged child final queued during parent sampling survives interruption and appears once in the next request.",
+        &responses::received_responses_requests(&server).await,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ));
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
