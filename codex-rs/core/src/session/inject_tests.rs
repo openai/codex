@@ -36,6 +36,7 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
     let metadata = expected.metadata.as_mut().unwrap();
     metadata.history_sequence = Some(1);
     metadata.sampled_through_sequence = Some(0);
+    metadata.model_search_state = Some(codex_history::ModelSearchState::Unused);
     metadata.mcp_attribution = Some(
         session
             .services

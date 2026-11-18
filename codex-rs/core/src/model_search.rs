@@ -7,13 +7,14 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
 use codex_extension_api::ExtensionData;
+use codex_history::CodexHarnessMetadata;
 use codex_history::InitialHistory;
+use codex_history::ModelSearchState;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_mcp::McpBinding;
 use codex_mcp::SearchDiscovery;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::openai_models::WebSearchProvider;
 use codex_tools::ToolSpec;
 use serde_json::Map;
@@ -145,26 +146,79 @@ impl SearchOwner {
     }
 
     pub(crate) fn restore(store: &ExtensionData, history: &InitialHistory) {
-        let used = |item: &ResponseItemEnvelope| {
-            item.metadata
-                .as_ref()
-                .is_some_and(|meta| meta.native_search_fallback_used)
+        let mut provider = None;
+        let mut legacy_native = false;
+        let mut legacy_search_mcp = false;
+        let mut has_checkpoint = false;
+        let mut inspect = |metadata: &CodexHarnessMetadata| {
+            match metadata.model_search_state {
+                Some(ModelSearchState::SearchMcp) => {
+                    provider = Some(WebSearchProvider::SearchMcp);
+                }
+                Some(ModelSearchState::Standalone)
+                    if provider != Some(WebSearchProvider::SearchMcp) =>
+                {
+                    provider = Some(WebSearchProvider::Standalone);
+                }
+                Some(ModelSearchState::Unused) | Some(ModelSearchState::Standalone) | None => {}
+            }
+            legacy_native |= metadata.native_search_fallback_used;
+            if let Some(attribution) = metadata.mcp_attribution.as_ref() {
+                legacy_search_mcp |= attribution.status
+                    == codex_protocol::mcp::McpAttributionStatus::AttributionError
+                    || attribution.sources.iter().any(|source| {
+                        source.connector_id.as_deref() == Some(codex_mcp::SEARCH_CONNECTOR)
+                    });
+            }
+            has_checkpoint |=
+                metadata.model_search_state.is_some() || metadata.mcp_attribution.is_some();
         };
-        if history.scan_rollout_items(|item| match item {
-            RolloutItem::ResponseItem(item) => used(item),
-            RolloutItem::Compacted(item) => item.replacement_history.iter().flatten().any(used),
-            _ => false,
-        }) {
-            Self::admit(store, WebSearchProvider::Standalone);
+        for item in history.get_rollout_items() {
+            match item {
+                RolloutItem::ResponseItem(item) => {
+                    if let Some(metadata) = item.metadata.as_ref() {
+                        inspect(metadata);
+                    }
+                }
+                RolloutItem::Compacted(item) => {
+                    for metadata in item
+                        .replacement_history
+                        .iter()
+                        .flatten()
+                        .filter_map(|item| item.metadata.as_ref())
+                    {
+                        inspect(metadata);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let provider = provider
+            .or_else(|| legacy_search_mcp.then_some(WebSearchProvider::SearchMcp))
+            .or_else(|| legacy_native.then_some(WebSearchProvider::Standalone))
+            .or_else(|| {
+                (!has_checkpoint
+                    && !matches!(history, InitialHistory::New | InitialHistory::Cleared))
+                .then_some(WebSearchProvider::SearchMcp)
+            });
+        if let Some(provider) = provider {
+            Self::admit(store, provider);
         }
     }
 
     pub(crate) fn checkpoint(store: &ExtensionData, items: &mut [ResponseItemEnvelope]) {
-        if Self::current(store) == Some(WebSearchProvider::Standalone) {
-            for item in items {
-                item.metadata
-                    .get_or_insert_default()
-                    .native_search_fallback_used = true;
+        let provider = Self::current(store);
+        let state = match provider {
+            Some(WebSearchProvider::SearchMcp) => ModelSearchState::SearchMcp,
+            Some(WebSearchProvider::Standalone) => ModelSearchState::Standalone,
+            None => ModelSearchState::Unused,
+        };
+        for item in items {
+            let metadata = item.metadata.get_or_insert_default();
+            metadata.model_search_state = Some(state);
+            if provider == Some(WebSearchProvider::Standalone) {
+                // Keep older readers working while this field rolls out.
+                metadata.native_search_fallback_used = true;
             }
         }
     }
@@ -418,15 +472,9 @@ pub(crate) async fn resolve(
         SearchDiscovery::Critical(reason) => *reason,
         SearchDiscovery::Unavailable => return finish(ModelSearch::Disabled, "unavailable"),
     };
-    let attribution = services.executed_tool_calls.mcp_attribution_snapshot();
     if let Some(mode) = native_mode
         && owner != Some(WebSearchProvider::SearchMcp)
         && usage.0.load(Ordering::Relaxed) & SearchTurnUsage::MCP == 0
-        && attribution.status != McpAttributionStatus::AttributionError
-        && !attribution
-            .sources
-            .iter()
-            .any(|source| source.connector_id.as_deref() == Some(codex_mcp::SEARCH_CONNECTOR))
     {
         finish(
             ModelSearch::Native {

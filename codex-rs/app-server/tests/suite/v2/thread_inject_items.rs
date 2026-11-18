@@ -639,6 +639,7 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
         Some(serde_json::from_value(json!({
             "history_sequence": 5,
             "sampled_through_sequence": 3,
+            "model_search_state": "unused",
         }))?)
     );
 

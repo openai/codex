@@ -64,6 +64,18 @@ pub struct ResponseItemEnvelope {
     pub metadata: Option<CodexHarnessMetadata>,
 }
 
+/// Persisted search-provider state for a thread.
+///
+/// A missing checkpoint means the history predates this field and may contain Search MCP
+/// references. `Unused` means the writer knows that neither provider has run yet.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSearchState {
+    Unused,
+    SearchMcp,
+    Standalone,
+}
+
 /// Metadata owned by the Codex harness and persisted with a response item.
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -173,6 +185,10 @@ pub struct CodexHarnessMetadata {
         deserialize_with = "deserialize_mcp_attribution_checkpoint"
     )]
     pub mcp_attribution: Option<McpAttribution>,
+
+    /// Search provider already used by this thread, or confirmation that neither has run yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_search_state: Option<ModelSearchState>,
 
     /// Native search ran during automatic fallback, so its browsing references stay on native.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

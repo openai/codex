@@ -2,6 +2,8 @@
 
 use super::*;
 use anyhow::Context;
+use codex_history::CodexHarnessMetadata;
+use codex_history::RolloutItem;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::WebSearchProvider;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -124,11 +126,11 @@ async fn mount_model_search(
         "inputSchema": {"type":"object","properties":{"system2_search_query":{"type":"array"},"open":{"type":"array"}}},
         "_meta": {"connector_id": codex_mcp::SEARCH_CONNECTOR,"connector_name":"search_service"}
     });
-    let apps =
-        AppsTestServer::mount_with_tools(server, Arc::new(Mutex::new(vec![tool.clone()]))).await?;
     tool["inputSchema"]["properties"]["literature_search_query"] = json!({"type":"array"});
     let pin = literature_search_pin();
     tool["_meta"]["_codex_apps"] = json!({"invocation_context":pin});
+    let apps =
+        AppsTestServer::mount_with_tools(server, Arc::new(Mutex::new(vec![tool.clone()]))).await?;
     // Host-owned Apps catalogs can exceed the generic MCP limit of 2,048 tools.
     let mut catalog: Vec<_> = (0..2_048)
         .map(|n| json!({"name":format!("other_{n}"),"inputSchema":{"type":"object"}}))
@@ -201,6 +203,25 @@ fn model_search_builder(apps: &AppsTestServer, tool_mode: ToolMode) -> TestCodex
                 .experimental_supported_tools
                 .push("literature_search_query".into());
         })
+}
+
+fn rewrite_rollout_response_metadata(
+    path: &std::path::Path,
+    mut rewrite: impl FnMut(&mut CodexHarnessMetadata),
+) -> Result<()> {
+    let mut rollout = Vec::new();
+    for original in std::fs::read_to_string(path)?.lines() {
+        let mut line = codex_rollout::parse_rollout_line(original)?;
+        if let RolloutItem::ResponseItem(item) = &mut line.item
+            && let Some(metadata) = item.metadata.as_mut()
+        {
+            rewrite(metadata);
+        }
+        rollout.push(serde_json::to_string(&line)?);
+    }
+    let rollout = rollout.join("\n");
+    std::fs::write(path, format!("{rollout}\n"))?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -304,10 +325,29 @@ async fn model_selected_search_preserves_discovery_and_call_history() -> Result<
         ],
     )
     .await;
-    let test = model_search_builder(&apps, ToolMode::Direct)
+    let mut test = model_search_builder(&apps, ToolMode::Direct)
+        .with_model_info_override("hosted-paper", |model| {
+            model.web_search_provider = None;
+        })
         .build_with_auto_env(&server)
         .await?;
     test.submit_turn("Find the FlashAttention-2 paper.").await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    test.codex.shutdown_and_wait().await?;
+    let mut replaced_legacy_checkpoint = false;
+    rewrite_rollout_response_metadata(&rollout_path, |metadata| {
+        if let Some(attribution) = metadata.mcp_attribution.as_mut() {
+            *attribution = Default::default();
+            replaced_legacy_checkpoint = true;
+        }
+    })?;
+    assert!(
+        replaced_legacy_checkpoint,
+        "first turn should persist legacy MCP attribution"
+    );
+    test = model_search_builder(&apps, ToolMode::Direct)
+        .restart_with_auto_env(&server, &test)
+        .await?;
     discovery_available.store(false, Ordering::SeqCst);
     test.submit_turn("Open the paper and check its speedup.")
         .await?;
@@ -350,6 +390,54 @@ async fn model_selected_search_preserves_discovery_and_call_history() -> Result<
             .rewrite_known_segments()
             .include_request_settings(),
     ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_free_history_withholds_native_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let discovery_available = Arc::new(AtomicBool::new(true));
+    let apps = mount_model_search(&server, &discovery_available).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("imported", "Keep the imported reference [turn0search0]."),
+                ev_completed("imported"),
+            ]),
+            sse(vec![
+                ev_assistant_message("outage", "Search is temporarily unavailable."),
+                ev_completed("outage"),
+            ]),
+        ],
+    )
+    .await;
+    let mut test = model_search_builder(&apps, ToolMode::Direct)
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("Remember this imported search result.")
+        .await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    test.codex.shutdown_and_wait().await?;
+    let mut removed_checkpoint = false;
+    rewrite_rollout_response_metadata(&rollout_path, |metadata| {
+        removed_checkpoint |= metadata.model_search_state.take().is_some();
+        metadata.mcp_attribution = None;
+    })?;
+    assert!(
+        removed_checkpoint,
+        "first turn should persist model search state"
+    );
+    test = model_search_builder(&apps, ToolMode::Direct)
+        .restart_with_auto_env(&server, &test)
+        .await?;
+    discovery_available.store(false, Ordering::SeqCst);
+    test.submit_turn("Open the imported reference.").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].tool_by_name("web", "run").is_none());
     Ok(())
 }
 
