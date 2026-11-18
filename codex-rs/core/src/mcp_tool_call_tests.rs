@@ -52,12 +52,14 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use ctor::ctor;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tracing::Instrument;
@@ -65,6 +67,71 @@ use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 use tracing_test::internal::MockWriter;
+
+const MCP_PERMISSION_REQUEST_HOOK_FIXTURE_ARG: &str = "--codex-test-mcp-permission-request-hook";
+
+#[derive(Deserialize)]
+struct McpPermissionRequestHookFixture {
+    log_path: std::path::PathBuf,
+    hook_output: serde_json::Value,
+}
+
+#[ctor]
+fn maybe_run_mcp_permission_request_hook_fixture() {
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    if args.next().as_deref()
+        != Some(std::ffi::OsStr::new(
+            MCP_PERMISSION_REQUEST_HOOK_FIXTURE_ARG,
+        ))
+    {
+        return;
+    }
+
+    let Some(fixture_path) = args.next() else {
+        exit_mcp_permission_request_hook_fixture(format_args!(
+            "expected MCP permission request hook fixture path"
+        ));
+    };
+    if args.next().is_some() {
+        exit_mcp_permission_request_hook_fixture(format_args!(
+            "unexpected extra MCP permission request hook fixture arguments"
+        ));
+    }
+
+    if let Err(error) = run_mcp_permission_request_hook_fixture(std::path::Path::new(&fixture_path))
+    {
+        exit_mcp_permission_request_hook_fixture(format_args!(
+            "failed to run MCP permission request hook fixture: {error:#}"
+        ));
+    }
+    std::process::exit(0);
+}
+
+fn exit_mcp_permission_request_hook_fixture(message: std::fmt::Arguments<'_>) -> ! {
+    let _ = writeln!(std::io::stderr().lock(), "{message}");
+    std::process::exit(1);
+}
+
+fn run_mcp_permission_request_hook_fixture(fixture_path: &std::path::Path) -> anyhow::Result<()> {
+    let fixture: McpPermissionRequestHookFixture =
+        serde_json::from_reader(std::fs::File::open(fixture_path)?)?;
+    let payload: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
+
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(fixture.log_path)?;
+    serde_json::to_writer(&mut log, &payload)?;
+    writeln!(log)?;
+    log.flush()?;
+
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer(&mut stdout, &fixture.hook_output)?;
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
+}
 
 fn annotations(
     read_only: Option<bool>,
@@ -266,35 +333,25 @@ fn install_mcp_permission_request_hook(
     matcher: &str,
     hook_output: &serde_json::Value,
 ) -> std::path::PathBuf {
-    let script_path = turn_context
+    let fixture_path = turn_context
         .config
         .codex_home
-        .join("mcp_permission_request_hook.py");
+        .join("mcp_permission_request_hook_fixture.json");
     let log_path = turn_context
         .config
         .codex_home
         .join("mcp_permission_request_hook_log.jsonl");
-    let hook_output = hook_output.to_string();
     std::fs::create_dir_all(&turn_context.config.codex_home)
         .expect("create codex home for MCP permission hook");
-    let script = format!(
-        r#"import json
-from pathlib import Path
-import sys
-
-payload = json.load(sys.stdin)
-with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(payload) + "\n")
-
-print({hook_output:?})
-"#,
-        log_path = log_path.display(),
-        hook_output = hook_output,
-    );
-
-    std::fs::write(&script_path, script).expect("write MCP permission hook script");
-    let python = std::env::var("CARGO_BIN_EXE_python3")
-        .unwrap_or_else(|_| if cfg!(windows) { "python" } else { "python3" }.to_owned());
+    std::fs::write(
+        &fixture_path,
+        serde_json::json!({
+            "log_path": log_path,
+            "hook_output": hook_output,
+        })
+        .to_string(),
+    )
+    .expect("write MCP permission hook fixture");
     std::fs::write(
         turn_context.config.codex_home.join("hooks.json"),
         serde_json::json!({
@@ -303,7 +360,7 @@ print({hook_output:?})
                     "matcher": matcher,
                     "hooks": [{
                         "type": "command",
-                        "command": script_path.to_str().expect("UTF-8 hook script path"),
+                        "command": fixture_path.to_str().expect("UTF-8 hook fixture path"),
                         "timeout_sec": 5,
                     }]
                 }]
@@ -327,7 +384,14 @@ print({hook_output:?})
     let hooks = session.hooks().reconfigured(HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(trusted_config_layer_stack),
-        shell_program: Some(python),
+        shell_program: Some(
+            std::env::current_exe()
+                .expect("resolve current test binary")
+                .to_str()
+                .expect("UTF-8 current test binary path")
+                .to_owned(),
+        ),
+        shell_args: vec![MCP_PERMISSION_REQUEST_HOOK_FIXTURE_ARG.to_owned()],
         ..HooksConfig::default()
     });
     session.services.hooks.store(Arc::new(hooks));
