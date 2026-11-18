@@ -11,6 +11,7 @@ export type { AccountSessionWorkspace } from "./AccountSessionWorkspace";
 export type { AccountSessionWorkspaceKind } from "./AccountSessionWorkspaceKind";
 export type { AccountTokenUsageDailyBucket } from "./AccountTokenUsageDailyBucket";
 export type { AccountTokenUsageSummary } from "./AccountTokenUsageSummary";
+export type { AccountUpdateReason } from "./AccountUpdateReason";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { ActivePermissionProfile } from "./ActivePermissionProfile";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";

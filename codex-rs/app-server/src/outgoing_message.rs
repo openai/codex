@@ -1250,6 +1250,7 @@ mod tests {
     #[test]
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
+            reason: None,
             auth_mode: Some(AuthMode::Chatgpt),
             plan_type: Some(PlanType::SelfServeBusinessProLite),
         });
@@ -1259,7 +1260,8 @@ mod tests {
                 "method": "account/updated",
                 "params": {
                     "authMode": "chatgpt",
-                    "planType": "self_serve_business_prolite"
+                    "planType": "self_serve_business_prolite",
+                    "reason": null
                 },
             }),
             serde_json::to_value(notification)

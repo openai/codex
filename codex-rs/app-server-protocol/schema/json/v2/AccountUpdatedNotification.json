@@ -1,6 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AccountUpdateReason": {
+      "enum": [
+        "workspaceRoutingReady",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "AuthMode": {
       "description": "Authentication mode for OpenAI-backed providers.",
       "oneOf": [
@@ -108,6 +115,17 @@
           "type": "null"
         }
       ]
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AccountUpdateReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Set when initial routing discovery completes for the same authenticated owner."
     }
   },
   "title": "AccountUpdatedNotification",

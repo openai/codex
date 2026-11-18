@@ -172,6 +172,7 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
         },
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
             AccountUpdatedNotification {
+                reason: None,
                 auth_mode: None,
                 plan_type: None,
             },

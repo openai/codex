@@ -219,6 +219,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         AppServerEvent::Lagged { skipped: 1 },
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
             AccountUpdatedNotification {
+                reason: None,
                 auth_mode: None,
                 plan_type: None,
             },

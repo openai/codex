@@ -150,6 +150,7 @@ client_id = "enterprise-client""#
     assert_eq!(
         account,
         AccountUpdatedNotification {
+            reason: None,
             auth_mode: None,
             plan_type: None,
         }

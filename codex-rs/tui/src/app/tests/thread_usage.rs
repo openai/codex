@@ -95,6 +95,7 @@ async fn account_updated_with_backend_only_auth_enables_thread_usage() -> Result
         &app_server,
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
             AccountUpdatedNotification {
+                reason: None,
                 auth_mode: Some(AuthMode::AgentIdentity),
                 plan_type: Some(PlanType::Business),
             },
@@ -254,6 +255,7 @@ async fn account_change_discards_thread_usage_deferred_while_overlay_is_open() -
         &app_server,
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
             AccountUpdatedNotification {
+                reason: None,
                 auth_mode: Some(AuthMode::AgentIdentity),
                 plan_type: Some(PlanType::Business),
             },

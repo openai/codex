@@ -74,6 +74,7 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
                 codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
                     ServerNotification::AccountUpdated(
                         codex_app_server_protocol::AccountUpdatedNotification {
+                            reason: None,
                             auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
                             plan_type: Some(codex_protocol::account::PlanType::Pro),
                         },

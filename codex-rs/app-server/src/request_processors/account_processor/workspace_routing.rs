@@ -5,6 +5,7 @@
 
 use super::*;
 use codex_app_server_protocol::AccountRoutingOverride;
+use codex_app_server_protocol::AccountUpdateReason;
 use codex_backend_client::AccountEntry;
 use codex_config::ConfigLoadError;
 use codex_http_client::NetworkPolicyDenied;
@@ -244,7 +245,8 @@ impl AccountRequestProcessor {
                 && response.workspace_routing.is_some()
                 && auth_changes.borrow().owner_generation == owner_generation
             {
-                let notification = processor.current_account_updated_notification();
+                let mut notification = processor.current_account_updated_notification();
+                notification.reason = Some(AccountUpdateReason::WorkspaceRoutingReady);
                 processor
                     .outgoing
                     .send_account_notification(
