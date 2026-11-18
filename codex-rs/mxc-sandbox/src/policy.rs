@@ -21,17 +21,19 @@ use codex_windows_sandbox::resolve_windows_deny_read_paths;
 use mxc_sdk::mxc_common::cmdline::CommandLineContext;
 use mxc_sdk::mxc_common::cmdline::CommandLineError;
 use mxc_sdk::mxc_common::cmdline::cmdline_from_argv_for_context;
-use mxc_sdk::mxc_common::models::BaseProcessUiConfig;
-use mxc_sdk::mxc_common::models::ContainerPolicy;
-use mxc_sdk::mxc_common::models::ExecutionRequest;
-use mxc_sdk::mxc_common::models::FallbackPolicy;
-use mxc_sdk::mxc_common::models::NetworkAction;
-use mxc_sdk::mxc_common::models::NetworkCidr;
-use mxc_sdk::mxc_common::models::NetworkEgressPolicy;
-use mxc_sdk::mxc_common::models::NetworkIngressPolicy;
-use mxc_sdk::mxc_common::models::NetworkPeer;
-use mxc_sdk::mxc_common::models::NetworkRule;
-use mxc_sdk::mxc_common::models::UiPolicy;
+use mxc_sdk::v1::ContainerRequest;
+use mxc_sdk::v1::Containment;
+use mxc_sdk::v1::FilesystemPolicy;
+use mxc_sdk::v1::NetworkAction;
+use mxc_sdk::v1::NetworkEgressPolicy;
+use mxc_sdk::v1::NetworkIngressPolicy;
+use mxc_sdk::v1::NetworkPeerPolicy;
+use mxc_sdk::v1::NetworkPolicy;
+use mxc_sdk::v1::NetworkRulePolicy;
+use mxc_sdk::v1::UiPolicy;
+use mxc_sdk::v1::configs::ProcessContainerConfig;
+use mxc_sdk::v1::configs::ProcessContainerUi;
+use mxc_sdk::v1::configs::ProcessContainerUiIsolation;
 use thiserror::Error;
 
 use crate::MxcCommand;
@@ -120,7 +122,7 @@ pub(super) fn build_request(
     env: Vec<String>,
     volume_roots: &[PathBuf],
     platform_read_roots: &[PathBuf],
-) -> Result<ExecutionRequest, PolicyError> {
+) -> Result<ContainerRequest, PolicyError> {
     if command.command.is_empty() {
         return Err(PolicyError::EmptyCommand);
     }
@@ -293,78 +295,77 @@ pub(super) fn build_request(
         NetworkAction::Deny
     };
     let mut egress = NetworkEgressPolicy {
-        default: egress_default,
+        default: Some(egress_default),
         ..Default::default()
     };
     if proxied {
         // PSEC host loopback can be bidirectional. This shape is supported only
         // when the caller already allows local clients and servers. Keep
         // private-network ingress denied and allow no direct DNS bypass.
-        egress.allow.push(NetworkRule {
-            to: vec![
-                NetworkPeer {
-                    cidr: NetworkCidr {
-                        address: std::net::Ipv4Addr::new(127, 0, 0, 0).into(),
-                        prefix_length: 8,
-                    },
-                    except: Vec::new(),
-                },
-                NetworkPeer {
-                    cidr: NetworkCidr {
-                        address: std::net::Ipv6Addr::LOCALHOST.into(),
-                        prefix_length: 128,
-                    },
-                    except: Vec::new(),
-                },
-            ],
-            ports: Vec::new(),
-        });
+        egress.allow = Some(vec![NetworkRulePolicy {
+            to: Some(vec![
+                NetworkPeerPolicy::new("127.0.0.0/8"),
+                NetworkPeerPolicy::new("::1/128"),
+            ]),
+            ..Default::default()
+        }]);
     }
-    Ok(ExecutionRequest {
-        script_code: match cmd_script_command_line(&command.command) {
+    let mut process_container = ProcessContainerConfig::default();
+    process_container.capabilities = vec!["registryRead".to_owned()];
+    let mut ui = ProcessContainerUi::default();
+    ui.isolation = ProcessContainerUiIsolation::Desktop;
+    process_container.ui = Some(ui);
+    let environment = env
+        .iter()
+        .map(|entry| {
+            let (key, value) = entry.split_once('=').ok_or_else(|| {
+                PolicyError::PolicyResolution(
+                    "MXC environment entries must be KEY=VALUE".to_owned(),
+                )
+            })?;
+            Ok((key.to_owned(), value.to_owned()))
+        })
+        .collect::<Result<Vec<_>, PolicyError>>()?;
+    Ok(ContainerRequest {
+        working_directory: Some(
+            command_cwd
+                .to_str()
+                .ok_or(PolicyError::NonUnicodeCommandCwd)?
+                .to_owned(),
+        ),
+        environment: (!environment.is_empty()).then_some(environment),
+        filesystem: Some(FilesystemPolicy {
+            readwrite_paths: unicode_paths(write)?,
+            readonly_paths: unicode_paths(read)?,
+            denied_paths: unicode_paths(deny)?,
+            ..Default::default()
+        }),
+        network: Some(NetworkPolicy {
+            egress: Some(egress),
+            ingress: Some(NetworkIngressPolicy {
+                default: Some(ingress_default),
+                host_loopback: Some(if network_enabled || proxied {
+                    NetworkAction::Allow
+                } else {
+                    NetworkAction::Deny
+                }),
+            }),
+            ..Default::default()
+        }),
+        // PowerShell needs Win32k and desktop handles during DLL startup.
+        // Keep clipboard, input injection, and system-control restrictions.
+        ui: Some(UiPolicy {
+            disable: false,
+            ..Default::default()
+        }),
+        containment: Containment::ProcessContainer(process_container),
+        ..ContainerRequest::new(match cmd_script_command_line(&command.command) {
             Some(script) => script,
             None => cmdline_from_argv_for_context(
                 &command.command,
                 CommandLineContext::WindowsCreateProcess,
             )?,
-        },
-        working_directory: command_cwd
-            .to_str()
-            .ok_or(PolicyError::NonUnicodeCommandCwd)?
-            .to_owned(),
-        env: (!env.is_empty()).then_some(env),
-        policy: ContainerPolicy {
-            capabilities: vec!["registryRead".to_owned()],
-            readwrite_paths: unicode_paths(write)?,
-            readonly_paths: unicode_paths(read)?,
-            denied_paths: unicode_paths(deny)?,
-            fallback: FallbackPolicy {
-                allow_dacl_mutation: false,
-            },
-            network_egress: Some(egress),
-            network_ingress: Some(NetworkIngressPolicy {
-                default: ingress_default,
-                host_loopback: if network_enabled || proxied {
-                    NetworkAction::Allow
-                } else {
-                    NetworkAction::Deny
-                },
-            }),
-            network_specified: true,
-            network_mode_specified: true,
-            // PowerShell needs Win32k and desktop handles during DLL startup.
-            // Keep clipboard, input injection, and system-control restrictions.
-            ui: UiPolicy {
-                disable: false,
-                ..Default::default()
-            },
-            base_process_ui: BaseProcessUiConfig {
-                isolation: "desktop".to_owned(),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..Default::default()
+        })
     })
 }
 

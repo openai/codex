@@ -67,7 +67,7 @@ pub(super) fn run() -> Result<i32> {
         &volumes,
         &platform_read_roots()?,
     )?;
-    crate::native::launch(&request)
+    crate::native::launch(request)
 }
 
 pub(super) fn volume_roots(
