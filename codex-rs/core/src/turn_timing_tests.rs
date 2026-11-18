@@ -1,4 +1,7 @@
 use super::ToolBatchTiming;
+use codex_analytics::IncompleteReason;
+use codex_analytics::IncompleteReason::*;
+use codex_analytics::TurnCriticalPath;
 use codex_analytics::TurnProfile;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
@@ -20,6 +23,12 @@ use super::TurnProfileState;
 use super::TurnTimingState;
 use super::response_item_records_turn_ttft;
 use crate::ResponseEvent;
+
+impl TurnTimingState {
+    pub(crate) fn incomplete_reasons(&self) -> Vec<IncompleteReason> {
+        self.profile_state().incomplete_reasons.clone()
+    }
+}
 
 #[tokio::test]
 async fn turn_timing_state_records_ttft_only_once_per_turn() {
@@ -414,17 +423,49 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
 async fn invalidation_and_late_guard_drop_cannot_restore_a_frozen_path() {
     let timing = Arc::new(TurnTimingState::default());
     timing.enable_critical_path();
+    timing.invalidate_critical_path(&[CodeModeUnsupported]);
     timing.mark_turn_started(Instant::now()).await;
     let guard = timing.begin_tool_blocking(Some(ToolBatchTiming::default()));
-    timing.invalidate_critical_path();
-    let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
-    assert_eq!(
-        profile.critical_path,
-        codex_analytics::TurnCriticalPath::Incomplete
-    );
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for reason in [UnsupportedOperation, UnattributedUserWait] {
+            let (timing, barrier) = (&timing, &barrier);
+            scope.spawn(move || {
+                barrier.wait();
+                timing.invalidate_critical_path(&[CodeModeUnsupported, reason]);
+            });
+        }
+    });
+    let result = timing.complete_profile_and_duration_ms().await;
+    let TurnCriticalPath::Incomplete(reasons) = &result.2.critical_path else {
+        panic!("expected incomplete capture");
+    };
+    assert_eq!(reasons.first(), Some(&CodeModeUnsupported));
+    assert_eq!(reasons.len(), 3);
+    assert!(reasons.contains(&UnsupportedOperation) && reasons.contains(&UnattributedUserWait));
+    timing.invalidate_critical_path(&[ForcedTeardown]);
     timing.enable_critical_path();
     drop(guard);
     assert!(timing.snapshot_path(Instant::now()).is_none());
+    assert_eq!(timing.complete_profile_and_duration_ms().await, result);
+}
+
+#[test]
+fn critical_path_fallback_depends_on_whether_the_turn_started() {
+    let now = Instant::now();
+    let mut state = TurnProfileState {
+        capture_enabled: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        state.complete(now).critical_path,
+        TurnCriticalPath::Incomplete(vec![MissingTurnStart])
+    );
+    state.start(now);
+    assert_eq!(
+        state.complete(now).critical_path,
+        TurnCriticalPath::Incomplete(vec![Unclassified])
+    );
 }
 
 #[tokio::test]

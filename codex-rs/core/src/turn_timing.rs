@@ -6,6 +6,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use codex_analytics::IncompleteReason;
 use codex_analytics::TurnProfile;
 use codex_direct_tool_timing::DirectToolTimings;
 use codex_otel::TURN_TTFM_DURATION_METRIC;
@@ -108,6 +109,7 @@ struct TurnTimingStateInner {
 struct TurnProfileState {
     capture_enabled: bool,
     path: Option<CriticalPath>,
+    incomplete_reasons: Vec<IncompleteReason>,
     tool_dependency: Option<CriticalPath>,
     started_at: Option<Instant>,
     last_transition_at: Option<Instant>,
@@ -149,10 +151,15 @@ impl TurnTimingState {
         }
     }
 
-    pub(crate) fn invalidate_critical_path(&self) {
+    pub(crate) fn invalidate_critical_path(&self, reasons: &[IncompleteReason]) {
         let mut state = self.profile_state();
         if state.completed_profile.is_none() {
             state.path = None;
+            for reason in reasons {
+                if !state.incomplete_reasons.contains(reason) {
+                    state.incomplete_reasons.push(*reason);
+                }
+            }
         }
     }
 
@@ -342,6 +349,7 @@ impl TurnProfileState {
         *self = Self {
             path,
             capture_enabled: self.capture_enabled,
+            incomplete_reasons: std::mem::take(&mut self.incomplete_reasons),
             started_at: Some(started_at),
             last_transition_at: Some(started_at),
             ..Self::default()

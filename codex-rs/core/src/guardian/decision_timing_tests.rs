@@ -1,6 +1,7 @@
 #![cfg(test)]
 //! Verifies review timing binds to its invocation before scheduling and respects the capture gate.
 
+use codex_analytics::IncompleteReason;
 use codex_direct_tool_timing::ToolBatchTiming;
 use codex_utils_critical_path::CriticalPath;
 use codex_utils_critical_path::PathDurations;
@@ -96,6 +97,10 @@ async fn decision_binds_before_scheduling_and_does_not_follow_reused_ids(
             .snapshot_path(Instant::now())
             .is_none(),
         network && critical_path_timing
+    );
+    assert_eq!(
+        turn.turn_timing_state.incomplete_reasons().first(),
+        (network && critical_path_timing).then_some(&IncompleteReason::UnattributedReview)
     );
     if await_decision {
         assert_eq!(

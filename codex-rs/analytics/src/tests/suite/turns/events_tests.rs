@@ -1023,6 +1023,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 
 #[tokio::test]
 async fn critical_path_payload_preserves_capture_status_and_emits_once() {
+    use crate::IncompleteReason;
     use crate::TurnCriticalPath;
     use crate::TurnCriticalPathDurations;
     use crate::TurnProfileFact;
@@ -1032,15 +1033,19 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
         AppServerTurnStatus::Completed,
         AppServerTurnStatus::Interrupted,
     ] {
-        for (critical_path, expected) in [
+        for (critical_path, expected, expected_reasons) in [
             (
                 TurnCriticalPath::Disabled,
                 json!([
                     "disabled", null, null, null, null, null, null, null, null, null
                 ]),
+                None,
             ),
             (
-                TurnCriticalPath::Incomplete,
+                TurnCriticalPath::Incomplete(vec![
+                    IncompleteReason::CodeModeUnsupported,
+                    IncompleteReason::UnattributedUserWait,
+                ]),
                 json!([
                     "incomplete",
                     null,
@@ -1053,6 +1058,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     null,
                     null
                 ]),
+                Some(json!(["code_mode_unsupported", "unattributed_user_wait"])),
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
@@ -1068,6 +1074,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     unknown_ms: 4,
                 }),
                 json!(["complete", 1234, 700, 500, 200, 200, 100, 150, 80, 4]),
+                None,
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
@@ -1083,6 +1090,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     unknown_ms: 0,
                 }),
                 json!(["complete", 1234, 1234, 1234, 0, 0, 0, 0, 0, 0]),
+                None,
             ),
         ] {
             let mut reducer = AnalyticsReducer::default();
@@ -1143,6 +1151,10 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     params["critical_path_unknown_ms"],
                 ]),
                 expected
+            );
+            assert_eq!(
+                params.get("critical_path_incomplete_reasons"),
+                expected_reasons.as_ref()
             );
             assert_eq!(
                 params.get("critical_path_auto_review_overhead_ms"),

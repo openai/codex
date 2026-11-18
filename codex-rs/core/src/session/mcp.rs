@@ -849,7 +849,9 @@ impl Session {
             .features
             .enabled(Feature::CriticalPathTiming)
         {
-            turn_context.turn_timing_state.invalidate_critical_path();
+            turn_context
+                .turn_timing_state
+                .invalidate_critical_path(&[IncompleteReason::UnattributedUserWait]);
         }
         let _elicitation = self.services.elicitations.register();
         let (tx_response, rx_response) = oneshot::channel();

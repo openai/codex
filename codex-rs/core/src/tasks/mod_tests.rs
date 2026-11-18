@@ -600,6 +600,7 @@ fn emit_compact_metric_records_auto_local() {
 
 struct UncooperativeTimedTask {
     entered: Arc<tokio::sync::Notify>,
+    finish: Arc<tokio::sync::Notify>,
 }
 
 impl SessionTask for UncooperativeTimedTask {
@@ -631,45 +632,73 @@ impl SessionTask for UncooperativeTimedTask {
         _blocking = timing.begin_tool_blocking(Some(batch));
         let _review = _work.start_review();
         self.entered.notify_one();
-        std::future::pending().await
+        self.finish.notified().await;
+        Ok(None)
     }
 }
 
+#[test_case::test_case(false; "forced teardown")]
+#[test_case::test_case(true; "finished before wait")]
 #[tokio::test(flavor = "current_thread")]
-async fn hard_abort_drops_timing_guards_before_profile_completion() {
+async fn abort_drops_timing_guards_before_profile_completion(finished_before_wait: bool) {
+    use codex_analytics::IncompleteReason::ForcedTeardown;
+    use codex_analytics::TurnCriticalPath;
+    use codex_protocol::protocol::TurnAbortReason;
+
     let (session, context, _receiver) = make_session_and_context_with_rx().await;
     let entered = Arc::new(tokio::sync::Notify::new());
+    let finish = Arc::new(tokio::sync::Notify::new());
     session
         .spawn_task(
             Arc::clone(&context),
             Vec::new(),
             UncooperativeTimedTask {
                 entered: Arc::clone(&entered),
+                finish: Arc::clone(&finish),
             },
         )
         .await;
     entered.notified().await;
+    let turn = session
+        .active_turn
+        .lock()
+        .await
+        .take()
+        .expect("active turn");
+    if finished_before_wait {
+        // The task exits after the abort claims the turn but before it waits.
+        let done = turn.task.as_ref().expect("running task").done.notified();
+        finish.notify_one();
+        done.await;
+    }
     session
-        .abort_all_tasks(codex_protocol::protocol::TurnAbortReason::Interrupted)
+        .abort_taken_tasks(Some(turn), TurnAbortReason::Interrupted)
         .await;
-    // The task's review and tool guards are gone before abort completion.
+
+    let timing = &context.turn_timing_state;
     assert!(
-        context
-            .turn_timing_state
+        timing
             .direct_tool_timings
             .owner_for_turn("uncooperative", &context.sub_id)
             .is_none()
     );
-    assert_eq!(
-        context
-            .turn_timing_state
-            .snapshot_path(std::time::Instant::now()),
-        None
-    );
+    let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
+    if finished_before_wait {
+        assert!(matches!(
+            profile.critical_path,
+            TurnCriticalPath::Complete(_)
+        ));
+    } else {
+        assert_eq!(
+            profile.critical_path,
+            TurnCriticalPath::Incomplete(vec![ForcedTeardown])
+        );
+    }
 }
 
 #[tokio::test]
 async fn turn_critical_path_metrics_count_each_capture_once() {
+    use codex_analytics::IncompleteReason::Unclassified;
     use codex_analytics::TurnCriticalPath;
     use codex_analytics::TurnCriticalPathDurations;
 
@@ -690,11 +719,12 @@ async fn turn_critical_path_metrics_count_each_capture_once() {
     });
     let _interest_cache_guard =
         tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let incomplete = TurnCriticalPath::Incomplete(vec![Unclassified]);
     for (sku, path) in [
         (Some("codex"), complete),
         (Some("codex"), TurnCriticalPath::Disabled),
-        (None, TurnCriticalPath::Incomplete),
-        (Some("unrecognized-sku"), TurnCriticalPath::Incomplete),
+        (None, incomplete.clone()),
+        (Some("unrecognized-sku"), incomplete),
     ] {
         Arc::make_mut(&mut context.config).apps_mcp_product_sku = sku.map(str::to_owned);
         context.turn_timing_state = Arc::default();
@@ -725,7 +755,7 @@ async fn turn_critical_path_metrics_count_each_capture_once() {
                 assert!(trace.contains("critical_path_inference_ms=31"));
                 assert!(trace.contains("critical_path_user_wait_ms=0"));
             }
-            TurnCriticalPath::Disabled | TurnCriticalPath::Incomplete => {
+            TurnCriticalPath::Disabled | TurnCriticalPath::Incomplete(_) => {
                 assert!(!trace.contains("critical_path_duration_ms="));
                 let status = if matches!(profile.critical_path, TurnCriticalPath::Disabled) {
                     "disabled"

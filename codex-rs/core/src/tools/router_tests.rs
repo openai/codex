@@ -609,6 +609,7 @@ fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> RegisteredTool {
         exposure: runtime.exposure(),
         native_review: Default::default(),
         runtime,
+        is_trusted: false,
         model_spec: None,
     }
 }

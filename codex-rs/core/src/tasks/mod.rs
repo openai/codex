@@ -15,7 +15,6 @@ use codex_diagnostics::Gauge;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Cache;
 use codex_extension_api::ThreadIdleCause;
 use futures::future::BoxFuture;
-use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 use tokio::sync::Notify;
@@ -47,6 +46,7 @@ use crate::state::RunningTask;
 use crate::state::TaskKind;
 use crate::state::TurnState;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_analytics::IncompleteReason;
 use codex_analytics::TurnProfileFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_context_fragments::RenderedFragment;
@@ -1229,21 +1229,27 @@ impl Session {
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
-        select! {
-            _ = task.done.notified() => {
-            },
-            _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
-                warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
-                // Forced teardown can abort independently spawned tool dispatches
-                // whose guards are destroyed later. Do not publish complete totals
-                // for a dependency graph that has not settled.
-                task.turn_context.turn_timing_state.invalidate_critical_path();
+        let mut handle = task.handle;
+        let grace = Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+        let joined = match tokio::time::timeout(grace, &mut handle).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                handle.abort();
+                handle.await
             }
+        };
+        // A task may finish normally between the deadline and the abort.
+        if let Err(error) = joined {
+            warn!(%error, "task {sub_id} did not finish gracefully");
+            let reason = if error.is_cancelled() {
+                IncompleteReason::ForcedTeardown
+            } else {
+                IncompleteReason::Unclassified
+            };
+            task.turn_context
+                .turn_timing_state
+                .invalidate_critical_path(&[reason]);
         }
-
-        task.handle.abort();
-        // Aborting schedules destruction; join before freezing the turn's timing.
-        let _ = task.handle.await;
 
         if let Err(error) = self
             .record_pending_initial_input(

@@ -16,15 +16,22 @@ use crate::function_tool::OrCancelToolExt;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::call_trace;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
+use codex_analytics::IncompleteReason;
+use codex_analytics::IncompleteReason::CodeModeUnsupported;
+use codex_analytics::IncompleteReason::Unclassified;
+use codex_analytics::IncompleteReason::UnsupportedOperation;
 use codex_direct_tool_timing::ToolAdmission;
 use codex_direct_tool_timing::ToolBatchTiming;
 use codex_direct_tool_timing::ToolGateTiming;
@@ -79,15 +86,32 @@ impl From<FunctionCallError> for ToolDispatchError {
 
 // Direct spawn and wait calls use this turn's tool time; child work stays on its own turn.
 // CodeMode and follow-up agent operations still lack runtime capture.
-fn direct_path_supported(tool_name: &codex_tools::ToolName, source: &ToolCallSource) -> bool {
-    !(matches!(source, ToolCallSource::CodeMode { .. })
-        || (tool_name.is_default_namespace()
-            && matches!(tool_name.name.as_str(),
-                crate::tools::code_mode::PUBLIC_TOOL_NAME | crate::tools::code_mode::WAIT_TOOL_NAME))
-        // Multi-agent tool namespaces can be overridden by the tool catalog.
-        || matches!(tool_name.name.as_str(), "send_input"
-            | "close_agent" | "resume_agent" | "list_agents"
-            | "followup_task" | "interrupt_agent" | "send_message"))
+fn direct_path_incomplete_reasons(
+    tool_name: &codex_tools::ToolName,
+    registered_tool: Option<&RegisteredTool>,
+    source: &ToolCallSource,
+) -> &'static [IncompleteReason] {
+    // The registry resolves the call by this name, normalizing only the default namespace.
+    // Keep legacy name-based invalidation even when the name resolves to an external tool.
+    let reasons: &[_] = match tool_name.name.as_str() {
+        PUBLIC_TOOL_NAME | WAIT_TOOL_NAME if tool_name.is_default_namespace() => {
+            &[CodeModeUnsupported]
+        }
+        "send_input" | "close_agent" | "resume_agent" | "list_agents" | "followup_task"
+        | "interrupt_agent" | "send_message" => &[UnsupportedOperation],
+        _ => &[],
+    };
+    let trusted = registered_tool.is_some_and(|tool| tool.is_trusted);
+    match (source, reasons, trusted) {
+        (ToolCallSource::CodeMode { .. }, [UnsupportedOperation], true) => {
+            &[CodeModeUnsupported, UnsupportedOperation]
+        }
+        (ToolCallSource::CodeMode { .. }, [_], false) => &[CodeModeUnsupported, Unclassified],
+        (ToolCallSource::CodeMode { .. }, _, _) => &[CodeModeUnsupported],
+        (_, [], _) => &[],
+        (_, reasons, true) => reasons,
+        (_, _, false) => &[Unclassified],
+    }
 }
 
 impl ToolCallRuntime {
@@ -203,9 +227,8 @@ impl ToolCallRuntime {
             .record_tool_call(&call, &source, &step_context);
         let router = &step_context.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
-        let tool_runtime = router
-            .registered_tool(&call.tool_name)
-            .map(|tool| Arc::clone(&tool.runtime));
+        let registered_tool = router.registered_tool(&call.tool_name);
+        let tool_runtime = registered_tool.map(|tool| Arc::clone(&tool.runtime));
         let finishes_on_cancellation = tool_runtime
             .as_ref()
             .is_some_and(|runtime| runtime.finishes_on_cancellation());
@@ -220,14 +243,11 @@ impl ToolCallRuntime {
             .config
             .features
             .enabled(codex_features::Feature::CriticalPathTiming)
-            && !direct_path_supported(
-                &tool_runtime
-                    .as_ref()
-                    .map_or_else(|| call.tool_name.clone(), |runtime| runtime.tool_name()),
-                &source,
-            )
         {
-            turn.turn_timing_state.invalidate_critical_path();
+            let reasons = direct_path_incomplete_reasons(&call.tool_name, registered_tool, &source);
+            if !reasons.is_empty() {
+                turn.turn_timing_state.invalidate_critical_path(reasons);
+            }
         }
         let work_timing = self.timing.and_then(|timing| match &source {
             ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
@@ -658,44 +678,53 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::openai_models::ToolMode;
+    use codex_tools::ToolName;
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tracing_test::internal::MockWriter;
 
     #[test]
-    fn direct_tool_support_follows_namespace_resolution() {
-        let handler = crate::tools::multi_agent_tool::multi_agent_v2_handler(
-            crate::tools::handlers::multi_agents_v2::WaitAgentHandler::default(),
-            Some("custom_collaboration"),
-            /*description_override*/ None,
-            /*parameters_override*/ None,
-        );
-        let registry = ToolRegistry::from_tools([handler]);
-        let registered = registry
-            .registered_tool(&codex_tools::ToolName::namespaced(
-                "custom_collaboration",
-                "wait_agent",
-            ))
-            .unwrap();
-        assert!(direct_path_supported(
-            &registered.runtime.tool_name(),
-            &ToolCallSource::Direct
-        ));
-        for name in [
-            crate::tools::code_mode::PUBLIC_TOOL_NAME,
-            crate::tools::code_mode::WAIT_TOOL_NAME,
-            "followup_task",
-            "send_message",
+    fn direct_path_reasons_follow_namespace_resolution() {
+        let nested = ToolCallSource::CodeMode {
+            cell_id: "cell".into(),
+            runtime_tool_call_id: "call".into(),
+        };
+        let code: &[IncompleteReason] = &[CodeModeUnsupported];
+        let mixed: &[IncompleteReason] = &[CodeModeUnsupported, UnsupportedOperation];
+        let mixed_unknown: &[IncompleteReason] = &[CodeModeUnsupported, Unclassified];
+        let namespaced_agent = ToolName::namespaced("custom_collaboration", "send_message");
+        let wait_agent = ToolName::namespaced("custom_collaboration", "wait_agent");
+        let external_wait = ToolName::plain(WAIT_TOOL_NAME).with_default_namespace();
+        let mcp_message = ToolName::namespaced("mcp__chat", "send_message");
+        let unknown = &[Unclassified][..];
+        for (name, builtin, direct, indirect) in [
+            (ToolName::plain(PUBLIC_TOOL_NAME), true, code, code),
+            (ToolName::plain(WAIT_TOOL_NAME), true, code, code),
+            (external_wait, false, unknown, mixed_unknown),
+            (wait_agent, true, &[], code),
+            (namespaced_agent, true, &[UnsupportedOperation], mixed),
+            (mcp_message, false, unknown, mixed_unknown),
+            (ToolName::namespaced("mcp", "wait"), false, &[], code),
         ] {
-            assert!(!direct_path_supported(
-                &codex_tools::ToolName::plain(name).with_default_namespace(),
-                &ToolCallSource::Direct
-            ));
+            let mut registry = ToolRegistry::default();
+            let handler = ImmediateHandler {
+                tool_name: name.clone(),
+                supports_parallel: false,
+                calls: AtomicUsize::default(),
+            };
+            if builtin {
+                registry.add(handler);
+            } else {
+                assert!(registry.register_external(Arc::new(handler)));
+            }
+            let registered = registry.registered_tool(&name).unwrap();
+            let reasons = |source| direct_path_incomplete_reasons(&name, Some(registered), source);
+            assert_eq!(
+                (reasons(&ToolCallSource::Direct), reasons(&nested)),
+                (direct, indirect),
+                "{name}"
+            );
         }
-        assert!(direct_path_supported(
-            &codex_tools::ToolName::namespaced("mcp", "exec"),
-            &ToolCallSource::Direct
-        ));
     }
 
     #[test]

@@ -83,6 +83,7 @@ pub use guardian_v2::GuardianV2EventKind;
 pub use product_attribution::ThreadProductUpdate;
 pub use thread_hint::ThreadHintStatus;
 pub use thread_hint::ThreadHintStatusEvent;
+pub use turn_critical_path::IncompleteReason;
 pub use turn_critical_path::TurnCriticalPath;
 pub use turn_critical_path::TurnCriticalPathDurations;
 

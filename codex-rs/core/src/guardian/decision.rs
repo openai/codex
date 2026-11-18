@@ -1,6 +1,7 @@
 //! Calls the decision extension for each approval and enforces host constraints.
 //! The synchronous service captures one action; no outcome is stored by tool-call ID.
 
+use codex_analytics::IncompleteReason;
 use codex_async_utils::THREAD_STACK_SIZE_BYTES;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::GuardianScope;
@@ -101,7 +102,10 @@ pub(crate) fn decide_approval(
                 .start_review_for_turn(call_id, &context.turn().sub_id)
         });
         if timing.is_none() {
-            context.turn().turn_timing_state.invalidate_critical_path();
+            context
+                .turn()
+                .turn_timing_state
+                .invalidate_critical_path(&[IncompleteReason::UnattributedReview]);
         }
         timing
     } else {

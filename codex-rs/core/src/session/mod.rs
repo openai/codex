@@ -68,6 +68,7 @@ use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::ImagePreparationFact;
 use codex_analytics::ImagePreparationMetadata;
+use codex_analytics::IncompleteReason;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::ThreadInitializationMode;
 use codex_analytics::TurnCodexErrorFact;
@@ -3312,7 +3313,9 @@ impl Session {
                 .features
                 .enabled(Feature::CriticalPathTiming)
         {
-            turn_context.turn_timing_state.invalidate_critical_path();
+            turn_context
+                .turn_timing_state
+                .invalidate_critical_path(&[IncompleteReason::UnattributedUserWait]);
         }
         timing
     }

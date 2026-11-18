@@ -1,3 +1,4 @@
+use codex_analytics::IncompleteReason;
 use codex_direct_tool_timing::ToolBatchTiming;
 use codex_direct_tool_timing::ToolTimingGuard;
 use codex_features::Feature;
@@ -17,6 +18,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use pretty_assertions::assert_eq;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -298,5 +300,9 @@ async fn unowned_human_wait_does_not_claim_a_complete_path(capture: bool) {
             .snapshot_path(Instant::now())
             .is_none(),
         capture
+    );
+    assert_eq!(
+        turn_context.turn_timing_state.incomplete_reasons().first(),
+        capture.then_some(&IncompleteReason::UnattributedUserWait)
     );
 }
