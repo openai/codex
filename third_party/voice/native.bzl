@@ -5,6 +5,13 @@ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_foreign_cc//foreign_cc/private:cc_toolchain_util.bzl", "absolutize_path_in_str", "get_env_vars", "get_flags_info", "get_tools_info")
 load("@rules_python//python:py_runtime_info.bzl", "PyRuntimeInfo")
 
+_NATIVE_BUILD_JOBS = 8
+
+def _macos_prefix_resources(_os_name, _inputs_size):
+    # The local prefix action launches its own build system with -j; account for
+    # those workers in Bazel's CPU budget alongside other local compile actions.
+    return {"cpu": _NATIVE_BUILD_JOBS}
+
 def _native_prefix_impl(ctx):
     cc = find_cpp_toolchain(ctx)
     features = cc_common.configure_features(
@@ -31,7 +38,7 @@ def _native_prefix_impl(ctx):
         "receipt": receipt.path,
         "target": ctx.attr.target,
         "deployment_target": minimums[0] if minimums else None,
-        "jobs": 8,
+        "jobs": _NATIVE_BUILD_JOBS,
         "cc": tools.cc,
         "cxx": tools.cxx,
         "ar": tools.cxx_linker_static,
@@ -80,6 +87,7 @@ def _native_prefix_impl(ctx):
             "no-remote-exec": "1",
             "no-remote-cache": "1",
         } if ctx.attr.target.endswith("apple-darwin") else {},
+        resource_set = _macos_prefix_resources if ctx.attr.target.endswith("apple-darwin") else None,
         mnemonic = "VoiceNativePrefix",
         progress_message = "Building native voice prefix for " + ctx.attr.target,
     )
