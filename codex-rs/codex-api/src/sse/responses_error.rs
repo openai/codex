@@ -5,7 +5,6 @@ use crate::error::ApiError;
 use crate::error::parse_terminal_provider_error;
 use crate::responses_headers::json_headers_to_http_headers;
 use codex_http_client::RetryAfter;
-use codex_protocol::protocol::MisalignmentErrorDetails;
 use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -23,12 +22,39 @@ struct Error {
     misalignment: Option<Value>,
 }
 
+fn retry_after_header(headers: Option<&Value>) -> Option<RetryAfter> {
+    headers
+        .and_then(Value::as_object)
+        .and_then(|headers| RetryAfter::from_headers(&json_headers_to_http_headers(headers)))
+}
+
+/// Classifies recognized statusless error events without treating unknown notifications as failures.
+pub(super) fn parse_error_event(
+    error: Option<&Value>,
+    headers: Option<&Value>,
+) -> Option<ApiError> {
+    if let Some(error) = parse_terminal_provider_error(error, /*status*/ None) {
+        return Some(error);
+    }
+    let error = error?;
+    let code = error.get("code")?.as_str()?;
+    match code {
+        "policy_capacity_unavailable" | "server_is_overloaded" => {
+            let retry_after =
+                retry_after_header(error.get("headers")).or_else(|| retry_after_header(headers));
+            Some(if code == "policy_capacity_unavailable" {
+                ApiError::PolicyCapacityUnavailable { retry_after }
+            } else {
+                ApiError::ServerOverloaded { retry_after }
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
     let error = response.as_ref().and_then(|response| response.get("error"));
-    let retry_after_header = error
-        .and_then(|error| error.get("headers"))
-        .and_then(Value::as_object)
-        .and_then(|headers| RetryAfter::from_headers(&json_headers_to_http_headers(headers)));
+    let retry_after_header = retry_after_header(error.and_then(|error| error.get("headers")));
     if let Some(error) = parse_terminal_provider_error(error, /*status*/ None) {
         return error;
     }
@@ -45,27 +71,6 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
     };
 
     match error.code.as_deref() {
-        Some("insufficient_quota" | "credit_balance_exhausted") => ApiError::QuotaExceeded,
-        Some("usage_not_included") => ApiError::UsageNotIncluded,
-        Some("misalignment_policy_violation") => {
-            let message = error
-                .message
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or_else(|| {
-                    "This request was blocked due to a misalignment policy violation.".to_string()
-                });
-            ApiError::MisalignmentPolicyViolation {
-                message,
-                misalignment: error.misalignment.and_then(|details| {
-                    serde_json::from_value::<MisalignmentErrorDetails>(details).ok()
-                }),
-            }
-        }
-        Some("invalid_prompt") => ApiError::InvalidPrompt {
-            message: error
-                .message
-                .unwrap_or_else(|| "Invalid request.".to_string()),
-        },
         Some("policy_capacity_unavailable") => ApiError::PolicyCapacityUnavailable {
             retry_after: retry_after_header,
         },

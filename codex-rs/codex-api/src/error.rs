@@ -103,6 +103,23 @@ pub(crate) fn parse_terminal_provider_error(
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        ("insufficient_quota" | "credit_balance_exhausted", None) => Some(ApiError::QuotaExceeded),
+        ("usage_not_included", None) => Some(ApiError::UsageNotIncluded),
+        ("invalid_prompt", None) => Some(ApiError::InvalidPrompt {
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Invalid request.")
+                .to_owned(),
+        }),
+        ("misalignment_policy_violation", None) => Some(ApiError::MisalignmentPolicyViolation {
+            message: message
+                .unwrap_or("This request was blocked due to a misalignment policy violation.")
+                .to_owned(),
+            misalignment: error.get("misalignment").cloned().and_then(|details| {
+                serde_json::from_value::<MisalignmentErrorDetails>(details).ok()
+            }),
+        }),
         ("api_key_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
             Some(ApiError::SpendLimitExceeded(SpendLimitScope::ApiKey))
         }

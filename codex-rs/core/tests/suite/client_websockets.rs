@@ -2732,6 +2732,22 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     json!({"type": "error", "sequence_number": 0, "error": {"code": "cyber_policy", "message": "policy rejection"}}),
     CodexErrorInfo::CyberPolicy; "cyber policy without status"
 )]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "invalid_prompt"}}),
+    CodexErrorInfo::InvalidPrompt; "statusless invalid prompt"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "insufficient_quota"}}),
+    CodexErrorInfo::UsageLimitExceeded; "statusless quota"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "misalignment_policy_violation"}}),
+    CodexErrorInfo::MisalignmentPolicyViolation; "statusless misalignment"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "server_is_overloaded"}}),
+    CodexErrorInfo::ServerOverloaded; "statusless overload without advice"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     failure: serde_json::Value,

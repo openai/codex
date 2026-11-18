@@ -7,6 +7,7 @@ use crate::common::ResponseEvent;
 use bytes::Bytes;
 use codex_client::StreamResponse;
 use codex_http_client::RetryAfter;
+use codex_protocol::error::SpendLimitScope;
 use codex_protocol::protocol::CodexErrorInfo;
 use futures::StreamExt;
 use futures::stream;
@@ -297,4 +298,156 @@ async fn retry_header_does_not_override_terminal_errors() {
         let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
         assert_eq!(error.retry_delay(/*retry_count*/ 1), None, "{code}");
     }
+}
+
+/// Exercise the SSE delivery path while the provider leaves its connection open.
+async fn keep_open_error(event: serde_json::Value) -> crate::ApiError {
+    let bytes =
+        stream::iter([Ok(Bytes::from(format!("data: {event}\n\n")))]).chain(stream::pending());
+    let mut response = spawn_response_stream(
+        StreamResponse {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            bytes: Box::pin(bytes),
+        },
+        Duration::from_secs(60),
+        /*telemetry*/ None,
+        /*turn_state*/ None,
+    );
+    let started = tokio::time::Instant::now();
+    let error = loop {
+        match response.next().await {
+            Some(Ok(ResponseEvent::RateLimits(_))) => {}
+            Some(Err(error)) => break error,
+            other => panic!("expected an error, got {other:?}"),
+        }
+    };
+    assert_eq!(started.elapsed(), Duration::ZERO, "{event}");
+    assert!(response.next().await.is_none());
+    error
+}
+
+fn error_forms(detail: serde_json::Value) -> [serde_json::Value; 2] {
+    [
+        json!({"type": "error", "error": detail}),
+        json!({"type": "response.failed", "response": {"error": detail}}),
+    ]
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_codes_exit_keep_open_sse_in_both_event_forms() {
+    use crate::ApiError;
+    for code in [
+        "audio_too_large",
+        "audio_too_short",
+        "invalid_audio",
+        "invalid_audio_data",
+        "invalid_audio_format",
+        "missing_audio_sample_rate",
+        "model_not_found",
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "api_key_spend_limit_exceeded",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "usage_not_included",
+        "invalid_prompt",
+        "misalignment_policy_violation",
+    ] {
+        for event in error_forms(
+            json!({"code": code, "message": "Rejected.", "headers": {"Retry-After": "7"}}),
+        ) {
+            let error = keep_open_error(event).await;
+            match (code, &error) {
+                (
+                    "audio_too_large",
+                    ApiError::InvalidAudioInput {
+                        per_recording: false,
+                        ..
+                    },
+                )
+                | (
+                    "audio_too_short"
+                    | "invalid_audio"
+                    | "invalid_audio_data"
+                    | "invalid_audio_format"
+                    | "missing_audio_sample_rate",
+                    ApiError::InvalidAudioInput {
+                        per_recording: true,
+                        ..
+                    },
+                )
+                | ("model_not_found", ApiError::ModelNotFound { status: None, .. })
+                | ("insufficient_quota" | "credit_balance_exhausted", ApiError::QuotaExceeded)
+                | (
+                    "api_key_spend_limit_exceeded",
+                    ApiError::SpendLimitExceeded(SpendLimitScope::ApiKey),
+                )
+                | (
+                    "project_spend_limit_exceeded",
+                    ApiError::SpendLimitExceeded(SpendLimitScope::Project),
+                )
+                | (
+                    "organization_spend_limit_exceeded",
+                    ApiError::SpendLimitExceeded(SpendLimitScope::Organization),
+                )
+                | ("usage_not_included", ApiError::UsageNotIncluded)
+                | ("invalid_prompt", ApiError::InvalidPrompt { .. })
+                | ("misalignment_policy_violation", ApiError::MisalignmentPolicyViolation { .. }) =>
+                    {}
+                _ => panic!("wrong error for {code}: {error:?}"),
+            }
+            let error = map_api_error(error);
+            assert_eq!(error.retry_delay(/*retry_count*/ 1), None, "{code}");
+            assert!(!error.requires_http_fallback(), "{code}");
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn overload_advice_survives_keep_open_sse_in_both_event_forms() {
+    for (code, expected) in [
+        ("server_is_overloaded", CodexErrorInfo::ServerOverloaded),
+        (
+            "policy_capacity_unavailable",
+            CodexErrorInfo::PolicyCapacityUnavailable,
+        ),
+    ] {
+        for (header, delay) in [
+            (Some("7"), Some(Duration::from_secs(7))),
+            (Some("bad"), None),
+            (None, None),
+        ] {
+            let mut detail = json!({"code": code});
+            if let Some(value) = header {
+                detail["headers"] = json!({"Retry-After": value});
+            }
+            for event in error_forms(detail) {
+                let error = map_api_error(keep_open_error(event).await);
+                assert_eq!(error.to_codex_protocol_error(), expected);
+                assert_eq!(error.retry_delay(/*retry_count*/ 1), delay, "{code}");
+            }
+        }
+        let event = json!({"type": "error", "headers": {"Retry-After": "9"}, "error": {"code": code, "headers": {"Retry-After": "3"}}});
+        assert_eq!(
+            map_api_error(keep_open_error(event).await).retry_delay(/*retry_count*/ 1),
+            Some(Duration::from_secs(3))
+        );
+        let event =
+            json!({"type": "error", "headers": {"Retry-After": "9"}, "error": {"code": code}});
+        assert_eq!(
+            map_api_error(keep_open_error(event).await).retry_delay(/*retry_count*/ 1),
+            Some(Duration::from_secs(9))
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn retryable_failed_response_preserves_advice_before_sse_eof() {
+    let event = json!({"type": "response.failed", "response": {"error": {"code": "rate_limit_exceeded", "message": "Try again in 35 seconds.", "headers": {"Retry-After": "2"}}}});
+    let error = map_api_error(keep_open_error(event).await);
+    assert_eq!(
+        error.retry_delay(/*retry_count*/ 1),
+        Some(Duration::from_secs(2))
+    );
 }
