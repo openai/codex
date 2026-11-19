@@ -24,6 +24,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -36,16 +37,39 @@ use tokio::sync::Notify;
 use tokio::sync::TryLockError;
 
 #[derive(Debug, Default)]
-struct Gate {
-    entered: Notify,
-    release: Notify,
+pub(super) struct Gate {
+    pub(super) entered: Notify,
+    pub(super) release: Notify,
 }
 
 #[derive(Debug)]
-struct GatedModelsManager {
+pub(super) struct GatedModelsManager {
     inner: StaticModelsManager,
     gate_next_lookup: AtomicBool,
     context_build: Gate,
+}
+
+impl GatedModelsManager {
+    pub(super) fn new() -> anyhow::Result<Self> {
+        Ok(Self::with_catalog(bundled_models_response()?))
+    }
+
+    pub(super) fn with_catalog(catalog: ModelsResponse) -> Self {
+        Self {
+            inner: StaticModelsManager::new(
+                /*auth_manager*/ None,
+                catalog,
+                codex_models_manager::ModelOrigin::ExplicitConfig,
+            ),
+            gate_next_lookup: AtomicBool::new(false),
+            context_build: Gate::default(),
+        }
+    }
+
+    pub(super) fn gate_next_lookup(&self) -> &Gate {
+        self.gate_next_lookup.store(true, Ordering::SeqCst);
+        &self.context_build
+    }
 }
 
 impl ModelsManager for GatedModelsManager {
@@ -147,15 +171,7 @@ impl TurnLifecycleContributor for SleepingTurn {
 async fn interrupt_during_wake_context_construction_does_not_start_turn() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let requests = responses::mount_sse_once(&server, responses::sse_completed("initial")).await;
-    let models = Arc::new(GatedModelsManager {
-        inner: StaticModelsManager::new(
-            /*auth_manager*/ None,
-            bundled_models_response()?,
-            codex_models_manager::ModelOrigin::ExplicitConfig,
-        ),
-        gate_next_lookup: AtomicBool::new(/*v*/ false),
-        context_build: Gate::default(),
-    });
+    let models = Arc::new(GatedModelsManager::new()?);
     let sleeping_turn = Arc::new(SleepingTurn::default());
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.turn_lifecycle_contributor(sleeping_turn.clone());
@@ -164,6 +180,32 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
         .with_extensions(Arc::new(extensions.build()))
         .build_with_auto_env(&server)
         .await?;
+    #[cfg(unix)]
+    let git_root = test
+        .codex
+        .environment_selections()
+        .await
+        .iter()
+        .any(|selection| selection.environment_id == codex_exec_server::LOCAL_ENVIRONMENT_ID)
+        .then(|| test.config.cwd.as_path().to_path_buf());
+    #[cfg(unix)]
+    if let Some(root) = &git_root {
+        super::git_enrichment::run_git(root, &["init", "-q", "-b", "main"])?;
+        std::fs::write(root.join("tracked"), "initial\n")?;
+        super::git_enrichment::run_git(root, &["add", "tracked"])?;
+        super::git_enrichment::run_git(
+            root,
+            &[
+                "-c",
+                "user.name=Codex",
+                "-c",
+                "user.email=codex@example.invalid",
+                "commit",
+                "-qm",
+                "initial",
+            ],
+        )?;
+    }
     let codex = &test.codex;
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -172,6 +214,26 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
         }]))
         .await?;
     sleeping_turn.stop.entered.notified().await;
+    #[cfg(unix)]
+    if let Some(root) = &git_root {
+        codex_git_utils::get_worktree_status_in_repo(root, root)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("initial status should complete"))?;
+        std::fs::create_dir_all(root.join(".git/info"))?;
+        std::fs::write(root.join(".git/info/attributes"), "tracked filter=wake\n")?;
+        super::git_enrichment::run_git(
+            root,
+            &[
+                "config",
+                "filter.wake.clean",
+                "printf ran > .git/wake-status-ran; cat",
+            ],
+        )?;
+        let tracked = root.join("tracked");
+        std::fs::write(&tracked, "changed\n")?;
+        std::fs::File::open(tracked)?
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))?;
+    }
 
     // Queue mail while the completed turn still owns the reservation, so its
     // completion starts the wake independently of the submission loop.
@@ -192,24 +254,26 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
         matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
     })
     .await;
-    models
-        .gate_next_lookup
-        .store(/*val*/ true, Ordering::SeqCst);
+    let context_build = models.gate_next_lookup();
     sleeping_turn.stop.release.notify_one();
 
     // Context construction happens after the discovery-time reservation check.
     // Process the interrupt before allowing that context construction to finish.
-    models.context_build.entered.notified().await;
+    context_build.entered.notified().await;
     codex.submit(Op::Interrupt).await?;
     codex.submit(Op::RealtimeConversationListVoices).await?;
     wait_for_event(codex, |event| {
         matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
     })
     .await;
-    models.context_build.release.notify_one();
+    context_build.release.notify_one();
     sleeping_turn.finished.notified().await;
 
     assert_eq!(sleeping_turn.started.load(Ordering::SeqCst), 1);
+    #[cfg(unix)]
+    if let Some(root) = &git_root {
+        assert!(!root.join(".git/wake-status-ran").exists());
+    }
     requests.single_request();
     codex.shutdown_and_wait().await?;
     Ok(())

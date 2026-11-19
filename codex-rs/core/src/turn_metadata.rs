@@ -10,7 +10,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
-#[cfg(test)]
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
@@ -137,6 +136,38 @@ pub async fn detached_memory_responses_metadata(
     metadata
 }
 
+/// A single turn owns both its current Git snapshot and the task publishing it.
+#[derive(Debug, Default)]
+pub(crate) struct TurnGitEnrichment {
+    workspaces: Option<watch::Receiver<BTreeMap<String, TurnMetadataWorkspace>>>,
+    task: Option<AbortOnDropHandle<()>>,
+    admission: Option<oneshot::Sender<()>>,
+}
+
+impl TurnGitEnrichment {
+    pub(crate) fn start(cwd: AbsolutePathBuf, git_root_discovery: Arc<GitRootDiscovery>) -> Self {
+        let (updates, workspaces) = watch::channel(BTreeMap::new());
+        let (admission, request) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let repo_root = git_root_discovery.discover(cwd.clone());
+            collect_git_workspaces(
+                &cwd,
+                repo_root,
+                GitCollectionAdmission::Pending(request),
+                |observed| {
+                    updates.send_replace(observed);
+                },
+            )
+            .await;
+        });
+        Self {
+            workspaces: Some(workspaces),
+            task: Some(AbortOnDropHandle::new(task)),
+            admission: Some(admission),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TurnMetadataState {
     cwd: AbsolutePathBuf,
@@ -159,13 +190,11 @@ pub(crate) struct TurnMetadataState {
     auto_review_enabled: bool,
     node_repl_auto_review_required: bool,
     node_repl_disabled: bool,
-    enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
+    git_enrichment: Mutex<TurnGitEnrichment>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
     responses_api_metadata: RwLock<BTreeMap<String, String>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
     user_input_requested_during_turn: AtomicBool,
-    enrichment_task: Mutex<Option<AbortOnDropHandle<()>>>,
-    git_enrichment_complete: watch::Sender<bool>,
 }
 
 impl codex_analytics::TurnAnalyticsMetadata for TurnMetadataState {
@@ -244,13 +273,11 @@ impl TurnMetadataState {
             auto_review_enabled,
             node_repl_auto_review_required: model_info.computer_use_review_required(),
             node_repl_disabled: model_info.node_repl_disabled,
-            enriched_workspaces: RwLock::new(None),
+            git_enrichment: Mutex::default(),
             turn_started_at_unix_ms: RwLock::new(None),
             responses_api_metadata: RwLock::new(BTreeMap::new()),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
             user_input_requested_during_turn: AtomicBool::new(false),
-            enrichment_task: Mutex::new(None),
-            git_enrichment_complete: watch::channel(/*init*/ true).0,
         }
     }
 
@@ -519,10 +546,12 @@ impl TurnMetadataState {
     }
 
     fn current_workspaces(&self) -> BTreeMap<String, TurnMetadataWorkspace> {
-        self.enriched_workspaces
-            .read()
+        self.git_enrichment
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .workspaces
+            .as_ref()
+            .map(|workspaces| workspaces.borrow().clone())
             .unwrap_or_default()
     }
 
@@ -540,63 +569,55 @@ impl TurnMetadataState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn_started_at_unix_ms);
     }
 
-    pub(crate) fn spawn_git_enrichment_task(
-        self: &Arc<Self>,
-        git_root_discovery: Arc<GitRootDiscovery>,
-    ) {
-        let mut task_guard = self
-            .enrichment_task
+    pub(crate) fn set_git_enrichment(&self, enrichment: TurnGitEnrichment) {
+        *self
+            .git_enrichment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = enrichment;
+    }
+
+    pub(crate) fn spawn_git_enrichment_task(&self, git_root_discovery: Arc<GitRootDiscovery>) {
+        let mut enrichment = self
+            .git_enrichment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if task_guard.is_some() {
-            return;
+        if enrichment.task.is_none() {
+            *enrichment = TurnGitEnrichment::start(self.cwd.clone(), git_root_discovery);
         }
-
-        self.git_enrichment_complete.send_replace(/*value*/ false);
-        // History-only contexts have no active task to cancel enrichment. Keep the
-        // state weak across awaits so dropping its last owner aborts this waiter.
-        let state = Arc::downgrade(self);
-        let cwd = self.cwd.clone();
-        *task_guard = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-            let workspaces = git_workspaces(&cwd, git_root_discovery.discover(cwd.clone())).await;
-            let Some(state) = state.upgrade() else {
-                return;
-            };
-            if !workspaces.is_empty() {
-                *state
-                    .enriched_workspaces
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspaces);
-            }
-
-            state.git_enrichment_complete.send_replace(/*value*/ true);
-        })));
     }
 
     pub(crate) async fn wait_for_git_enrichment(&self) {
-        let mut completion = self.git_enrichment_complete.subscribe();
-        let _ = completion.wait_for(|complete| *complete).await;
+        let workspaces = self
+            .git_enrichment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .workspaces
+            .clone();
+        if let Some(mut workspaces) = workspaces {
+            // Only the collector owns a sender. Completion and cancellation both close it.
+            while workspaces.changed().await.is_ok() {}
+        }
+    }
+
+    pub(crate) fn admit_git_enrichment(&self) {
+        let admission = self
+            .git_enrichment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admission
+            .take();
+        if let Some(admission) = admission {
+            let _ = admission.send(());
+        }
     }
 
     pub(crate) fn cancel_git_enrichment_task(&self) {
-        let mut task_guard = self
-            .enrichment_task
+        self.git_enrichment
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(task) = task_guard.take() {
-            task.abort();
-            self.git_enrichment_complete.send_replace(/*value*/ true);
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .task
+            .take();
     }
-}
-
-async fn git_workspaces(
-    cwd: &AbsolutePathBuf,
-    repo_root: impl Future<Output = Option<PathBuf>>,
-) -> BTreeMap<String, TurnMetadataWorkspace> {
-    let mut workspaces = BTreeMap::new();
-    collect_git_workspaces(cwd, repo_root, |observed| workspaces = observed).await;
-    workspaces
 }
 
 async fn memory_workspaces(
@@ -604,7 +625,12 @@ async fn memory_workspaces(
     repo_root: impl Future<Output = Option<PathBuf>>,
 ) -> BTreeMap<String, TurnMetadataWorkspace> {
     let mut workspaces = BTreeMap::new();
-    let collect = collect_git_workspaces(cwd, repo_root, |observed| workspaces = observed);
+    let collect = collect_git_workspaces(
+        cwd,
+        repo_root,
+        GitCollectionAdmission::Immediate,
+        |observed| workspaces = observed,
+    );
     let _ = tokio::time::timeout(MEMORY_GIT_METADATA_TIMEOUT, collect).await;
     workspaces
 }
@@ -612,23 +638,41 @@ async fn memory_workspaces(
 async fn collect_git_workspaces(
     cwd: &AbsolutePathBuf,
     repo_root: impl Future<Output = Option<PathBuf>>,
+    admission: GitCollectionAdmission,
     mut publish: impl FnMut(BTreeMap<String, TurnMetadataWorkspace>),
 ) {
     let Some(repo_root) = repo_root.await else {
         return;
     };
+    let workspace_key = repo_root.to_string_lossy().into_owned();
+    let status =
+        collect_git_status_after_admission(admission, get_worktree_status_in_repo(cwd, &repo_root));
     collect_workspace_git_metadata(
         get_head_state(cwd),
         |updates| async move { observe_git_remote_urls(cwd, &updates).await },
-        get_worktree_status_in_repo(cwd, &repo_root),
+        status,
         |workspace| {
-            publish(BTreeMap::from([(
-                repo_root.to_string_lossy().into_owned(),
-                workspace,
-            )]));
+            publish(BTreeMap::from([(workspace_key.clone(), workspace)]));
         },
     )
     .await;
+}
+
+enum GitCollectionAdmission {
+    Immediate,
+    Pending(oneshot::Receiver<()>),
+}
+
+async fn collect_git_status_after_admission(
+    admission: GitCollectionAdmission,
+    status: impl Future<Output = Option<GitWorktreeStatus>>,
+) -> Option<GitWorktreeStatus> {
+    if let GitCollectionAdmission::Pending(request) = admission
+        && request.await.is_err()
+    {
+        return None;
+    }
+    status.await
 }
 
 async fn collect_workspace_git_metadata<R: Future<Output = ()>>(

@@ -1138,6 +1138,11 @@ impl ThreadManager {
         Arc::clone(&self.state.git_root_discovery)
     }
 
+    /// Finds the Git root using the shared, bounded background discovery service.
+    pub async fn discover_git_root(&self, cwd: AbsolutePathBuf) -> Option<PathBuf> {
+        self.state.git_root_discovery.discover(cwd).await
+    }
+
     /// Returns the startup catalog. Use [`CodexThread::model_info`] for a live chat or
     /// [`Self::models_manager_for_config`] for a new destination.
     pub fn get_models_manager(&self) -> SharedModelsManager {

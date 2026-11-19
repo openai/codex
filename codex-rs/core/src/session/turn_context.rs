@@ -14,6 +14,7 @@ use crate::shell_snapshot::ShellSnapshotSandbox;
 use crate::skills::HostSkillDiscovery;
 use crate::tools::sandboxing::configured_windows_sandbox_selection;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
+use crate::turn_metadata::TurnGitEnrichment;
 use arc_swap::ArcSwap;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::ResolvedPluginMetricsOperation;
@@ -1342,6 +1343,11 @@ impl Session {
         let cwd = primary_turn_environment
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
+        let git_enrichment_cwd = if git_enrichment_policy == GitEnrichmentPolicy::Fresh {
+            turn_environments.single_local_environment_cwd()
+        } else {
+            None
+        };
         let network_permission_profile = primary_turn_environment
             .map(TurnEnvironment::permission_profile)
             .cloned()
@@ -1494,18 +1500,17 @@ impl Session {
         if let Some(program) = turn_context.cyber_access_program {
             turn_context.extension_data.insert(program);
         }
-        let turn_context = Arc::new(turn_context);
-        if git_enrichment_policy == GitEnrichmentPolicy::Fresh
-            && turn_context
-                .initial_environments
-                .single_local_environment_cwd()
-                .is_some()
-        {
+        // Model, plugin, skill, and helper setup may change repository state.
+        // Read refs after setup; status waits until the turn is admitted.
+        if let Some(cwd) = git_enrichment_cwd {
             turn_context
                 .turn_metadata_state
-                .spawn_git_enrichment_task(Arc::clone(&self.services.git_root_discovery));
+                .set_git_enrichment(TurnGitEnrichment::start(
+                    cwd,
+                    Arc::clone(&self.services.git_root_discovery),
+                ));
         }
-        turn_context
+        Arc::new(turn_context)
     }
 
     pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {

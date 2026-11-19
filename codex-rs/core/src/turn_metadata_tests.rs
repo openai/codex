@@ -141,6 +141,7 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
 }
 
 async fn wait_for_git_enrichment(state: &TurnMetadataState) -> Value {
+    state.admit_git_enrichment();
     tokio::time::timeout(Duration::from_secs(2), state.wait_for_git_enrichment())
         .await
         .expect("git enrichment should complete");
@@ -1391,6 +1392,49 @@ fn responses_api_metadata_accepts_previously_valid_reserved_keys() {
 }
 
 #[tokio::test]
+async fn preparing_model_request_metadata_does_not_wait_for_pending_git_enrichment() {
+    let (session, turn) = make_session_and_context().await;
+    let (_updates, workspaces) = watch::channel(BTreeMap::new());
+    turn.turn_metadata_state
+        .set_git_enrichment(TurnGitEnrichment {
+            workspaces: Some(workspaces),
+            task: None,
+            admission: None,
+        });
+    let step = StepContext::for_test(Arc::new(turn));
+
+    let metadata = tokio::time::timeout(
+        Duration::from_secs(1),
+        session.responses_metadata(&step, CodexResponsesRequestKind::Turn),
+    )
+    .await
+    .expect("generation must continue while optional Git discovery is pending");
+    assert!(metadata.workspaces.is_empty());
+}
+
+#[tokio::test]
+async fn turn_git_status_waits_for_admission() {
+    let (admission, request) = oneshot::channel();
+    let started = AtomicBool::new(false);
+    let status =
+        collect_git_status_after_admission(GitCollectionAdmission::Pending(request), async {
+            started.store(true, Ordering::SeqCst);
+            None
+        });
+    tokio::pin!(status);
+    assert!(futures::poll!(status.as_mut()).is_pending());
+    assert!(!started.load(Ordering::SeqCst));
+    admission.send(()).expect("admit");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), status)
+            .await
+            .expect("Git status should finish after admission")
+            .is_none()
+    );
+    assert!(started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn git_enrichment_publishes_refs_before_status_is_available() {
     let (_temp_dir, repo) = create_clean_git_repo("repo").await;
     let url = "https://example.invalid/repo.git";
@@ -1535,9 +1579,12 @@ async fn git_enrichment_keeps_dirty_status_when_an_unborn_repo_contains_a_head_f
             .success()
     );
     std::fs::write(repo.join("HEAD"), "untracked").expect("write HEAD file");
-    let workspaces = git_workspaces(
+    let mut workspaces = BTreeMap::new();
+    collect_git_workspaces(
         &repo,
         std::future::ready(Some(repo.as_path().to_path_buf())),
+        GitCollectionAdmission::Immediate,
+        |observed| workspaces = observed,
     )
     .await;
     let workspace = workspaces
@@ -1585,8 +1632,10 @@ async fn git_enrichment_rejects_a_committed_status_when_head_is_missing() {
     assert!(latest.is_none());
 }
 
+#[test_case::test_case(false; "new HEAD is clean")]
+#[test_case::test_case(true; "new HEAD is dirty")]
 #[tokio::test]
-async fn git_enrichment_does_not_mark_an_old_head_clean() {
+async fn git_enrichment_does_not_pair_old_head_with_new_status(expected_has_changes: bool) {
     let (_temp_dir, repo) = create_clean_git_repo("repo").await;
     let head = get_head_commit_hash(&repo)
         .await
@@ -1601,10 +1650,15 @@ async fn git_enrichment_does_not_mark_an_old_head_clean() {
                 .expect("commit")
                 .success()
         );
+        if expected_has_changes {
+            std::fs::write(repo.join("untracked.txt"), "dirty\n").expect("dirty worktree");
+        }
+        let new_head = get_head_commit_hash(&repo).await.expect("read new HEAD");
         let status = get_worktree_status_in_repo(&repo, &repo)
             .await
-            .expect("read clean status for the new HEAD");
-        assert!(!status.has_changes);
+            .expect("read successful status for the new HEAD");
+        assert_eq!(status.head_commit_hash, Some(new_head));
+        assert_eq!(status.has_changes, expected_has_changes);
         Some(status)
     };
     assert_eq!(
@@ -1721,9 +1775,10 @@ async fn turn_metadata_state_coalesces_concurrent_git_enrichment() {
                 barrier.wait().await;
                 state.spawn_git_enrichment_task(git_root_discovery);
                 state
-                    .enrichment_task
+                    .git_enrichment
                     .lock()
                     .expect("enrichment task lock")
+                    .task
                     .as_ref()
                     .expect("enrichment task")
                     .abort_handle()
@@ -1770,9 +1825,10 @@ async fn dropping_turn_metadata_aborts_unused_git_enrichment() {
     let weak_state = Arc::downgrade(&state);
     state.spawn_git_enrichment_task(Arc::default());
     let task = state
-        .enrichment_task
+        .git_enrichment
         .lock()
         .expect("enrichment task lock")
+        .task
         .as_ref()
         .expect("enrichment task")
         .abort_handle();
@@ -1849,9 +1905,10 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     state.cancel_git_enrichment_task();
     assert!(
         state
-            .enrichment_task
+            .git_enrichment
             .lock()
             .expect("enrichment task lock")
+            .task
             .is_none()
     );
     tokio::time::timeout(Duration::from_secs(2), state.wait_for_git_enrichment())
@@ -1889,6 +1946,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         &model_info_from_slug("gpt-5.4"),
     ));
     invalid_state.spawn_git_enrichment_task(Arc::default());
+    invalid_state.admit_git_enrichment();
     tokio::time::timeout(
         Duration::from_secs(2),
         invalid_state.wait_for_git_enrichment(),

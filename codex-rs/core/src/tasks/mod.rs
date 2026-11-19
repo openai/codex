@@ -474,6 +474,7 @@ impl Session {
                 {
                     _tool_result_capture = session.services.executed_tool_calls.begin_turn(&ctx);
                 }
+                ctx.turn_metadata_state.admit_git_enrichment();
                 task_for_run
                     .run(
                         Arc::clone(&session),

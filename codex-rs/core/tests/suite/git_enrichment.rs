@@ -35,7 +35,7 @@ use test_case::test_case;
 
 const ORIGIN_URL: &str = "https://example.invalid/cxa5426/repo.git";
 
-fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
+pub(super) fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -53,21 +53,14 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
 fn create_git_repo() -> Result<(TempDir, String)> {
     let repo = TempDir::new()?;
     run_git(repo.path(), &["init", "-q", "-b", "main"])?;
-    std::fs::write(repo.path().join("README.md"), "initial\n")?;
-    run_git(repo.path(), &["add", "README.md"])?;
+    run_git(repo.path(), &["config", "user.name", "CXA-5426"])?;
     run_git(
         repo.path(),
-        &[
-            "-c",
-            "user.name=CXA-5426",
-            "-c",
-            "user.email=cxa5426@example.invalid",
-            "commit",
-            "-q",
-            "-m",
-            "initial",
-        ],
+        &["config", "user.email", "cxa5426@example.invalid"],
     )?;
+    std::fs::write(repo.path().join("README.md"), "initial\n")?;
+    run_git(repo.path(), &["add", "README.md"])?;
+    run_git(repo.path(), &["commit", "-qm", "initial"])?;
     run_git(repo.path(), &["remote", "add", "origin", ORIGIN_URL])?;
     let head = run_git(repo.path(), &["rev-parse", "HEAD"])?;
     Ok((repo, head))
@@ -90,6 +83,172 @@ fn expected_workspace(repo: &Path, head: &str, has_changes: bool) -> Value {
             "has_changes": has_changes,
         }
     })
+}
+
+#[cfg(unix)]
+fn assert_request_workspace(
+    request: &core_test_support::responses::ResponsesRequest,
+    expected: Value,
+) -> Result<()> {
+    let header: Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .context("turn metadata header")?,
+    )?;
+    assert_eq!(header["workspaces"], expected);
+    assert_eq!(turn_metadata(&request.body_json())?["workspaces"], expected);
+    Ok(())
+}
+
+/// Requests remain prompt while status is blocked, then carry the fresh complete snapshot.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn requests_refresh_git_refs_after_model_lookup_without_waiting_for_status() -> Result<()> {
+    use super::wake_reservation::GatedModelsManager;
+    use core_test_support::responses;
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::time::UNIX_EPOCH;
+
+    struct NotifyRequest(Arc<tokio::sync::Notify>);
+
+    impl wiremock::Match for NotifyRequest {
+        fn matches(&self, _request: &wiremock::Request) -> bool {
+            self.0.notify_one();
+            true
+        }
+    }
+
+    skip_if_no_network!(Ok(()));
+    let (repo, old_head) = create_git_repo()?;
+    let root = repo.path();
+    let next_origin = "https://example.invalid/cxa5426/next.git";
+    let next = run_git(
+        root,
+        &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "next"],
+    )?;
+    let server = responses::start_mock_server().await;
+    let first_arrived = Arc::new(tokio::sync::Notify::new());
+    let first_requests = responses::mount_sse_once_match(
+        &server,
+        NotifyRequest(Arc::clone(&first_arrived)),
+        responses::sse(vec![
+            ev_response_created("initial"),
+            ev_function_call(
+                "wait",
+                "test_sync_tool",
+                r#"{"wait_for_git_enrichment":true}"#,
+            ),
+            ev_completed("initial"),
+        ]),
+    )
+    .await;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.5")
+        .context("bundled gpt-5.5 model")?
+        .experimental_supported_tools
+        .push("test_sync_tool".to_string());
+    let models = Arc::new(GatedModelsManager::with_catalog(catalog));
+    let cwd = root.to_path_buf().abs();
+    let test = test_codex()
+        .with_model("gpt-5.5")
+        .with_models_manager(models.clone())
+        .with_config(move |config| config.cwd = cwd)
+        .build(&server)
+        .await?;
+
+    let tracked = root.join("README.md");
+    std::fs::write(&tracked, "changed\n")?;
+    std::fs::File::open(&tracked)?.set_modified(UNIX_EPOCH + Duration::from_secs(1))?;
+    std::fs::create_dir_all(root.join(".git/info"))?;
+    std::fs::write(
+        root.join(".git/info/attributes"),
+        "README.md filter=hold-status\n",
+    )?;
+    let fifo = root.join(".git/release-status");
+    ensure!(
+        Command::new("mkfifo").arg(&fifo).status()?.success(),
+        "create status gate"
+    );
+    let mut gate = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)?;
+    run_git(
+        root,
+        &[
+            "config",
+            "filter.hold-status.clean",
+            "read -r line < .git/release-status && cat",
+        ],
+    )?;
+
+    let model_lookup = models.gate_next_lookup();
+    let release_model = async {
+        tokio::time::timeout(Duration::from_secs(5), model_lookup.entered.notified()).await?;
+        let switched = run_git(root, &["update-ref", "HEAD", &next])
+            .and_then(|_| run_git(root, &["remote", "set-url", "origin", next_origin]));
+        model_lookup.release.notify_one();
+        switched?;
+        Ok(())
+    };
+    let release_status = async {
+        // The Git command timeout is five seconds. This request must arrive before status
+        // could time out, while the clean filter is still blocked on the FIFO.
+        tokio::time::timeout(Duration::from_secs(4), first_arrived.notified()).await?;
+        let first = first_requests.single_request();
+        let metadata = turn_metadata(&first.body_json())?;
+        if let Some(workspace) = metadata["workspaces"].get(root.to_string_lossy().as_ref()) {
+            assert_ne!(
+                workspace["latest_git_commit_hash"].as_str(),
+                Some(old_head.as_str())
+            );
+            assert_ne!(
+                workspace["associated_remote_urls"]["origin"].as_str(),
+                Some(ORIGIN_URL)
+            );
+            assert!(workspace.get("has_changes").is_none());
+        }
+        let following =
+            responses::mount_sse_once(&server, responses::sse_completed("follow-up")).await;
+        gate.write_all(b"release\n")?;
+        Ok(following)
+    };
+    let ((), (), following) = tokio::time::timeout(Duration::from_secs(12), async {
+        tokio::try_join!(
+            test.submit_text_turn("inspect the workspace"),
+            release_model,
+            release_status,
+        )
+    })
+    .await??;
+
+    let follow_up = following.single_request();
+    assert_eq!(
+        follow_up.function_call_output_text("wait").as_deref(),
+        Some("ok")
+    );
+    assert_request_workspace(
+        &follow_up,
+        json!({
+            root.to_string_lossy().as_ref(): {
+                "associated_remote_urls": {"origin": next_origin},
+                "latest_git_commit_hash": next,
+                "has_changes": true,
+            },
+        }),
+    )?;
+    let input = follow_up.body_json()["input"].to_string();
+    assert!(!input.contains(&old_head));
+    assert!(!input.contains(&next));
+    assert!(!input.contains(ORIGIN_URL));
+    assert!(!input.contains(next_origin));
+    assert!(!input.contains("codex_git_state"));
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
 }
 
 enum GitMetadataAtStartup {
@@ -325,16 +484,22 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
         turn_metadata(&user_turn)?["auto_review_enabled"].as_bool(),
         Some(true)
     );
+    let dirty_workspace = expected_workspace(repo.path(), &head, /*has_changes*/ true);
     if let Some(workspaces) = initial_user_turn_metadata.get("workspaces") {
+        let root = repo.path().to_string_lossy();
         assert_eq!(
-            workspaces,
-            &expected_workspace(repo.path(), &head, /*has_changes*/ true)
+            workspaces.as_object().context("initial workspaces")?.len(),
+            1
         );
+        let fields = workspaces[root.as_ref()]
+            .as_object()
+            .context("initial workspace")?;
+        assert!(!fields.is_empty());
+        for (field, value) in fields {
+            assert_eq!(Some(value), dirty_workspace[root.as_ref()].get(field));
+        }
     }
-    assert_eq!(
-        turn_metadata(&user_turn)?["workspaces"],
-        expected_workspace(repo.path(), &head, /*has_changes*/ true)
-    );
+    assert_eq!(turn_metadata(&user_turn)?["workspaces"], dirty_workspace);
     assert_eq!(
         guardian_turn["client_metadata"]["x-openai-subagent"].as_str(),
         Some("guardian")
@@ -462,19 +627,7 @@ async fn concurrent_turns_keep_distinct_worktree_and_repository_metadata() -> Re
     )?;
     std::fs::write(worktree.join("branch.txt"), "branch commit\n")?;
     run_git(&worktree, &["add", "branch.txt"])?;
-    run_git(
-        &worktree,
-        &[
-            "-c",
-            "user.name=CXA-5426",
-            "-c",
-            "user.email=cxa5426@example.invalid",
-            "commit",
-            "-q",
-            "-m",
-            "branch commit",
-        ],
-    )?;
+    run_git(&worktree, &["commit", "-qm", "branch commit"])?;
     let worktree_head = run_git(&worktree, &["rev-parse", "HEAD"])?;
     let (other_repo, other_head) = create_git_repo()?;
 

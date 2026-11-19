@@ -266,7 +266,11 @@ mod job {
         // JoinSet aborts the probe if preparation fails or this job is cancelled.
         let mut git_probe = tokio::task::JoinSet::new();
         let cwd = config.cwd.clone();
-        git_probe.spawn(async move { codex_git_utils::probe_worktree_changes(&cwd).await });
+        let thread_manager = Arc::clone(&context.thread_manager);
+        git_probe.spawn(async move {
+            let root = thread_manager.discover_git_root(cwd.clone()).await?;
+            codex_git_utils::probe_worktree_changes(&cwd, &root).await
+        });
         let rollout_items = crate::rollout_input::read_recent_rollout_items(rollout_path).await?;
         let rollout_contents = match config.memories.version {
             MemoryVersion::V1 => serialize_filtered_rollout_response_items(&rollout_items)?,

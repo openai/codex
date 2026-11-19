@@ -214,15 +214,17 @@ async fn change_probe_only_returns_git_verified_positive_status() {
     crate::ensure_git_baseline_repository(root)
         .await
         .expect("create initial commit");
+    let cwd = root.join("nested");
+    std::fs::create_dir(&cwd).expect("create nested cwd");
     let head = crate::get_head_commit_hash(root).await.expect("read HEAD");
-    assert_eq!(probe_worktree_changes(root).await, None);
+    assert_eq!(probe_worktree_changes(&cwd, root).await, None);
 
     // The pathspec must treat names containing Git pathspec syntax literally.
     let candidate = root.join("[recent]");
     std::fs::create_dir(&candidate).expect("create candidate directory");
     std::fs::write(candidate.join("leaf"), "new file").expect("create untracked leaf");
     assert_eq!(
-        probe_worktree_changes(root).await,
+        probe_worktree_changes(&cwd, root).await,
         Some((
             root.to_path_buf(),
             GitWorktreeStatus {
@@ -240,7 +242,7 @@ async fn change_probe_only_returns_git_verified_positive_status() {
             .expect("configure hidden untracked files")
             .success()
     );
-    assert_eq!(probe_worktree_changes(root).await, None);
+    assert_eq!(probe_worktree_changes(&cwd, root).await, None);
 }
 
 #[tokio::test]

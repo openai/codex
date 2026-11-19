@@ -13,7 +13,6 @@ use futures::future::BoxFuture;
 use futures::future::WeakShared;
 
 use crate::GitSha;
-use crate::get_git_repo_root;
 use crate::info::detect_local_fsmonitor_override;
 use crate::info::run_git_command_with_timeout_from;
 
@@ -82,8 +81,11 @@ pub async fn get_worktree_status_in_repo(
 /// Returns a positive change observation from a few recently modified root
 /// directories. A clean, failed, or incomplete probe cannot establish that the
 /// complete worktree is clean and returns `None`.
-pub async fn probe_worktree_changes(cwd: &Path) -> Option<(PathBuf, GitWorktreeStatus)> {
-    let root = get_git_repo_root(cwd)?;
+pub async fn probe_worktree_changes(
+    cwd: &Path,
+    repo_root: &Path,
+) -> Option<(PathBuf, GitWorktreeStatus)> {
+    let root = repo_root.to_path_buf();
     let probe_root = root.clone();
     let cwd = cwd.to_path_buf();
     // Relative Git environment paths can resolve differently in sibling cwds.
