@@ -63,8 +63,10 @@ async fn snapshot_failure_omits_credentials_and_stops_descendants(
             },
             FileSystemAccessMode::Deny,
         ));
+        // This fixture only exercises filesystem restrictions. Remote runners can
+        // deny bubblewrap's nested network namespace before the shell starts.
         (
-            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Enabled),
             SandboxSelection::Platform {
                 preference: SandboxablePreference::Auto,
                 windows_sandbox: SandboxType::None,
