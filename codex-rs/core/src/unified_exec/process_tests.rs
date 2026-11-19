@@ -152,20 +152,100 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 #[tokio::test]
 async fn fail_and_terminate_preserves_failure_message() {
     let process = remote_process(
-        WriteStatus::Accepted,
+        WriteStatus::StdinClosed,
         /*terminate_error*/ None,
         codex_sandboxing::SandboxType::None,
     )
     .await;
 
     process.fail_and_terminate("network denied".to_string());
+    assert!(matches!(
+        process.write(b"hello").await,
+        Err(UnifiedExecError::WriteToStdin)
+    ));
+    process
+        .terminate_confirmed()
+        .await
+        .expect("terminate should succeed");
     process.fail_and_terminate("second failure".to_string());
 
-    assert!(process.has_exited());
     assert_eq!(
-        process.failure_message(),
-        Some("network denied".to_string())
+        (
+            process.has_exited(),
+            process.exit_code(),
+            process.failure_message()
+        ),
+        (true, None, Some("network denied".to_string()))
     );
+}
+
+#[test_case::test_case(WriteStatus::UnknownProcess; "unknown_process")]
+#[test_case::test_case(WriteStatus::StdinClosed; "closed_stdin")]
+#[tokio::test(start_paused = true)]
+async fn remote_lifecycle_updates_preserve_recovered_exit_state(write_status: WriteStatus) {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let process = UnifiedExecProcess::from_exec_server_started(
+        StartedExecProcess {
+            process: Arc::new(MockExecProcess {
+                process_id: "test-process".to_string().into(),
+                write_response: WriteResponse {
+                    status: write_status,
+                },
+                read_responses: Mutex::new(VecDeque::from([ReadResponse {
+                    chunks: Vec::new(),
+                    next_seq: 1,
+                    exited: true,
+                    exit_code: Some(7),
+                    closed: true,
+                    failure: None,
+                    sandbox_denied: true,
+                }])),
+                terminate_error: None,
+                wake_tx,
+            }),
+            sandbox_type: Some(codex_sandboxing::SandboxType::None),
+        },
+        OutputDrainPolicy::WaitForOutputClosure,
+    )
+    .await
+    .expect("remote process should start");
+
+    // A rejected write first reports exit without a status. The final read then
+    // recovers the executor's actual exit code and sandbox-denial classification.
+    let closed = process.output_handles().output_closed_notify.notified();
+    tokio::pin!(closed);
+    closed.as_mut().enable();
+    process.output_handles().collection_finished.cancel();
+    assert!(matches!(
+        process.write(b"hello").await,
+        Err(UnifiedExecError::WriteToStdin)
+    ));
+    closed.await;
+
+    assert!(matches!(
+        process.write(b"hello").await,
+        Err(UnifiedExecError::WriteToStdin)
+    ));
+    process.fail_and_terminate("network denied".to_string());
+    process
+        .terminate_confirmed()
+        .await
+        .expect("terminate should succeed");
+
+    assert_eq!(
+        (
+            process.has_exited(),
+            process.exit_code(),
+            process.failure_message()
+        ),
+        (true, Some(7), Some("network denied".to_string()))
+    );
+    assert!(matches!(
+        process
+            .check_for_sandbox_denial_with_text("unrelated output")
+            .await,
+        Err(UnifiedExecError::SandboxDenied { .. })
+    ));
 }
 
 #[tokio::test]
