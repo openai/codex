@@ -127,17 +127,6 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
 }
 
 #[test]
-fn remote_plugin_install_suggestions_skip_core_installed_verification() {
-    assert!(is_remote_plugin_install_suggestion(
-        "snowflake@openai-curated-remote"
-    ));
-    assert!(!is_remote_plugin_install_suggestion(
-        "snowflake@openai-curated"
-    ));
-    assert!(!is_remote_plugin_install_suggestion("Plugin_123"));
-}
-
-#[test]
 fn recommended_plugin_install_args_accept_legacy_tool_id() {
     let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
         "plugin_id": "google-drive@openai-curated-remote",

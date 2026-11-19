@@ -389,17 +389,6 @@ async fn mount_remote_calendar_recommendation(
     server: &wiremock::MockServer,
     installed: Arc<AtomicBool>,
 ) {
-    let installed_for_marker = Arc::clone(&installed);
-    Mock::given(method("GET"))
-        .and(path("/ps/plugins/tooling-state/turtle"))
-        .respond_with(move |_: &wiremock::Request| {
-            let marker = installed_for_marker
-                .load(Ordering::SeqCst)
-                .then_some("1700000000000");
-            ResponseTemplate::new(200).set_body_json(json!({ "tooling_changed_at": marker }))
-        })
-        .mount(server)
-        .await;
     Mock::given(method("GET"))
         .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
@@ -1664,8 +1653,6 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         .codex
         .refresh_runtime_config(current_config, test.config.clone())
         .await;
-    // Let the one-second marker poll window expire before the next turn.
-    tokio::time::sleep(Duration::from_secs(1)).await;
     test.submit_turn("check whether Calendar is still installed")
         .await?;
     let requests = mock.requests();
