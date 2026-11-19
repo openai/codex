@@ -614,10 +614,13 @@ impl RemoteAppServerClient {
         } = self;
         let mut worker_handle = worker_handle;
         let (response_tx, response_rx) = oneshot::channel();
-        if command_tx
-            .send(RemoteClientCommand::Shutdown { response_tx })
-            .await
-            .is_ok()
+        // A worker stalled on a socket write may leave the command queue full.
+        // Bound admission too, so shutdown can reach the worker abort below.
+        if let Ok(Ok(())) = timeout(
+            SHUTDOWN_TIMEOUT,
+            command_tx.send(RemoteClientCommand::Shutdown { response_tx }),
+        )
+        .await
             && let Ok(Ok(close_result)) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
         {
             close_result?;
@@ -1072,6 +1075,37 @@ fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_aborts_worker_when_command_queue_is_full() {
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (response_tx, _response_rx) = oneshot::channel();
+        assert!(
+            command_tx
+                .try_send(RemoteClientCommand::Shutdown { response_tx })
+                .is_ok()
+        );
+        let worker_handle = tokio::spawn(async move {
+            // Retain the full queue while simulating a stalled socket write.
+            std::future::pending::<()>().await;
+            drop(command_rx);
+        });
+        let worker_abort_handle = worker_handle.abort_handle();
+        let client = RemoteAppServerClient {
+            command_tx,
+            event_rx,
+            pending_events: VecDeque::new(),
+            metadata: RemoteServerMetadata::default(),
+            worker_handle,
+        };
+
+        timeout(SHUTDOWN_TIMEOUT * 3, client.shutdown())
+            .await
+            .expect("shutdown must not wait indefinitely for command queue space")
+            .expect("shutdown should abort a stalled worker");
+        assert!(worker_abort_handle.is_finished());
+    }
 
     #[tokio::test]
     async fn shutdown_tolerates_worker_exit_after_command_is_queued() {
