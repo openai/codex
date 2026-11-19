@@ -35,6 +35,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 assert_matches = { workspace = true }
+log = { workspace = true }
 pretty_assertions = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }

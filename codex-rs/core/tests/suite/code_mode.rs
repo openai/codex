@@ -2376,6 +2376,213 @@ fn assert_nested_apps_call_ids(rpcs: &[Value]) {
     }
 }
 
+#[tokio::test]
+async fn websocket_custom_provider_omits_private_exec_and_late_wait_results_on_retry() -> Result<()>
+{
+    let case = ResultBodyCase::Shared(None);
+    skip_if_no_network!(Ok(()));
+    use tracing_subscriber::util::SubscriberInitExt;
+    // Keep the socket pump on this thread so its trace subscriber is local to the test.
+    let trace = tempfile::NamedTempFile::new()?;
+    let _subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_env_filter("tungstenite::protocol=trace")
+        .with_writer(trace.reopen()?)
+        .finish()
+        .set_default();
+    let apps = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&apps).await?;
+    // Hold the third RPC until the model has already received its call inventory.
+    let (reached, admitted) = oneshot::channel();
+    let (release_result, held) = std::sync::mpsc::channel();
+    let gate = Mutex::new(Some((reached, held)));
+    let result = serde_json::json!({"content": [{"type":"text", "text":"late private result"}]});
+    Mock::given(body_partial_json(
+        serde_json::json!({"method":"tools/call","params":{"arguments":{"title":"late"}}}),
+    ))
+    .respond_with(move |request: &Request| {
+        let (reached, held) = gate.lock().unwrap().take().unwrap();
+        reached.send(()).unwrap();
+        held.recv_timeout(Duration::from_secs(30)).unwrap();
+        let rpc: Value = serde_json::from_slice(&request.body).unwrap();
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"jsonrpc":"2.0", "id":rpc["id"], "result":result}))
+    })
+    .with_priority(/*p*/ 1)
+    .mount(&apps)
+    .await;
+    let code = "const t = ALL_TOOLS.find(t => t.name.endsWith('create_event')); \
+                for (const title of ['first', 'second']) await tools[t.name]({title, starts_at: 'noon'}); \
+                const pending = tools[t.name]({title:'late', starts_at:'noon'}); \
+                yield_control(); await pending; text('done')";
+    let mut exec = ev_custom_tool_call("call-events", "exec", code);
+    exec["item"]["id"] = "exec-events".into();
+    let wait = |id, ms| {
+        let args = serde_json::json!({"cell_id":"1", "yield_time_ms":ms});
+        let call = responses::ev_function_call(id, "wait", &args.to_string());
+        vec![ev_response_created(id), call, ev_completed(id)]
+    };
+    // Each of the first two sockets closes before completing the tool-output request.
+    let switch = ev_response_created("interrupted");
+    let server = responses::start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("warmup"), ev_completed("warmup")],
+            vec![ev_response_created("resp-1"), exec, ev_completed("resp-1")],
+            wait("poll", /*ms*/ 1),
+            wait("wait", /*ms*/ 10_000),
+            vec![],
+        ],
+        vec![vec![switch.clone()]],
+        vec![vec![ev_response_created("resp-2"), ev_completed("resp-2")]],
+    ])
+    .await;
+    let release = server.gate_response_event(&switch);
+    let poll = server.gate_response_event(&ev_response_created("poll"));
+    let mut builder = case
+        .builder(apps_server.chatgpt_base_url, AuthMode::Headers)
+        .with_config(|config| {
+            // This test isolates result authorization across retries with full inventory enabled.
+            config
+                .features
+                .enable(Feature::ExecutedToolCallMetadata)
+                .unwrap();
+            config.model_provider.stream_max_retries = Some(2);
+        });
+    let test = builder.build_with_websocket_server(&server).await?;
+    let rotate = async {
+        // Yield can precede admission. Poll while the admitted result is still held.
+        admitted.await?;
+        poll.send(()).unwrap();
+        server
+            .wait_for_request(/*connection_index*/ 0, /*request_index*/ 3)
+            .await;
+        release_result.send(())?;
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+        )
+        .await?;
+        struct OtherAccount;
+        impl codex_login::ExternalAuth for OtherAccount {
+            fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+                Box::pin(async { Ok(hosted_result_auth("other-account")) })
+            }
+            fn refresh(
+                &self,
+                _: codex_login::ExternalAuthRefreshContext,
+            ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+                self.resolve()
+            }
+        }
+        test.thread_manager
+            .auth_manager()
+            .set_external_auth(Arc::new(OtherAccount))
+            .await?;
+        release.send(()).expect("release retry under second owner");
+        anyhow::Ok(())
+    };
+    tokio::try_join!(test.submit_turn("Create calendar events"), rotate)?;
+
+    let connections = server.connections();
+    assert_eq!(
+        connections.iter().map(Vec::len).collect::<Vec<_>>(),
+        [5, 1, 1]
+    );
+    assert_eq!(connections[0][0].body_json()["generate"], false);
+    let delta = connections[0][2].body_json();
+    assert_eq!(delta["previous_response_id"], "resp-1");
+    let retry = connections[1][0].body_json();
+    // Retrying across owners must preserve only the ordinary conversation on this provider.
+    let mut expected = connections[2][0].body_json();
+    assert!(expected.get("previous_response_id").is_none());
+    assert!(expected.get("tool_results").is_none());
+    let private_prefix = "called calendar_create_event for";
+    let log = fs::read_to_string(trace.path())?;
+    // Match each received request to its send. Clear server sends when their responses arrive.
+    let mut logged = false;
+    let mut received = 0;
+    for line in log.lines() {
+        logged |= line.starts_with("TRACE tungstenite::protocol: Sending frame: opcode=TEXT,");
+        if line.starts_with(
+            r#"TRACE tungstenite::protocol: Received message {"type":"response.create","#,
+        ) {
+            received += 1;
+            assert_eq!(std::mem::take(&mut logged), !line.contains(private_prefix));
+        } else if line.starts_with("TRACE tungstenite::protocol: Received message ") {
+            logged = false;
+        }
+    }
+    assert_eq!(received, connections.iter().map(Vec::len).sum::<usize>());
+    // The lower-level writer also emits metadata for each traced frame.
+    assert_eq!(
+        log.matches("TRACE tungstenite::protocol::frame: writing frame")
+            .count(),
+        log.matches("TRACE tungstenite::protocol: Sending frame:")
+            .count(),
+    );
+    assert!(!expected.to_string().contains(private_prefix));
+    assert!(!expected.to_string().contains("tool_result_call_id"));
+    let timestamp = "x-codex-ws-stream-request-start-ms";
+    expected["client_metadata"][timestamp] = retry["client_metadata"][timestamp].clone();
+    let input = expected["input"].as_array_mut().unwrap();
+    assert!(input.last().unwrap()["output"].to_string().contains("done"));
+    let output = input
+        .iter_mut()
+        .find(|item| item["type"] == "custom_tool_call_output")
+        .unwrap();
+    assert_eq!(output["call_id"], "call-events");
+    let calls = output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"]
+        .as_array_mut()
+        .unwrap();
+    let executed = recorded_apps_tool_calls(&apps).await;
+    assert_eq!(executed.len(), 3);
+    assert_nested_apps_call_ids(&executed);
+    for (call, title) in calls[..2].iter().zip(["first", "second"]) {
+        assert_eq!(
+            call["arguments"],
+            serde_json::json!({"title": title, "starts_at": "noon"})
+        );
+        assert!(call.get("tool_result").is_none());
+        assert!(call.get("tool_result_call_id").is_none());
+    }
+    let late_on_exec = calls.len() == 3;
+    assert_eq!(delta["input"], serde_json::json!([output]));
+    let polled = connections[0][3].body_json();
+    // A call first reported after the exec yields belongs to the poll output.
+    let before = if late_on_exec { &delta } else { &polled };
+    let bound = before["input"].as_array().unwrap().last().unwrap();
+    let origin = input
+        .iter_mut()
+        .find(|item| **item == *bound)
+        .expect("original pending output");
+    let calls = &mut origin["internal_chat_message_metadata_passthrough"]["executed_tool_calls"];
+    let call = calls.as_array_mut().unwrap().last_mut().unwrap();
+    assert_eq!(call["arguments"]["title"], "late");
+    assert!(call.get("tool_result").is_none());
+    assert!(call.get("tool_result_call_id").is_none());
+    assert!(!retry.to_string().contains("late private result"));
+    assert_eq!(retry, expected);
+    let completed = connections[0][4].body_json();
+    let wait_output = expected["input"].as_array().unwrap().last().unwrap();
+    assert_eq!(wait_output["call_id"], "wait");
+    if completed.get("previous_response_id").is_some() {
+        expected["input"] = serde_json::json!([wait_output]);
+        expected["previous_response_id"] = "wait".into();
+    }
+    expected["client_metadata"][timestamp] = completed["client_metadata"][timestamp].clone();
+    assert_eq!(completed, expected);
+    let accounts: Vec<_> = server
+        .handshakes()
+        .iter()
+        .map(|h| h.header("chatgpt-account-id").unwrap())
+        .collect();
+    assert_eq!(accounts, ["account_id", "account_id", "other-account"]);
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResultBodyCase {
     Ungranted,

@@ -2075,6 +2075,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.4.0",
+ "log",
  "pretty_assertions",
  "rcgen",
  "regex-lite",
@@ -16248,7 +16249,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.28.0"
-source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=7447c427513cfe685f236e1ac0513c4ea3dd9c0b#7447c427513cfe685f236e1ac0513c4ea3dd9c0b"
+source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=7a920470d62138955446b64220c7609e46ad770e#7a920470d62138955446b64220c7609e46ad770e"
 dependencies = [
  "futures-util",
  "log",
@@ -16741,7 +16742,7 @@ dependencies = [
 [[package]]
 name = "tungstenite"
 version = "0.27.0"
-source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=bc589d684755a8c02da0fc7e58d0861cbfc306f1#bc589d684755a8c02da0fc7e58d0861cbfc306f1"
+source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=e19950ef7828cb311e6d51a6bedcebf0192e055c#e19950ef7828cb311e6d51a6bedcebf0192e055c"
 dependencies = [
  "bytes",
  "data-encoding",

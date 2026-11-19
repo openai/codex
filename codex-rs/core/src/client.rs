@@ -2377,6 +2377,11 @@ impl ModelClientSession {
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
+            let result_body_destination = sampling_result_destination(
+                &client_setup,
+                include_internal && self.client.captures_result_bodies(),
+                &responses_headers,
+            );
             tracing::Span::current().record("api.path", "/responses");
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -2628,6 +2633,18 @@ impl ModelClientSession {
                         if after_prewarm { "true" } else { "false" },
                     ),
                 ],
+            );
+            // Prewarm selects the inference route but never carries private result bodies.
+            let result_body_destination = if warmup {
+                None
+            } else {
+                result_body_destination
+            };
+            let ResponsesWsRequest::ResponseCreate(payload) = &mut ws_request;
+            payload.tool_results = self.client.sampling_result_bodies(
+                responses_metadata,
+                result_body_destination.as_ref(),
+                payload.input,
             );
             let stream_result = websocket_connection
                 .stream_request_with_observer(
