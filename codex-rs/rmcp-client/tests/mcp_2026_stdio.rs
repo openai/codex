@@ -81,6 +81,17 @@ async fn exercise_stdio_server(
     let observed_elicitations = Arc::clone(&elicitation_count);
     let legacy_session = server_mode.starts_with("legacy");
     let handshake_timeout = match protocol_mode {
+        McpProtocolMode::DiscoverLocalStdio if server_mode == "legacy-slow" => {
+            Duration::from_secs(6)
+        }
+        McpProtocolMode::DiscoverLocalStdio
+            if matches!(
+                server_mode,
+                "legacy-ignore-initialize-after-discover" | "legacy-delayed-init-first"
+            ) =>
+        {
+            Duration::from_secs(2)
+        }
         // Discovery can wait for a silent probe, then stop and relaunch the helper.
         McpProtocolMode::DiscoverLocalStdio => Duration::from_secs(30),
         McpProtocolMode::Legacy | McpProtocolMode::V20260728 => Duration::from_secs(5),
@@ -253,6 +264,7 @@ async fn unmarked_stdio_helpers_recover_from_failed_or_late_discovery() -> anyho
         "legacy-init-first",
         "legacy-reject-late-initialize",
         "legacy-reject-and-exit",
+        "legacy-empty-discover",
         "legacy-late",
         "legacy-silent",
         "legacy-versions",
@@ -268,6 +280,39 @@ async fn unmarked_stdio_helpers_recover_from_failed_or_late_discovery() -> anyho
         .with_context(|| format!("stdio discovery failed in {mode} mode"))?;
     }
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_initialize_can_outlive_the_discovery_watchdog() -> anyhow::Result<()> {
+    exercise_stdio_server(
+        "legacy-slow",
+        McpProtocolMode::DiscoverLocalStdio,
+        /*opt_in*/ false,
+        /*use_executor*/ false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unresponsive_legacy_initialize_can_still_restart() -> anyhow::Result<()> {
+    exercise_stdio_server(
+        "legacy-ignore-initialize-after-discover",
+        McpProtocolMode::DiscoverLocalStdio,
+        /*opt_in*/ false,
+        /*use_executor*/ false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_legacy_initialize_gives_its_replacement_a_fresh_timeout() -> anyhow::Result<()> {
+    exercise_stdio_server(
+        "legacy-delayed-init-first",
+        McpProtocolMode::DiscoverLocalStdio,
+        /*opt_in*/ false,
+        /*use_executor*/ false,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

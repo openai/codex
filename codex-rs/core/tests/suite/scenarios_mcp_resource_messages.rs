@@ -73,6 +73,10 @@ async fn mcp_resource_messages(tool_mode: ToolMode) -> Result<()> {
             config.code_mode.disable_in_process_fallback = true;
             config
                 .features
+                .disable(Feature::McpConnectionSharing)
+                .expect("use a cacheable legacy catalog");
+            config
+                .features
                 .enable(Feature::CodeModeHost)
                 .expect("enable Code Mode host");
             config

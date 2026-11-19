@@ -1019,6 +1019,7 @@ async fn mcp_server_status_list_waits_for_live_stdio_metadata_before_using_cache
     let pid_file = codex_home.path().join("mcp.pid");
     std::fs::write(&barrier_file, "ready")?;
     mock_responses_config(&server.uri())
+        .disable_feature(Feature::McpConnectionSharing)
         .with_extra_config(&format!(
             r#"[mcp_servers.cached-stdio]
 command = {}
@@ -1092,6 +1093,7 @@ async fn dormant_thread_status_returns_live_inventory_without_waking_the_thread(
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
+        .disable_feature(Feature::McpConnectionSharing)
         .enable_feature(Feature::McpLazyStdioStartup)
         .with_extra_config(&format!(
             "[mcp_servers.memo]\ncommand = {}\nenabled_tools = [\"echo\"]",

@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use rmcp::model::ClientRequest;
+use rmcp::model::DiscoverRequestMethod;
 use rmcp::model::ErrorCode;
+use rmcp::model::ErrorData;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::RequestId;
 use rmcp::model::ServerResult;
@@ -105,6 +107,19 @@ impl Discovery {
         // protocol error can be classified as a discovery reply without an ID.
         if matches_probe || (idless && (!legacy || modern)) {
             self.probe_id = None;
+            // Some legacy helpers answer unknown methods with {}. Let rmcp initialize
+            // on this pipe, or skip the empty reply if initialize is already in flight.
+            if !matches!(self.outcome, Some(DiscoveryOutcome::Reply))
+                && let JsonRpcMessage::Response(response) = reply
+                && matches!(response.result, ServerResult::EmptyResult(_))
+            {
+                *message = Some(JsonRpcMessage::error(
+                    ErrorData::method_not_found::<DiscoverRequestMethod>(),
+                    Some(response.id.clone()),
+                ));
+                self.outcome = Some(DiscoveryOutcome::RetryLegacy);
+                return legacy;
+            }
             if legacy {
                 // Auto sent initialize before receiving the reply to its earlier probe.
                 if !modern && matches!(reply, JsonRpcMessage::Error(_)) {
@@ -235,6 +250,9 @@ impl Transport<RoleClient> for LocalStdioTransport {
             match transport.into_legacy_pipes() {
                 Ok((stdout, stdin)) => {
                     probe.initialize_id = Some(request.id.clone());
+                    // Discovery must not terminate an initialize that is still within the
+                    // configured startup timeout.
+                    probe.retry_at = None;
                     self.transport = StdioTransport::Legacy(AsyncRwTransport::new(stdout, stdin));
                 }
                 Err(error) => return futures::future::err(error).boxed(),

@@ -764,6 +764,10 @@ async fn token_budget_context_injects_plain_thread_hint_text(cached_subagent: bo
     let test = test_codex()
         .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = true)
         .with_config(move |config| {
+            config
+                .features
+                .set_enabled(Feature::McpConnectionSharing, !cached_subagent)
+                .expect("use a cacheable legacy catalog for the subagent");
             config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
             config
                 .features

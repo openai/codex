@@ -18,8 +18,6 @@ use rmcp::model::ElicitRequest;
 use rmcp::model::ElicitRequestParams;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParams;
-use rmcp::model::InitializeResult;
 use rmcp::model::InputRequest;
 use rmcp::model::InputRequiredResult;
 use rmcp::model::JsonObject;
@@ -48,7 +46,6 @@ struct TestToolServer {
     tools: Arc<Vec<Tool>>,
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
-    supports_openai_form_elicitation: Arc<AtomicBool>,
     tools_discovered: Arc<AtomicBool>,
     invalidated_listing: Arc<AtomicBool>,
 }
@@ -216,7 +213,6 @@ impl TestToolServer {
             tools: Arc::new(tools),
             resources: Arc::new(resources),
             resource_templates: Arc::new(resource_templates),
-            supports_openai_form_elicitation: Arc::new(AtomicBool::new(false)),
             tools_discovered: Arc::default(),
             invalidated_listing: Arc::default(),
         }
@@ -543,28 +539,6 @@ struct ImageScenarioArgs {
 }
 
 impl ServerHandler for TestToolServer {
-    async fn initialize(
-        &self,
-        request: InitializeRequestParams,
-        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
-    ) -> Result<InitializeResult, McpError> {
-        if let Ok(barrier_file) = std::env::var(INITIALIZE_BARRIER_FILE_ENV) {
-            while !std::path::Path::new(&barrier_file).is_file() {
-                sleep(Duration::from_millis(10)).await;
-            }
-        }
-        self.supports_openai_form_elicitation.store(
-            request
-                .capabilities
-                .extensions
-                .as_ref()
-                .is_some_and(|extensions| extensions.contains_key("openai/form")),
-            Ordering::Relaxed,
-        );
-        context.peer.set_peer_info(request);
-        Ok(self.get_info())
-    }
-
     fn get_info(&self) -> ServerConfig {
         let mut capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -851,9 +825,10 @@ impl ServerHandler for TestToolServer {
                 }
             }
             "client_capabilities" => Ok(Self::structured_result(json!({
-                "supportsOpenaiFormElicitation": self
-                    .supports_openai_form_elicitation
-                    .load(Ordering::Relaxed),
+                "supportsOpenaiFormElicitation": context
+                    .client_capabilities()
+                    .and_then(|capabilities| capabilities.extensions)
+                    .is_some_and(|extensions| extensions.contains_key("openai/form")),
             }))),
             "sandbox_meta" | "get_codex_security_daybreak_access" | "get_daybreak_access" => Ok(
                 Self::structured_result(serde_json::Value::Object(context.meta.0.0)),
@@ -1244,6 +1219,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the server with STDIO transport. If the client disconnects we simply
     // bubble up the error so the process exits.
     let service = TestToolServer::new();
+    // Hold both server/discover and initialize behind the startup barrier.
+    if let Some(barrier_file) = std::env::var_os(INITIALIZE_BARRIER_FILE_ENV) {
+        while !std::path::Path::new(&barrier_file).is_file() {
+            sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    }
     let running = service.serve(stdio()).await?;
 
     // A test can close an initialized transport without killing an arbitrary PID.

@@ -584,6 +584,10 @@ async fn mcp_tool_hook_starts_cached_model_hidden_tools(
         .with_config(move |config| {
             config
                 .features
+                .disable(Feature::McpConnectionSharing)
+                .expect("use a cacheable legacy catalog");
+            config
+                .features
                 .enable(Feature::Plugins)
                 .expect("enable plugins");
             config
@@ -748,6 +752,10 @@ async fn mcp_tool_hook_timeout_includes_cached_server_startup() -> Result<()> {
                 .expect("write model-hidden MCP tool hook config");
         })
         .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::McpConnectionSharing)
+                .expect("use a cacheable legacy catalog");
             enable_hooks_and_rmcp_server(
                 config,
                 rmcp_test_server_bin,

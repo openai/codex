@@ -49,8 +49,12 @@ fn main() -> Result<()> {
             | "legacy-reject-and-exit"
             | "legacy-init-first"
             | "legacy-reject-late-initialize"
+            | "legacy-empty-discover"
             | "legacy-late"
             | "legacy-silent"
+            | "legacy-slow"
+            | "legacy-ignore-initialize-after-discover"
+            | "legacy-delayed-init-first"
             | "legacy-versions"
             | "oversized-stdout"
             | "oversized-stdout-legacy"
@@ -102,6 +106,12 @@ fn main() -> Result<()> {
             }
             "server/discover" if mode == "legacy-late" => {
                 late_discovery_id = Some(message["id"].clone());
+            }
+            "server/discover" if mode == "legacy-empty-discover" => {
+                write_message(
+                    &mut stdout,
+                    json!({"jsonrpc": "2.0", "id": message["id"], "result": {}}),
+                )?;
             }
             // The first helper makes its version offer only after it receives initialize.
             "server/discover"
@@ -174,7 +184,15 @@ fn main() -> Result<()> {
                     }),
                 )?;
             }
-            "initialize" if mode == "legacy-reject-late-initialize" && index != 0 => {
+            "initialize"
+                if matches!(
+                    mode.as_str(),
+                    "legacy-reject-late-initialize" | "legacy-delayed-init-first"
+                ) && index != 0 =>
+            {
+                if mode == "legacy-delayed-init-first" {
+                    std::thread::sleep(std::time::Duration::from_millis(1100));
+                }
                 write_message(
                     &mut stdout,
                     json!({"jsonrpc": "2.0", "id": message["id"], "error": {
@@ -182,8 +200,18 @@ fn main() -> Result<()> {
                     }}),
                 )?;
             }
+            "initialize" if mode == "legacy-ignore-initialize-after-discover" && index != 0 => {}
             "initialize" => {
                 assert!(is_legacy);
+                if mode == "legacy-delayed-init-first" {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                }
+                if matches!(mode.as_str(), "legacy-slow" | "legacy-empty-discover") {
+                    assert_ne!(index, 0, "initialize should use the original helper");
+                }
+                if mode == "legacy-slow" {
+                    std::thread::sleep(std::time::Duration::from_millis(3500));
+                }
                 if mode == "legacy-late" {
                     let id = late_discovery_id
                         .take()
