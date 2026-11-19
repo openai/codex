@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -24,9 +25,14 @@ use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use futures::FutureExt;
+use futures::future::Shared;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::warn;
@@ -147,6 +153,7 @@ pub(crate) struct OutgoingMessageSender {
     verification_auth: OnceLock<Arc<codex_login::AuthManager>>,
     verification_connections: Mutex<HashSet<ConnectionId>>,
     human_approval_connections: Mutex<HashSet<ConnectionId>>,
+    replay_connections: Mutex<HashMap<ConnectionId, Arc<ReplayConnection>>>,
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
     process_reply_sender: mpsc::Sender<OutgoingEnvelope>,
@@ -156,6 +163,48 @@ pub(crate) struct OutgoingMessageSender {
     /// disconnect cleanup all get handled.
     request_contexts: Mutex<HashMap<ConnectionRequestId, RequestContext>>,
     analytics_events_client: AnalyticsEventsClient,
+}
+
+struct ReplayConnection {
+    // Keep the last receipt on the connection, rather than the replay task: a
+    // replacement listener must not bypass a write its predecessor queued.
+    pending: StdMutex<Option<Shared<oneshot::Receiver<()>>>>,
+    turn: Semaphore,
+    disconnect: CancellationToken,
+}
+
+impl ReplayConnection {
+    async fn acquire_turn(&self) -> Option<SemaphorePermit<'_>> {
+        tokio::select! {
+            biased;
+            _ = self.disconnect.cancelled() => None,
+            permit = self.turn.acquire() => permit.ok(),
+        }
+    }
+
+    async fn wait_pending(&self) -> bool {
+        let receipt = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some(receipt) = receipt else {
+            return !self.disconnect.is_cancelled();
+        };
+        tokio::select! {
+            biased;
+            _ = self.disconnect.cancelled() => {}
+            _ = receipt => {}
+        };
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        // A dropped physical-write receipt can mean either encoding rejection
+        // or a message retained for reconnect. In either case it has left the
+        // bounded connection queue; only logical disconnect ends the replay.
+        !self.disconnect.is_cancelled()
+    }
 }
 
 #[derive(Clone)]
@@ -283,6 +332,7 @@ impl OutgoingMessageSender {
             verification_auth: OnceLock::new(),
             verification_connections: Mutex::new(HashSet::new()),
             human_approval_connections: Mutex::new(HashSet::new()),
+            replay_connections: Mutex::new(HashMap::new()),
             next_server_request_id: AtomicI64::new(0),
             process_reply_sender: sender.clone(),
             sender,
@@ -354,7 +404,26 @@ impl OutgoingMessageSender {
             .insert(connection_id);
     }
 
+    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+        self.replay_connections.lock().await.insert(
+            connection_id,
+            Arc::new(ReplayConnection {
+                pending: StdMutex::new(None),
+                turn: Semaphore::new(1),
+                disconnect: CancellationToken::new(),
+            }),
+        );
+    }
+
+    pub(crate) async fn stop_connection_replays(&self, connection_id: ConnectionId) {
+        let replay = self.replay_connections.lock().await.remove(&connection_id);
+        if let Some(replay) = replay {
+            replay.disconnect.cancel();
+        }
+    }
+
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+        self.stop_connection_replays(connection_id).await;
         self.human_approval_connections
             .lock()
             .await
@@ -562,40 +631,74 @@ impl OutgoingMessageSender {
         (outgoing_message_id, rx_approve)
     }
 
-    pub(crate) async fn replay_requests_to_connection_for_thread(
+    pub(crate) async fn replay_requests_to_connection(
         &self,
         connection_id: ConnectionId,
-        thread_id: ThreadId,
+        requests: Vec<ServerRequest>,
     ) {
-        let requests = self.pending_requests_for_thread(thread_id).await;
-        let human_approval = self
-            .human_approval_connections
+        let Some(replay) = self
+            .replay_connections
             .lock()
             .await
-            .contains(&connection_id);
+            .get(&connection_id)
+            .cloned()
+        else {
+            return;
+        };
         for request in requests {
-            if requires_human_approval(&request) {
-                if !human_approval {
+            let Some(_turn) = replay.acquire_turn().await else {
+                return;
+            };
+            if !replay.wait_pending().await {
+                return;
+            }
+            let permit = tokio::select! {
+                biased;
+                _ = replay.disconnect.cancelled() => return,
+                permit = self.sender.reserve() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+            };
+            let approval = requires_human_approval(&request);
+            if approval {
+                let eligible = tokio::select! {
+                    biased;
+                    _ = replay.disconnect.cancelled() => return,
+                    eligible = self.human_approval_connections.lock() => eligible,
+                };
+                if !eligible.contains(&connection_id) {
                     continue;
                 }
-                // Register the replay recipient before sending so its response
-                // cannot race ahead of callback authorization.
-                let mut callbacks = self.request_id_to_callback.lock().await;
+            }
+            {
+                let mut callbacks = tokio::select! {
+                    biased;
+                    _ = replay.disconnect.cancelled() => return,
+                    callbacks = self.request_id_to_callback.lock() => callbacks,
+                };
                 let Some(entry) = callbacks.get_mut(request.id()) else {
                     continue;
                 };
-                entry.human_approval_recipients.insert(connection_id);
-            }
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::ToConnection {
+                if replay.disconnect.is_cancelled() {
+                    return;
+                }
+                if approval {
+                    entry.human_approval_recipients.insert(connection_id);
+                }
+                let (tx, receipt) = oneshot::channel();
+                permit.send(OutgoingEnvelope::ToConnection {
                     connection_id,
                     message: OutgoingMessage::Request(request),
-                    write_complete_tx: None,
-                })
-                .await
-            {
-                warn!("failed to resend request to client: {err:?}");
+                    write_complete_tx: Some(tx),
+                });
+                *replay
+                    .pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receipt.shared());
+            }
+            if !replay.wait_pending().await {
+                return;
             }
         }
     }

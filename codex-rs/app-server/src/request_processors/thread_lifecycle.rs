@@ -14,10 +14,15 @@ use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use std::borrow::Cow;
+use tokio::task::JoinSet;
 
 #[cfg(test)]
 #[path = "thread_listener_shutdown_tests.rs"]
 mod listener_shutdown_tests;
+
+#[cfg(test)]
+#[path = "thread_replay_tests.rs"]
+mod replay_tests;
 
 #[derive(Clone)]
 pub(super) struct ListenerTaskContext {
@@ -507,6 +512,7 @@ async fn start_listener(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        let mut replays = JoinSet::new();
         let shutdown_complete = loop {
             tokio::select! {
                 biased;
@@ -527,9 +533,15 @@ async fn start_listener(
                         &thread_watch_manager,
                         &outgoing_for_task,
                         &pending_thread_unloads,
+                        Some(&mut replays),
                         listener_command,
                     )
                     .await;
+                }
+                Some(result) = replays.join_next(), if !replays.is_empty() => {
+                    if let Err(error) = result {
+                        warn!("thread resume replay task failed: {error}");
+                    }
                 }
                 event = conversation.next_event() => {
                     let event = match event {
@@ -748,6 +760,8 @@ async fn start_listener(
                 }
             }
         };
+        // Dropping the set aborts replay workers before this listener retires.
+        drop(replays);
         // The thread owns its event sender, so waiting for channel closure retains
         // the runtime. Keep only the notification relay after ShutdownComplete.
         drop(conversation);
@@ -786,6 +800,7 @@ async fn start_listener(
                     &thread_watch_manager,
                     &outgoing_for_task,
                     &pending_thread_unloads,
+                    /*replays*/ None,
                     command,
                 )
             };
@@ -943,7 +958,7 @@ pub(super) async fn unload_thread_without_subscribers(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_thread_listener_command(
+async fn handle_thread_listener_command(
     conversation_id: ThreadId,
     conversation: Option<&Arc<CodexThread>>,
     codex_home: &Path,
@@ -952,6 +967,7 @@ pub(super) async fn handle_thread_listener_command(
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
     pending_thread_unloads: &PendingThreadUnloads,
+    replays: Option<&mut JoinSet<()>>,
     listener_command: ThreadListenerCommand,
 ) {
     match listener_command {
@@ -959,7 +975,7 @@ pub(super) async fn handle_thread_listener_command(
             request: resume_request,
             completion_tx,
         } => {
-            let Some(conversation) = conversation else {
+            let (Some(conversation), Some(replays)) = (conversation, replays) else {
                 // Dropping the completion sender returns the closing error.
                 return;
             };
@@ -972,9 +988,11 @@ pub(super) async fn handle_thread_listener_command(
                 thread_watch_manager,
                 outgoing,
                 pending_thread_unloads,
+                replays,
                 *resume_request,
             )
             .await;
+            // The resume response is complete even if its replay is later cancelled.
             let _ = completion_tx.send(());
         }
         ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, goal } => {
@@ -1066,7 +1084,7 @@ pub(super) async fn handle_thread_listener_command(
     clippy::await_holding_invalid_type,
     reason = "running-thread resume subscription must be serialized against pending unloads"
 )]
-pub(super) async fn handle_pending_thread_resume_request(
+async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
     _codex_home: &Path,
@@ -1075,6 +1093,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
     pending_thread_unloads: &PendingThreadUnloads,
+    replays: &mut JoinSet<()>,
     mut pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let (active_turn_metadata, mut active_turn, active_page_params) = {
@@ -1307,6 +1326,11 @@ pub(super) async fn handle_pending_thread_resume_request(
         turns_backwards_cursor,
         items_backwards_cursor,
     };
+    // Retire the previous replay before the new response can reach this client.
+    // The connection retains the receipt for any write already queued.
+    let stopped = thread_state_manager
+        .begin_resume_replay(conversation_id, connection_id)
+        .await;
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)
         .await;
@@ -1334,11 +1358,18 @@ pub(super) async fn handle_pending_thread_resume_request(
             );
         }
     }
-    outgoing
-        .replay_requests_to_connection_for_thread(connection_id, conversation_id)
-        .await;
-    // App-server owns resume response and snapshot ordering, so wait until
-    // replay completes before letting extensions react to the idle thread.
+    let requests = outgoing.pending_requests_for_thread(conversation_id).await;
+    if let Some(mut stopped) = stopped.filter(|_| !requests.is_empty()) {
+        let outgoing = Arc::clone(outgoing);
+        replays.spawn(async move {
+            tokio::select! {
+                biased;
+                _ = stopped.changed() => {}
+                _ = outgoing.replay_requests_to_connection(connection_id, requests) => {}
+            }
+        });
+    }
+    // Give queued input a chance to start before releasing the next same-thread RPC.
     conversation
         .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
         .await;

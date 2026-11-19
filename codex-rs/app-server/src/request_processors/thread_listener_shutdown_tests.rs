@@ -39,7 +39,7 @@ use std::collections::HashSet;
 use test_case::test_case;
 use tokio::sync::mpsc;
 
-async fn test_processor(
+pub(super) async fn test_processor(
     test: &TestCodex,
 ) -> Result<(ThreadRequestProcessor, mpsc::Receiver<OutgoingEnvelope>)> {
     let config = Arc::new(test.config.clone());
