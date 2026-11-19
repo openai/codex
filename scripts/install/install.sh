@@ -813,7 +813,31 @@ record_standalone_releases_in_use() {
       # Keep those matches, but reject other failures and any stderr below.
       [ "$?" -eq 1 ] || return 1
     fi
-    [ ! -s "$tmp_dir/lsof-error" ] || return 1
+    if [ -s "$tmp_dir/lsof-error" ]; then
+      # lsof inspects every mount even with +D. An inaccessible, unrelated
+      # filesystem cannot hide files on the releases device; reject all other
+      # warnings, including any failure to inspect the releases mount itself.
+      device="$(stat -c '%d' "$releases" 2>/dev/null || stat -f '%d' "$releases")" || return 1
+      device="$(printf '%x' "$device")" || return 1
+      LC_ALL=C RELEASES="$releases" RELEASE_DEVICE="$device" awk '
+        NR % 3 == 1 {
+          if ($0 !~ /^lsof: WARNING: can\047t stat\(\) [^[:space:]]+ file system \//) exit 1
+          mount = $0; sub(/^lsof: WARNING: can\047t stat\(\) [^[:space:]]+ file system /, "", mount)
+          releases = ENVIRON["RELEASES"]
+          if (mount == "/" || index(releases "/", mount "/") == 1 ||
+              index(mount "/", releases "/") == 1) exit 1
+          next
+        }
+        NR % 3 == 2 { if ($0 != "      Output information may be incomplete.") exit 1; next }
+        {
+          if ($0 !~ /^      assuming "dev=[0-9a-fA-F]+" from mount table$/) exit 1
+          dev = $0; sub(/^.*dev=/, "", dev); sub(/".*$/, "", dev)
+          dev = tolower(dev); sub(/^0+/, "", dev)
+          if (dev == ENVIRON["RELEASE_DEVICE"] || dev == "") exit 1
+        }
+        END { if (NR % 3 != 0) exit 1 }
+      ' "$tmp_dir/lsof-error" || return 1
+    fi
   fi
 }
 

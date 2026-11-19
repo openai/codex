@@ -390,10 +390,32 @@ class InstallShTest(unittest.TestCase):
         function = "record_standalone_releases_in_use() {" + function + "\n}\n"
         function = function.replace("/usr/sbin/lsof ", "mock_lsof ")
         matches = "p123\nn/releases/active/bin/codex\n"
+        device = os.stat(tempfile.gettempdir()).st_dev
+        warning = (
+            "lsof: WARNING: can't stat() hfs file system {mount}\n"
+            "      Output information may be incomplete.\n"
+            '      assuming "dev={device}" from mount table\n'
+        )
+        unrelated = warning.format(mount="/Volumes/unrelated", device=f"{device + 1:x}")
         for status, output, error, expected in (
             (0, matches, "", 0),
             (1, "", "", 0),
             (1, matches, "", 0),
+            (1, matches, unrelated, 0),
+            (
+                1,
+                matches,
+                warning.format(mount="/Volumes/unrelated", device=f"00{device:X}"),
+                1,
+            ),
+            (
+                1,
+                matches,
+                warning.format(mount=tempfile.gettempdir(), device=f"{device + 1:x}"),
+                1,
+            ),
+            (1, matches, unrelated.rsplit("\n", 2)[0] + "\n", 1),
+            (1, matches, unrelated + "inspection failed\n", 1),
             (0, matches, "inspection failed\n", 1),
             (1, matches, "inspection failed\n", 1),
             (2, "", "", 1),
@@ -404,7 +426,7 @@ class InstallShTest(unittest.TestCase):
                     script = (
                         "set -eu\n"
                         "os=macos\n"
-                        "releases=/releases\n"
+                        f"releases={shlex.quote(temp_dir)}\n"
                         f"tmp_dir={shlex.quote(temp_dir)}\n"
                         # Avoid depending on other processes on the test host.
                         'ps() { printf "%s codex\\n" "$(id -u)"; }\n'
