@@ -1287,21 +1287,6 @@ fn sse_event(event: Value) -> String {
     sse(vec![event])
 }
 
-fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
-    let body: Value = serde_json::from_slice(body).expect("parse request body");
-    body.get("input")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
-        .collect()
-}
-
 #[tokio::test]
 async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -2837,41 +2822,53 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
-    let first_chunks = vec![
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(ev_response_created("resp-1")),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(ev_message_item_added("msg-1", "")),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(ev_output_text_delta("first ")),
-        },
-        StreamingSseChunk {
-            gate: Some(gate_completed_rx),
-            body: sse_event(ev_message_item_done("msg-1", "first response")),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(ev_completed("resp-1")),
-        },
-    ];
-    let second_chunks = vec![StreamingSseChunk {
-        gate: None,
-        body: sse(vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-2", "accepted queued prompt handled"),
-            ev_completed("resp-2"),
-        ]),
-    }];
-    let (server, _completions) =
-        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    #[derive(Default)]
+    struct FirstMessageGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for FirstMessageGate {
+        fn on_item_completed<'a>(
+            &'a self,
+            _thread_store: &'a codex_extension_api::ExtensionData,
+            _turn_store: &'a codex_extension_api::ExtensionData,
+            item: &'a codex_protocol::items::TurnItem,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                if item.id() == "msg-1" {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+            })
+        }
+    }
+
+    let gate = Arc::new(FirstMessageGate::default());
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(gate.clone());
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_message_item_added("msg-1", ""),
+                ev_output_text_delta("first "),
+                ev_message_item_done("msg-1", "first response"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "accepted queued prompt handled"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
     let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_model("gpt-5.4")
         .with_pre_build_hook(|home| {
             write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
@@ -2881,7 +2878,8 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             trust_discovered_hooks(config);
             config.otel.log_user_prompt = true;
         });
-    let test = builder.build_with_streaming_server(&server).await?;
+    // The hook fixture executes a host script from this temporary home.
+    let test = builder.build(&server).await?;
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -2890,10 +2888,9 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         }]))
         .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::AgentMessageContentDelta(_))
-    })
-    .await;
+    // A steer can cancel the HTTP stream even if its mock is gated. Stop the turn
+    // inside message completion instead, so both steers are in the same pending batch.
+    timeout(Duration::from_secs(30), gate.entered.notified()).await?;
 
     for text in ["accepted queued prompt", "blocked queued prompt"] {
         test.codex
@@ -2904,28 +2901,14 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             .await?;
     }
 
-    sleep(Duration::from_millis(100)).await;
-    let _ = gate_completed_tx.send(());
-
-    let requests = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let requests = server.requests().await;
-            if requests.len() >= 2 {
-                break requests;
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("second request should arrive")
-    .into_iter()
-    .collect::<Vec<_>>();
+    gate.release.notify_one();
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
+    let requests = responses.requests();
     assert_eq!(requests.len(), 2);
 
     logs_assert(|lines| {
@@ -2948,7 +2931,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     assert!(!rollout.contains("blocked queued prompt"));
     assert!(rollout.contains("accepted queued prompt"));
 
-    let second_user_texts = request_message_input_texts(&requests[1], "user");
+    let second_user_texts = requests[1].message_input_texts("user");
     assert!(
         second_user_texts.contains(&"accepted queued prompt".to_string()),
         "second request should include the accepted queued prompt",
@@ -3024,7 +3007,6 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         ],
     );
 
-    server.shutdown().await;
     Ok(())
 }
 

@@ -1506,6 +1506,7 @@ async fn token_budget_auto_compact_fallback_uses_buffer_until_new_context() -> R
 
     let server = start_mock_server().await;
     let trigger_call_id = "trigger-call";
+    let remaining_call_id = "remaining-in-fallback";
     let fallback_call_id = "fallback-call";
     let new_context_call_id = "new-context-call";
     let responses = mount_sse_sequence(
@@ -1518,6 +1519,7 @@ async fn token_budget_auto_compact_fallback_uses_buffer_until_new_context() -> R
             ]),
             sse(vec![
                 ev_response_created("fallback-tool-resp"),
+                ev_function_call(remaining_call_id, "get_context_remaining", "{}"),
                 ev_exec_command_call(fallback_call_id, "echo fallback-note > fallback-note.txt"),
                 ev_completed_with_tokens("fallback-tool-resp", /*total_tokens*/ 10_000),
             ]),
@@ -1570,8 +1572,10 @@ async fn token_budget_auto_compact_fallback_uses_buffer_until_new_context() -> R
             .any(|name| name == "get_context_remaining"),
         "fallback should preserve the normal tool surface"
     );
+    // Streaming tools can start before their own response.completed usage arrives.
+    // The fallback step always observes the preceding response's 9,500 tokens.
     assert_eq!(
-        fallback_request.function_call_output_text(trigger_call_id),
+        requests[2].function_call_output_text(remaining_call_id),
         Some("You have 0 tokens left in this context window.".to_string())
     );
     let initial_context = token_budget_contexts(&requests[0]);

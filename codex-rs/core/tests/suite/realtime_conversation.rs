@@ -5227,24 +5227,31 @@ async fn realtime_handoff_history_scenario_inner(
     .await;
     assert_eq!(session_updated, "sess_inbound");
 
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::HandoffRequested(handoff),
-        }) if handoff.handoff_id == "handoff_inbound"
-            && handoff.input_transcript == "text from realtime" =>
-        {
-            Some(())
+    // Routing starts the turn before the realtime fanout publishes HandoffRequested.
+    // Either notification can win; consume one stream without discarding the other.
+    let mut saw_handoff = false;
+    let mut turn_id = None;
+    let mut completed_turn_id = None;
+    wait_for_event(&test.codex, |event| {
+        match event {
+            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::HandoffRequested(handoff),
+            }) if handoff.handoff_id == "handoff_inbound"
+                && handoff.input_transcript == "text from realtime" =>
+            {
+                saw_handoff = true;
+            }
+            EventMsg::TurnStarted(started) => turn_id = Some(started.turn_id.clone()),
+            EventMsg::TurnComplete(completed) => {
+                completed_turn_id = Some(completed.turn_id.clone())
+            }
+            _ => {}
         }
-        _ => None,
+        // A blocked prompt must reach the stop-and-interrupt path below before it can finish.
+        saw_handoff && turn_id.is_some() && (block_prompt || turn_id == completed_turn_id)
     })
     .await;
-
-    let turn_id = loop {
-        let event = test.codex.next_event().await?;
-        if let EventMsg::TurnStarted(turn_started) = event.msg {
-            break turn_started.turn_id;
-        }
-    };
+    let turn_id = turn_id.expect("observed routed turn");
     Uuid::parse_str(&turn_id).context("realtime-routed turn ID should be a UUID")?;
 
     if block_prompt {
@@ -5302,10 +5309,6 @@ async fn realtime_handoff_history_scenario_inner(
         )), "rejected handoff speech remains available for closure carryover");
         return Ok(Vec::new());
     }
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     test.thread_store
         .flush_thread(test.session_configured.thread_id)
         .await?;
