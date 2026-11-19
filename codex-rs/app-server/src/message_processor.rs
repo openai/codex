@@ -1360,11 +1360,18 @@ impl MessageProcessor {
             ClientRequest::EnvironmentStatus { params, .. } => {
                 self.environment_processor.environment_status(params).await
             }
-            ClientRequest::FsReadFile { params, .. } => self
-                .fs_processor
-                .read_file(params)
-                .await
-                .map(|response| Some(response.into())),
+            ClientRequest::FsReadFile { params, .. } => {
+                self.fs_processor.read_file(params).await.map(|file| {
+                    // Defer encoding to the stdio writer. Remote control serializes
+                    // for both segment sizing and transmission.
+                    let payload = if session.origin == crate::transport::ConnectionOrigin::Stdio {
+                        ClientResponsePayload::FsReadFileBytes(file)
+                    } else {
+                        ClientResponsePayload::FsReadFile(file.into())
+                    };
+                    Some(payload)
+                })
+            }
             ClientRequest::FsWriteFile { params, .. } => self
                 .fs_processor
                 .write_file(params)

@@ -42,6 +42,10 @@ fn interrupt_conversation_payload_stays_jsonrpc_only() -> Result<()> {
 fn client_response_jsonrpc_parts_preserve_payloads_and_request_ids() -> Result<()> {
     let payloads = [
         (
+            ClientResponsePayload::FsReadFileBytes(v2::FsReadFileBytes { data: vec![0, 255] }),
+            json!({ "dataBase64": "AP8=" }),
+        ),
+        (
             ClientResponsePayload::GetAuthStatus(v1::GetAuthStatusResponse {
                 auth_method: Some(AuthMode::Chatgpt),
                 auth_token: None,

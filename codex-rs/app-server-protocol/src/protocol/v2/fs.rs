@@ -1,8 +1,12 @@
 use crate::JsonSchema;
 use crate::TS;
+use base64::Engine;
+use base64::display::Base64Display;
+use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::Serializer;
 
 /// Read a file from the host filesystem.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -20,6 +24,26 @@ pub struct FsReadFileParams {
 pub struct FsReadFileResponse {
     /// File contents encoded as base64.
     pub data_base64: String,
+}
+
+/// Outgoing `fs/readFile` payload that encodes the file as base64 during serialization.
+#[derive(Serialize, Debug, Clone)]
+pub struct FsReadFileBytes {
+    #[serde(rename = "dataBase64", serialize_with = "serialize_file_data")]
+    pub data: Vec<u8>,
+}
+
+fn serialize_file_data<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+    // serde_json writes Display fragments directly into the JSON string.
+    serializer.collect_str(&Base64Display::new(data, &STANDARD))
+}
+
+impl From<FsReadFileBytes> for FsReadFileResponse {
+    fn from(file: FsReadFileBytes) -> Self {
+        Self {
+            data_base64: STANDARD.encode(file.data),
+        }
+    }
 }
 
 /// Write a file on the host filesystem.

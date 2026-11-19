@@ -13,8 +13,8 @@ use codex_app_server_protocol::FsGetMetadataResponse;
 use codex_app_server_protocol::FsReadDirectoryEntry;
 use codex_app_server_protocol::FsReadDirectoryParams;
 use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileBytes;
 use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsReadFileResponse;
 use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsUnwatchParams;
@@ -64,16 +64,14 @@ impl FsRequestProcessor {
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
-    ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+    ) -> Result<FsReadFileBytes, JSONRPCErrorError> {
         let path = PathUri::from_abs_path(&params.path);
-        let bytes = self
+        let data = self
             .file_system()?
             .read_file(&path, Default::default(), /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
-        Ok(FsReadFileResponse {
-            data_base64: STANDARD.encode(bytes),
-        })
+        Ok(FsReadFileBytes { data })
     }
 
     pub(crate) async fn write_file(

@@ -339,6 +339,7 @@ macro_rules! client_request_definitions {
         #[allow(clippy::large_enum_variant)]
         pub enum ClientResponsePayload {
             $( $variant($response), )*
+            FsReadFileBytes(v2::FsReadFileBytes),
             InterruptConversation(v1::InterruptConversationResponse),
         }
 
@@ -353,6 +354,10 @@ macro_rules! client_request_definitions {
                             })
                         }
                     )*
+                    Self::FsReadFileBytes(file) => Some(ClientResponse::FsReadFile {
+                        request_id,
+                        response: file.into(),
+                    }),
                     Self::InterruptConversation(_) => None,
                 }
             }

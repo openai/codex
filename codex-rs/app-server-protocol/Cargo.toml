@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 codex-experimental-api-macros = { workspace = true }
 codex-app-server-protocol-noop-macros = { workspace = true }
 codex-extension-items = { workspace = true }

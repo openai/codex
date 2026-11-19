@@ -22,9 +22,9 @@ pub enum OutgoingMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OutgoingResponse {
+pub struct OutgoingResponse<T = Box<ClientResponsePayload>> {
     pub id: RequestId,
-    pub result: Box<ClientResponsePayload>,
+    pub result: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

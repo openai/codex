@@ -9,11 +9,16 @@ use super::TransportEvent;
 use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
+use crate::outgoing_message::OutgoingMessage;
+use crate::outgoing_message::OutgoingResponse;
 use crate::outgoing_message::QueuedOutgoingMessage;
+use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::FsReadFileBytes;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
 use std::io::BufRead;
+use std::io::BufWriter;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::io::Write;
@@ -24,6 +29,48 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+
+// Batch the small chunks emitted by the streaming base64 encoder.
+const FILE_RESPONSE_BUFFER_SIZE: usize = 64 * 1024;
+
+enum StdoutMessage {
+    Line(String),
+    FileRead(OutgoingResponse<FsReadFileBytes>),
+}
+
+impl StdoutMessage {
+    fn new(message: OutgoingMessage) -> Option<Self> {
+        let message = match message {
+            OutgoingMessage::Response(response) => {
+                // Encoding the request ID and file bytes can only fail on I/O. Other
+                // responses need a complete frame for serialization error recovery.
+                if let ClientResponsePayload::FsReadFileBytes(result) = *response.result {
+                    return Some(Self::FileRead(OutgoingResponse {
+                        id: response.id,
+                        result,
+                    }));
+                }
+                OutgoingMessage::Response(response)
+            }
+            message => message,
+        };
+        let mut line = serialize_outgoing_message(message)?;
+        line.push('\n');
+        Some(Self::Line(line))
+    }
+
+    fn write_to(self, output: &mut BufWriter<impl Write>) -> IoResult<()> {
+        match self {
+            // The previous frame was flushed. Forward a complete line without copying it.
+            Self::Line(line) => output.get_mut().write_all(line.as_bytes()),
+            Self::FileRead(response) => {
+                serde_json::to_writer(&mut *output, &response)?;
+                output.write_all(b"\n")?;
+                output.flush()
+            }
+        }
+    }
+}
 
 pub async fn start_stdio_connection(
     transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -80,13 +127,16 @@ pub async fn start_stdio_connection(
     // Keep stdout's blocking writes off Tokio's pool too. The forwarding future
     // owns writer_rx so cancelling it also releases producers stuck on a full queue.
     let (stdout_tx, mut stdout_rx) =
-        mpsc::channel::<(String, oneshot::Sender<()>)>(/*buffer*/ 1);
+        mpsc::channel::<(StdoutMessage, oneshot::Sender<()>)>(/*buffer*/ 1);
     std::thread::Builder::new()
         .name("app-server-stdout".to_string())
         .spawn(move || {
-            let mut stdout = std::io::stdout().lock();
-            while let Some((json, written_tx)) = stdout_rx.blocking_recv() {
-                if let Err(err) = stdout.write_all(json.as_bytes()) {
+            let mut stdout =
+                BufWriter::with_capacity(FILE_RESPONSE_BUFFER_SIZE, std::io::stdout().lock());
+            while let Some((message, written_tx)) = stdout_rx.blocking_recv() {
+                if let Err(err) = message.write_to(&mut stdout) {
+                    // Discard any buffered tail so dropping the writer cannot retry it.
+                    let _ = stdout.into_parts();
                     error!("Failed to write to stdout: {err}");
                     break;
                 }
@@ -135,12 +185,11 @@ pub async fn start_stdio_connection(
 
     let write_messages = async move {
         while let Some(queued_message) = writer_rx.recv().await {
-            let Some(mut json) = serialize_outgoing_message(queued_message.message) else {
+            let Some(message) = StdoutMessage::new(queued_message.message) else {
                 continue;
             };
-            json.push('\n');
             let (written_tx, written_rx) = oneshot::channel();
-            if stdout_tx.send((json, written_tx)).await.is_err() || written_rx.await.is_err() {
+            if stdout_tx.send((message, written_tx)).await.is_err() || written_rx.await.is_err() {
                 break;
             }
             if let Some(write_complete_tx) = queued_message.write_complete_tx {
@@ -192,3 +241,7 @@ fn stdio_initialize_client_name(line: &str) -> Option<String> {
     let params = serde_json::from_value::<InitializeParams>(params?).ok()?;
     Some(params.client_info.name)
 }
+
+#[cfg(test)]
+#[path = "stdio_tests.rs"]
+mod tests;
