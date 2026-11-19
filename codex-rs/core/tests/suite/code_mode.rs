@@ -13,6 +13,7 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_analytics::AnalyticsEventsClient;
+use codex_config::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
@@ -37,10 +38,12 @@ use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_http_client::DestinationPolicy;
 use codex_http_client::NetworkPolicyController;
+use codex_login::AuthHeaders;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::codex_apps_mcp_server_config;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -2345,6 +2348,13 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
     Ok(())
 }
 
+fn hosted_result_auth(account: &'static str) -> CodexAuth {
+    let mut headers = http::HeaderMap::new();
+    headers.insert("authorization", "Bearer session-token".parse().unwrap());
+    headers.insert("chatgpt-account-id", account.parse().unwrap());
+    CodexAuth::Headers(AuthHeaders::new(headers))
+}
+
 fn apps_rpc_call_id(rpc: &Value) -> &str {
     rpc["params"]["_meta"]["_codex_apps"]["call_id"]
         .as_str()
@@ -2366,14 +2376,122 @@ fn assert_nested_apps_call_ids(rpcs: &[Value]) {
     }
 }
 
-#[test_case(ToolMode::Direct; "direct")]
-#[test_case(ToolMode::CodeModeOnly; "code_mode")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResultBodyCase {
+    Ungranted,
+    Shared(Option<&'static str>),
+    ModelBearer,
+    AppsHeader(&'static str),
+    AppsEnvHeader(&'static str),
+    AppsHeaderHelper,
+    OAuth,
+    FeatureOff(Option<&'static str>),
+}
+
+impl ResultBodyCase {
+    fn builder(self, base_url: String, auth: AuthMode) -> TestCodexBuilder {
+        let mut builder = result_metadata_apps_builder(base_url, "user@example.com");
+        if self == Self::Ungranted {
+            return builder;
+        }
+        if auth == AuthMode::Headers {
+            builder = builder.with_auth(hosted_result_auth("account_id"));
+        }
+        builder.with_config(move |config| {
+            config.model_provider.include_internal_metadata = true;
+            config.model_provider.requires_openai_auth = true;
+            if let Self::Shared(Some(sku)) | Self::FeatureOff(Some(sku)) = self {
+                config.model_provider.http_headers =
+                    Some(HashMap::from([("X-OpenAI-Product-Sku".into(), sku.into())]));
+            }
+            if self == Self::ModelBearer {
+                config.model_provider.experimental_bearer_token =
+                    Some("independent-model-token".into());
+            }
+            if !matches!(self, Self::FeatureOff(_)) {
+                let features = &mut config.features;
+                features.disable(Feature::ExecutedToolCallMetadata).unwrap();
+                features
+                    .enable(Feature::ConnectorToolResultPassthrough)
+                    .unwrap();
+            }
+        })
+    }
+
+    fn apps_override(self, base_url: &str) -> Option<McpServerConfig> {
+        let mut config = codex_apps_mcp_server_config(
+            base_url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
+        );
+        let McpServerTransportConfig::StreamableHttp {
+            http_headers,
+            env_http_headers,
+            http_headers_helper,
+            ..
+        } = &mut config.transport
+        else {
+            unreachable!("Apps uses streamable HTTP")
+        };
+        match self {
+            Self::OAuth => config.auth = McpServerAuth::OAuth,
+            Self::AppsHeader(name) => {
+                *http_headers = Some(HashMap::from([(name.into(), "Bearer apps".into())]))
+            }
+            // Exercise the configured header name even when the variable is currently unset.
+            Self::AppsEnvHeader(name) => {
+                *env_http_headers = Some(HashMap::from([(
+                    name.into(),
+                    "CODEX_TEST_APPS_TOKEN".into(),
+                )]))
+            }
+            Self::AppsHeaderHelper => {
+                *http_headers_helper = Some(if cfg!(windows) {
+                    r#"echo {"Authorization":"Bearer apps"}"#.into()
+                } else {
+                    r#"printf '{"Authorization":"Bearer apps"}'"#.into()
+                })
+            }
+            Self::Ungranted | Self::Shared(_) | Self::ModelBearer | Self::FeatureOff(_) => {
+                return None;
+            }
+        }
+        Some(config)
+    }
+}
+
+fn result_metadata_relay(
+    server: McpServerContribution,
+) -> Arc<codex_extension_api::ExtensionRegistry<Config>> {
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_server_contributor(Arc::new(ResultMetadataTestControl {
+        server: Mutex::new(server),
+        gate: Mutex::new(None),
+    }));
+    Arc::new(extensions.build())
+}
+
+#[test_case(ToolMode::Direct, ResultBodyCase::Ungranted, AuthMode::Chatgpt; "direct")]
+#[test_case(ToolMode::CodeModeOnly, ResultBodyCase::Ungranted, AuthMode::Chatgpt; "code_mode")]
+#[test_case(ToolMode::Direct, ResultBodyCase::Shared(None), AuthMode::Headers; "custom_direct")]
+#[test_case(ToolMode::CodeModeOnly, ResultBodyCase::Shared(None), AuthMode::Headers; "custom_code_mode")]
+#[test_case(ToolMode::CodeModeOnly, ResultBodyCase::OAuth, AuthMode::Headers; "hosted_oauth_gateway_headers")]
+#[test_case(ToolMode::CodeModeOnly, ResultBodyCase::OAuth, AuthMode::Chatgpt; "hosted_oauth_chatgpt")]
+#[test_case(ToolMode::Direct, ResultBodyCase::ModelBearer, AuthMode::Headers; "independent_model_bearer")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsHeader("Authorization"), AuthMode::Headers; "static_authorization")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsHeader("X-API-Key"), AuthMode::Headers; "static_api_key")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsEnvHeader("Authorization"), AuthMode::Headers; "env_authorization")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsEnvHeader("Cookie"), AuthMode::Headers; "unset_env_cookie")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsEnvHeader("Originator"), AuthMode::Headers; "env_originator")]
+#[test_case(ToolMode::Direct, ResultBodyCase::AppsHeaderHelper, AuthMode::Headers; "hosted_apps_headers_helper")]
+#[test_case(ToolMode::Direct, ResultBodyCase::FeatureOff(None), AuthMode::Headers; "private_results_disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn result_metadata_preserves_results_within_request_budget(
     tool_mode: ToolMode,
+    case: ResultBodyCase,
+    auth: AuthMode,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
+    let apps = responses::start_mock_server().await;
     let arguments = [
         serde_json::json!({ "search": "large" }),
         serde_json::json!({ "search": "medium-1" }),
@@ -2416,12 +2534,23 @@ async fn result_metadata_preserves_results_within_request_budget(
     assert!(metadata_sizes.iter().sum::<usize>() > 2 * 1024 * 1024);
     assert!(metadata_sizes.iter().sum::<usize>() < 15 * 1024 * 1024);
     assert!(serde_json::to_vec(&result_metadata[6]["openai/resource_access"])?.len() > 32 * 1024);
-    for (arguments, metadata) in arguments.iter().zip(&result_metadata) {
-        let result = serde_json::json!({
+    let shared = matches!(case, ResultBodyCase::Shared(_));
+    let budget_case = case == ResultBodyCase::Ungranted || shared;
+    let count = if budget_case { arguments.len() } else { 1 };
+    let arguments = &arguments[..count];
+    let result_metadata = &result_metadata[..count];
+    let granted = case != ResultBodyCase::Ungranted;
+    let direct = tool_mode == ToolMode::Direct;
+    let count_only = granted && !direct;
+    for (arguments, metadata) in arguments.iter().zip(result_metadata) {
+        let mut result = serde_json::json!({
             "content": [{ "type": "text", "text": RESULT_METADATA_PRIVATE_RESULT }],
             "isError": false,
             "_meta": metadata,
         });
+        if count_only {
+            result["structuredContent"] = serde_json::json!({"matches": [arguments["search"]]});
+        }
         Mock::given(method("POST"))
             .and(path("/api/codex/ps/mcp"))
             .and(body_partial_json(serde_json::json!({
@@ -2429,6 +2558,18 @@ async fn result_metadata_preserves_results_within_request_budget(
                 "params": { "arguments": arguments },
             })))
             .respond_with(move |request: &Request| {
+                match case {
+                    ResultBodyCase::AppsHeader(name) => {
+                        assert_eq!(request.headers[name], "Bearer apps")
+                    }
+                    ResultBodyCase::AppsHeaderHelper => {
+                        assert_eq!(request.headers["authorization"], "Bearer apps")
+                    }
+                    ResultBodyCase::AppsEnvHeader("Cookie") => {
+                        assert!(!request.headers.contains_key("cookie"))
+                    }
+                    _ => {}
+                }
                 let request: Value = serde_json::from_slice(&request.body).unwrap();
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "jsonrpc": "2.0",
@@ -2437,28 +2578,45 @@ async fn result_metadata_preserves_results_within_request_budget(
                 }))
             })
             .with_priority(/*p*/ 1)
-            .mount(&server)
+            .mount(&apps)
             .await;
     }
     // Exact argument matches take precedence over the shared fallback mounted afterward.
     let apps_server = mount_result_metadata_app(
-        &server, /*result_metadata*/ None, /*is_error*/ false,
+        &apps, /*result_metadata*/ None, /*is_error*/ false,
     )
     .await?;
-    let direct = tool_mode == ToolMode::Direct;
-    let mut builder =
-        result_metadata_apps_builder(apps_server.chatgpt_base_url, "user@example.com").with_config(
-            move |config| {
-                if direct {
-                    config.features.disable(Feature::CodeModeOnly).unwrap();
-                    config.features.disable(Feature::CodeMode).unwrap();
-                }
-            },
-        );
-    let test = builder.build_with_auto_env(&server).await?;
+    let builder = if let Some(config) = case.apps_override(&apps_server.chatgpt_base_url) {
+        // Only the override points at the gateway, so a compatibility fallback cannot pass.
+        case.builder(server.uri(), auth)
+            .with_extensions(result_metadata_relay(McpServerContribution::HostedApps {
+                config: Box::new(config),
+                protocol_mode: None,
+            }))
+    } else {
+        case.builder(apps_server.chatgpt_base_url, auth)
+    };
+    let mut builder = builder.with_config(move |config| {
+        // Keep the full-inventory budget coverage independent of connector-only capture.
+        config
+            .features
+            .enable(Feature::ExecutedToolCallMetadata)
+            .unwrap();
+        if direct {
+            config.features.disable(Feature::CodeModeOnly).unwrap();
+            config.features.disable(Feature::CodeMode).unwrap();
+        }
+    });
+    let test = if case == ResultBodyCase::AppsHeaderHelper {
+        builder.build(&server).await?
+    } else {
+        builder.build_with_auto_env(&server).await?
+    };
+    assert_eq!(test.thread_manager.auth_manager().auth_mode(), Some(auth));
     let call_ids = [
         "call-1", "call-2", "call-3", "call-4", "call-5", "call-6", "call-7", "call-8",
     ];
+    let call_ids = &call_ids[..count];
     let mut events = if direct {
         arguments
             .iter()
@@ -2473,7 +2631,7 @@ async fn result_metadata_preserves_results_within_request_budget(
             })
             .collect::<Vec<_>>()
     } else {
-        let arguments = serde_json::to_string(&arguments)?;
+        let arguments = serde_json::to_string(arguments)?;
         let code = format!(
             "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
              const results = []; \
@@ -2482,19 +2640,20 @@ async fn result_metadata_preserves_results_within_request_budget(
                  results.push({{ content: result.content, isError: Boolean(result.isError), \
                      hasMeta: Object.hasOwn(result, \"_meta\") }}); \
              }} \
-             text(JSON.stringify(results));"
+             text({count_only} ? results.length : JSON.stringify(results));"
         );
         vec![ev_custom_tool_call("call-1", "exec", &code)]
     };
     events.push(ev_completed("resp-1"));
     let initial = responses::mount_sse_once(&server, sse(events)).await;
     let follow_up = responses::mount_sse_once(&server, sse(vec![ev_completed("resp-2")])).await;
-    test.submit_turn("Search the connected app eight times")
-        .await?;
+    test.submit_turn("Search the connected app").await?;
     let initial = initial.single_request();
-    assert!(initial.has_message_with_input_texts("user", |texts| {
-        texts == ["Search the connected app eight times"]
-    }));
+    assert!(
+        initial.has_message_with_input_texts("user", |texts| {
+            texts == ["Search the connected app"]
+        })
+    );
     assert_eq!(
         tool_names(&initial.body_json())
             .iter()
@@ -2502,7 +2661,13 @@ async fn result_metadata_preserves_results_within_request_budget(
         !direct,
     );
     let request = follow_up.single_request();
-    let executed = recorded_apps_tool_calls(&server).await;
+    if case == ResultBodyCase::ModelBearer {
+        assert_eq!(
+            request.header("authorization").as_deref(),
+            Some("Bearer independent-model-token")
+        );
+    }
+    let executed = recorded_apps_tool_calls(&apps).await;
     let mut actual_arguments = executed
         .iter()
         .map(|call| {
@@ -2513,7 +2678,7 @@ async fn result_metadata_preserves_results_within_request_budget(
     actual_arguments.sort_by_key(Value::to_string);
     assert_eq!(actual_arguments, arguments);
     if direct {
-        for (call_id, args) in call_ids.iter().zip(&arguments) {
+        for (call_id, args) in call_ids.iter().zip(arguments) {
             let rpc = executed
                 .iter()
                 .find(|rpc| &rpc["params"]["arguments"] == args)
@@ -2533,8 +2698,9 @@ async fn result_metadata_preserves_results_within_request_budget(
         assert_nested_apps_call_ids(&executed);
         let (body, success) = custom_tool_output_body_and_success(&request, "call-1");
         assert_ne!(success, Some(false), "Code Mode failed: {body}");
-        assert_eq!(
-            serde_json::from_str::<Value>(&body)?,
+        let expected = if count_only {
+            serde_json::json!(arguments.len())
+        } else {
             serde_json::json!(vec![
                 serde_json::json!({
                     "content": [{ "type": "text", "text": RESULT_METADATA_PRIVATE_RESULT }],
@@ -2542,8 +2708,9 @@ async fn result_metadata_preserves_results_within_request_budget(
                     "hasMeta": false,
                 });
                 arguments.len()
-            ]),
-        );
+            ])
+        };
+        assert_eq!(serde_json::from_str::<Value>(&body)?, expected);
     }
     let captured = codex_core::test_support::history_with_tool_call_metadata(&test.codex).await;
     if direct {
@@ -2558,17 +2725,19 @@ async fn result_metadata_preserves_results_within_request_budget(
             .iter()
             .map(codex_protocol::models::executed_tool_call_metadata_bytes)
             .sum::<usize>()
-            > 2 * 1024 * 1024
+            >= metadata_sizes[..count].iter().sum::<usize>()
     );
     let captured = serde_json::to_value(captured)?;
-    for (input, expected_metadata) in [
-        // Ungranted custom inference endpoints strip raw metadata, including omission markers.
-        (request.input(), None),
-        (
-            captured.as_array().unwrap().clone(),
-            Some(result_metadata.clone()),
-        ),
-    ] {
+    let mut inputs = vec![
+        (request.input(), granted),
+        (captured.as_array().unwrap().clone(), true),
+    ];
+    if shared {
+        let next = responses::mount_sse_once(&server, sse(vec![ev_completed("resp-3")])).await;
+        test.submit_turn("Finish").await?;
+        inputs.push((next.single_request().input(), true));
+    }
+    for (input, include_metadata) in inputs {
         let mut calls = Vec::new();
         for output in &input {
             let metadata = &output["internal_chat_message_metadata_passthrough"];
@@ -2585,8 +2754,8 @@ async fn result_metadata_preserves_results_within_request_budget(
                 let name = calls[index]["name"].as_str().unwrap();
                 assert!(name.ends_with(RESULT_METADATA_TOOL));
                 let mut call = serde_json::json!({ "name": name, "arguments": arguments });
-                if let Some(metadata) = &expected_metadata {
-                    call["tool_result_metadata"] = metadata[index].clone();
+                if include_metadata {
+                    call["tool_result_metadata"] = result_metadata[index].clone();
                 }
                 call
             })

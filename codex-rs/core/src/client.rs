@@ -1489,18 +1489,20 @@ impl ModelClient {
     fn sampling_result_bodies(
         &self,
         metadata: &CodexResponsesMetadata,
-        owner: Option<AuthOwner>,
+        destination: Option<&ResultBodyDestination>,
         input: &[ResponseItem],
     ) -> Vec<(usize, usize, Arc<ToolResultBody>)> {
-        if let Some(owner) = owner
-            && matches!(metadata.request_kind, Some(CodexResponsesRequestKind::Turn))
+        if matches!(metadata.request_kind, Some(CodexResponsesRequestKind::Turn))
             && let Some(turn_id) = metadata.turn_id.as_deref()
             && let Some(turn) = self
                 .executed_tool_calls
                 .as_ref()
                 .and_then(|calls| calls.result_body_turn(turn_id))
         {
-            return turn.for_input(input, &owner);
+            let Some(destination) = destination else {
+                return Vec::new();
+            };
+            return turn.for_input(input, &destination.owner);
         }
         Vec::new()
     }
@@ -2135,13 +2137,11 @@ impl ResponsesHttpExecutor<'_> {
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
-            let result_body_owner = sampling_result_destination(
+            let result_body_destination = sampling_result_destination(
                 &client_setup,
                 include_internal && self.client.captures_result_bodies(),
                 &responses_headers,
-            )
-            // A candidate gateway must also have a verified thread grant before it can receive results.
-            .map(|destination| destination.owner);
+            );
             tracing::Span::current().record("api.path", "/responses");
             let transport = client_setup.http_transport("/responses")?;
             let request_auth_context = AuthRequestTelemetryContext::new(
@@ -2250,7 +2250,7 @@ impl ResponsesHttpExecutor<'_> {
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             options.tool_results = self.client.sampling_result_bodies(
                 responses_metadata,
-                result_body_owner,
+                result_body_destination.as_ref(),
                 &request.input,
             );
             let stream_result = client

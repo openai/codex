@@ -97,13 +97,17 @@ pub(super) struct ResultBodyCapture<'a> {
 }
 
 impl ResultBodyCapture<'_> {
+    fn is_current(&self, turn: &ResultBodyTurn, _retained: &RetainedResultBodies) -> bool {
+        turn.owner.is_current()
+    }
+
     pub(super) fn record(
         self,
         result: &CallToolResult,
         permits_source: impl FnOnce(AuthMode) -> bool,
     ) -> Option<Arc<PendingResultBody>> {
         let turn = self.turn.upgrade()?;
-        if !permits_source(turn.auth_mode) || !turn.is_current() {
+        if !permits_source(turn.auth_mode) || !self.is_current(&turn, &turn.lock_bodies()) {
             return None;
         }
         let mut body = ToolResultBody::from_mcp_result(result)?;
@@ -111,7 +115,7 @@ impl ResultBodyCapture<'_> {
             body.set_nested_call_id(call_id);
         }
         let mut retained = turn.lock_bodies();
-        if !turn.is_current()
+        if !self.is_current(&turn, &retained)
             || retained.by_id.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS
             || body.compact_bytes() > MAX_TURN_RESULT_BODY_BYTES - retained.bytes
         {
@@ -183,7 +187,7 @@ impl ResultBodyTurn {
         self: &Arc<Self>,
         nested_call_id: Option<&'a str>,
     ) -> Option<ResultBodyCapture<'a>> {
-        if !self.is_current() {
+        if !self.owner.is_current() {
             return None;
         }
         Some(ResultBodyCapture {
@@ -490,9 +494,15 @@ impl ExecutedToolCalls {
             || info
                 .http_headers
                 .iter()
-                .flat_map(HashMap::keys)
-                .chain(info.env_http_headers.iter().flat_map(HashMap::keys))
-                .any(|name| {
+                .flatten()
+                .map(|(name, value)| (name, Some(value.as_str())))
+                .chain(
+                    info.env_http_headers
+                        .iter()
+                        .flatten()
+                        .map(|(name, _)| (name, None)),
+                )
+                .any(|(name, _static_value)| {
                     !Self::is_result_body_provider_header(name)
                         && !name.eq_ignore_ascii_case(codex_client::OPENAI_ORGANIZATION_HEADER)
                         && !name.eq_ignore_ascii_case(codex_client::OPENAI_PROJECT_HEADER)
@@ -502,13 +512,13 @@ impl ExecutedToolCalls {
         }
         let owner = manager.auth_owner();
         let auth_mode = manager.auth_mode().filter(|_| owner.is_current())?;
-        if !matches!(auth_mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
-            || !info
-                .base_url
-                .as_deref()
-                .is_none_or(crate::client::is_local_connector_result_gateway)
-        {
-            return None;
+        match auth_mode {
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens
+                if info
+                    .base_url
+                    .as_deref()
+                    .is_none_or(crate::client::is_local_connector_result_gateway) => {}
+            _ => return None,
         }
         let capture = Arc::new(ResultBodyTurn {
             owner,
