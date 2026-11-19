@@ -1214,6 +1214,22 @@ class CyberAccessProgram(Enum):
     daybreak_red = "daybreakRed"
 
 
+class DaybreakAvailability(str, Enum):
+    available = "available"
+    enrollment_required = "enrollmentRequired"
+    unavailable_for_model = "unavailableForModel"
+    default = "default"
+
+    @classmethod
+    def _missing_(cls, value: object) -> DaybreakAvailability | None:
+        if not isinstance(value, str) or not value:
+            return None
+        member = str.__new__(cls, value)
+        member._name_ = value
+        member._value_ = value
+        return member
+
+
 class DeprecationNoticeNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2936,6 +2952,13 @@ class ModelAccessPrograms(BaseModel):
         populate_by_name=True,
     )
     cyber: Annotated[list[CyberAccessProgram], Field(description="Accepted explicit selections.")]
+    daybreak_availability: Annotated[
+        DaybreakAvailability | None,
+        Field(
+            alias="daybreakAvailability",
+            description="Server-resolved Daybreak availability for this caller and model.",
+        ),
+    ] = "default"
 
 
 class ModelAvailabilityNux(BaseModel):

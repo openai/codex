@@ -608,6 +608,7 @@ def generate_v2_all(schema_dir: Path, *, format_output: bool = True) -> None:
     _preserve_inline_media_class_names(out_path)
     _add_legacy_image_generation_thread_item_alias(out_path)
     _preserve_open_enum(out_path, "CodexErrorInfoValue", allow_empty=True)
+    _preserve_open_enum(out_path, "DaybreakAvailability")
     _preserve_reasoning_effort_enum(out_path)
     _preserve_thread_source_enum(out_path)
     _preserve_open_enum(out_path, "PlanType")

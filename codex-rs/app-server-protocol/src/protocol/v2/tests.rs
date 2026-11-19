@@ -5363,6 +5363,76 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn model_access_programs_preserve_availability_across_wire_formats() {
+    use codex_protocol::openai_models::ModelAccessPrograms as CoreModelAccessPrograms;
+
+    for (core_availability, app_server_availability, normalized_availability) in [
+        (json!("available"), json!("available"), json!("available")),
+        (
+            json!("enrollment_required"),
+            json!("enrollmentRequired"),
+            json!("enrollmentRequired"),
+        ),
+        (
+            json!("unavailable_for_model"),
+            json!("unavailableForModel"),
+            json!("unavailableForModel"),
+        ),
+        (json!("default"), json!("default"), json!("default")),
+        (
+            json!("future_status"),
+            json!("futureStatus"),
+            json!("default"),
+        ),
+    ] {
+        let core: CoreModelAccessPrograms = serde_json::from_value(json!({
+            "cyber": ["standard", "daybreak_blue", "daybreak_red"],
+            "daybreak_availability": core_availability,
+        }))
+        .expect("catalog availability should deserialize");
+        let app_server: ModelAccessPrograms = serde_json::from_value(json!({
+            "cyber": ["standard", "daybreakBlue", "daybreakRed"],
+            "daybreakAvailability": app_server_availability,
+        }))
+        .expect("app-server availability should deserialize");
+
+        assert_eq!(ModelAccessPrograms::from(core.clone()), app_server);
+        assert_eq!(CoreModelAccessPrograms::from(app_server.clone()), core);
+        assert_eq!(
+            serde_json::to_value(app_server).expect("model access programs should serialize"),
+            json!({
+                "cyber": ["standard", "daybreakBlue", "daybreakRed"],
+                "daybreakAvailability": normalized_availability,
+            }),
+        );
+    }
+
+    let legacy_core: CoreModelAccessPrograms = serde_json::from_value(json!({
+        "cyber": ["standard", "daybreak_blue"],
+    }))
+    .expect("old catalog metadata should deserialize");
+    let legacy_app_server: ModelAccessPrograms = serde_json::from_value(json!({
+        "cyber": ["standard", "daybreakBlue"],
+    }))
+    .expect("old app-server metadata should deserialize");
+    assert_eq!(
+        ModelAccessPrograms::from(legacy_core.clone()),
+        legacy_app_server,
+    );
+    assert_eq!(
+        CoreModelAccessPrograms::from(legacy_app_server.clone()),
+        legacy_core
+    );
+    assert_eq!(
+        serde_json::to_value(legacy_app_server).expect("legacy programs should serialize"),
+        json!({
+            "cyber": ["standard", "daybreakBlue"],
+            "daybreakAvailability": "default",
+        }),
+    );
+}
+
+#[test]
 fn turn_start_cyber_access_program_uses_separate_wire_formats() {
     for (app_server_value, core_value) in [
         ("standard", "standard"),

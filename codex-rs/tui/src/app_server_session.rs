@@ -3470,6 +3470,7 @@ mod tests {
         let mut catalog = codex_models_manager::bundled_models_response()?;
         for model in &mut catalog.models {
             model.available_access_programs = Some(ModelAccessPrograms {
+                daybreak_availability: Default::default(),
                 cyber: vec![
                     CyberAccessProgram::Standard,
                     CyberAccessProgram::DaybreakBlue,

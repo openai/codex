@@ -329,9 +329,30 @@ async fn list_models_uses_remote_catalog_as_source_of_truth(
     let remote_models = [
         (
             json!("2030-01-01T00:00:00Z"),
-            json!({ "cyber": ["standard", "daybreak_blue"] }),
+            json!({
+                "cyber": ["standard", "daybreak_blue"],
+                "daybreak_availability": "available",
+            }),
         ),
-        (json!(null), json!({ "cyber": ["daybreak_red"] })),
+        (
+            json!(null),
+            json!({
+                "cyber": ["daybreak_red"],
+                "daybreak_availability": "available",
+            }),
+        ),
+        (
+            json!(null),
+            json!({ "cyber": [], "daybreak_availability": "unavailable_for_model" }),
+        ),
+        (
+            json!(null),
+            json!({ "cyber": ["standard"], "daybreak_availability": "future_status" }),
+        ),
+        (
+            json!(null),
+            json!({ "cyber": ["standard"], "daybreak_availability": "enrollment_required" }),
+        ),
         (json!(null), json!({ "cyber": [] })),
         (json!(null), json!(null)),
     ]
@@ -454,9 +475,18 @@ model_catalog_url = "{server_uri}/v1/models"
             .map(|model| model["availableAccessPrograms"].clone())
             .collect::<Vec<_>>(),
         vec![
-            json!({ "cyber": ["standard", "daybreakBlue"] }),
-            json!({ "cyber": ["daybreakRed"] }),
-            json!({ "cyber": [] }),
+            json!({
+                "cyber": ["standard", "daybreakBlue"],
+                "daybreakAvailability": "available",
+            }),
+            json!({
+                "cyber": ["daybreakRed"],
+                "daybreakAvailability": "available",
+            }),
+            json!({ "cyber": [], "daybreakAvailability": "unavailableForModel" }),
+            json!({ "cyber": ["standard"], "daybreakAvailability": "default" }),
+            json!({ "cyber": ["standard"], "daybreakAvailability": "enrollmentRequired" }),
+            json!({ "cyber": [], "daybreakAvailability": "default" }),
             json!(null),
         ]
     );

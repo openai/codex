@@ -682,6 +682,7 @@ async fn saved_daybreak_rejection_records_child_input(
                     },
                     |program| vec![program],
                 ),
+                daybreak_availability: Default::default(),
             });
             model.use_responses_lite = false;
         })
@@ -858,6 +859,7 @@ async fn saved_daybreak_uses_existing_websocket_requests() -> Result<()> {
                     CyberAccessProgram::DaybreakBlue,
                     CyberAccessProgram::Standard,
                 ],
+                daybreak_availability: Default::default(),
             });
             model.use_responses_lite = false;
         })
@@ -1048,6 +1050,7 @@ async fn saved_daybreak_follows_the_child_model_and_automatic_compaction(
         .with_model_info_override(parent_model, move |model| {
             model.available_access_programs = Some(ModelAccessPrograms {
                 cyber: vec![parent_daybreak, CyberAccessProgram::Standard],
+                daybreak_availability: Default::default(),
             });
             model.comp_hash = Some("parent-window".to_owned());
             model.multi_agent_version = Some(version);
@@ -1063,6 +1066,7 @@ async fn saved_daybreak_follows_the_child_model_and_automatic_compaction(
                 } else {
                     vec![child_program]
                 },
+                daybreak_availability: Default::default(),
             });
             model.comp_hash = Some("child-window".to_owned());
             model.multi_agent_version = Some(version);

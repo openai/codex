@@ -136,6 +136,7 @@ export type { ContextCompactedNotification } from "./ContextCompactedNotificatio
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { CustomGatewaySettingsParams } from "./CustomGatewaySettingsParams";
 export type { CyberAccessProgram } from "./CyberAccessProgram";
+export type { DaybreakAvailability } from "./DaybreakAvailability";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DesktopOnboardingEntrypoint } from "./DesktopOnboardingEntrypoint";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";

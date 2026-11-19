@@ -17,6 +17,7 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::DaybreakAvailability;
 use codex_protocol::openai_models::ModelAccessPrograms;
 use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ModelsResponse;
@@ -373,10 +374,8 @@ async fn file_cache_implements_models_cache_contract() {
         client_version: Some(client_version.clone()),
         models: vec![ModelInfo {
             available_access_programs: Some(ModelAccessPrograms {
-                cyber: vec![
-                    CyberAccessProgram::Standard,
-                    CyberAccessProgram::DaybreakBlue,
-                ],
+                daybreak_availability: DaybreakAvailability::EnrollmentRequired,
+                cyber: vec![CyberAccessProgram::Standard],
             }),
             ..remote_model("file-cached", "File Cached", /*priority*/ 0)
         }],
@@ -1417,6 +1416,7 @@ async fn online_refresh_updates_access_programs_with_unchanged_etag() {
     let codex_home = tempdir().expect("temp dir");
     let granted_model = ModelInfo {
         available_access_programs: Some(ModelAccessPrograms {
+            daybreak_availability: Default::default(),
             cyber: vec![
                 CyberAccessProgram::Standard,
                 CyberAccessProgram::DaybreakBlue,
@@ -1425,7 +1425,10 @@ async fn online_refresh_updates_access_programs_with_unchanged_etag() {
         ..remote_model("access-programs", "Access Programs", /*priority*/ 0)
     };
     let revoked_model = ModelInfo {
-        available_access_programs: Some(ModelAccessPrograms { cyber: Vec::new() }),
+        available_access_programs: Some(ModelAccessPrograms {
+            cyber: Vec::new(),
+            daybreak_availability: Default::default(),
+        }),
         ..granted_model.clone()
     };
     let responses = vec![vec![granted_model.clone()], vec![revoked_model.clone()]];

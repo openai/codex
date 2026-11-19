@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use super::DaybreakAvailability;
 use super::ModelAccessPrograms;
 use super::SavedDaybreakChoice;
 use crate::turn_input::CyberAccessProgram;
@@ -18,22 +19,32 @@ fn selects_only_advertised_programs_with_blue_preferred() {
         (vec![Standard], None, Some(Standard)),
         (vec![], None, None),
     ] {
-        let programs = ModelAccessPrograms { cyber };
-        assert_eq!(
-            (
-                programs.daybreak(),
-                programs.standard(),
-                programs.select_saved(SavedDaybreakChoice::from(Some(true))),
-                programs.select_saved(SavedDaybreakChoice::from(Some(false))),
-                programs.select_saved(SavedDaybreakChoice::from(/* enabled */ None)),
-            ),
-            (
-                expected_daybreak,
-                expected_standard,
-                expected_daybreak,
-                expected_standard,
-                None,
-            )
-        );
+        for availability in [
+            DaybreakAvailability::Available,
+            DaybreakAvailability::EnrollmentRequired,
+            DaybreakAvailability::UnavailableForModel,
+            DaybreakAvailability::Default,
+        ] {
+            let programs = ModelAccessPrograms {
+                cyber: cyber.clone(),
+                daybreak_availability: availability,
+            };
+            assert_eq!(
+                (
+                    programs.daybreak(),
+                    programs.standard(),
+                    programs.select_saved(SavedDaybreakChoice::from(Some(true))),
+                    programs.select_saved(SavedDaybreakChoice::from(Some(false))),
+                    programs.select_saved(SavedDaybreakChoice::from(/* enabled */ None)),
+                ),
+                (
+                    expected_daybreak,
+                    expected_standard,
+                    expected_daybreak,
+                    expected_standard,
+                    None,
+                )
+            );
+        }
     }
 }

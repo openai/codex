@@ -135,6 +135,7 @@ async fn model_picker_refresh_updates_app_catalog_from_app_server() -> Result<()
             .then(|| ServiceTier::Fast.request_value().to_string());
         model.available_access_programs =
             Some(codex_protocol::openai_models::ModelAccessPrograms {
+                daybreak_availability: Default::default(),
                 cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
             });
     }

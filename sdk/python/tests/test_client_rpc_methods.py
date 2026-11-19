@@ -328,6 +328,43 @@ def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
     assert source.count("class PlanType(") == 1
 
 
+@pytest.mark.parametrize(
+    "availability",
+    [None, "available", "enrollmentRequired", "unavailableForModel", "default", "futureStatus"],
+)
+def test_model_list_preserves_daybreak_availability_from_older_and_newer_hosts(
+    monkeypatch: pytest.MonkeyPatch, availability: str | None
+) -> None:
+    access_programs: JsonObject = {"cyber": ["standard", "daybreakBlue", "daybreakRed"]}
+    if availability is not None:
+        access_programs["daybreakAvailability"] = availability
+    wire = {
+        "data": [
+            {
+                "id": "model-id",
+                "model": "model-id",
+                "displayName": "Model",
+                "description": "A caller-visible model",
+                "hidden": False,
+                "isDefault": False,
+                "defaultReasoningEffort": "medium",
+                "supportedReasoningEfforts": [],
+                "availableAccessPrograms": access_programs,
+            }
+        ],
+        "nextCursor": None,
+    }
+    client = CodexClient()
+    monkeypatch.setattr(client, "_request_raw", lambda _method, _params: wire)
+
+    response = client.model_list()
+
+    assert response.model_dump(mode="json", by_alias=True, exclude_unset=True) == wire
+    programs = response.data[0].available_access_programs
+    assert programs is not None
+    assert programs.daybreak_availability == (availability or "default")
+
+
 def test_plan_type_accepts_business_prolite_from_newer_runtime() -> None:
     """New runtime plan values should remain typed when using a codex_bin override."""
     plan_type = "self_serve_business_prolite"

@@ -50,6 +50,7 @@ async fn resumed_initial_messages_render_history() {
     chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
     chat.model_catalog = Arc::new(ModelCatalog::new(vec![model]));

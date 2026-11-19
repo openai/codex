@@ -2276,6 +2276,7 @@ async fn assert_daybreak_catalog_and_account_gates(provider_id: &str) {
     chat.config.model_provider_id = provider_id.into();
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model.clone()]));

@@ -7566,6 +7566,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.model = "gpt-agent".into();
     model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
     });
     crate::chatwidget::tests::helpers::set_test_model_catalog(&mut app.chat_widget, vec![model]);

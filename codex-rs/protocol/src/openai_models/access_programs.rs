@@ -1,4 +1,4 @@
-//! Caller-specific explicit access programs advertised by the model catalog.
+//! Caller-specific access programs and Daybreak availability from the model catalog.
 //!
 //! Discovery metadata does not grant access; inference still enforces authorization.
 
@@ -15,6 +15,21 @@ pub struct ModelAccessPrograms {
     /// Accepted explicit selections. An empty list is distinct from missing metadata.
     #[serde(deserialize_with = "deserialize_known_cyber_access_programs")]
     pub cyber: Vec<CyberAccessProgram>,
+    /// Server-resolved Daybreak availability for this caller and model.
+    #[serde(default)]
+    pub daybreak_availability: DaybreakAvailability,
+}
+
+/// Server-resolved Daybreak availability for this caller and model.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DaybreakAvailability {
+    Available,
+    EnrollmentRequired,
+    UnavailableForModel,
+    #[default]
+    #[serde(other)]
+    Default,
 }
 
 /// Saved preference to resolve against the selected model's advertised programs.

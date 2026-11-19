@@ -151,7 +151,10 @@ mod tests {
         model.available_access_programs = None;
         assert_eq!(select_program(&model, SavedDaybreakChoice::Off), Ok(None));
         for cyber in [vec![], vec![CyberAccessProgram::DaybreakRed]] {
-            model.available_access_programs = Some(ModelAccessPrograms { cyber });
+            model.available_access_programs = Some(ModelAccessPrograms {
+                cyber,
+                daybreak_availability: Default::default(),
+            });
             assert_eq!(select_program(&model, SavedDaybreakChoice::Unset), Ok(None));
             assert!(
                 select_program(&model, SavedDaybreakChoice::Off)

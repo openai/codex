@@ -58,6 +58,7 @@ mod guardian_v2;
 #[path = "openai_models/reasoning_effort.rs"]
 mod reasoning_effort;
 
+pub use access_programs::DaybreakAvailability;
 pub use access_programs::ModelAccessPrograms;
 pub use access_programs::SavedDaybreakChoice;
 pub use guardian_v2::AsyncClassifierMode;
@@ -2229,13 +2230,17 @@ mod tests {
             (Some(serde_json::Value::Null), None),
             (
                 Some(serde_json::json!({ "cyber": [] })),
-                Some(ModelAccessPrograms { cyber: vec![] }),
+                Some(ModelAccessPrograms {
+                    cyber: vec![],
+                    daybreak_availability: Default::default(),
+                }),
             ),
             (
                 Some(serde_json::json!({
                     "cyber": ["standard", "daybreak_blue", "future_program", "daybreak_red"]
                 })),
                 Some(ModelAccessPrograms {
+                    daybreak_availability: Default::default(),
                     cyber: vec![
                         CyberAccessProgram::Standard,
                         CyberAccessProgram::DaybreakBlue,
@@ -2243,7 +2248,46 @@ mod tests {
                     ],
                 }),
             ),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            [
+                (
+                    serde_json::json!("available"),
+                    DaybreakAvailability::Available,
+                ),
+                (
+                    serde_json::json!("enrollment_required"),
+                    DaybreakAvailability::EnrollmentRequired,
+                ),
+                (
+                    serde_json::json!("unavailable_for_model"),
+                    DaybreakAvailability::UnavailableForModel,
+                ),
+                (serde_json::json!("default"), DaybreakAvailability::Default),
+                (
+                    serde_json::json!("future_status"),
+                    DaybreakAvailability::Default,
+                ),
+            ]
+            .into_iter()
+            .map(|(availability, expected_availability)| {
+                (
+                    Some(serde_json::json!({
+                        "cyber": ["standard", "daybreak_blue", "future_program", "daybreak_red"],
+                        "daybreak_availability": availability,
+                    })),
+                    Some(ModelAccessPrograms {
+                        cyber: vec![
+                            CyberAccessProgram::Standard,
+                            CyberAccessProgram::DaybreakBlue,
+                            CyberAccessProgram::DaybreakRed,
+                        ],
+                        daybreak_availability: expected_availability,
+                    }),
+                )
+            }),
+        ) {
             let mut value = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
             if let Some(metadata) = metadata {
                 value["available_access_programs"] = metadata;

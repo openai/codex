@@ -2,6 +2,7 @@ use super::shared::v2_enum_from_core;
 use super::turn::CyberAccessProgram;
 use crate::JsonSchema;
 use crate::TS;
+use codex_protocol::openai_models::DaybreakAvailability as CoreDaybreakAvailability;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAccessPrograms as CoreModelAccessPrograms;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
@@ -90,19 +91,37 @@ pub struct ModelServiceTier {
     pub description: String,
 }
 
-/// Caller-specific explicit access programs advertised by model discovery.
+v2_enum_from_core!(
+    /// Server-resolved Daybreak availability for this caller and model.
+    #[derive(Default)]
+    #[ts(rename_all = "camelCase")]
+    pub enum DaybreakAvailability from CoreDaybreakAvailability {
+        Available,
+        EnrollmentRequired,
+        UnavailableForModel,
+        #[default]
+        #[serde(other)]
+        Default
+    }
+);
+
+/// Caller-specific access programs and Daybreak availability from model discovery.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ModelAccessPrograms {
     /// Accepted explicit selections.
     pub cyber: Vec<CyberAccessProgram>,
+    /// Server-resolved Daybreak availability for this caller and model.
+    #[serde(default)]
+    pub daybreak_availability: DaybreakAvailability,
 }
 
 impl From<CoreModelAccessPrograms> for ModelAccessPrograms {
     fn from(value: CoreModelAccessPrograms) -> Self {
         Self {
             cyber: value.cyber.into_iter().map(Into::into).collect(),
+            daybreak_availability: value.daybreak_availability.into(),
         }
     }
 }
@@ -111,6 +130,7 @@ impl From<ModelAccessPrograms> for CoreModelAccessPrograms {
     fn from(value: ModelAccessPrograms) -> Self {
         Self {
             cyber: value.cyber.into_iter().map(Into::into).collect(),
+            daybreak_availability: value.daybreak_availability.to_core(),
         }
     }
 }

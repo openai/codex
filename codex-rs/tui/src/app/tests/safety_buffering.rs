@@ -804,6 +804,7 @@ async fn run_safety_retry(
         model.tool_mode = Some(ToolMode::Direct);
         if scenario == SafetyRetryScenario::UnsupportedPermissions && model.slug == FASTER_MODEL {
             model.available_access_programs = Some(ModelAccessPrograms {
+                daybreak_availability: Default::default(),
                 cyber: vec![CyberAccessProgram::Standard],
             });
         }

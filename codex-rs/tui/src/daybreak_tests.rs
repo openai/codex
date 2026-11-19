@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 fn turn_program_uses_catalog_and_preserves_legacy_models() {
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.available_access_programs = Some(ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![
             CyberAccessProgram::Standard,
             CyberAccessProgram::DaybreakBlue,
@@ -45,7 +46,10 @@ fn turn_program_uses_catalog_and_preserves_legacy_models() {
         (Some(vec![]), false),
         (Some(vec![CyberAccessProgram::Standard]), true),
     ] {
-        model.available_access_programs = programs.map(|cyber| ModelAccessPrograms { cyber });
+        model.available_access_programs = programs.map(|cyber| ModelAccessPrograms {
+            cyber,
+            daybreak_availability: Default::default(),
+        });
         let result = program_for_turn(
             std::slice::from_ref(&model),
             &model.model,
@@ -64,6 +68,7 @@ fn turn_program_uses_catalog_and_preserves_legacy_models() {
 fn refusal_guidance_uses_the_model_catalog() {
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.available_access_programs = Some(ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![CyberAccessProgram::Standard],
     });
     for (name, expected) in [

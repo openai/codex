@@ -107,6 +107,7 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
             let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
             model.model = app.chat_widget.current_model().to_string();
             model.available_access_programs = Some(ModelAccessPrograms {
+                daybreak_availability: Default::default(),
                 cyber: vec![
                     CyberAccessProgram::Standard,
                     CyberAccessProgram::DaybreakBlue,

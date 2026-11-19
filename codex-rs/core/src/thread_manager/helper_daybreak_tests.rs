@@ -154,6 +154,7 @@ async fn paused_helpers(
             model.available_access_programs =
                 Some(codex_protocol::openai_models::ModelAccessPrograms {
                     cyber: programs.clone(),
+                    daybreak_availability: Default::default(),
                 });
         }
     }
