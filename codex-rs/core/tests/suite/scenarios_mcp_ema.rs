@@ -316,6 +316,16 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
         ))
         .with_config(move |config| {
             super::configure_scenario_catalog(config);
+            config.model_provider.requires_openai_auth = true;
+            config.model_provider.include_internal_metadata = true;
+            config
+                .features
+                .enable(codex_features::Feature::ConnectorToolResultPassthrough)
+                .expect("enable connector result capture");
+            config
+                .features
+                .enable(codex_features::Feature::ExecutedToolCallMetadata)
+                .expect("enable tool-call metadata");
             if matches!(scenario, EnterpriseLifecycle::RefreshPermissions) {
                 config.permissions.approval_policy = codex_config::Constrained::allow_any(
                     codex_protocol::protocol::AskForApproval::Never,
@@ -698,6 +708,15 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
         .await?;
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[1].header("authorization").as_deref(),
+        Some("Bearer account-access"),
+    );
+    let output = requests[1].function_call_output("enterprise-call");
+    assert_eq!(
+        output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"],
+        json!([{"name": "mcp__enterprise__calendar_list_events", "arguments": {}}]),
+    );
     let calls = mcp
         .received_requests()
         .await

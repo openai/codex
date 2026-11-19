@@ -291,32 +291,44 @@ pub(crate) fn is_local_connector_result_gateway(base_url: &str) -> bool {
     )
 }
 
-fn sampling_result_owner(
+#[derive(Debug, PartialEq)]
+struct ResultBodyDestination {
+    owner: AuthOwner,
+}
+
+fn sampling_result_destination(
     setup: &CurrentClientSetup,
     include_internal: bool,
     responses_headers: &ApiHeaderMap,
-) -> Option<AuthOwner> {
-    setup
+) -> Option<ResultBodyDestination> {
+    if !include_internal
+        || !responses_headers.is_empty()
+        || setup
+            .api_provider
+            .query_params
+            .as_ref()
+            .is_some_and(|params| !params.is_empty())
+    {
+        return None;
+    }
+    let owner = setup
         .auth_owner
         .as_ref()
-        .filter(|owner| {
-            owner.is_current()
-                && include_internal
-                && responses_headers.is_empty()
-                && matches!(
-                    setup.auth.as_ref().map(CodexAuth::auth_mode),
-                    Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
-                )
-                && is_local_connector_result_gateway(&setup.api_provider.base_url)
-                && setup.api_provider.headers.keys().all(|name| {
-                    matches!(
-                        name.as_str(),
-                        codex_model_provider::ACCOUNT_ROUTING_HEADER
-                            | codex_model_provider_info::RESIDENCY_HEADER_NAME
-                    ) || ExecutedToolCalls::is_result_body_provider_header(name.as_str())
-                })
-        })
-        .cloned()
+        .filter(|owner| owner.is_current())?
+        .clone();
+    let headers = &setup.api_provider.headers;
+    (matches!(
+        setup.auth.as_ref(),
+        Some(CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_))
+    ) && is_local_connector_result_gateway(&setup.api_provider.base_url)
+        && headers.keys().all(|name| {
+            matches!(
+                name.as_str(),
+                codex_model_provider::ACCOUNT_ROUTING_HEADER
+                    | codex_model_provider_info::RESIDENCY_HEADER_NAME
+            ) || ExecutedToolCalls::is_result_body_provider_header(name.as_str())
+        }))
+    .then_some(ResultBodyDestination { owner })
 }
 
 #[derive(Clone, Copy)]
@@ -2123,11 +2135,13 @@ impl ResponsesHttpExecutor<'_> {
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
-            let result_body_owner = sampling_result_owner(
+            let result_body_owner = sampling_result_destination(
                 &client_setup,
                 include_internal && self.client.captures_result_bodies(),
                 &responses_headers,
-            );
+            )
+            // A candidate gateway must also have a verified thread grant before it can receive results.
+            .map(|destination| destination.owner);
             tracing::Span::current().record("api.path", "/responses");
             let transport = client_setup.http_transport("/responses")?;
             let request_auth_context = AuthRequestTelemetryContext::new(

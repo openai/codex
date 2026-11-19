@@ -12,7 +12,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
-use super::sampling_result_owner;
+use super::sampling_result_destination;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -431,7 +431,6 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
             AuthManager::from_auth_for_testing_with_home(initial, home.path().to_path_buf());
         let refreshed_token = token(user, "refreshed");
         let mut info = test_model_provider().info().clone();
-        info.base_url = Some(CHATGPT_CODEX_BASE_URL.to_string());
         info.requires_openai_auth = true;
         let provider = Arc::new(SetupRefreshProvider {
             inner: create_model_provider(info, Some(manager.clone())),
@@ -456,13 +455,20 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
                 &format!("Bearer {refreshed_token}")
             );
             let empty = http::HeaderMap::new();
+            // A configured provider using the same ChatGPT credentials cannot receive results.
+            assert_eq!(
+                sampling_result_destination(&setup, /*include_internal*/ true, &empty),
+                None
+            );
+            setup.api_provider.base_url = codex_model_provider_info::CHATGPT_CODEX_BASE_URL.into();
             for (internal, response_headers, owner) in [
                 (true, &empty, setup.auth_owner.clone()),
                 (false, &empty, None),
                 (true, &headers, None),
             ] {
                 assert_eq!(
-                    sampling_result_owner(&setup, internal, response_headers),
+                    sampling_result_destination(&setup, internal, response_headers)
+                        .map(|destination| destination.owner),
                     owner
                 );
             }
@@ -471,7 +477,7 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
                 http::HeaderValue::from_static("another-organization"),
             );
             assert_eq!(
-                sampling_result_owner(&setup, /*include_internal*/ true, &empty),
+                sampling_result_destination(&setup, /*include_internal*/ true, &empty),
                 None,
             );
             assert_eq!(setup.auth.unwrap().get_token().unwrap(), refreshed_token);

@@ -646,8 +646,11 @@ fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision)
 ///
 /// This is public only so tests in HTTP-client consumers can exercise system-proxy routing
 /// deterministically on every supported platform.
-pub fn cache_system_proxy_route_for_test(request_url: &str, proxy_url: String) {
-    cache_system_proxy_decision(request_url, SystemProxyDecision::Proxy { url: proxy_url });
+pub fn cache_system_proxy_route_for_test(request_url: &str, proxy_url: impl Into<Option<String>>) {
+    let decision = proxy_url.into().map_or(SystemProxyDecision::Direct, |url| {
+        SystemProxyDecision::Proxy { url }
+    });
+    cache_system_proxy_decision(request_url, decision);
 }
 
 fn insert_system_proxy_cache_entry(
