@@ -305,7 +305,7 @@ impl Classification {
             let review_model = if config.guardian_policy_config.is_none()
                 && let Some(parent_model) = parent_model.as_ref()
             {
-                Some(codex_core::guardian_policy_model(&thread, &config, Arc::clone(parent_model)).await)
+                Some(codex_core::guardian_policy_model(&thread, &config, Arc::clone(parent_model)).await.map_err(|error| error.to_string())?)
             } else {
                 None
             };

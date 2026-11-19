@@ -38,13 +38,16 @@ pub(crate) async fn context_window_token_status(
 pub(crate) async fn context_window_token_status_for_model(
     sess: &Session,
     config: &Config,
-    turn_context: &TurnContext,
+    actor_turn: Option<&TurnContext>,
     model_info: &ModelInfo,
 ) -> ContextWindowTokenStatus {
+    let Some(actor_turn) = actor_turn else {
+        return context_window_token_status_with_config(sess, config, model_info).await;
+    };
     let mut config = config.clone();
     config.token_budget = super::token_budget::resolve_token_budget(
-        turn_context.configured_token_budget.as_ref(),
-        turn_context.use_model_token_budget_defaults,
+        actor_turn.configured_token_budget.as_ref(),
+        actor_turn.use_model_token_budget_defaults,
         model_info,
     );
     context_window_token_status_with_config(sess, &config, model_info).await

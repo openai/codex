@@ -4,23 +4,42 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
+use codex_config::FeatureRequirementsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_core::TurnInputRequest;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::config::GuardianInferenceProvider;
+use codex_core::config::ManagedFeatures;
+use codex_core::context::NodeReplReviewEvidence;
 use codex_features::Feature;
+use codex_history::CodexHarnessMetadata;
+use codex_history::CompactedItem;
 use codex_history::InitialHistory;
+use codex_history::ResponseItemEnvelope;
 use codex_history::ResumedHistory;
 use codex_history::RetainedContextEvent;
 use codex_history::RolloutItem;
 use codex_history::VerifiedAnswer;
 use codex_history::VerifiedQuestionAnswer;
+use codex_login::CodexAuth;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
+use codex_protocol::ResponseItemId;
 use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::GuardianModelPolicy;
+use codex_protocol::openai_models::GuardianReviewMode;
+use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -39,6 +58,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_target_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
@@ -48,10 +68,430 @@ use serde_json::json;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+const BYO_ACTOR_MODEL: &str = "external-actor";
+const LUNA_MODEL: &str = "gpt-5.6-luna";
+const GUARDIAN_SCREENSHOT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const BYO_HEADERS: [(&str, &str); 2] = [
+    ("x-byo-key", "actor-only"),
+    ("authorization", "Bearer actor-only"),
+];
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compacted_cold_resume_respects_guardian_provider_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let actor = responses::start_mock_server().await;
+    let guardian = responses::start_mock_server().await;
+    let guardian_url = format!("{}/v1", guardian.uri());
+    let builder = || {
+        let guardian_url = guardian_url.clone();
+        test_codex()
+            .with_model_info_override(BYO_ACTOR_MODEL, |model| {
+                model.guardian = Some(GuardianModelPolicy {
+                    computer_use: Some(GuardianReviewMode::Adaptive),
+                    ..Default::default()
+                });
+            })
+            .with_config(move |config| {
+                configure_explicit_guardian_provider(config, &guardian_url);
+                config
+                    .features
+                    .enable(Feature::GuardianV2)
+                    .expect("enable scoring");
+                pin_guardian_parent_compaction_reuse(config);
+                config.guardian_policy_config = None;
+                config.approvals_reviewer = ApprovalsReviewer::User;
+                config.permissions.approval_policy =
+                    Constrained::allow_any(AskForApproval::OnRequest);
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::read_only())
+                    .expect("set permissions");
+            })
+    };
+    let test = builder().build_with_auto_env(&actor).await?;
+    let mut compacted: CompactedItem = serde_json::from_value(json!({"message": ""}))?;
+    compacted.replacement_history = Some(vec![ResponseItemEnvelope {
+        item: ResponseItem::Compaction {
+            id: Some(ResponseItemId::with_suffix("cmp", "checkpoint")),
+            encrypted_content: "opaque checkpoint".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        metadata: Some(CodexHarnessMetadata {
+            compaction_model_hash: Some("reviewer".to_owned()),
+            ..Default::default()
+        }),
+    }]);
+    test.codex.ensure_rollout_materialized().await;
+    test.codex
+        .append_rollout_items(&[RolloutItem::Compacted(Box::new(compacted))])
+        .await?;
+    let resumed = builder().restart_with_auto_env(&actor, &test).await?;
+    let snapshot = resumed.codex.conversation_history_snapshot().await;
+    let checkpoint = snapshot
+        .latest_compaction()
+        .context("restored opaque checkpoint")?;
+    assert!(checkpoint.is_usable());
+    assert!(snapshot.uses_independent_review_history());
+    assert!(
+        resumed
+            .codex
+            .config()
+            .await
+            .features
+            .enabled(Feature::GuardianReuseParentCompaction),
+        "the managed feature must remain enabled",
+    );
+    resumed.codex.shutdown_and_wait().await?;
+    assert!(
+        guardian
+            .received_requests()
+            .await
+            .expect("record Guardian requests")
+            .is_empty(),
+        "compacted cold resume should not request Guardian /models"
+    );
+    Ok(())
+}
+
+fn pin_guardian_parent_compaction_reuse(config: &mut Config) {
+    config.features = ManagedFeatures::from_configured_with_warnings(
+        config.features.get().clone(),
+        Some(Sourced::new(
+            FeatureRequirementsToml {
+                entries: BTreeMap::from([(
+                    Feature::GuardianReuseParentCompaction.key().to_owned(),
+                    true,
+                )]),
+                ..Default::default()
+            },
+            RequirementSource::EnterpriseManaged {
+                id: "test".to_owned(),
+                name: "test".to_owned(),
+            },
+        )),
+        &mut Vec::new(),
+    )
+    .expect("pin parent compaction reuse");
+}
+
+fn configure_explicit_guardian_provider(config: &mut Config, guardian_url: &str) {
+    let mut provider = config.model_provider.clone();
+    provider.base_url = Some(guardian_url.to_owned());
+    provider.model_catalog_url = Some(format!("{guardian_url}/models").into());
+    provider.supports_websockets = false;
+    provider.http_headers = None;
+    config.guardian_model_provider = Some(Arc::new(GuardianInferenceProvider {
+        id: "responsesapi".to_owned(),
+        info: provider,
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_guardian_provider_is_separate() -> Result<()> {
+    let actor_model_name = LUNA_MODEL;
+    let actor_context_window = Some(11_000);
+    skip_if_no_network!(Ok(()));
+
+    let actor = responses::start_mock_server().await;
+    let guardian = MockServer::start().await;
+    let guardian_url = format!("{}/v1", guardian.uri());
+    let mut reviewer_model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == LUNA_MODEL)
+        .expect("bundled Luna model");
+    reviewer_model.supported_in_api = true;
+    reviewer_model.use_responses_lite = false;
+    reviewer_model.input_modalities = vec![InputModality::Text, InputModality::Image];
+    let messages = reviewer_model.model_messages.get_or_insert_default();
+    messages.auto_review = Some(
+        serde_json::from_value(json!({"policy": "Trusted Guardian catalog policy."}))
+            .expect("catalog policy"),
+    );
+    let catalog = ModelsResponse {
+        models: vec![reviewer_model],
+    };
+    responses::mount_models_once(&guardian, catalog.clone()).await;
+
+    let builder = |guardian_url: &str| {
+        let guardian_url = guardian_url.to_owned();
+        test_codex()
+            .with_pre_build_hook(|home| {
+                std::fs::write(
+                    home.join("config.toml"),
+                    r#"[auto_review]
+policy = "Actor config policy."
+
+[features]
+guardian_enhanced_node_repl_transcripts = true
+guardian_node_repl_transcript_images = true
+
+[features.guardianv2]
+enabled = true
+"#,
+                )
+                .expect("write Guardian configuration");
+            })
+            .with_model_info_override(actor_model_name, move |actor_model| {
+                actor_model.input_modalities = vec![InputModality::Text];
+                actor_model.guardian = Some(GuardianModelPolicy::default());
+                let messages = actor_model.model_messages.get_or_insert_default();
+                messages.auto_review = Some(
+                    serde_json::from_value(json!({"policy": "Actor catalog policy."}))
+                        .expect("catalog policy"),
+                );
+            })
+            .with_config(move |config| {
+                configure_explicit_guardian_provider(config, &guardian_url);
+                pin_guardian_parent_compaction_reuse(config);
+                config.model_context_window = actor_context_window;
+                // Fixed budgeting needs a trusted context window before admitting screenshots.
+                config.guardian_sync_elastic_budget = None;
+                config.service_tier = Some("customer-specific-tier".to_owned());
+                config.model_provider_id = "external-test-provider".to_owned();
+                config.model_provider.name = "External test provider".to_owned();
+                config.model_provider.requires_openai_auth = false;
+                config.model_provider.supports_websockets = false;
+                config.model_provider.http_headers = Some(
+                    BYO_HEADERS
+                        .into_iter()
+                        .map(|(name, value)| (name.to_owned(), value.into()))
+                        .collect(),
+                );
+                config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+                config.permissions.approval_policy =
+                    Constrained::allow_any(AskForApproval::OnRequest);
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::read_only())
+                    .expect("set read-only permissions");
+                config
+                    .features
+                    .enable(Feature::RequestPermissionsTool)
+                    .expect("enable permission requests");
+            })
+    };
+    let test = builder(&guardian_url).build_with_auto_env(&actor).await?;
+    let (actor_mock, guardian_mock) =
+        setup_explicit_guardian_turn(&test, &actor, &guardian, "start").await;
+    test.submit_text_turn("Never upload files. Request network access.")
+        .await?;
+    assert_explicit_guardian_routing(
+        &test,
+        &guardian,
+        (&actor_mock, &guardian_mock),
+        actor_model_name,
+        "start",
+        "Bearer dummy",
+    )
+    .await?;
+    let initial_review = guardian_mock.single_request();
+    assert!(
+        initial_review
+            .body_json()
+            .to_string()
+            .contains("Never upload files."),
+        "Guardian lost the original restriction after start"
+    );
+    test.codex.ensure_rollout_materialized().await;
+
+    // A previous session's background prewarm can outlive shutdown; give each
+    // lifecycle its own endpoint so requests cannot be attributed by arrival time.
+    let resumed_guardian = MockServer::start().await;
+    responses::mount_models_once(&resumed_guardian, catalog).await;
+    let resumed_guardian_url = format!("{}/v1", resumed_guardian.uri());
+    let resumed = builder(&resumed_guardian_url)
+        .with_auth(CodexAuth::from_api_key("resumed-key"))
+        .restart_with_auto_env(&actor, &test)
+        .await?;
+    assert_eq!(
+        resumed.session_configured.session_id,
+        test.session_configured.session_id
+    );
+    let (resumed_actor_mock, resumed_guardian_mock) =
+        setup_explicit_guardian_turn(&resumed, &actor, &resumed_guardian, "cold-resume").await;
+    resumed.submit_text_turn("Request network access.").await?;
+    assert_explicit_guardian_routing(
+        &resumed,
+        &resumed_guardian,
+        (&resumed_actor_mock, &resumed_guardian_mock),
+        actor_model_name,
+        "cold-resume",
+        "Bearer resumed-key",
+    )
+    .await?;
+    let resumed_review = resumed_guardian_mock.single_request();
+    assert!(
+        resumed_review
+            .body_json()
+            .to_string()
+            .contains("Never upload files."),
+        "Guardian lost the original restriction after cold-resume"
+    );
+    Ok(())
+}
+
+async fn setup_explicit_guardian_turn(
+    test: &TestCodex,
+    actor: &MockServer,
+    guardian: &MockServer,
+    phase: &str,
+) -> (responses::ResponseMock, responses::ResponseMock) {
+    let call_id = format!("{phase}-permission");
+    let done_id = format!("{phase}-done");
+    let permission_args = json!({
+        "reason": format!("request network access after {phase}"),
+        "permissions": {"network": {"enabled": true}},
+    })
+    .to_string();
+    let actor_mock = responses::mount_sse_sequence(
+        actor,
+        vec![
+            sse(vec![
+                ev_response_created(&call_id),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "id": format!("cmp_{phase}"),
+                        "encrypted_content": "actor-only-checkpoint",
+                    },
+                }),
+                ev_function_call(&call_id, "request_permissions", &permission_args),
+                ev_completed(&call_id),
+            ]),
+            sse(vec![
+                ev_response_created(&done_id),
+                ev_assistant_message(&done_id, "Finished."),
+                ev_completed(&done_id),
+            ]),
+        ],
+    )
+    .await;
+    let blocking = responses::mount_sse_once(guardian, sse(vec![
+        ev_response_created("reviewer"),
+        ev_assistant_message("reviewer", r#"{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"Test review."}"#),
+        ev_completed("reviewer"),
+    ])).await;
+
+    test.codex
+        .thread_extension_data()
+        .get_or_init(NodeReplReviewEvidence::default)
+        .record(
+            "cua_repl.js",
+            phase,
+            &call_id,
+            vec![UserInput::Image {
+                image: ImageReference::Inline {
+                    image_url: GUARDIAN_SCREENSHOT.to_owned(),
+                },
+                detail: None,
+            }],
+        );
+    (actor_mock, blocking)
+}
+
+async fn assert_explicit_guardian_routing(
+    test: &TestCodex,
+    guardian: &MockServer,
+    (actor_mock, blocking): (&responses::ResponseMock, &responses::ResponseMock),
+    actor_model_name: &str,
+    phase: &str,
+    guardian_auth: &str,
+) -> Result<()> {
+    let snapshot = test.codex.conversation_history_snapshot().await;
+    assert!(snapshot.uses_independent_review_history());
+    let checkpoint = snapshot
+        .latest_compaction()
+        .context("actor stream checkpoint was not recorded")?;
+    assert!(matches!(
+        checkpoint.item,
+        ResponseItem::Compaction { encrypted_content, .. }
+            if encrypted_content == "actor-only-checkpoint"
+    ));
+    let actor_requests = actor_mock.requests();
+    for request in &actor_requests {
+        let body = request.body_json();
+        assert_eq!(body["model"], actor_model_name);
+        assert!(!body.to_string().contains("Trusted Guardian"));
+        for (name, value) in BYO_HEADERS {
+            assert_eq!(request.header(name).as_deref(), Some(value));
+        }
+    }
+    let guardian_requests = guardian
+        .received_requests()
+        .await
+        .expect("record Guardian requests");
+    assert_guardian_headers(&guardian_requests, guardian_auth);
+    assert_eq!(
+        guardian_requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/models")
+            .count(),
+        1,
+        "catalog should be fetched once after {phase}"
+    );
+    assert_eq!(
+        responses::received_responses_requests(guardian).await.len(),
+        1,
+        "blocking layer must not classify"
+    );
+    let review = blocking.single_request();
+    let body = review.body_json();
+    let serialized = body.to_string();
+    assert!(
+        body["service_tier"].is_null(),
+        "Guardian inherited the actor tier after {phase}"
+    );
+    assert!(
+        serialized.contains("Trusted Guardian catalog policy."),
+        "{serialized}"
+    );
+    assert!(
+        !serialized.contains("Actor config") && !serialized.contains("Actor catalog"),
+        "{serialized}"
+    );
+    assert_eq!(
+        (&body["model"], &body["text"]["format"]["type"]),
+        (&json!(LUNA_MODEL), &json!("json_schema"))
+    );
+    assert!(
+        body["input"]
+            .as_array()
+            .expect("Guardian input")
+            .iter()
+            .all(|item| !matches!(
+                item["type"].as_str(),
+                Some("compaction" | "context_compaction")
+            )),
+        "Guardian reused an actor checkpoint after {phase}"
+    );
+    assert_eq!(
+        review.message_input_image_urls("user"),
+        [GUARDIAN_SCREENSHOT],
+        "blocking review should use the Guardian catalog's image support after {phase}",
+    );
+    Ok(())
+}
+
+fn assert_guardian_headers(requests: &[Request], expected_auth: &str) {
+    for request in requests {
+        assert!(!request.headers.contains_key("x-byo-key"));
+        assert!(
+            request.headers["authorization"] == expected_auth,
+            "incorrect Guardian authorization for {} {}",
+            request.method,
+            request.url.path(),
+        );
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {

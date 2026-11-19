@@ -38,6 +38,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
         state.history = ContextManager::for_session(
             /*root_capabilities_restricted*/ false,
             &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
+            /*reuse_parent_compaction*/ true,
             codex_guardian_context::ContextBudgeting::Fixed,
             uuid_v7_item_id_generator_for_test(),
         );
@@ -111,6 +112,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
     fork.state.lock().await.history = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
+        /*reuse_parent_compaction*/ true,
         codex_guardian_context::ContextBudgeting::Fixed,
         uuid_v7_item_id_generator_for_test(),
     );

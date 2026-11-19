@@ -80,15 +80,24 @@ impl GuardianApprovalReviewer {
             .map_or_else(|| GuardianV2Config::resolve(config), Ok)
             .ok();
         let requirements = config.config_layer_stack.requirements();
-        let mut policy = guardian_config.as_ref().map_or_else(
-            || {
-                codex_config::GuardianPolicyLoader::new(Some(
-                    &codex_features::FeatureToml::Enabled(true),
-                ))
-                .resolve(model.as_deref(), requirements)
-            },
-            |config| config.policy_for_model(model.as_deref(), requirements),
-        );
+        let mut policy = if config.guardian_model_provider.is_some() {
+            let mut policy = codex_config::GuardianPolicyLoader::new(Some(
+                &codex_features::FeatureToml::Enabled(true),
+            ))
+            .resolve(/*model*/ None, requirements);
+            policy.disable_scoring();
+            policy
+        } else {
+            guardian_config.as_ref().map_or_else(
+                || {
+                    codex_config::GuardianPolicyLoader::new(Some(
+                        &codex_features::FeatureToml::Enabled(true),
+                    ))
+                    .resolve(model.as_deref(), requirements)
+                },
+                |config| config.policy_for_model(model.as_deref(), requirements),
+            )
+        };
         // Live mandatory restrictions may harden the turn's captured policy.
         thread
             .config()

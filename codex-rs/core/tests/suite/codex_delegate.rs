@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
+use codex_core::config::GuardianInferenceProvider;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -35,8 +38,10 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 
+#[test_case::test_case(false; "ordinary")]
+#[test_case::test_case(true; "explicit_guardian")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_delegate_ignores_legacy_deltas() {
+async fn codex_delegate_ignores_legacy_deltas(explicit_guardian: bool) {
     skip_if_no_network!();
 
     // Single response with reasoning summary deltas.
@@ -50,7 +55,14 @@ async fn codex_delegate_ignores_legacy_deltas() {
     let server = start_mock_server().await;
     mount_sse_sequence(&server, vec![sse_stream]).await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(move |config| {
+        if explicit_guardian {
+            config.guardian_model_provider = Some(Arc::new(GuardianInferenceProvider {
+                id: "guardian".to_string(),
+                info: config.model_provider.clone(),
+            }));
+        }
+    });
     let test = builder.build(&server).await.expect("build test codex");
 
     // Kick off review (delegated).

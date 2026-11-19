@@ -1158,8 +1158,9 @@ impl ThreadManager {
     /// Select the app-server catalog using the same owner as thread requests.
     pub fn models_manager_for_config(&self, config: &Config) -> SharedModelsManager {
         self.state.model_catalog.for_config(
-            config,
+            &config.model_provider,
             config.model_catalog.as_ref(),
+            config.features.enabled(Feature::ApiKeyModelDiscovery),
             self.catalog_auth_context(config),
             /*same_owner*/ true,
         )
@@ -1180,17 +1181,8 @@ impl ThreadManager {
     }
 
     fn catalog_auth_context(&self, config: &Config) -> ProviderAuthContext {
-        let credentials = self.auth_manager();
-        let runtime = crate::runtime_auth::runtime_for_config(
-            &self.state.runtime_auth,
-            config,
-            Arc::clone(&credentials),
-            &self.state.installation_id,
-        );
-        ProviderAuthContext {
-            credentials,
-            runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
-        }
+        self.state
+            .thread_provider_auth(config, &self.state.auth_manager, &self.state.runtime_auth)
     }
 
     /// Resolves the model before starting or cold-resuming a thread with this manager's credentials.
@@ -1221,8 +1213,7 @@ impl ThreadManager {
             .state
             .models_for_thread(
                 &options.config,
-                &self.state.auth_manager,
-                &self.state.runtime_auth,
+                &self.catalog_auth_context(&options.config),
                 &originator,
                 &source,
             )
@@ -2069,27 +2060,44 @@ impl ThreadManagerState {
     async fn models_for_thread(
         &self,
         config: &Config,
-        auth_manager: &Arc<AuthManager>,
-        runtime_auth: &crate::runtime_auth::RuntimeAuthSlot,
+        provider_auth: &ProviderAuthContext,
         originator: &str,
         session_source: &SessionSource,
     ) -> SharedModelsManager {
+        let manager = self.model_catalog.for_thread(
+            &config.model_provider,
+            config.model_catalog.as_ref(),
+            config.features.enabled(Feature::ApiKeyModelDiscovery),
+            provider_auth.clone(),
+            Arc::ptr_eq(&provider_auth.credentials, &self.auth_manager),
+            originator,
+        );
+        if session_source.is_non_root_agent() {
+            // The final provider/auth/originator catalog may be new even when the base
+            // manager was reused. Preserve loaded snapshots, including unsaved updates.
+            manager
+                .ensure_initialized(config.http_client_factory())
+                .await;
+        }
+        manager
+    }
+
+    fn thread_provider_auth(
+        &self,
+        config: &Config,
+        auth_manager: &Arc<AuthManager>,
+        runtime_auth: &crate::runtime_auth::RuntimeAuthSlot,
+    ) -> ProviderAuthContext {
         let runtime = crate::runtime_auth::runtime_for_config(
             runtime_auth,
             config,
             Arc::clone(auth_manager),
             &self.installation_id,
         );
-        self.model_catalog
-            .for_thread(
-                config,
-                Arc::clone(auth_manager),
-                runtime,
-                Arc::ptr_eq(auth_manager, &self.auth_manager),
-                originator,
-                session_source,
-            )
-            .await
+        ProviderAuthContext {
+            credentials: Arc::clone(auth_manager),
+            runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
+        }
     }
 
     pub(crate) fn shared_thread_instructions_provider(
@@ -2993,6 +3001,18 @@ impl ThreadManagerState {
         } else {
             Arc::new(mcp_manager.for_plugins_manager(Arc::clone(&plugins_manager)))
         };
+        let inherited_guardian =
+            thread_extension_init.get::<crate::guardian::GuardianReviewerInference>();
+        if inherited_guardian.is_some()
+            && !matches!(
+                &session_source,
+                SessionSource::Internal(InternalSessionSource::Guardian)
+            )
+        {
+            return Err(CodexErr::InvalidRequest(
+                "a shared Guardian catalog requires an internal Guardian reviewer".to_string(),
+            ));
+        }
         let models_manager = tokio::select! {
             biased;
             _ = agent_control.runtime().shutdown.cancelled() => {
@@ -3001,13 +3021,48 @@ impl ThreadManagerState {
                 }
                 return Err(CodexErr::TurnAborted);
             }
-            manager = self.models_for_thread(
-                &config,
-                &auth_manager,
-                &runtime_auth,
-                &startup_context.originator,
-                &session_source,
-            ) => manager,
+            manager = async {
+                let provider_auth = self.thread_provider_auth(&config, &auth_manager, &runtime_auth);
+                if let Some(guardian_provider) = &config.guardian_model_provider {
+                    let provider = provider_auth.model_provider(guardian_provider.info.clone());
+                    // A trusted provider catalog must not read snapshots from the Actor's cache.
+                    let mut settings = codex_models_manager::manager::ModelCatalogSettings::default();
+                    settings.skip_bundled_seed = guardian_provider.info.model_catalog_url.is_some();
+                    settings.api_key_model_discovery_default = config
+                        .config_layer_stack
+                        .requirements_toml()
+                        .feature_requirements
+                        .as_ref()
+                        .and_then(|requirements| requirements.entries.get(Feature::ApiKeyModelDiscovery.key()))
+                        .copied()
+                        .unwrap_or(true);
+                    let guardian_catalog = provider.models_manager_with_settings(
+                        /*config_model_catalog*/ None,
+                        settings,
+                    );
+                    let guardian_catalog = guardian_catalog
+                        .for_originator(&startup_context.originator)
+                        .unwrap_or(guardian_catalog);
+                    thread_extension_init.insert(crate::guardian::GuardianInferenceContext::resolve(
+                        &config,
+                        guardian_provider,
+                        provider_auth.clone(),
+                        provider,
+                        guardian_catalog,
+                    ));
+                }
+                if let Some(inference) = inherited_guardian {
+                    Arc::clone(&inference.0.models_manager)
+                } else {
+                    self.models_for_thread(
+                        &config,
+                        &provider_auth,
+                        &startup_context.originator,
+                        &session_source,
+                    )
+                    .await
+                }
+            } => manager,
         };
         let registered = Arc::new(AtomicBool::new(false));
         thread_extension_init.insert(ThreadRegistrationReceipt(Arc::clone(&registered)));

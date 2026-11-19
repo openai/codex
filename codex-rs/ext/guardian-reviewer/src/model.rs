@@ -14,6 +14,33 @@ pub struct ReviewModel {
     pub model_override: Option<String>,
 }
 
+/// Selects the eligible entry with the lowest priority value for the requested slug.
+pub fn select_catalog_reviewer(
+    available_models: Vec<CatalogModel>,
+    model_id: &str,
+) -> Option<CatalogModel> {
+    available_models
+        .into_iter()
+        .filter(|entry| entry.slug == model_id)
+        .min_by_key(|entry| entry.priority)
+}
+
+/// Prefers low effort when supported, otherwise preserving the caller's fallback.
+pub fn preferred_reasoning_effort(
+    model: &ModelInfo,
+    fallback: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if model
+        .supported_reasoning_levels
+        .iter()
+        .any(|preset| preset.effort == ReasoningEffort::Low)
+    {
+        Some(ReasoningEffort::Low)
+    } else {
+        fallback
+    }
+}
+
 /// Prefers the review model and low effort when advertised; preserves the parent fallback.
 /// Returns the matching catalog entry so its metadata comes from the same selection.
 pub fn select_review_model(
@@ -22,30 +49,17 @@ pub fn select_review_model(
     default_review_model_id: &str,
     available_models: Vec<CatalogModel>,
 ) -> (ReviewModel, Option<CatalogModel>) {
-    let preferred_reasoning_effort = |supports_low: bool, fallback| {
-        if supports_low {
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        } else {
-            fallback
-        }
-    };
     let model_override = parent_model.auto_review_model_override.as_deref();
     let review_model_id = model_override.unwrap_or(default_review_model_id);
     let guardian_catalog_contains_auto_review = available_models
         .iter()
         .any(|entry| entry.slug == default_review_model_id);
-    let reviewer = available_models
-        .into_iter()
-        .filter(|entry| entry.slug == review_model_id)
-        .min_by_key(|entry| entry.priority);
+    let reviewer = select_catalog_reviewer(available_models, review_model_id);
     let guardian_review_model_overridden = model_override.is_some();
     let guardian_review_model_override = model_override.map(str::to_string);
     let (guardian_model, guardian_reasoning_effort) = if let Some(model) = &reviewer {
         let reasoning_effort = preferred_reasoning_effort(
-            model
-                .supported_reasoning_levels
-                .iter()
-                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            model,
             Some(
                 model
                     .default_reasoning_level
@@ -56,10 +70,7 @@ pub fn select_review_model(
         (review_model_id.to_string(), reasoning_effort)
     } else {
         let reasoning_effort = preferred_reasoning_effort(
-            parent_model
-                .supported_reasoning_levels
-                .iter()
-                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            parent_model,
             parent_reasoning_effort
                 .or(parent_model.default_reasoning_level.as_ref())
                 .cloned(),

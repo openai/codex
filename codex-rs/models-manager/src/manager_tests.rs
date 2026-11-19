@@ -590,9 +590,16 @@ async fn initialization_retains_loaded_catalogs_including_empty_responses() {
         vec![remote_model("remote", "Remote", /*priority*/ 0)],
     ] {
         let endpoint = TestModelsEndpoint::new(vec![models.clone()]);
-        let manager =
-            OpenAiModelsManager::new_without_cache(endpoint.clone(), /*auth_manager*/ None)
-                .with_provider_catalog();
+        let manager = OpenAiModelsManager::with_settings(
+            ModelCatalogSettings {
+                skip_bundled_seed: true,
+                ..Default::default()
+            },
+            endpoint.clone(),
+            /*auth_manager*/ None,
+        );
+        assert!(manager.remote_models.read().await.entry.models.is_empty());
+        let manager = manager.with_provider_catalog();
         manager
             .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
             .await;

@@ -158,6 +158,7 @@ fn root_history() -> ContextManager {
     ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &ManagedFeatures::from(codex_features::Features::with_defaults()),
+        /*reuse_parent_compaction*/ true,
         codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     )
@@ -591,6 +592,7 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     let mut history = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &features,
+        features.enabled(Feature::GuardianReuseParentCompaction),
         codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
@@ -634,6 +636,7 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     let mut resumed = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &features,
+        features.enabled(Feature::GuardianReuseParentCompaction),
         codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );

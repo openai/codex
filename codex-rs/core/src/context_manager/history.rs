@@ -364,10 +364,11 @@ impl ContextManager {
     pub(crate) fn for_session(
         root_capabilities_restricted: bool,
         features: &ManagedFeatures,
+        reuse_parent_compaction: bool,
         budgeting: ContextBudgeting,
         item_id_generator: ItemIdGenerator,
     ) -> Self {
-        let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
+        let independent = !reuse_parent_compaction;
         Self {
             retain_inherited_user_messages: !root_capabilities_restricted,
             guardian_include_additional_context: features

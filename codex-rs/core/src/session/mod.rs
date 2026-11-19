@@ -1036,12 +1036,27 @@ impl Session {
         let enable_full_access_form_input = !root_capabilities_restricted
             && matches!(thread_source.as_ref(), Some(ThreadSource::User))
             && client_mcp_extensions.contains(OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID);
-        let provider_auth = codex_model_provider::ProviderAuthContext {
-            credentials: Arc::clone(&auth_manager),
-            runtime_auth: configured_runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
-        };
+        let provider_auth = thread_extension_init
+            .get::<crate::guardian::GuardianReviewerInference>()
+            .map_or_else(
+                || codex_model_provider::ProviderAuthContext {
+                    credentials: Arc::clone(&auth_manager),
+                    runtime_auth: configured_runtime
+                        .map(|runtime| (runtime, config.runtime_auth_mode)),
+                },
+                |inference| inference.0.auth.clone(),
+            );
         // Replace any inherited context before startup hooks see this thread's effective auth.
         thread_extension_init.insert(provider_auth.clone());
+        if config.guardian_model_provider.is_some()
+            && thread_extension_init
+                .get::<crate::guardian::GuardianInferenceContext>()
+                .is_none()
+        {
+            return Err(CodexErr::InvalidRequest(
+                "host-selected Guardian inference context is not initialized".to_string(),
+            ));
+        }
         let session_configuration = SessionConfiguration {
             turn_extension_init,
             provider: provider_auth.model_provider(config.model_provider.clone()),
@@ -2049,14 +2064,13 @@ impl Session {
         // checkpoint can make reconstruction depend on reviewer compatibility.
         let reviewer_compaction_hash = if codex_history::CompactionCheckpoint::latest(&history)
             .is_some_and(codex_history::CompactionCheckpoint::is_usable)
-            && turn_context
-                .config
-                .features
-                .enabled(Feature::GuardianReuseParentCompaction)
+            && turn_context.config.guardian_reuses_parent_compaction()
         {
             let context = crate::guardian::GuardianReviewContext::from(turn_context);
-            let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
-            reviewer.comp_hash.clone()
+            crate::guardian::resolve_review_model(self, &context)
+                .await
+                .ok()
+                .and_then(|(_, reviewer)| reviewer.comp_hash.clone())
         } else {
             None
         };

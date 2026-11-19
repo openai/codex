@@ -22,6 +22,7 @@ pub struct PreparedGuardianContext {
     parent: Arc<Session>,
     context: GuardianReviewContext,
     config: Config,
+    inference: Option<Arc<crate::guardian::GuardianInferenceContext>>,
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
     parent_compaction: Option<ResponseItem>,
@@ -62,10 +63,15 @@ impl PreparedGuardianContext {
         .with_node_repl_policy(node_repl_policy);
         key.root_review_version = root_review_version;
         key.parent_reset_version = history.reset_version;
+        let inference = crate::guardian::GuardianInferenceContext::for_config(
+            &context.turn().config,
+            &parent.services.thread_extension_data,
+        )?;
         Ok(Self {
             parent,
             context,
             config,
+            inference,
             context_policy,
             key,
             parent_compaction,
@@ -116,12 +122,14 @@ impl PreparedGuardianContext {
             self.parent_compaction.as_ref(),
         );
         let mut config = self.config.clone();
-        config.model_provider.supports_websockets &= self
-            .parent
-            .services
-            .model_client
-            .responses_websocket_enabled();
-        let options = crate::StartThreadOptions {
+        if self.inference.is_none() {
+            config.model_provider.supports_websockets &= self
+                .parent
+                .services
+                .model_client
+                .responses_websocket_enabled();
+        }
+        let mut options = crate::StartThreadOptions {
             request_country: self.context.request_country.clone(),
             prompt_cache_key: self.parent.services.model_client.prompt_cache_key_policy(),
             history_mode: Some(codex_protocol::protocol::ThreadHistoryMode::Paginated),
@@ -155,6 +163,13 @@ impl PreparedGuardianContext {
             client_mcp_extensions: self.parent.services.client_mcp_extensions.clone(),
             ..crate::StartThreadOptions::new(config)
         };
+        if let Some(inference) = &self.inference {
+            options
+                .thread_extension_init
+                .insert(crate::guardian::GuardianReviewerInference(Arc::clone(
+                    inference,
+                )));
+        }
         (options, state)
     }
 

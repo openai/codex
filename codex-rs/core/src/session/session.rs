@@ -1611,6 +1611,7 @@ impl Session {
                 ContextManager::for_session(
                     session_configuration.root_capabilities_restricted,
                     &config.features,
+                    config.guardian_reuses_parent_compaction(),
                     config.guardian_context_budgeting(),
                     Arc::clone(&item_id_generator),
                 ),
@@ -1886,7 +1887,12 @@ impl Session {
                     .enabled(Feature::ConcurrentReasoningSummaries),
                 config.features.enabled(Feature::OutputTokenReplay),
                 attestation_provider.clone(),
-                config.http_client_factory(),
+                thread_extension_data
+                    .get::<crate::guardian::GuardianReviewerInference>()
+                    .map_or_else(
+                        || config.http_client_factory(),
+                        |inference| inference.0.http_client_factory.clone(),
+                    ),
                 workspace_routing.as_ref().clone(),
                 extensions.model_request_contributors().to_vec(),
             )

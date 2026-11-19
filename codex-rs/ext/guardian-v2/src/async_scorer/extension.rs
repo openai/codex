@@ -45,7 +45,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if !input.config.features.enabled(Feature::GuardianApproval) {
+            if !input.config.features.enabled(Feature::GuardianApproval)
+                || input.config.guardian_model_provider.is_some()
+            {
                 return;
             }
 

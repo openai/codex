@@ -257,6 +257,7 @@ async fn new_config(
         async_compaction_threshold_percent: 65,
         model_provider_id,
         model_provider,
+        guardian_model_provider: None,
         personality: None,
         permissions: Permissions::from_approval_and_profile(
             Constrained::allow_any(AskForApproval::Never),

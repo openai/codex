@@ -12,7 +12,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::protocol::SessionSource;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use std::sync::Arc;
 
@@ -116,56 +115,48 @@ impl ThreadModelCatalog {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn for_thread(
+    pub(super) fn for_thread(
         &self,
-        config: &Config,
-        credentials: Arc<AuthManager>,
-        runtime: Option<Arc<RuntimeAuthManager>>,
+        provider: &ModelProviderInfo,
+        configured_catalog: Option<&ModelsResponse>,
+        api_key_model_discovery_default: bool,
+        auth: ProviderAuthContext,
         same_owner: bool,
         originator: &str,
-        session_source: &SessionSource,
     ) -> SharedModelsManager {
-        let models = config.model_catalog.as_ref().or_else(|| {
+        let models = configured_catalog.or_else(|| {
             self.catalog
                 .as_ref()
-                .filter(|_| self.matches_catalog_provider(&config.model_provider))
+                .filter(|_| self.matches_catalog_provider(provider))
         });
-        let auth = ProviderAuthContext {
-            credentials,
-            runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
-        };
-        let manager = self.for_config(config, models, auth, same_owner);
-        let manager = manager.for_originator(originator).unwrap_or(manager);
-        if session_source.is_non_root_agent() {
-            // The final provider/auth/originator catalog may be new even when the base
-            // manager was reused. Preserve loaded snapshots, including unsaved updates.
-            manager
-                .ensure_initialized(config.http_client_factory())
-                .await;
-        }
-        manager
+        let manager = self.for_config(
+            provider,
+            models,
+            api_key_model_discovery_default,
+            auth,
+            same_owner,
+        );
+        manager.for_originator(originator).unwrap_or(manager)
     }
 
     pub(super) fn for_config(
         &self,
-        config: &Config,
+        provider: &ModelProviderInfo,
         models: Option<&ModelsResponse>,
+        api_key_model_discovery_default: bool,
         auth: ProviderAuthContext,
         same_owner: bool,
     ) -> SharedModelsManager {
-        let api_key_model_discovery_default =
-            config.features.enabled(Feature::ApiKeyModelDiscovery);
         if same_owner
             && self.runtime_mode == auth.runtime_auth.as_ref().map(|(_, mode)| *mode)
-            && self.matches_catalog_provider(&config.model_provider)
+            && self.matches_catalog_provider(provider)
             && self.catalog.as_ref() == models
             && self.api_key_model_discovery_default == api_key_model_discovery_default
         {
             return Arc::clone(&self.manager);
         }
         self.factory.build(
-            auth.model_provider(config.model_provider.clone()),
+            auth.model_provider(provider.clone()),
             models.cloned(),
             api_key_model_discovery_default,
         )

@@ -1,8 +1,8 @@
 //! Resolves reviewer models and adds policy context and live network state to reviewer configuration.
 //! Both prewarming and reviews finish this setup before context preparation and reuse checks.
-//! A missing default reviewer gets one shared catalog refresh per parent session.
+//! Inherited routing refreshes a missing default reviewer once per parent session.
 //! Refresh work survives cancelled waiters and precedes checkpoint compatibility decisions.
-//! Async classification shares reviewer eligibility and the parent session's catalog.
+//! Both review paths use the host's Guardian catalog when the host selects a provider.
 
 use crate::guardian_review::ReviewRetrieval;
 use codex_protocol::openai_models::CatalogModel;
@@ -11,7 +11,11 @@ use std::sync::Arc;
 
 use codex_features::Feature;
 use codex_guardian_reviewer::reviewer_instructions;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_model_provider::ProviderAuthContext;
+use codex_models_manager::ModelsManagerConfig;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::model_info::with_config_overrides;
 use codex_prompts::ResolvedModelMessages;
@@ -29,6 +33,11 @@ use crate::context::ContextualUserFragment;
 use crate::context::GuardianConversationHistory;
 
 struct GuardianModelCatalogRefresh(Shared<BoxFuture<'static, ()>>);
+
+enum GuardianCatalogLookup {
+    InitializeIfNeeded,
+    UseAvailable,
+}
 
 /// Adds the captured model, policy prompt and live network rules before reuse selection.
 #[allow(clippy::too_many_arguments)]
@@ -109,12 +118,24 @@ pub fn build_guardian_review_session_config(
     Ok(guardian_config)
 }
 
-/// Retries a missing default reviewer once before retaining the parent fallback.
+/// Resolves the reviewer from its inference provider's catalog.
+/// Inherited routing retries a missing default once before falling back to the parent;
+/// host-selected routing keeps its provider's preferred model on a catalog miss.
 pub(crate) async fn resolve_review_model(
     session: &crate::session::session::Session,
     context: &super::GuardianReviewContext,
-) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
+) -> anyhow::Result<(codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>)> {
     let turn = context.turn();
+    if let Some(inference) = super::GuardianInferenceContext::for_config(
+        &turn.config,
+        &session.services.thread_extension_data,
+    )? {
+        return Ok(resolve_explicit_guardian_reviewer(
+            &inference,
+            GuardianCatalogLookup::InitializeIfNeeded,
+        )
+        .await);
+    }
     // Check before resolving: a refresh that finishes during the lookup still
     // requires a reread, but later calls only need one catalog resolution.
     let refresh_completed = session
@@ -151,9 +172,9 @@ pub(crate) async fn resolve_review_model(
             )
         });
         refresh.0.clone().await;
-        return resolve_review_model_from_catalog(session, context).await;
+        return Ok(resolve_review_model_from_catalog(session, context).await);
     }
-    resolved
+    Ok(resolved)
 }
 
 async fn resolve_review_model_from_catalog(
@@ -162,7 +183,7 @@ async fn resolve_review_model_from_catalog(
 ) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
     let turn = context.turn();
     let (review_model, model_info) = resolve_catalog_review_model(
-        session,
+        session.services.models_manager.as_ref(),
         &turn.config,
         &context.model_info,
         context.reasoning_effort.as_ref(),
@@ -175,54 +196,92 @@ async fn resolve_review_model_from_catalog(
     )
 }
 
-/// Resolves async classification policy against the reviewed thread's catalog.
-/// A missing eligible reviewer retains the captured parent metadata, as synchronous review does.
+/// Resolves async classification policy against the catalog used for Guardian requests.
 pub async fn guardian_policy_model(
     thread: &crate::CodexThread,
     config: &Config,
     parent_model: Arc<ModelInfo>,
-) -> Arc<ModelInfo> {
+) -> anyhow::Result<Arc<ModelInfo>> {
+    let thread_store = thread.thread_extension_data();
+    if let Some(inference) = super::GuardianInferenceContext::for_config(config, thread_store)? {
+        let (_, model) =
+            resolve_explicit_guardian_reviewer(&inference, GuardianCatalogLookup::UseAvailable)
+                .await;
+        return Ok(Arc::clone(&model.model));
+    }
     #[expect(clippy::expect_used, reason = "Required thread startup invariant")]
-    let auth = thread
-        .thread_extension_data()
-        .get::<codex_model_provider::ProviderAuthContext>()
+    let auth = thread_store
+        .get::<ProviderAuthContext>()
         .expect("Core installs provider auth before starting Guardian");
     let provider = auth.model_provider(config.model_provider.clone());
     let (_, model_info) = resolve_catalog_review_model(
-        &thread.session,
+        thread.session.services.models_manager.as_ref(),
         config,
         &parent_model,
         config.model_reasoning_effort.as_ref(),
         provider.approval_review_preferred_model(),
     )
     .await;
-    model_info.map_or(parent_model, |model| model.model)
+    Ok(model_info.map_or(parent_model, |model| model.model))
+}
+
+async fn resolve_explicit_guardian_reviewer(
+    inference: &super::GuardianInferenceContext,
+    lookup: GuardianCatalogLookup,
+) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
+    let catalog = &inference.models_manager;
+    let preferred = inference.provider.approval_review_preferred_model();
+    let http_client_factory = inference.http_client_factory.clone();
+    let model_config = ModelsManagerConfig::default();
+    // Async scoring uses the available metadata while its background retry runs.
+    if matches!(lookup, GuardianCatalogLookup::InitializeIfNeeded) {
+        catalog
+            .ensure_initialized(http_client_factory.clone())
+            .await;
+    }
+    let eligible = eligible_review_models(
+        catalog.as_ref(),
+        http_client_factory,
+        /*model_override*/ None,
+    )
+    .await;
+    let reviewer = codex_guardian_reviewer::select_catalog_reviewer(eligible, preferred);
+    let catalog_contains_auto_review = reviewer.is_some();
+    let model_info = match reviewer {
+        Some(entry) => with_reviewer_config_overrides(entry, &model_config),
+        None => catalog.get_model_info(preferred, &model_config).await,
+    };
+    // An advertised reviewer gets an explicit "none" when it has no default effort.
+    let fallback_effort = model_info
+        .default_reasoning_level
+        .clone()
+        .or_else(|| catalog_contains_auto_review.then_some(ReasoningEffort::None));
+    let reasoning_effort =
+        codex_guardian_reviewer::preferred_reasoning_effort(&model_info, fallback_effort);
+    let review_model = codex_guardian_reviewer::ReviewModel {
+        model: preferred.to_owned(),
+        reasoning_effort,
+        default_review_model_id: preferred.to_owned(),
+        catalog_contains_auto_review,
+        model_overridden: false,
+        model_override: None,
+    };
+    (review_model, Arc::new(model_info))
 }
 
 async fn resolve_catalog_review_model(
-    session: &crate::session::session::Session,
+    models_manager: &dyn ModelsManager,
     config: &Config,
     parent_model: &ModelInfo,
     reasoning_effort: Option<&ReasoningEffort>,
     default_review_model_id: &str,
 ) -> (codex_guardian_reviewer::ReviewModel, Option<CatalogModel>) {
-    // Keep a successful refresh even if writing it to the disk cache failed.
-    let models_manager = &session.services.models_manager;
-    let mut catalog = models_manager
-        .model_catalog_with_origins(RefreshStrategy::InMemory, config.http_client_factory())
-        .await;
-    let uses_codex_backend = models_manager
-        .auth_manager()
-        .is_some_and(AuthManager::current_auth_uses_codex_backend);
-    catalog.retain(|entry| {
-        (uses_codex_backend || entry.supported_in_api)
-            && (parent_model.auto_review_model_override.is_some()
-                || matches!(
-                    entry.origin,
-                    codex_models_manager::ModelOrigin::Provider
-                        | codex_models_manager::ModelOrigin::ExplicitConfig
-                ))
-    });
+    let catalog = eligible_review_models(
+        models_manager,
+        config.http_client_factory(),
+        parent_model.auto_review_model_override.as_deref(),
+    )
+    .await;
     let (review_model, reviewer) = codex_guardian_reviewer::select_review_model(
         parent_model,
         reasoning_effort,
@@ -237,14 +296,43 @@ async fn resolve_catalog_review_model(
                 .await,
         )
     } else {
-        reviewer.map(|entry| CatalogModel {
-            model: with_config_overrides(
-                Arc::unwrap_or_clone(entry.model),
-                &config.to_models_manager_config(),
-            )
-            .into(),
-            origin: entry.origin,
-        })
+        reviewer
+            .map(|entry| with_reviewer_config_overrides(entry, &config.to_models_manager_config()))
     };
     (review_model, guardian_model_info)
+}
+
+fn with_reviewer_config_overrides(
+    entry: CatalogModel,
+    config: &ModelsManagerConfig,
+) -> CatalogModel {
+    CatalogModel {
+        model: with_config_overrides(Arc::unwrap_or_clone(entry.model), config).into(),
+        origin: entry.origin,
+    }
+}
+
+/// Preserve provider eligibility while selecting from the latest in-memory catalog.
+async fn eligible_review_models(
+    models_manager: &dyn ModelsManager,
+    http_client_factory: HttpClientFactory,
+    model_override: Option<&str>,
+) -> Vec<CatalogModel> {
+    // Keep a successful refresh even if writing it to the disk cache failed.
+    let mut catalog = models_manager
+        .model_catalog_with_origins(RefreshStrategy::InMemory, http_client_factory)
+        .await;
+    let uses_codex_backend = models_manager
+        .auth_manager()
+        .is_some_and(AuthManager::current_auth_uses_codex_backend);
+    catalog.retain(|entry| {
+        (uses_codex_backend || entry.supported_in_api)
+            && (model_override.is_some()
+                || matches!(
+                    entry.origin,
+                    codex_models_manager::ModelOrigin::Provider
+                        | codex_models_manager::ModelOrigin::ExplicitConfig
+                ))
+    });
+    catalog
 }

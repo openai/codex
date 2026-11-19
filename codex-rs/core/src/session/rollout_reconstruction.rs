@@ -199,6 +199,7 @@ impl Session {
             ContextManager::for_session(
                 turn_context.root_capabilities_restricted,
                 &turn_context.config.features,
+                turn_context.config.guardian_reuses_parent_compaction(),
                 turn_context.config.guardian_context_budgeting(),
                 // Reconstructing retained evidence may mint temporary revisions before restoring
                 // the durable originals. Replay must not consume the live thread's item sequence.

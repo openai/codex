@@ -75,6 +75,8 @@ pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerAction;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerPolicy;
 pub use metrics::token_usage_delta;
 pub use model::ReviewModel;
+pub use model::preferred_reasoning_effort;
+pub use model::select_catalog_reviewer;
 pub use model::select_review_model;
 pub use outcome::GuardianReviewError;
 pub use outcome::GuardianReviewOutcome;

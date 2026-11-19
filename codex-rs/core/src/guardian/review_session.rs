@@ -270,8 +270,8 @@ pub(super) fn review_turn(
             parent_turn_environments,
         ),
         permission_profile: config.permissions.permission_profile().clone(),
-        reasoning_summary: context.reasoning_summary,
-        personality: context.personality,
+        reasoning_summary: config.model_reasoning_summary.unwrap_or_default(),
+        personality: config.personality,
         model: review_model.model.clone(),
         reasoning_effort: review_model.reasoning_effort.clone(),
         cyber_access_program: parent_turn.cyber_access_program.filter(|_| {
@@ -296,10 +296,18 @@ async fn run_review_on_session(
     deadline: ReviewDeadline,
 ) -> ReviewSessionResult {
     let review_model = &params.review_model;
-    let model_info = params
-        .parent_session
-        .services
-        .models_manager
+    let actor_turn = params.parent_context.turn();
+    let inherited_turn = actor_turn
+        .config
+        .guardian_model_provider
+        .is_none()
+        .then_some(actor_turn.as_ref());
+    let models_manager = if inherited_turn.is_some() {
+        &params.parent_session.services.models_manager
+    } else {
+        &review_session.session.services.models_manager
+    };
+    let model_info = models_manager
         .get_model_info(
             review_model.model.as_str(),
             &params.spawn_config.to_models_manager_config(),
@@ -360,7 +368,7 @@ async fn run_review_on_session(
         && crate::session::context_window::context_window_token_status_for_model(
             review_session.session.as_ref(),
             &params.spawn_config,
-            params.parent_context.turn(),
+            inherited_turn,
             &model_info,
         )
         .await

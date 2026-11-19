@@ -378,6 +378,7 @@ impl CatalogSource {
 pub struct ModelCatalogSettings {
     cache: Option<Arc<dyn ModelsCache>>,
     pub api_key_model_discovery_default: bool,
+    pub skip_bundled_seed: bool,
     // Before the host publishes a live change, each thread uses its configured default.
     live_discovery: Arc<std::sync::Mutex<Option<bool>>>,
 }
@@ -487,7 +488,11 @@ impl OpenAiModelsManager {
                 etag: None,
                 client_version: Some(crate::client_version_to_whole()),
                 identity: endpoint_client.identity(),
-                models: BUNDLED_MODELS.to_vec(),
+                models: if settings.skip_bundled_seed {
+                    Vec::new()
+                } else {
+                    BUNDLED_MODELS.to_vec()
+                },
             })),
             settings,
             endpoint_client,
