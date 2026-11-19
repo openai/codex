@@ -122,7 +122,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::attestation::AttestationContext;
 use crate::attestation::AttestationProvider;
@@ -1266,21 +1265,13 @@ impl ModelClient {
             });
         }
         let is_openai = self.state.provider.info().is_openai();
-        // These prompt-only items are rebuilt on every request. Hash their visible payloads
-        // within the thread so retries and resumed sessions preserve their identity.
-        let prefix_namespace = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            self.state.thread_id.to_string().as_bytes(),
-        );
+        let request_ids = self.state.context_ids.request_ids(self.state.thread_id);
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
                 let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
                 prefix.push(ResponseItem::AdditionalTools {
-                    id: Some(ResponseItemId::with_suffix(
-                        "at",
-                        Uuid::new_v5(&prefix_namespace, &serde_json::to_vec(&tools)?),
-                    )),
+                    id: Some(request_ids.id_by_content("at", &serde_json::to_vec(&tools)?)),
                     role: "developer".to_string(),
                     tools: Arc::from(tools),
                 });
@@ -1293,10 +1284,9 @@ impl ModelClient {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
                 prompt.base_instructions.text.clone(),
             ));
-            instructions.set_id(Some(ResponseItemId::with_suffix(
-                "msg",
-                Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
-            )));
+            instructions.set_id(Some(
+                request_ids.id_by_content("msg", prompt.base_instructions.text.as_bytes()),
+            ));
             prefix.push(instructions);
         }
         input.splice(0..0, prefix);

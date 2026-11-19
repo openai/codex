@@ -5024,6 +5024,17 @@ impl Session {
                 metadata,
                 started_item,
             } = replacement;
+            // History assigns sequences on append and on legacy replay. Only newly
+            // rendered context in this replacement should receive a prefix ID.
+            let fresh = items.iter_mut().filter(|entry| {
+                entry
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.history_sequence)
+                    .is_none()
+            });
+            self.context_ids
+                .assign_prefix_ids(fresh.map(|entry| &mut entry.item));
             for envelope in &mut items {
                 self.assign_missing_response_item_id(&mut envelope.item);
             }
@@ -5708,12 +5719,15 @@ impl Session {
         if self.reference_context_item().await.is_some() {
             return Ok(None);
         }
-        let items = crate::context_manager::updates::merge_world_state_updates(updates);
-        self.state
-            .lock()
-            .await
-            .history
-            .set_world_state_baseline(snapshot.clone());
+        let mut items = crate::context_manager::updates::merge_world_state_updates(updates);
+        {
+            let mut state = self.state.lock().await;
+            // Recovery may need to append full instructions after a surviving prefix.
+            if state.history.annotated_items().is_empty() {
+                self.context_ids.assign_prefix_ids(items.iter_mut());
+            }
+            state.history.set_world_state_baseline(snapshot.clone());
+        }
         self.publish_step_context(
             step_context,
             items,

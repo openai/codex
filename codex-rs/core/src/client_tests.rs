@@ -77,6 +77,7 @@ use codex_runtime_agent_instance::AgentHostAuthorization;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
 use codex_runtime_agent_instance::RuntimeRole;
+use codex_thread_context_ids::ThreadContextIds;
 use codex_thread_context_ids_test_support::thread_context_ids;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
@@ -114,19 +115,20 @@ use wiremock::matchers::path;
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    test_model_client_with_thread_id(ThreadId::new(), session_source)
+    test_model_client_with_ids(ThreadId::new(), session_source, thread_context_ids())
 }
 
-fn test_model_client_with_thread_id(
+fn test_model_client_with_ids(
     thread_id: ThreadId,
     session_source: SessionSource,
+    context_ids: ThreadContextIds,
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
         codex_model_provider::create_model_provider(provider, /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        thread_context_ids(),
+        context_ids,
         session_source,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -1081,7 +1083,7 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
 #[test_case::test_case(true; "responses_lite")]
 fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<()> {
     let thread_id = ThreadId::new();
-    let client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
+    let client = test_model_client_with_ids(thread_id, SessionSource::Cli, thread_context_ids());
     let mut model = test_model_info();
     model.use_responses_lite = responses_lite;
     let instructions_index = usize::from(responses_lite);
@@ -1147,10 +1149,7 @@ fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<(
         );
     }
 
-    let independent = build(
-        &test_model_client_with_thread_id(ThreadId::new(), SessionSource::Cli),
-        &prompt,
-    )?;
+    let independent = build(&test_model_client(SessionSource::Cli), &prompt)?;
     assert_ne!(
         independent.input[instructions_index].id(),
         changed_tools.input[instructions_index].id()

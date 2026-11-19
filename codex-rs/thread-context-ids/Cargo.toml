@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
-uuid = { workspace = true, features = ["v7"] }
+uuid = { workspace = true, features = ["v5", "v7"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
