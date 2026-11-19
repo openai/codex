@@ -82,7 +82,7 @@ pub struct LunaSamplerConfig {
 /// One tool-less Luna classification request.
 pub struct LunaSamplingRequest {
     /// Generator selected by the owning session for response items.
-    pub item_id_generator: codex_protocol::ItemIdGenerator,
+    pub context_ids: codex_thread_context_ids::ThreadContextIds,
     /// Cyber selection captured from the owning turn; Daybreak reviews use Blue.
     pub cyber_access_program: Option<CyberAccessProgram>,
     /// ID of the response handling the classified tool.
@@ -251,7 +251,7 @@ impl LunaSampler {
             if item.id().is_none()
                 && let Some(prefix) = item.id_prefix()
             {
-                item.set_id(Some((request.item_id_generator)(prefix)));
+                item.set_id(Some(request.context_ids.next_item(prefix)));
             }
         }
     }

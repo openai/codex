@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-thread-context-ids = { workspace = true }
 codex-agent-identity = { workspace = true }
 codex-runtime-agent-instance = { workspace = true }
 anyhow = { workspace = true }
@@ -41,6 +42,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+codex-thread-context-ids-test-support = { workspace = true }
 base64 = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-protocol-test-support = { workspace = true }

@@ -63,7 +63,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
-use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use core_test_support::ThreadIdle;
 use core_test_support::apps_test_server::HostedMessagingServer;
 use core_test_support::responses;
@@ -507,7 +507,7 @@ fn user_instruction(text: &str) -> ResponseItem {
     ResponseItem::Message {
         status: None,
         encrypted_content: None,
-        id: Some(uuid_v7_item_id_generator_for_test()("msg")),
+        id: Some(thread_context_ids().next_item("msg")),
         role: "user".to_owned(),
         content: vec![ContentItem::InputText {
             text: text.to_owned(),
@@ -2490,7 +2490,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         ResponseItem::Message {
             status: None,
             encrypted_content: None,
-            id: Some(uuid_v7_item_id_generator_for_test()("assistant")),
+            id: Some(thread_context_ids().next_item("assistant")),
             role: "assistant".to_owned(),
             content: vec![ContentItem::OutputText {
                 annotations: None,

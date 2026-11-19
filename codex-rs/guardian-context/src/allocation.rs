@@ -22,10 +22,10 @@ use crate::budget::section_tokens;
 use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::ItemIdGenerator;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::protocol::TruncationPolicy;
+use codex_thread_context_ids::ThreadContextIds;
 
 const REQUEST_BUDGET_EXCEEDED: SectionError = SectionError::EvidenceLimitExceeded {
     section: "request_budget",
@@ -292,6 +292,13 @@ impl PreparedElasticContext<'_> {
 const MESSAGE_ID_PREFIX: &str = "msg";
 const ID_FIELD_FRAMING: &str = r#","id":"#;
 
+fn id_token_budget(id: &ResponseItemId) -> usize {
+    // Measure the wire string, including escaping and the optional field framing.
+    let wire_bytes = ByteCount::measure(|counter| serde_json::to_writer(counter, id.as_str()))
+        .saturating_add(ID_FIELD_FRAMING.len());
+    TruncationPolicy::Bytes(wire_bytes).token_budget()
+}
+
 /// Actual IDs reserved for possible new messages and their conservative wire token cost.
 pub struct ReservedElasticItemIds {
     by_prefix: BTreeMap<&'static str, Vec<ResponseItemId>>,
@@ -301,21 +308,15 @@ pub struct ReservedElasticItemIds {
 impl ReservedElasticItemIds {
     /// Reserves IDs for the largest possible emitted suffix before dropping evidence.
     /// Removing a native item can merge adjacent user messages, never split them.
-    pub fn reserve(prepared: &PreparedElasticContext<'_>, generate: &ItemIdGenerator) -> Self {
+    pub fn reserve(prepared: &PreparedElasticContext<'_>, context_ids: &ThreadContextIds) -> Self {
         let mut reserved = Self {
             by_prefix: BTreeMap::new(),
             tokens: 0,
         };
         let mut has_user_content = false;
         let mut reserve = |prefix| {
-            let id = generate(prefix);
-            // Measure the wire string, including escaping and the optional field framing.
-            let wire_bytes =
-                ByteCount::measure(|counter| serde_json::to_writer(counter, id.as_str()))
-                    .saturating_add(ID_FIELD_FRAMING.len());
-            reserved.tokens = reserved
-                .tokens
-                .saturating_add(TruncationPolicy::Bytes(wire_bytes).token_budget());
+            let id = context_ids.next_item(prefix);
+            reserved.tokens = reserved.tokens.saturating_add(id_token_budget(&id));
             reserved.by_prefix.entry(prefix).or_default().push(id);
         };
         for section in &prepared.context.sections {

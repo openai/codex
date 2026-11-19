@@ -74,22 +74,27 @@ fn collect(
         .unwrap()
 }
 
+fn native_message(ciphertext: &str) -> ResponseItem {
+    ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_owned(),
+        recipient: "/root/worker".to_owned(),
+        content: vec![
+            codex_protocol::models::AgentMessageInputContent::EncryptedContent {
+                encrypted_content: ciphertext.to_owned(),
+            },
+        ],
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
 #[test_case::test_case(ContextBudgeting::Fixed; "fixed")]
 #[test_case::test_case(ContextBudgeting::Elastic; "elastic")]
 fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_images(
     mode: ContextBudgeting,
 ) {
-    let native = ResponseItem::AgentMessage {
-        id: Some(ResponseItemId::from_server("amsg_parent".to_owned())),
-        author: "/root".to_owned(),
-        recipient: "/root/worker".to_owned(),
-        content: vec![
-            codex_protocol::models::AgentMessageInputContent::EncryptedContent {
-                encrypted_content: "opaque-parent-restriction".to_owned(),
-            },
-        ],
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let mut native = native_message("opaque-parent-restriction");
+    native.set_id(Some(ResponseItemId::from_server("amsg_parent".to_owned())));
     let images = [
         ImageReference::Inline {
             image_url: "data:image/png;base64,Zmlyc3Q=".to_owned(),
@@ -283,14 +288,8 @@ fn rejected_preparation_preserves_committed_history_and_cursor(mode: ContextBudg
 
 #[test]
 fn elastic_fits_ids_without_resetting_committed_history() {
-    const ID_PADDING_BYTES: usize = 1_024;
     let mode = ContextBudgeting::Elastic;
-    let mut config = sample_request("parent");
-    let original_generator = std::sync::Arc::clone(&config.item_id_generator);
-    let padding = "x".repeat(ID_PADDING_BYTES);
-    config.item_id_generator = std::sync::Arc::new(move |prefix| {
-        ResponseItemId::from_server(format!("{}{padding}", original_generator(prefix)))
-    });
+    let config = sample_request("parent");
     let mut history = History {
         items: vec![responses::user_message_item("Inspect README.md.")],
         version: 1,
@@ -304,6 +303,10 @@ fn elastic_fits_ids_without_resetting_committed_history() {
     history
         .items
         .push(responses::user_message_item("Inspect LICENSE next."));
+    // Reserve enough real IDs for their combined cost to affect image admission.
+    history
+        .items
+        .extend((0..16).map(|index| native_message(&format!("instruction-{index}"))));
     let image = ContentItem::InputImage {
         image: ImageReference::Inline {
             image_url: "data:image/png;base64,b3B0aW9uYWw=".to_owned(),

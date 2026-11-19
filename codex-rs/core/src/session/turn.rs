@@ -894,10 +894,9 @@ pub(crate) async fn run_turn(
                         ));
                     }
                     if stop_outcome.should_block {
-                        if let Some(hook_prompt_message) = build_hook_prompt_message(
-                            &stop_outcome.continuation_fragments,
-                            &sess.item_id_generator,
-                        ) {
+                        if let Some(hook_prompt_message) =
+                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
+                        {
                             sess.record_response_item_and_emit_turn_item(
                                 &turn_context,
                                 &step_context.settings.model_info,
@@ -1279,7 +1278,7 @@ pub(crate) async fn merge_submitted_context(
         context.0.clone(),
         sess.additional_context_format(),
         &turn_context.session_telemetry,
-        &sess.item_id_generator,
+        &sess.context_ids,
     );
     items
         .into_iter()

@@ -1,9 +1,5 @@
 use codex_protocol::ContextWindowId;
 use codex_protocol::protocol::TokenUsage;
-use std::sync::Arc;
-
-/// Allocates context window IDs. Clones share the same allocator.
-pub(crate) type ContextWindowIdGenerator = Arc<dyn Fn() -> ContextWindowId + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowIds {

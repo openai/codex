@@ -139,8 +139,8 @@ fn build_session_telemetry(
 }
 
 impl MemoryStartupContext {
-    pub(crate) fn item_id_generator(&self) -> &codex_protocol::ItemIdGenerator {
-        self.thread.item_id_generator()
+    pub(crate) fn context_ids(&self) -> &codex_thread_context_ids::ThreadContextIds {
+        self.thread.context_ids()
     }
 
     pub(crate) fn new(
@@ -333,7 +333,7 @@ impl MemoryStartupContext {
             Arc::clone(&self.provider),
             AgentIdentityAuthPolicy::JwtOnly,
             self.thread_id,
-            Arc::clone(self.item_id_generator()),
+            self.context_ids().clone(),
             session_source.clone(),
             config_snapshot.originator,
             config.model_verbosity,

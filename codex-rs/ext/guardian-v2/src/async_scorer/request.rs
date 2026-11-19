@@ -71,7 +71,7 @@ impl LunaSamplingRequest {
                 .ok()?
                 .prepare_delivery(history)
                 .ok()?;
-            let ids = ReservedElasticItemIds::reserve(&prepared, &self.item_id_generator);
+            let ids = ReservedElasticItemIds::reserve(&prepared, &self.context_ids);
             context = prepared
                 .enforce_budget(
                     RequestBudget {

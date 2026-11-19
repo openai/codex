@@ -5,7 +5,6 @@
 
 use crate::context::GuardianSenderMessages;
 use crate::context_manager::ContextManager;
-use crate::session::session::Session;
 use codex_history::RolloutItem;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -130,7 +129,7 @@ impl LocalAgentRuntime {
                         let context = ContextManager::reconstruct_rollout(
                             &history,
                             history_mode,
-                            ContextManager::new(Session::new_item_id_generator()),
+                            ContextManager::new,
                             // Tool bodies are not sender authorization evidence.
                             TruncationPolicy::Bytes(0),
                         )

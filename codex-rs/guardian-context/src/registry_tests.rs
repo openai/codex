@@ -207,7 +207,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
     ];
     let answers = ["assistant: Publish?\nuser: No.\n".to_string()];
     let reviews = super::PreviousReviews::try_from_fragments(vec![super::PreviousReview {
-        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
+        id: codex_thread_context_ids_test_support::thread_context_ids().next_item("review"),
         fragment: "<guardian_sync_review>debug-secret review</guardian_sync_review>".to_string(),
     }])
     .unwrap();

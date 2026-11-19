@@ -22,9 +22,9 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_protocol::turn_input::CyberAccessProgram;
-use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use core_test_support::responses::strip_metadata_from_items;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -131,7 +131,7 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
         /*reuse_parent_compaction*/ true,
         codex_guardian_context::ContextBudgeting::Fixed,
-        uuid_v7_item_id_generator_for_test(),
+        thread_context_ids(),
     );
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
@@ -2054,9 +2054,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             complete: false,
         },
         codex_history::RetainedInputSource::Local(None),
-        &uuid_v7_item_id_generator_for_test(),
+        &thread_context_ids(),
     );
-    retained.record(&answer, &uuid_v7_item_id_generator_for_test());
+    retained.record(&answer, &thread_context_ids());
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact").into()),
         RolloutItem::ResponseItem(assistant_message("assistant reply").into()),

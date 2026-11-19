@@ -145,7 +145,7 @@ impl ContextManager {
                     complete: true,
                 },
                 source,
-                &self.item_id_generator,
+                &self.context_ids,
             );
             return None;
         }
@@ -209,9 +209,9 @@ impl ContextManager {
             };
             let retained = Arc::make_mut(&mut self.retained_context);
             captured = if is_assistant {
-                retained.record_assistant_message(message, metadata.into(), &self.item_id_generator)
+                retained.record_assistant_message(message, metadata.into(), &self.context_ids)
             } else {
-                retained.record_user_message(message, metadata.into(), &self.item_id_generator)
+                retained.record_user_message(message, metadata.into(), &self.context_ids)
             };
         }
         if !is_assistant {

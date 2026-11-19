@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-thread-context-ids = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-backend-client = { workspace = true }

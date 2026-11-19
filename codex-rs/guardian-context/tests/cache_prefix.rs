@@ -33,7 +33,8 @@ use codex_history::VerifiedQuestionAnswer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
+
+use codex_thread_context_ids_test_support::thread_context_ids;
 use pretty_assertions::assert_eq;
 
 struct History {
@@ -80,7 +81,7 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
             complete: true,
         },
         RetainedInputSource::Local(None),
-        &uuid_v7_item_id_generator_for_test(),
+        &thread_context_ids(),
     );
     // Legacy review history and Felix's retained, thread-owned history use the
     // same composer. Retained assistant growth and eviction must also preserve its prefix.
@@ -112,12 +113,12 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                         complete: true,
                     },
                     RetainedInputSource::Local(Some(generation + 1)),
-                    &uuid_v7_item_id_generator_for_test(),
+                    &thread_context_ids(),
                 );
             }
             let reviews =
                 PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
-                    id: uuid_v7_item_id_generator_for_test()("review"),
+                    id: thread_context_ids().next_item("review"),
                     fragment: format!("Host-attested decision {generation}: denied."),
                 }])
                 .unwrap();
@@ -244,7 +245,7 @@ fn elastic_verified_answers_preserve_question_answer_identity() {
             answer,
             acceptance_order: Some(7),
         },
-        &uuid_v7_item_id_generator_for_test(),
+        &thread_context_ids(),
     );
     let trusted_answers = collect_verified_answer_candidates(&retained);
     let root = [GuardianRootMessage::UserInput(original.clone())];

@@ -3,7 +3,6 @@ mod agent_path;
 pub mod auth;
 mod budget_units;
 mod context_window_id;
-mod item_id_generator;
 mod request_country;
 pub use request_country::InvalidRequestCountry;
 pub use request_country::RequestCountry;
@@ -16,9 +15,6 @@ mod tool_name;
 pub use agent_path::AgentPath;
 pub use budget_units::BudgetUnitsSum;
 pub use context_window_id::ContextWindowId;
-pub use item_id_generator::ItemIdGenerator;
-#[cfg(test)]
-use item_id_generator::uuid_v7_item_id_generator_for_test;
 pub use permission_profile_intersection::PermissionIntersectionError;
 pub use permission_profile_intersection::intersect_effective_permission_profiles;
 pub use response_item_id::ResponseItemId;

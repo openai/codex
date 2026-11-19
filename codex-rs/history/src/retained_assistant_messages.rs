@@ -9,7 +9,7 @@ use super::RetainedSource;
 use super::RetainedSourceRole;
 use super::RetainedUserMessage;
 use super::bound_family;
-use codex_protocol::ItemIdGenerator;
+use codex_thread_context_ids::ThreadContextIds;
 
 impl RetainedContext {
     /// Reports observed storage loss or a retained message that cannot be delivered whole.
@@ -39,18 +39,22 @@ impl RetainedContext {
         &mut self,
         message: RetainedUserMessage,
         source: RetainedInputSource,
-        item_id_generator: &ItemIdGenerator,
+        context_ids: &ThreadContextIds,
     ) -> Option<RetainedSource> {
-        self.record_assistant_message_with_revision(message, source, || {
-            item_id_generator("retained")
-        })
+        self.record_assistant_message_with_revision(
+            message,
+            source,
+            context_ids,
+            /*revision*/ None,
+        )
     }
 
     pub(super) fn record_assistant_message_with_revision(
         &mut self,
         mut message: RetainedUserMessage,
         source: RetainedInputSource,
-        revision: impl FnOnce() -> codex_protocol::ResponseItemId,
+        context_ids: &ThreadContextIds,
+        revision: Option<&codex_protocol::ResponseItemId>,
     ) -> Option<RetainedSource> {
         if source == RetainedInputSource::Local(None) {
             // Leave unsequenced sources to legacy transcript selection. Missing
@@ -83,7 +87,11 @@ impl RetainedContext {
         if empty {
             return None;
         }
-        let revision = message.message_id.as_ref().map(|_| revision());
+        let revision = message.message_id.as_ref().map(|_| {
+            revision
+                .cloned()
+                .unwrap_or_else(|| context_ids.next_item("retained"))
+        });
         let entry = Ordered {
             revision,
             inherited,

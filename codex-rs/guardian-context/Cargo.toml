@@ -16,10 +16,12 @@ workspace = true
 codex-context-fragments = { workspace = true }
 codex-history = { workspace = true }
 codex-protocol = { workspace = true }
+codex-thread-context-ids = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+codex-thread-context-ids-test-support = { workspace = true }
 codex-protocol-test-support = { workspace = true }
 pretty_assertions = { workspace = true }

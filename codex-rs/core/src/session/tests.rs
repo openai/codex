@@ -3,6 +3,7 @@ use crate::agent::LocalAgentControl;
 use codex_mcp::McpServerKey;
 use codex_protocol::ContextWindowId;
 use codex_protocol::RequestCountry;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use codex_thread_store::ThreadPersistenceMetadata;
 #[path = "compaction_replay_tests.rs"]
 mod compaction_replay_tests;
@@ -865,7 +866,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         ),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        thread_context_ids(),
         codex_protocol::protocol::SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -2414,13 +2415,10 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
 #[tokio::test]
 async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
-    let response_item = build_hook_prompt_message(
-        &[HookPromptFragment::from_single_hook(
-            "Retry with tests.",
-            "hook-run-1",
-        )],
-        &session.item_id_generator,
-    )
+    let response_item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with tests.",
+        "hook-run-1",
+    )])
     .expect("hook prompt message");
 
     session
@@ -6679,7 +6677,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.model_provider.clone(),
     );
     let agent_control = LocalAgentControl::default();
-    let item_id_generator = Session::new_item_id_generator();
+    let context_ids = thread_context_ids();
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -6756,7 +6754,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &config.features,
         config.guardian_reuses_parent_compaction(),
         config.guardian_context_budgeting(),
-        Arc::clone(&item_id_generator),
+        context_ids.clone(),
     );
     let (environment_manager, resolved_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
@@ -6876,7 +6874,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            Arc::clone(&item_id_generator),
+            context_ids.clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -6908,7 +6906,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let session = Session {
         thread_id,
-        item_id_generator,
+        context_ids,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         outcome_reporting: None,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -9038,7 +9036,7 @@ where
         config.model_provider.clone(),
     );
     let agent_control = LocalAgentControl::default();
-    let item_id_generator = Session::new_item_id_generator();
+    let context_ids = thread_context_ids();
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -9115,7 +9113,7 @@ where
         &config.features,
         config.guardian_reuses_parent_compaction(),
         config.guardian_context_budgeting(),
-        Arc::clone(&item_id_generator),
+        context_ids.clone(),
     );
     let (environment_manager, resolved_turn_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
@@ -9234,7 +9232,7 @@ where
             ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            Arc::clone(&item_id_generator),
+            context_ids.clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -9266,7 +9264,7 @@ where
 
     let session = Arc::new(Session {
         thread_id,
-        item_id_generator,
+        context_ids,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         outcome_reporting: None,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),

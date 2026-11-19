@@ -99,7 +99,7 @@ fn elastic_pending_action_defers_the_exact_call_to_final_admission() {
 #[test]
 fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     let message = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
-        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
+        id: codex_thread_context_ids_test_support::thread_context_ids().next_item("review"),
         fragment: "host-attested review".into(),
     }])
     .unwrap()

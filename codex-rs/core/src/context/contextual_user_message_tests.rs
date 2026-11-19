@@ -148,13 +148,10 @@ fn ignores_regular_user_text() {
 
 #[test]
 fn detects_hook_prompt_fragment_and_roundtrips_escaping() {
-    let message = build_hook_prompt_message(
-        &[HookPromptFragment::from_single_hook(
-            r#"Retry with "waves" & <tides>"#,
-            "hook-run-1",
-        )],
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
-    )
+    let message = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        r#"Retry with "waves" & <tides>"#,
+        "hook-run-1",
+    )])
     .expect("hook prompt message");
 
     let ResponseItem::Message { content, .. } = message else {

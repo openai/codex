@@ -51,7 +51,6 @@ use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
 use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
-use codex_protocol::ItemIdGenerator;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::AudioReference;
@@ -69,6 +68,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
+use codex_thread_context_ids::ThreadContextIds;
 use codex_utils_audio::estimate_tool_audio_tokens;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
@@ -103,7 +103,7 @@ fn next_guardian_review_context_revision() -> u64 {
 /// Transcript of thread history
 #[derive(Clone)]
 pub(crate) struct ContextManager {
-    item_id_generator: ItemIdGenerator,
+    context_ids: ThreadContextIds,
     sampling: super::sampling::SamplingProgress,
     /// Inclusive sequence cutoff for calls that may still be running in the fork source.
     pub(crate) restored_through_sequence: u64,
@@ -312,14 +312,18 @@ impl SharedConversationHistory {
 #[cfg(test)]
 impl Default for ContextManager {
     fn default() -> Self {
-        Self::new(codex_protocol_test_support::uuid_v7_item_id_generator_for_test())
+        Self::new(codex_thread_context_ids_test_support::thread_context_ids())
     }
 }
 
 impl ContextManager {
-    pub(crate) fn new(item_id_generator: ItemIdGenerator) -> Self {
+    pub(crate) fn context_ids(&self) -> &ThreadContextIds {
+        &self.context_ids
+    }
+
+    pub(crate) fn new(context_ids: ThreadContextIds) -> Self {
         Self {
-            item_id_generator,
+            context_ids,
             sampling: Default::default(),
             restored_through_sequence: 0,
             items: Arc::new(Vec::new()),
@@ -366,7 +370,7 @@ impl ContextManager {
         features: &ManagedFeatures,
         reuse_parent_compaction: bool,
         budgeting: ContextBudgeting,
-        item_id_generator: ItemIdGenerator,
+        context_ids: ThreadContextIds,
     ) -> Self {
         let independent = !reuse_parent_compaction;
         Self {
@@ -381,7 +385,7 @@ impl ContextManager {
             review_budgeting: budgeting,
             review_history: independent
                 .then(|| TranscriptHistory::new(/*generation*/ 0, budgeting)),
-            ..Self::new(item_id_generator)
+            ..Self::new(context_ids)
         }
     }
 
@@ -397,9 +401,7 @@ impl ContextManager {
         &mut self,
         event: &mut RetainedContextEvent,
     ) -> bool {
-        if !Arc::make_mut(&mut self.retained_context)
-            .record_and_capture(event, &self.item_id_generator)
-        {
+        if !Arc::make_mut(&mut self.retained_context).record_and_capture(event, &self.context_ids) {
             return false;
         }
         match event {

@@ -1,0 +1,16 @@
+[package]
+name = "codex-thread-context-ids-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-thread-context-ids = { workspace = true }

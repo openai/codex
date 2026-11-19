@@ -241,7 +241,7 @@ pub(crate) async fn exit_review_mode(
             &[ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some((session.item_id_generator)("msg")),
+                id: Some(session.context_ids.next_item("msg")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 phase: None,
@@ -263,7 +263,7 @@ pub(crate) async fn exit_review_mode(
             ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some((session.item_id_generator)("msg")),
+                id: Some(session.context_ids.next_item("msg")),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
                     annotations: None,

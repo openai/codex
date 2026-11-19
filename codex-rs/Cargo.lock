@@ -2296,7 +2296,6 @@ dependencies = [
  "codex-extension-items",
  "codex-history",
  "codex-protocol",
- "codex-protocol-test-support",
  "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
@@ -3115,6 +3114,8 @@ dependencies = [
  "codex-state",
  "codex-terminal-detection",
  "codex-test-binary-support",
+ "codex-thread-context-ids",
+ "codex-thread-context-ids-test-support",
  "codex-thread-store",
  "codex-tools",
  "codex-user-input",
@@ -3781,6 +3782,8 @@ dependencies = [
  "codex-history",
  "codex-protocol",
  "codex-protocol-test-support",
+ "codex-thread-context-ids",
+ "codex-thread-context-ids-test-support",
  "codex-utils-output-truncation",
  "pretty_assertions",
  "serde",
@@ -3808,6 +3811,7 @@ dependencies = [
  "codex-protocol-test-support",
  "codex-rmcp-client",
  "codex-shell-command",
+ "codex-thread-context-ids",
  "codex-utils-output-truncation",
  "codex-utils-path-uri",
  "codex-utils-string",
@@ -3849,6 +3853,8 @@ dependencies = [
  "codex-protocol",
  "codex-protocol-test-support",
  "codex-runtime-agent-instance",
+ "codex-thread-context-ids",
+ "codex-thread-context-ids-test-support",
  "codex-utils-cargo-bin",
  "codex-websocket-client",
  "core_test_support",
@@ -3914,7 +3920,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
- "codex-protocol-test-support",
+ "codex-thread-context-ids",
+ "codex-thread-context-ids-test-support",
  "codex-utils-absolute-path",
  "codex-utils-model-facing-id",
  "pretty_assertions",
@@ -4341,6 +4348,7 @@ dependencies = [
  "codex-secrets",
  "codex-state",
  "codex-terminal-detection",
+ "codex-thread-context-ids",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
  "codex-utils-template",
@@ -4789,7 +4797,6 @@ name = "codex-protocol-test-support"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
- "uuid",
 ]
 
 [[package]]
@@ -5202,6 +5209,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-thread-context-ids"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-thread-context-ids-test-support",
+ "pretty_assertions",
+ "uuid",
+]
+
+[[package]]
+name = "codex-thread-context-ids-test-support"
+version = "0.0.0"
+dependencies = [
+ "codex-thread-context-ids",
+]
+
+[[package]]
 name = "codex-thread-manager-sample"
 version = "0.0.0"
 dependencies = [
@@ -5224,9 +5248,9 @@ dependencies = [
  "codex-install-context",
  "codex-otel",
  "codex-protocol",
- "codex-protocol-test-support",
  "codex-rollout",
  "codex-state",
+ "codex-thread-context-ids-test-support",
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-path-uri",

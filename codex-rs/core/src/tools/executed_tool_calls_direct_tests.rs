@@ -9,6 +9,7 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -38,7 +39,7 @@ fn capture_only_does_not_publish_general_direct_metadata_after_refresh() {
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call.clone(), permit)),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
         if enabled {
             assert_eq!(
@@ -69,7 +70,7 @@ fn direct_request_uses_live_window_after_persisted_budget_is_exhausted() {
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
         item
     };
@@ -156,7 +157,7 @@ async fn direct_result_body_budget_reopens_when_the_output_is_lost(available: us
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
         item
     };
@@ -253,7 +254,7 @@ async fn direct_result_bodies_require_the_originating_output_turn_and_owner(
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
         item
     };
@@ -358,7 +359,7 @@ fn direct_metadata_follows_output_ids_with_reused_call_ids_and_reverse_completio
             recorder.attach_direct_call_to_output(
                 &mut outputs[index],
                 prepared[index].take(),
-                &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+                &thread_context_ids(),
             );
             assert!(outputs[index].executed_tool_call_metadata().is_none());
             if supplied_ids {
@@ -421,7 +422,7 @@ fn direct_budget_keeps_an_omission_marker_when_it_fits() {
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
 
         expected.set_id(item.id().cloned());
@@ -460,11 +461,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     let cloned = recorder.clone();
     let mut overflow = output("overflow");
     let before = serde_json::to_value(&overflow).expect("serializable output");
-    cloned.attach_direct_call_to_output(
-        &mut overflow,
-        prepare(&cloned),
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
-    );
+    cloned.attach_direct_call_to_output(&mut overflow, prepare(&cloned), &thread_context_ids());
     assert_eq!(
         serde_json::to_value(&overflow).expect("serializable output"),
         before,
@@ -481,11 +478,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     assert!(prepare(&recorder).is_none());
 
     let mut completed = output("completed");
-    recorder.attach_direct_call_to_output(
-        &mut completed,
-        pending.pop(),
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
-    );
+    recorder.attach_direct_call_to_output(&mut completed, pending.pop(), &thread_context_ids());
     assert_eq!(
         completed
             .executed_tool_call_metadata()
@@ -498,11 +491,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     recorder.refresh(&features);
     assert!(prepare(&recorder).is_none());
     let mut stale = output("stale");
-    recorder.attach_direct_call_to_output(
-        &mut stale,
-        Some(replacement),
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
-    );
+    recorder.attach_direct_call_to_output(&mut stale, Some(replacement), &thread_context_ids());
     assert!(stale.id().is_none());
     assert!(stale.executed_tool_call_metadata().is_none());
     let current = prepare(&recorder).expect("stale call released its slot");
@@ -510,7 +499,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     recorder.attach_direct_call_to_output(
         &mut current_output,
         Some(current),
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        &thread_context_ids(),
     );
     assert_eq!(
         current_output
@@ -547,7 +536,7 @@ async fn direct_recording_preserves_encoded_arguments_in_history() {
     recorder.attach_direct_call_to_output(
         &mut item,
         recorder.prepare_direct_call(&call, &ToolCallSource::Direct, &step),
-        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        &thread_context_ids(),
     );
     let wire = serde_json::to_value(&item).unwrap();
     assert_eq!(wire["output"], ordinary_output);

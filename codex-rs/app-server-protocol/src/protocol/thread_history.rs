@@ -5504,14 +5504,14 @@ mod tests {
 
     #[test]
     fn rebuilds_hook_prompt_items_from_rollout_response_items() {
-        let hook_prompt = build_hook_prompt_message(
-            &[
-                CoreHookPromptFragment::from_single_hook("Retry with tests.", "hook-run-1"),
-                CoreHookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
-            ],
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
-        )
+        let mut hook_prompt = build_hook_prompt_message(&[
+            CoreHookPromptFragment::from_single_hook("Retry with tests.", "hook-run-1"),
+            CoreHookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
+        ])
         .expect("hook prompt message");
+        hook_prompt.set_id(Some(codex_protocol::ResponseItemId::from_server(
+            "msg_hook".to_owned(),
+        )));
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_attribution: None,

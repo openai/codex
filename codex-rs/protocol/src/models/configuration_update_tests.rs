@@ -20,8 +20,8 @@ fn configuration_update_round_trips_without_message_fields() {
         }
     );
 
-    item.set_id(Some(crate::uuid_v7_item_id_generator_for_test()(
-        "configuration-id",
+    item.set_id(Some(crate::ResponseItemId::from_server(
+        "configuration-id".to_owned(),
     )));
     item.set_turn_id_if_missing("turn-id");
     item.set_create_time_if_missing(serde_json::Number::from(123));

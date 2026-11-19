@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
+codex-thread-context-ids = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-model-facing-id = { workspace = true }
 schemars = { workspace = true }
@@ -21,6 +22,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-codex-protocol-test-support = { workspace = true }
+codex-thread-context-ids-test-support = { workspace = true }
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -428,9 +428,9 @@ impl CodexThread {
         &self.session.services.thread_extension_data
     }
 
-    /// Generator used for response items produced on behalf of this thread.
-    pub fn item_id_generator(&self) -> &codex_protocol::ItemIdGenerator {
-        &self.session.item_id_generator
+    /// Allocates context IDs on behalf of this thread.
+    pub fn context_ids(&self) -> &codex_thread_context_ids::ThreadContextIds {
+        &self.session.context_ids
     }
 
     /// Returns tools from this thread’s ready, unshared Apps MCP client.

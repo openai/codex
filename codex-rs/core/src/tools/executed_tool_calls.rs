@@ -692,7 +692,7 @@ impl ExecutedToolCalls {
         &self,
         item: &mut ResponseItem,
         prepared: Option<(ExecutedToolCall, DirectCallPermit)>,
-        item_id_generator: &codex_protocol::ItemIdGenerator,
+        context_ids: &codex_thread_context_ids::ThreadContextIds,
     ) {
         let Some((mut call, permit)) = prepared else {
             if self.captures_result_bodies
@@ -703,7 +703,7 @@ impl ExecutedToolCalls {
                 && cell.truncated_metadata_binding_valid
             {
                 // Bind nested results to the actual exec/wait output before history projection.
-                crate::session::assign_missing_item_id(item, item_id_generator);
+                crate::session::assign_missing_item_id(item, context_ids);
                 cell.output_item_id = item.id().cloned();
             }
             return;
@@ -717,7 +717,7 @@ impl ExecutedToolCalls {
         {
             return;
         }
-        crate::session::assign_missing_item_id(item, item_id_generator);
+        crate::session::assign_missing_item_id(item, context_ids);
         let keep_live_call = !self.captures_result_bodies
             || state.direct_calls.len() < MAX_PENDING_EXECUTED_TOOL_CALLS
             || item

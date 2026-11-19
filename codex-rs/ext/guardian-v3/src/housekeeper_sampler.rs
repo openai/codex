@@ -100,7 +100,7 @@ impl HousekeeperSampler {
             )],
         );
         if let Some(prefix) = instructions.id_prefix() {
-            instructions.set_id(Some((parent.item_id_generator())(prefix)));
+            instructions.set_id(Some(parent.context_ids().next_item(prefix)));
         }
         Ok(Self {
             parent: Arc::downgrade(parent),
@@ -152,7 +152,7 @@ impl HousekeeperSampler {
         let (input, schema, input_tokens, history_budget) = loop {
             let (mut input, schema) = build_request(count)?;
             if let Some(prefix) = input.id_prefix() {
-                let id = item_id.get_or_insert_with(|| (parent.item_id_generator())(prefix));
+                let id = item_id.get_or_insert_with(|| parent.context_ids().next_item(prefix));
                 input.set_id(Some(id.clone()));
             }
             let fixed_tokens =

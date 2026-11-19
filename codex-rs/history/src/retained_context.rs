@@ -11,7 +11,7 @@ pub use source::RetainedSource;
 pub use source::RetainedSourceId;
 pub use source::RetainedSourceRole;
 
-use codex_protocol::ItemIdGenerator;
+use codex_thread_context_ids::ThreadContextIds;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -390,7 +390,7 @@ impl RetainedContext {
         &mut self,
         mut message: RetainedUserMessage,
         source: RetainedInputSource,
-        item_id_generator: &ItemIdGenerator,
+        context_ids: &ThreadContextIds,
     ) -> Option<RetainedSource> {
         message.bound();
         let inherited = source == RetainedInputSource::Inherited;
@@ -442,7 +442,7 @@ impl RetainedContext {
         let revision = message
             .message_id
             .as_ref()
-            .map(|_| item_id_generator("retained"));
+            .map(|_| context_ids.next_item("retained"));
         let entry = Ordered {
             revision,
             inherited,
@@ -475,19 +475,15 @@ impl RetainedContext {
     }
 
     /// Same-event delivery is idempotent; changed contents replace that source's record.
-    pub fn record(
-        &mut self,
-        event: &RetainedContextEvent,
-        item_id_generator: &ItemIdGenerator,
-    ) -> bool {
-        self.record_and_capture(&mut event.clone(), item_id_generator)
+    pub fn record(&mut self, event: &RetainedContextEvent, context_ids: &ThreadContextIds) -> bool {
+        self.record_and_capture(&mut event.clone(), context_ids)
     }
 
     /// Records a host event and fills in its retained source for rollout persistence.
     pub fn record_and_capture(
         &mut self,
         event: &mut RetainedContextEvent,
-        item_id_generator: &ItemIdGenerator,
+        context_ids: &ThreadContextIds,
     ) -> bool {
         event.bound();
         match event {
@@ -543,12 +539,8 @@ impl RetainedContext {
                 *retained_source = self.record_assistant_message_with_revision(
                     message.clone(),
                     RetainedInputSource::Local(Some(*acceptance_order)),
-                    || {
-                        retained_source.as_ref().map_or_else(
-                            || item_id_generator("retained"),
-                            |source| source.revision.clone(),
-                        )
-                    },
+                    context_ids,
+                    retained_source.as_ref().map(|source| &source.revision),
                 );
                 true
             }

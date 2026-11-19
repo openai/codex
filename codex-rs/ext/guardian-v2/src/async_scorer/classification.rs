@@ -322,7 +322,7 @@ impl Classification {
             // Retries keep the classification's inference turn identity.
             let request_turn_id = Uuid::now_v7();
             let sampling = LunaSamplingRequest {
-                item_id_generator: Arc::clone(thread.item_id_generator()),
+                context_ids: thread.context_ids().clone(),
                 cyber_access_program,
                 parent_response_id,
                 instructions,

@@ -6,12 +6,21 @@ use crate::estimate_input_tokens;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
-use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
 
 #[test]
-fn reserves_escaped_ids_for_user_messages_and_native_call_outputs() {
+fn id_budget_accounts_for_json_escaping() {
+    let id = ResponseItemId::from_server("\"".repeat(32));
+    let wire = format!(r#","id":{}"#, serde_json::to_string(id.as_str()).unwrap());
+    assert_eq!(
+        id_token_budget(&id),
+        TruncationPolicy::Bytes(wire.len()).token_budget()
+    );
+}
+
+#[test]
+fn reserves_ids_for_user_messages_and_native_call_outputs() {
     let call: ResponseItem = serde_json::from_value(serde_json::json!({
         "type": "function_call",
         "id": "fc_committed",
@@ -44,10 +53,7 @@ fn reserves_escaped_ids_for_user_messages_and_native_call_outputs() {
         config: &ElasticBudgetConfig::default(),
         delivered_omissions: None,
     };
-    let uuid = uuid_v7_item_id_generator_for_test();
-    let generator: ItemIdGenerator =
-        Arc::new(move |prefix| ResponseItemId::from_server(format!("{}\"\\", uuid(prefix))));
-    let reserved = ReservedElasticItemIds::reserve(&prepared, &generator);
+    let reserved = ReservedElasticItemIds::reserve(&prepared, &thread_context_ids());
     let mut suffix = prepared.context.into_annotated_messages();
     let measure = |items: &[ResponseItemEnvelope]| {
         items

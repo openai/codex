@@ -300,7 +300,7 @@ mod job {
             MemoryVersion::V1 => vec![ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some(context.item_id_generator()("msg")),
+                id: Some(context.context_ids().next_item("msg")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: input_text }],
                 phase: None,

@@ -409,7 +409,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 evidence.authorization_version,
                 evidence.review_context_revision,
                 evidence.root_versions,
-                &self.session.item_id_generator,
+                &self.session.context_ids,
             );
         }
     }

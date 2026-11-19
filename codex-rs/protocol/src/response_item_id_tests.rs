@@ -1,19 +1,8 @@
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use uuid::Uuid;
 
 use super::ResponseItemId;
 use crate::models::ResponseItem;
-
-#[test]
-fn creates_prefixed_uuid_v7_ids() {
-    let id = crate::uuid_v7_item_id_generator_for_test()("msg");
-    let uuid = id.strip_prefix("msg_").expect("message prefix");
-    assert_eq!(
-        Uuid::parse_str(uuid).expect("UUID suffix").get_version(),
-        Some(uuid::Version::SortRand)
-    );
-}
 
 #[test]
 fn creates_prefixed_ids_with_explicit_suffix() {

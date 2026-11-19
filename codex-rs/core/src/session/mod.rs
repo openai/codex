@@ -276,7 +276,6 @@ mod mcp_prewarm;
 mod mcp_refresh;
 mod mcp_runtime;
 mod model_catalog_settings;
-mod model_ids;
 pub(crate) mod multi_agents;
 mod plugin_selection;
 mod realtime_handoff;
@@ -605,12 +604,12 @@ const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyb
 
 pub(crate) fn assign_missing_item_id(
     item: &mut ResponseItem,
-    item_id_generator: &codex_protocol::ItemIdGenerator,
+    context_ids: &codex_thread_context_ids::ThreadContextIds,
 ) {
     if item.id().is_none_or(|id| id.is_empty())
         && let Some(prefix) = item.id_prefix()
     {
-        item.set_id(Some(item_id_generator(prefix)));
+        item.set_id(Some(context_ids.next_item(prefix)));
     }
 }
 
@@ -4036,7 +4035,7 @@ impl Session {
     }
 
     pub(crate) fn assign_missing_response_item_id(&self, item: &mut ResponseItem) {
-        assign_missing_item_id(item, &self.item_id_generator);
+        assign_missing_item_id(item, &self.context_ids);
     }
 
     pub(crate) fn response_item_from_user_input(
@@ -6060,8 +6059,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
-        response_item: ResponseItem,
+        mut response_item: ResponseItem,
     ) {
+        self.assign_missing_response_item_id(&mut response_item);
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(
             turn_context,

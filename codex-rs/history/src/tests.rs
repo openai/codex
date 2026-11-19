@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_protocol::ContextWindowId;
-use codex_protocol::ResponseItemId;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::PermissionProfile;
@@ -11,6 +10,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_thread_context_ids_test_support::thread_context_ids;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -432,14 +432,9 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
             },
             acceptance_order: 7,
         };
-        let sequence = std::sync::Mutex::new(
-            codex_utils_model_facing_id::ModelFacingIdGenerator::new(/*seed*/ 42, "item"),
-        );
-        let generator: codex_protocol::ItemIdGenerator = Arc::new(move |kind| {
-            ResponseItemId::generated(kind, sequence.lock().unwrap().fetch_next())
-        });
+        let ids = thread_context_ids();
         let mut live = RetainedContext::default();
-        assert!(live.record_and_capture(&mut original, &generator));
+        assert!(live.record_and_capture(&mut original, &ids));
         let wire = serde_json::to_value(RolloutItem::RetainedContext(original.clone()))?;
         let earlier = serde_json::from_value::<EarlierRolloutItem>(wire)?;
         let EarlierRolloutItem::ResponseItem { payload, metadata } = &earlier;
@@ -476,7 +471,7 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
                 phase: None,
             },
             RetainedInputSource::Local(metadata.user_input_order),
-            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            &thread_context_ids(),
         );
         let rewritten_checkpoint =
             serde_json::from_value(serde_json::to_value(earlier_checkpoint)?)?;
@@ -496,12 +491,8 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
         };
         assert_eq!(restored, original);
         let mut replayed = RetainedContext::default();
-        assert!(replayed.record(&restored, &generator));
+        assert!(replayed.record(&restored, &thread_context_ids()));
         assert_eq!(replayed, live);
-        assert_eq!(
-            crate::next_model_id_ordinals(&[RolloutItem::RetainedContext(restored)]),
-            (1, 0)
-        );
     }
     Ok(())
 }

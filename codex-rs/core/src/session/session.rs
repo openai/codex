@@ -35,7 +35,6 @@ use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
 use codex_prompts::render_model_instructions;
 use codex_protocol::ContextWindowId;
-use codex_protocol::ItemIdGenerator;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -51,6 +50,7 @@ use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_sandboxing::SandboxType;
 use codex_skills::SkillError;
+use codex_thread_context_ids::ThreadContextIds;
 use codex_utils_git_discovery::GitRootDiscovery;
 use codex_utils_path::replace_path_and_deduplicate;
 use std::sync::OnceLock;
@@ -72,7 +72,7 @@ pub(crate) struct AgentOutcomeReporting {
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
-    pub(crate) item_id_generator: ItemIdGenerator,
+    pub(crate) context_ids: ThreadContextIds,
     pub(crate) agent_runtime: AgentRuntimeServices,
     pub(crate) outcome_reporting: Option<AgentOutcomeReporting>,
     pub(crate) installation_id: String,
@@ -642,10 +642,6 @@ impl Session {
                 .is_some_and(|reporting| reporting.handoffs.is_closed())
     }
 
-    pub(crate) fn new_item_id_generator() -> ItemIdGenerator {
-        Arc::new(|prefix| ResponseItemId::with_suffix(prefix, uuid::Uuid::now_v7()))
-    }
-
     pub(super) async fn effective_thread_config_snapshot(
         &self,
         configuration: &SessionConfiguration,
@@ -906,7 +902,7 @@ impl Session {
             session_configuration.thread_source.as_ref(),
             Some(ThreadSource::Subagent | ThreadSource::GuardianReview)
         );
-        let prepare_ids = super::model_ids::from_history;
+        let prepare_ids = InitialHistory::initialize_context_ids;
         // New threads need their window ID to create the rollout. Resumes initialize once the
         // writer has validated or refreshed the history snapshot.
         let new_thread_ids = (!matches!(initial_history, InitialHistory::Resumed(_)))
@@ -921,15 +917,13 @@ impl Session {
             for record in records {
                 match record {
                     RolloutItem::ResponseItem(item) => {
-                        assign_missing_item_id(&mut item.item, &ids.item_id_generator)
+                        assign_missing_item_id(&mut item.item, &ids.context_ids)
                     }
                     RolloutItem::Compacted(checkpoint) if restore_child_window => {
                         checkpoint.window_number = Some(0);
-                        checkpoint.first_window_id =
-                            Some(ids.initial_auto_compact_window_ids.window_id.clone());
+                        checkpoint.first_window_id = Some(ids.initial_window_id.clone());
                         checkpoint.previous_window_id = None;
-                        checkpoint.window_id =
-                            Some(ids.initial_auto_compact_window_ids.window_id.clone());
+                        checkpoint.window_id = Some(ids.initial_window_id.clone());
                     }
                     _ => {}
                 }
@@ -1155,10 +1149,7 @@ impl Session {
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
                             subagent_history_start_ordinal: None,
-                            initial_window_id: ids
-                                .initial_auto_compact_window_ids
-                                .window_id
-                                .clone(),
+                            initial_window_id: ids.initial_window_id.clone(),
                             runtime_workspace_roots: Some(config.workspace_roots.clone()),
                             metadata: config.thread_persistence_metadata(),
                         };
@@ -1310,11 +1301,11 @@ impl Session {
                     version,
                 )?;
             }
-            let super::model_ids::InitialModelIds {
-                item_id_generator,
-                context_window_id_generator,
-                initial_auto_compact_window_ids,
+            let codex_history::InitialContextIds {
+                context_ids,
+                initial_window_id,
             } = new_thread_ids.unwrap_or_else(|| prepare_ids(&initial_history));
+            let initial_auto_compact_window_ids = crate::state::AutoCompactWindowIds::new_initial(initial_window_id);
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {
@@ -1606,13 +1597,12 @@ impl Session {
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids.clone(),
-                context_window_id_generator,
                 ContextManager::for_session(
                     session_configuration.root_capabilities_restricted,
                     &config.features,
                     config.guardian_reuses_parent_compaction(),
                     config.guardian_context_budgeting(),
-                    Arc::clone(&item_id_generator),
+                    context_ids.clone(),
                 ),
             );
             if matches!(initial_history, InitialHistory::Resumed(_)) {
@@ -1871,7 +1861,7 @@ impl Session {
                     AgentIdentityAuthPolicy::JwtOnly
                 },
                 thread_id,
-                Arc::clone(&item_id_generator),
+                context_ids.clone(),
                 session_configuration.session_source.clone(),
                 session_configuration.originator.clone(),
                 config.model_verbosity,
@@ -2014,7 +2004,7 @@ impl Session {
             let (mcp_prewarm_tx, mcp_prewarm_rx) = async_channel::bounded(1);
             let sess = Arc::new(Session {
                 thread_id,
-                item_id_generator,
+                context_ids,
                 agent_runtime,
                 outcome_reporting,
                 installation_id,

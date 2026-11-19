@@ -158,7 +158,7 @@ impl ToolCallRuntime {
             .features
             .enabled(codex_features::Feature::FileBackedToolAudio);
         let recorder = self.session.services.executed_tool_calls.clone();
-        let item_id_generator = Arc::clone(&self.session.item_id_generator);
+        let context_ids = self.session.context_ids.clone();
         let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
         let call_state = Arc::new(ToolCallState::default());
@@ -191,11 +191,7 @@ impl ToolCallRuntime {
                     .get_or_insert_default()
                     .delivered_assistant_message = Some(text.clone());
             }
-            recorder.attach_direct_call_to_output(
-                &mut response.item,
-                recorded_call,
-                &item_id_generator,
-            );
+            recorder.attach_direct_call_to_output(&mut response.item, recorded_call, &context_ids);
             Ok(response)
         }
     }

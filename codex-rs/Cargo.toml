@@ -166,6 +166,8 @@ members = [
     "terminal-detection",
     "test-binary-support",
     "thread-manager-sample",
+    "thread-context-ids",
+    "thread-context-ids/tests/support",
     "thread-store",
     "uds",
     "codex-experimental-api-macros",
@@ -307,6 +309,8 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
+codex-thread-context-ids = { path = "thread-context-ids" }
+codex-thread-context-ids-test-support = { path = "thread-context-ids/tests/support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tcp-tunnel = { path = "tcp-tunnel" }

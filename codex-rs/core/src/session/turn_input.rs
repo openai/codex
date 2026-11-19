@@ -871,7 +871,7 @@ impl Session {
             )]),
             self.additional_context_format(),
             &task.turn_context.session_telemetry,
-            &self.item_id_generator,
+            &self.context_ids,
         );
         if !input.is_empty() {
             self.input_queue
