@@ -1521,21 +1521,23 @@ mod tests {
         );
     }
 
-    #[test_case::test_case(false, false, false; "foreground bills a complete response even without a summary")]
-    #[test_case::test_case(true, false, false; "background bills a complete response even without a summary")]
-    #[test_case::test_case(false, true, false; "turn interrupt discards a queued complete response")]
-    #[test_case::test_case(true, true, false; "session shutdown bills a queued complete response even without a summary")]
-    #[test_case::test_case(false, false, true; "a malformed sibling is still reported when valid spending exhausts the account")]
+    #[test_case::test_case(false, false, false, None; "foreground bills a complete response even without a summary")]
+    #[test_case::test_case(true, false, false, None; "background bills a complete response even without a summary")]
+    #[test_case::test_case(false, true, false, None; "turn interrupt discards a queued complete response")]
+    #[test_case::test_case(true, true, false, None; "session shutdown bills a queued complete response even without a summary")]
+    #[test_case::test_case(false, false, true, None; "a malformed sibling is still reported when valid spending exhausts the account")]
     #[tokio::test]
     async fn collect_queued_complete_response(
         background: bool,
         interrupted: bool,
         bad_sibling: bool,
+        host_total: Option<f64>,
     ) {
-        let (mut sess, turn, _) = crate::session::tests::make_session_and_context_with_rx().await;
+        let (mut sess, turn, _events) =
+            crate::session::tests::make_session_and_context_with_rx().await;
         let accounting = Arc::new(UsageRecorder {
             reports: Mutex::new(Vec::new()),
-            decision: if bad_sibling {
+            decision: if bad_sibling || host_total.is_some() {
                 UsageAccountingDecision::Exhausted
             } else {
                 UsageAccountingDecision::Continue
