@@ -1252,7 +1252,7 @@ async fn v2_implicit_and_explicit_invocations_retain_their_step_catalog() -> Tes
             TurnInputContext {
                 step_store,
                 turn_id: "turn-1".to_string(),
-                user_input: vec![UserInput::Mention {
+                user_input: &[UserInput::Mention {
                     name: installed.name.clone(),
                     path: installed.main_prompt.as_str().to_string(),
                 }],
@@ -1398,7 +1398,7 @@ async fn v2_shadow_observation_tracks_merged_skills_independently_of_read_route(
                     TurnInputContext {
                         step_store: &harness.step_store,
                         turn_id: turn_id.to_string(),
-                        user_input: vec![UserInput::Text {
+                        user_input: &[UserInput::Text {
                             text: "continue".to_string(),
                             text_elements: Vec::new(),
                         }],

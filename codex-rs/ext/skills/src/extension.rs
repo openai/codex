@@ -375,14 +375,14 @@ where
                 self.emit_warning(thread_store.level_id(), Some(&input.turn_id), warning);
             }
 
-            let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
+            let selected_entries = collect_explicit_skill_mentions(input.user_input, &catalog);
             let shadow_selection_turn = if config.shadow_selection_enabled {
                 let mut shadow_catalog = catalog.clone();
                 if let Some(host_skills) = host_skills {
                     shadow_catalog.extend(host_skills.clone());
                 }
                 let shadow_selected_entries =
-                    collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);
+                    collect_explicit_skill_mentions(input.user_input, &shadow_catalog);
                 Some(self.shadow_selection.start(
                     &input,
                     shadow_catalog,

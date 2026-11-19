@@ -141,7 +141,7 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
                 TurnInputContext {
                     step_store: &turn_store,
                     turn_id: turn_id.to_string(),
-                    user_input: vec![UserInput::Skill {
+                    user_input: &[UserInput::Skill {
                         name: "selected".to_string(),
                         path: "selected/SKILL.md".into(),
                     }],

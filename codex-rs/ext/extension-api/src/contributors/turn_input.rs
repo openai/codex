@@ -23,8 +23,8 @@ pub struct TurnInputContext<'a> {
     pub step_store: &'a crate::ExtensionData,
     /// Stable host-owned turn identifier.
     pub turn_id: String,
-    /// User input submitted for this turn.
-    pub user_input: Vec<UserInput>,
+    /// User input submitted for this turn, borrowed from the host for the contribution.
+    pub user_input: &'a [UserInput],
     /// Resolved turn environments, in host priority order.
     pub environments: Vec<TurnInputEnvironment<'a>>,
 }

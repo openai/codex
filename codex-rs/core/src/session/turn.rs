@@ -1566,7 +1566,7 @@ async fn build_extension_turn_input_items(
     let input = TurnInputContext {
         step_store: &step_context.extension_data,
         turn_id: turn_context.sub_id.to_string(),
-        user_input: user_input.to_vec(),
+        user_input,
         environments,
     };
     let extension_metrics =

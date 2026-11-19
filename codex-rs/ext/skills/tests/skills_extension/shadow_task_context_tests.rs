@@ -170,7 +170,7 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
                 TurnInputContext {
                     step_store: &ExtensionData::new("step"),
                     turn_id: turn_id.to_string(),
-                    user_input,
+                    user_input: &user_input,
                     environments: vec![codex_extension_api::TurnInputEnvironment {
                         environment_id: "test".to_string(),
                         cwd: PathUri::from_host_native_path(

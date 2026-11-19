@@ -85,8 +85,8 @@ impl ShadowSelectionExperiment {
         recent_skill_invocations: Arc<RecentSkillInvocations>,
         task_context: Arc<ShadowTaskContext>,
     ) -> ShadowSelectionTurnState {
-        let query = build_shadow_query(&input.user_input);
-        let task_snapshot = task_context.begin_turn(&input.turn_id, &query, &input.user_input);
+        let query = build_shadow_query(input.user_input);
+        let task_snapshot = task_context.begin_turn(&input.turn_id, &query, input.user_input);
         let recent_skill_resources = recent_skill_invocations.snapshot();
         let explicitly_selected_skill_resources = explicitly_selected
             .iter()

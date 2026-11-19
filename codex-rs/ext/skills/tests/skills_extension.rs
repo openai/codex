@@ -387,7 +387,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         TurnInputContext {
             step_store: &ExtensionData::new("step"),
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Text {
+            user_input: &[UserInput::Text {
                 text: "$demo".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1064,7 +1064,7 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
         TurnInputContext {
             step_store: &step_store,
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Text {
+            user_input: &[UserInput::Text {
                 text: "Fix lint errors.".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1170,7 +1170,7 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
             TurnInputContext {
                 step_store: &ExtensionData::new("step"),
                 turn_id: turn_id.to_string(),
-                user_input: vec![UserInput::Text {
+                user_input: &[UserInput::Text {
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],
@@ -1372,7 +1372,7 @@ async fn selected_executor_catalog_caches_root_selections_per_turn_and_reuses_di
         TurnInputContext {
             step_store: &step_store,
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Text {
+            user_input: &[UserInput::Text {
                 text: "$lint-fix please".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -3009,7 +3009,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         TurnInputContext {
             step_store: &step_store,
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Mention {
+            user_input: &[UserInput::Mention {
                 name: "lint-fix".to_string(),
                 path: root_b_locator.to_string(),
             }],
@@ -3277,7 +3277,7 @@ async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
         TurnInputContext {
             step_store: &step_store,
             turn_id: "turn-1".to_string(),
-            user_input: Vec::new(),
+            user_input: &[],
             environments: Vec::new(),
         },
         /*extension_metrics*/ None,
@@ -3384,7 +3384,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
         TurnInputContext {
             step_store: &ExtensionData::new("step"),
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Text {
+            user_input: &[UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -3470,7 +3470,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         TurnInputContext {
             step_store: &ExtensionData::new("step"),
             turn_id: "turn-1".to_string(),
-            user_input: vec![UserInput::Text {
+            user_input: &[UserInput::Text {
                 text: "$hidden-skill".to_string(),
                 text_elements: Vec::new(),
             }],
