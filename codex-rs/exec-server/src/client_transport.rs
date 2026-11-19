@@ -361,6 +361,7 @@ impl ExecServerClient {
         transport_params: ExecServerTransportParams,
         http_client_factory: HttpClientFactory,
         started: &mut Option<Instant>,
+        provisioning_deadline: &mut Option<Instant>,
     ) -> Result<Self, ExecServerError> {
         let (transport_params, deferred_readiness) = match transport_params {
             ExecServerTransportParams::Deferred(deferred) => {
@@ -369,28 +370,31 @@ impl ExecServerClient {
             transport_params => (transport_params, None),
         };
 
-        let provisioning_deadline = if let Some(mut readiness) = deferred_readiness {
-            let provisioning_result = readiness
-                .wait_for(Option::is_some)
-                .await
-                .map_err(|_| {
-                    ExecServerError::Disconnected(
+        let effective_provisioning_deadline =
+            if let Some(mut readiness) = deferred_readiness {
+                let provisioning_result = readiness
+                    .wait_for(Option::is_some)
+                    .await
+                    .map_err(|_| {
+                        ExecServerError::Disconnected(
                         "environment unavailable: environment provisioning ended before completion"
                             .to_string(),
                     )
-                })?
-                .clone()
-                .ok_or_else(|| {
-                    ExecServerError::Disconnected(
+                    })?
+                    .clone()
+                    .ok_or_else(|| {
+                        ExecServerError::Disconnected(
                         "environment unavailable: provisioning remained pending after completion"
                             .to_string(),
                     )
-                })?;
-            provisioning_result.map_err(ExecServerError::ProvisioningFailed)?;
-            Some(Instant::now() + PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT)
-        } else {
-            None
-        };
+                    })?;
+                provisioning_result.map_err(ExecServerError::ProvisioningFailed)?;
+                Some(*provisioning_deadline.get_or_insert_with(|| {
+                    Instant::now() + PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT
+                }))
+            } else {
+                None
+            };
 
         *started = Some(Instant::now());
         let websocket = match transport_params {
@@ -415,7 +419,7 @@ impl ExecServerClient {
                     &provider,
                     &identity,
                     http_client_factory.clone(),
-                    provisioning_deadline,
+                    effective_provisioning_deadline,
                 )
                 .await?;
                 let reconnect_strategy = ExecServerReconnectStrategy::NoiseRendezvous {

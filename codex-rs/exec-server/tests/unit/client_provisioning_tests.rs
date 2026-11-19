@@ -36,7 +36,7 @@ async fn caller_after_ready_retries_an_unpublished_provisioning_failure(reconnec
         attempt
             .result
             .get_or_init(|| async {
-                let result = startup_client.connect_once(&attempt).await;
+                let result = startup_client.connect_with_retry(&attempt).await;
                 assert!(result.is_err());
                 failed_tx.send(()).expect("failure observed");
                 // Suspend at the publication boundary, as another executor thread could.

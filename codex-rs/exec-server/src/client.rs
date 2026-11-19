@@ -564,7 +564,7 @@ impl LazyRemoteExecServerClient {
         } else {
             self.startup
                 .result
-                .get_or_init(|| self.connect_once(&self.startup))
+                .get_or_init(|| self.connect_with_retry(&self.startup))
                 .await
                 .clone()
                 .map_err(ExecServerError::ConnectionAttempt)
@@ -599,7 +599,7 @@ impl LazyRemoteExecServerClient {
         };
         let result = attempt
             .result
-            .get_or_init(|| self.connect_once(&attempt))
+            .get_or_init(|| self.connect_with_retry(&attempt))
             .await;
         let mut reconnect = self
             .reconnect
@@ -2373,6 +2373,7 @@ mod tests {
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
             /*started*/ &mut None,
+            /*provisioning_deadline*/ &mut None,
         )
         .await
         .expect("stdio transport should connect");
@@ -2402,6 +2403,39 @@ mod tests {
         .expect("stdio client should connect");
 
         assert_eq!(client.session_id().as_deref(), Some("stdio-test"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_stdio_initialization_terminates_spawned_process() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let pid_file = tempdir.path().join("server.pid");
+        let script = format!(
+            "read _line; echo \"$$\" > {}; read _line",
+            shell_quote(pid_file.as_path()),
+        );
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "sh".to_string(),
+                    args: vec!["-c".to_string(), script],
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(60),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        let initializing = tokio::spawn({
+            let client = client.clone();
+            async move { client.get().await }
+        });
+        let pid = read_pid_file(&pid_file).await;
+        assert!(process_exists(pid));
+        initializing.abort();
+        let _ = initializing.await;
+        wait_for_process_exit(pid).await;
+        assert!(!client.startup_finished());
     }
 
     #[cfg(unix)]
@@ -3403,14 +3437,21 @@ mod tests {
             listener.local_addr().expect("listener should have address")
         );
         let (replacement_initialized_tx, replacement_initialized_rx) = oneshot::channel();
+        let (allow_replacement_tx, allow_replacement_rx) = watch::channel(false);
         let server = tokio::spawn(async move {
-            let (mut failed_startup, _) = listener.accept().await.expect("startup should arrive");
-            failed_startup
-                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+            let replacement = loop {
+                let (mut stream, _) = listener.accept().await.expect("startup should arrive");
+                if *allow_replacement_rx.borrow() {
+                    break stream;
+                }
+                stream
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .expect("failed handshake response should write");
+            };
+            let mut replacement = accept_async(replacement)
                 .await
-                .expect("failed handshake response should write");
-
-            let mut replacement = accept_websocket(&listener).await;
+                .expect("replacement websocket");
             complete_websocket_initialize(
                 &mut replacement,
                 "replacement-session",
@@ -3459,6 +3500,7 @@ mod tests {
             EnvironmentObservedStatus::Disconnected { .. }
         ));
 
+        allow_replacement_tx.send(true).expect("allow replacement");
         let (ready, first, second) =
             tokio::join!(client.wait_until_ready(), client.get(), client.get());
         ready.expect("later readiness check should retry startup");
@@ -3470,16 +3512,110 @@ mod tests {
             .await
             .expect("server should observe replacement initialization");
 
+        let outcomes = std::iter::from_fn(|| observed_rx.try_recv().ok()).collect::<Vec<_>>();
         assert_eq!(
-            std::iter::from_fn(|| observed_rx.try_recv().ok()).collect::<Vec<_>>(),
-            [
-                crate::ConnectionAttemptOutcome::Failure,
-                crate::ConnectionAttemptOutcome::Success
-            ],
+            outcomes.last(),
+            Some(&crate::ConnectionAttemptOutcome::Success)
+        );
+        assert!(outcomes.len() >= 2);
+        assert!(
+            outcomes[..outcomes.len() - 1]
+                .iter()
+                .all(|outcome| *outcome == crate::ConnectionAttemptOutcome::Failure)
         );
 
         drop(first);
         drop(second);
+        drop(client);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn startup_retry_is_shared_after_initialize_transport_closes() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+        let (initialized_tx, initialized_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut failed = accept_websocket(&listener).await;
+            let initialize = read_jsonrpc_websocket(&mut failed).await;
+            assert!(
+                matches!(initialize, JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD)
+            );
+            // The executor may have received initialize, but the caller never sees its response.
+            drop(failed);
+            let mut replacement = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut replacement,
+                "replacement-session",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+            initialized_tx.send(()).expect("replacement initialized");
+            timeout(Duration::from_secs(1), replacement.next())
+                .await
+                .expect("client should close");
+        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+                http_headers: HeaderMap::new(),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+        assert!(
+            client
+                .connection_observer
+                .set(Arc::new(move |_, outcome| {
+                    observed_tx
+                        .send(outcome)
+                        .expect("record connection outcome");
+                }))
+                .is_ok()
+        );
+
+        let background = client.start_connecting().expect("background startup task");
+        let initiator = tokio::spawn({
+            let client = client.clone();
+            async move { client.get().await }
+        });
+        assert_eq!(
+            observed_rx.recv().await,
+            Some(crate::ConnectionAttemptOutcome::Failure)
+        );
+        assert!(!client.startup_finished());
+        assert!(client.readiness_result().is_none());
+        assert!(matches!(
+            client.status().await,
+            EnvironmentObservedStatus::Pending
+        ));
+        initiator.abort();
+        let _ = initiator.await;
+        timeout(Duration::from_secs(2), initialized_rx)
+            .await
+            .expect("startup should progress without any waiter")
+            .expect("server observed initialization");
+
+        let (ready, first, second) =
+            tokio::join!(client.wait_until_ready(), client.get(), client.get());
+        ready.expect("startup should recover");
+        let first = first.expect("first waiter should connect");
+        let second = second.expect("second waiter should connect");
+        assert_eq!(first.session_id().as_deref(), Some("replacement-session"));
+        assert!(Arc::ptr_eq(&first.inner, &second.inner));
+        assert!(client.startup_finished());
+        assert_eq!(
+            observed_rx.recv().await,
+            Some(crate::ConnectionAttemptOutcome::Success)
+        );
+        assert!(observed_rx.try_recv().is_err());
+        drop(first);
+        drop(second);
+        drop(background);
         drop(client);
         server.await.expect("server task should finish");
     }
@@ -3553,6 +3689,10 @@ mod tests {
         })
         .await
         .expect("client should observe disconnect");
+        timeout(Duration::from_millis(50), client.wait_until_ready())
+            .await
+            .expect("historical startup readiness must not reconnect")
+            .expect("initial startup succeeded");
         let failed_reconnect = match client.get().await {
             Ok(_) => panic!("first lazy reconnect should fail"),
             Err(error) => error,
