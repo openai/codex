@@ -72,7 +72,7 @@ impl TraceReducer {
         tool_call_id: &str,
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
-        if !runtime_payload.capture.is_complete() {
+        if !runtime_payload.is_complete() {
             return Ok(());
         }
         let kind = self
@@ -135,7 +135,7 @@ impl TraceReducer {
     ) -> Result<()> {
         let kind = self.rollout.tool_calls[tool_call_id].kind.clone();
         // MCP results are opaque evidence; they cannot describe agent interactions.
-        if !runtime_payload.capture.is_complete() || matches!(kind, ToolCallKind::Mcp { .. }) {
+        if !runtime_payload.is_complete() || matches!(kind, ToolCallKind::Mcp { .. }) {
             return Ok(());
         }
         let runtime_payload_json = self.payload_reader.read_json(runtime_payload)?;

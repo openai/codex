@@ -73,6 +73,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         terminal_ids_by_process: BTreeMap::new(),
         process_ids_by_terminal: BTreeMap::new(),
         thread_conversation_snapshots: BTreeMap::new(),
+        structured_output_hashes: BTreeMap::new(),
         pending_compaction_replacement_item_ids: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
         last_thread_resume_seq: BTreeMap::new(),
@@ -220,6 +221,8 @@ struct TraceReducer {
     process_ids_by_terminal: BTreeMap<String, String>,
     /// Latest request and its response items, used to reconcile the next request.
     thread_conversation_snapshots: BTreeMap<String, Vec<String>>,
+    /// Full identities for JSON tool outputs whose reduced bodies contain only a preview.
+    structured_output_hashes: BTreeMap<String, [u8; 32]>,
     /// Replacement snapshot installed by compaction but not yet seen in a sampling request.
     ///
     /// The first full request after compaction should compare against the installed replacement

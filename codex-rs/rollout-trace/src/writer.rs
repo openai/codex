@@ -79,7 +79,6 @@ pub(crate) struct BundleWriter {
     metadata_bytes: u64,
     event_log_full: bool,
     items: HashMap<(RawPayloadKind, [u8; 32]), RawPayloadRef>,
-    writing_content: bool,
     next_seq: u64,
     next_payload_ordinal: u64,
     // Keep the first error so explicit reads and shutdown can detect an incomplete recording.
@@ -107,31 +106,119 @@ impl BundleWriter {
         kind: RawPayloadKind,
         body: &[u8],
     ) -> Result<RawPayloadRef> {
-        let parts = capture_parts(kind, body, self.limits.max_payload_bytes)?;
+        self.write_body_for_event(kind, body, |_, reference| {
+            Ok(serde_json::to_vec(&reference)?.len() as u64)
+        })
+    }
+
+    fn write_body_for_event(
+        &mut self,
+        kind: RawPayloadKind,
+        body: &[u8],
+        event_bytes: impl Fn(&Self, RawPayloadRef) -> Result<u64>,
+    ) -> Result<RawPayloadRef> {
+        let tool = matches!(
+            kind,
+            RawPayloadKind::ToolResult | RawPayloadKind::ToolRuntimeEvent
+        );
+        let parts = if tool {
+            crate::tool_content::large_string_values(body)
+        } else {
+            capture_parts(kind, body, self.limits.max_payload_bytes)?
+        };
+        // Deduplication determines how many IDs we assign, so budget for the last possible ID.
+        // Shard admission determines capture status. Truncation carries two byte counts.
+        // Within the body cap, omission costs more than a complete ref even with a 20-digit shard.
+        let last_ordinal = self.next_payload_ordinal.saturating_add(parts.len() as u64);
+        let ref_bound = |kind, bytes| RawPayloadRef {
+            raw_payload_id: format!("raw_payload:{last_ordinal}"),
+            kind,
+            shard: (bytes > self.limits.max_payload_bytes).then_some(last_ordinal),
+            capture: if bytes > self.limits.max_payload_bytes {
+                PayloadCapture::Truncated {
+                    original_bytes: bytes,
+                    retained_bytes: self.limits.max_payload_bytes,
+                }
+            } else {
+                PayloadCapture::Omitted {
+                    original_bytes: bytes,
+                }
+            },
+            parts: Vec::new(),
+        };
+        let compact_reserve = if tool {
+            event_bytes(self, ref_bound(kind, body.len()))?
+        } else {
+            0
+        };
+        let unsplit = |writer: &mut Self| {
+            writer.store_body(kind, body, body.len(), Vec::new(), compact_reserve)
+        };
         if parts.is_empty() {
-            return self.store_body(kind, body, body.len(), Vec::new());
+            return unsplit(self);
         }
         // Literal fragments preserve whitespace, key order and escapes without reserving a
         // sentinel in user JSON. A missing child occupies exactly one original value slot.
         let mut fragments = Vec::with_capacity(parts.len() + 1);
-        let mut children = Vec::with_capacity(parts.len());
         let mut end = 0;
-        for (range, child_kind) in parts {
+        for (range, _) in &parts {
             fragments.push(std::str::from_utf8(&body[end..range.start])?);
             end = range.end;
+        }
+        fragments.push(std::str::from_utf8(&body[end..])?);
+        // The literal structure can itself exceed the cap. Fall back before any child is written.
+        if tool
+            && fragments
+                .iter()
+                .map(|fragment| fragment.len())
+                .sum::<usize>()
+                > self.limits.max_payload_bytes
+        {
+            return unsplit(self);
+        }
+        let layout = serde_json::to_vec(&fragments)?;
+        if tool && layout.len() > self.limits.max_payload_bytes {
+            return unsplit(self);
+        }
+        let mut reserved = 0;
+        if tool {
+            // The split stores a compressed layout and shares each distinct value across
+            // occurrences. The uncompressed event log still lists a ref for every occurrence.
+            // Budget the whole event before writing children. If it would crowd out later
+            // lifecycle events, capture the original as one capped or omitted body.
+            let mut parent = ref_bound(kind, body.len());
+            parent.parts = parts
+                .iter()
+                .map(|(range, kind)| ref_bound(*kind, range.len()))
+                .collect();
+            reserved = event_bytes(self, parent)?;
+            let used = self.metadata_bytes + self.shards.charged_bytes() + self.lifecycle_reserve();
+            if reserved > self.limits.max_bytes.saturating_sub(used) {
+                return unsplit(self);
+            }
+        }
+        let mut children = Vec::with_capacity(parts.len());
+        for (range, child_kind) in parts {
             let bytes = &body[range];
             let key = (child_kind, Sha256::digest(bytes).into());
             let child = if let Some(child) = self.items.get(&key) {
                 child.clone()
             } else {
-                let child = self.write_body(child_kind, bytes)?;
+                let child = if child_kind == RawPayloadKind::ContentValue {
+                    self.store_body(child_kind, bytes, bytes.len(), Vec::new(), reserved)?
+                } else {
+                    self.write_body(child_kind, bytes)?
+                };
                 self.items.insert(key, child.clone());
                 child
             };
             children.push(child);
         }
-        fragments.push(std::str::from_utf8(&body[end..])?);
-        self.store_body(kind, &serde_json::to_vec(&fragments)?, body.len(), children)
+        self.store_body(kind, &layout, body.len(), children, reserved)
+    }
+
+    fn lifecycle_reserve(&self) -> u64 {
+        (self.limits.max_bytes / 8).min(1 << 20)
     }
 
     fn store_body(
@@ -140,14 +227,8 @@ impl BundleWriter {
         body: &[u8],
         original_bytes: usize,
         parts: Vec<RawPayloadRef>,
+        event_reserve: u64,
     ) -> Result<RawPayloadRef> {
-        // Bridge admits whole shards. Keep attachment bytes out of shards that carry
-        // message structure, so omitting a media shard cannot hide a tool or its links.
-        let content = kind == RawPayloadKind::ContentValue;
-        if self.writing_content != content {
-            self.shards.finish()?;
-            self.writing_content = content;
-        }
         let ordinal = self.next_payload_ordinal;
         let raw_payload_id = format!("raw_payload:{ordinal}");
         // Layout is metadata. Applying the individual body cap to it would hide surviving siblings.
@@ -156,15 +237,18 @@ impl BundleWriter {
         } else {
             body.len()
         };
-        // Leave room for lifecycle events and their explicit omitted-body references.
-        let reserve = (self.limits.max_bytes / 8).min(1 << 20);
+        // Admit each shard write by its compressed size. Hold back space for this tool
+        // event's references until append publishes it, plus the usual lifecycle reserve.
+        let reserve = self.lifecycle_reserve();
+        let content = kind == RawPayloadKind::ContentValue;
         let shard_limit = self
             .limits
             .max_bytes
+            .saturating_sub(event_reserve)
             .saturating_sub(self.metadata_bytes + reserve + if content { reserve } else { 0 });
         let shard =
             self.shards
-                .append_with_limit(&raw_payload_id, &body[..retained], shard_limit)?;
+                .append_with_limit(kind, &raw_payload_id, &body[..retained], shard_limit)?;
         let capture = if shard.is_none() {
             PayloadCapture::Omitted { original_bytes }
         } else if retained != body.len() {
@@ -196,15 +280,7 @@ impl BundleWriter {
             // Closure is observed here, after draining earlier jobs.
             wall_time_unix_ms = unix_time_ms();
         }
-        let event = RawTraceEvent {
-            schema_version: RAW_TRACE_EVENT_SCHEMA_VERSION,
-            seq: self.next_seq,
-            wall_time_unix_ms,
-            rollout_id: self.rollout_id.clone(),
-            thread_id: context.thread_id,
-            codex_turn_id: context.codex_turn_id,
-            payload,
-        };
+        let event = self.raw_event(context, payload, wall_time_unix_ms);
         let mut bytes = serde_json::to_vec(&event)?;
         bytes.push(b'\n');
         if self.metadata_bytes + self.shards.charged_bytes() + bytes.len() as u64
@@ -218,6 +294,23 @@ impl BundleWriter {
         self.events.flush()?;
         self.next_seq += 1;
         Ok(event)
+    }
+
+    fn raw_event(
+        &self,
+        context: RawTraceEventContext,
+        payload: RawTraceEventPayload,
+        wall_time_unix_ms: i64,
+    ) -> RawTraceEvent {
+        RawTraceEvent {
+            schema_version: RAW_TRACE_EVENT_SCHEMA_VERSION,
+            seq: self.next_seq,
+            wall_time_unix_ms,
+            rollout_id: self.rollout_id.clone(),
+            thread_id: context.thread_id,
+            codex_turn_id: context.codex_turn_id,
+            payload,
+        }
     }
 }
 
@@ -274,7 +367,6 @@ impl TraceWriter {
             metadata_bytes,
             event_log_full: false,
             items: HashMap::new(),
-            writing_content: false,
             next_seq: 1,
             next_payload_ordinal: 1,
             failure: Arc::clone(&failure),
@@ -367,18 +459,27 @@ impl TraceWriter {
 
     /// Encodes a borrowed observation before returning. The worker handles its
     /// bytes or serialization error in order, preserving previously accepted evidence.
+    /// The event constructor also supplies the envelope when budgeting tool references.
     pub(crate) fn event_with_payload(
         &self,
         context: RawTraceEventContext,
         kind: RawPayloadKind,
         value: &impl Serialize,
-        event: impl FnOnce(RawPayloadRef) -> RawTraceEventPayload + Send + 'static,
+        event: impl FnOnce(RawPayloadRef) -> RawTraceEventPayload + Clone + Send + 'static,
     ) -> Result<()> {
         check_recording(&self.failure)?;
         let body = serde_json::to_vec(value);
-        self.defer_event(context, move |bundle| {
-            let reference = bundle.write_body(kind, &body?)?;
-            Ok(event(reference))
+        let now = unix_time_ms();
+        self.submit(move |bundle| {
+            let _ = bundle.record(|bundle| {
+                let reference =
+                    bundle.write_body_for_event(kind, &body?, |writer, reference| {
+                        let candidate =
+                            writer.raw_event(context.clone(), event.clone()(reference), now);
+                        Ok(serde_json::to_vec(&candidate)?.len() as u64 + 1)
+                    })?;
+                bundle.append(context, event(reference), now)
+            });
         })
     }
 
@@ -390,7 +491,7 @@ impl TraceWriter {
 
 impl Drop for TraceWriter {
     fn drop(&mut self) {
-        // The closing event seals the shard after earlier jobs. Joining makes it visible on return.
+        // The closing event seals all shards after earlier jobs. Joining makes it visible on return.
         if !thread::panicking() {
             let _ = self.enqueue_event(
                 RawTraceEventContext::default(),

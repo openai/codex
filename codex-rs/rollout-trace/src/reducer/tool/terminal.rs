@@ -28,6 +28,7 @@ use crate::model::TerminalRequest;
 use crate::model::TerminalResult;
 use crate::model::TerminalSession;
 use crate::model::ToolCallKind;
+use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
 use crate::raw_event::RawEventSeq;
 use crate::reducer::TraceReducer;
@@ -93,7 +94,7 @@ impl TraceReducer {
             return Ok(None);
         };
 
-        if !runtime_payload.capture.is_complete() {
+        if !runtime_payload.is_complete() {
             return Ok(None);
         }
         let payload = self.payload_reader.read_json(runtime_payload)?;
@@ -175,13 +176,44 @@ impl TraceReducer {
         else {
             bail!("terminal end referenced unknown operation {operation_id}");
         };
-        let response = response_payload
-            .filter(|p| p.capture.is_complete())
-            .map(|payload| {
-                let value = self.payload_reader.read_json(payload)?;
-                parse_terminal_response_payload(value, &operation_kind, &payload.raw_payload_id)
-            })
-            .transpose()?;
+        let response = match response_payload {
+            Some(payload)
+                if payload.capture.is_complete()
+                    && (payload.kind == RawPayloadKind::ToolRuntimeEvent
+                        || payload.is_complete()) =>
+            {
+                // A retained exec-end parent still carries the exit code and process ID.
+                // observed_json maps an unavailable output child to null.
+                let value = self.payload_reader.observed_json(payload)?.value;
+                Some(parse_terminal_response_payload(
+                    value,
+                    &operation_kind,
+                    &payload.raw_payload_id,
+                )?)
+            }
+            Some(payload)
+                if payload.capture.is_complete()
+                    && operation_kind == TerminalOperationKind::WriteStdin =>
+            {
+                let observed = self.payload_reader.observed_json(payload)?;
+                // Missing stdout has a child ID at the same path. A literal null does not.
+                let has_exec_output = observed.value["value"]["output"].is_string()
+                    || observed.missing["value"]["output"].is_string();
+                if has_exec_output
+                    && let DispatchedToolTraceResponsePayload::CodeModeResponse { value } =
+                        serde_json::from_value(observed.value)?
+                {
+                    let result: CodeModeExecResult = serde_json::from_value(value)?;
+                    Some(ParsedTerminalResponse {
+                        process_id: None,
+                        result: result.into(),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
 
         let process_id = {
             let Some(operation) = self.rollout.terminal_operations.get_mut(operation_id) else {
@@ -507,7 +539,7 @@ fn parse_protocol_terminal_response(payload: ExecCommandEndPayload) -> ParsedTer
         process_id: payload.process_id,
         result: TerminalResult {
             exit_code: Some(payload.exit_code),
-            stdout: payload.aggregated_output,
+            stdout: payload.aggregated_output.unwrap_or_default(),
             stderr: String::new(),
             formatted_output: None,
             original_token_count: None,
@@ -557,15 +589,8 @@ fn parse_dispatch_terminal_response(value: JsonValue) -> Result<ParsedTerminalRe
 
 fn parse_code_mode_exec_result(value: JsonValue) -> TerminalResult {
     match serde_json::from_value::<CodeModeExecResult>(value.clone()) {
-        Ok(result) => TerminalResult {
-            exit_code: result.exit_code,
-            stdout: result.output.clone(),
-            stderr: String::new(),
-            formatted_output: Some(result.output),
-            original_token_count: result.original_token_count,
-            chunk_id: result.chunk_id,
-        },
-        Err(_) => {
+        Ok(result) if result.output.is_some() => result.into(),
+        _ => {
             let output = json_text_content(&value).unwrap_or_else(|| value.to_string());
             TerminalResult {
                 exit_code: None,
@@ -614,8 +639,7 @@ struct ExecCommandBeginPayload {
 #[derive(Deserialize)]
 struct ExecCommandEndPayload {
     process_id: Option<String>,
-    #[serde(default)]
-    aggregated_output: String,
+    aggregated_output: Option<String>,
     exit_code: i32,
 }
 
@@ -655,7 +679,20 @@ struct CodeModeExecResult {
     chunk_id: Option<String>,
     exit_code: Option<i32>,
     original_token_count: Option<usize>,
-    output: String,
+    output: Option<String>,
+}
+
+impl From<CodeModeExecResult> for TerminalResult {
+    fn from(result: CodeModeExecResult) -> Self {
+        Self {
+            exit_code: result.exit_code,
+            stdout: result.output.clone().unwrap_or_default(),
+            stderr: String::new(),
+            formatted_output: result.output,
+            original_token_count: result.original_token_count,
+            chunk_id: result.chunk_id,
+        }
+    }
 }
 
 #[cfg(test)]

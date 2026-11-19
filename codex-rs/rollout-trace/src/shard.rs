@@ -17,11 +17,14 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use serde::de::IgnoredAny;
+use serde_json::Value;
+use serde_json::value::RawValue;
 use zstd::stream::write::Encoder;
 
 use crate::bundle::PAYLOADS_DIR_NAME;
 use crate::payload::PayloadCapture;
 use crate::payload::RawPayloadId;
+use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
 
 const WINDOW_LOG: u32 = 23;
@@ -35,92 +38,124 @@ fn shard_path(directory: &Path, number: u64) -> PathBuf {
 
 pub(crate) struct ShardWriter {
     directory: PathBuf,
-    active: Option<Encoder<'static, BufWriter<File>>>,
-    number: u64,
-    bytes: usize,
+    active: [Option<ActiveShard>; 2],
+    last_number: u64,
     closed_bytes: u64,
-    active_bytes: u64,
+}
+
+struct ActiveShard {
+    number: u64,
+    encoder: Encoder<'static, BufWriter<File>>,
+    uncompressed_bytes: usize,
+    compressed_bytes: u64,
+}
+
+// Bridge can omit large content shards while retaining their parent layouts.
+// Each stream keeps its compression window across writes to the other stream.
+fn stream_index(kind: RawPayloadKind) -> usize {
+    usize::from(kind == RawPayloadKind::ContentValue)
 }
 
 impl ShardWriter {
     pub(crate) fn new(directory: PathBuf) -> Self {
         Self {
             directory,
-            active: None,
-            number: 0,
-            bytes: 0,
+            active: [None, None],
+            last_number: 0,
             closed_bytes: 0,
-            active_bytes: 0,
         }
     }
 
-    /// Reserve the final empty block and checksum while a flushed frame is still live.
+    /// Reserve the final empty block and checksum for each flushed, live frame.
     pub(crate) fn charged_bytes(&self) -> u64 {
-        self.closed_bytes + self.active_bytes + if self.active.is_some() { 7 } else { 0 }
+        self.closed_bytes
+            + self
+                .active
+                .iter()
+                .flatten()
+                .map(|shard| shard.compressed_bytes + 7)
+                .sum::<u64>()
     }
 
     /// Near the budget boundary, trial-compress one independent frame. A body that
     /// does not fit then leaves both the published prefix and future small writes intact.
     pub(crate) fn append_with_limit(
         &mut self,
+        kind: RawPayloadKind,
         id: &str,
         body: &[u8],
         limit: u64,
     ) -> Result<Option<u64>> {
         let size = HEADER_BYTES + id.len() + body.len();
         let bound = zstd::zstd_safe::compress_bound(size) as u64 + 128;
-        if self.charged_bytes().saturating_add(bound) <= limit {
-            return self.append(id, body).map(Some);
+        let remaining = limit.saturating_sub(self.charged_bytes());
+        if bound <= remaining {
+            return self.append(kind, id, body).map(Some);
         }
-        self.finish()?;
-        if self.closed_bytes >= limit {
+        if remaining == 0 {
             return Ok(None);
         }
         let mut encoder = new_encoder(Vec::new())?;
         write_record(&mut encoder, id, body)?;
         let frame = encoder.finish()?;
-        if frame.len() as u64 > limit - self.closed_bytes {
+        if frame.len() as u64 > remaining {
             return Ok(None);
         }
-        let number = self.number + 1;
+        self.finish_stream(stream_index(kind))?;
+        let number = self.last_number + 1;
         let mut file = File::create_new(shard_path(&self.directory, number))?;
         file.write_all(&frame)?;
         self.closed_bytes += frame.len() as u64;
-        self.number = number;
+        self.last_number = number;
         Ok(Some(number))
     }
 
     /// Returns the shard containing this whole record once it is readable.
-    pub(crate) fn append(&mut self, id: &str, body: &[u8]) -> Result<u64> {
+    fn append(&mut self, kind: RawPayloadKind, id: &str, body: &[u8]) -> Result<u64> {
+        let stream = stream_index(kind);
         let size = HEADER_BYTES + id.len() + body.len();
-        if self.bytes.saturating_add(size) > TARGET_BYTES {
-            self.finish()?;
+        if self.active[stream]
+            .as_ref()
+            .is_some_and(|shard| shard.uncompressed_bytes.saturating_add(size) > TARGET_BYTES)
+        {
+            self.finish_stream(stream)?;
         }
-        let encoder = match self.active.as_mut() {
+        let shard = match self.active[stream].as_mut() {
             Some(active) => active,
             None => {
-                self.number += 1;
-                self.bytes = 0;
-                let path = shard_path(&self.directory, self.number);
+                let number = self.last_number + 1;
+                let path = shard_path(&self.directory, number);
                 let file = File::create_new(&path)
                     .with_context(|| format!("create shard {}", path.display()))?;
-                self.active.insert(new_encoder(BufWriter::new(file))?)
+                self.last_number = number;
+                self.active[stream].insert(ActiveShard {
+                    number,
+                    encoder: new_encoder(BufWriter::new(file))?,
+                    uncompressed_bytes: 0,
+                    compressed_bytes: 0,
+                })
             }
         };
-        write_record(encoder, id, body)?;
-        encoder.flush()?;
-        self.active_bytes = encoder.get_ref().get_ref().metadata()?.len();
-        self.bytes += size;
-        Ok(self.number)
+        write_record(&mut shard.encoder, id, body)?;
+        shard.encoder.flush()?;
+        shard.compressed_bytes = shard.encoder.get_ref().get_ref().metadata()?.len();
+        shard.uncompressed_bytes += size;
+        Ok(shard.number)
     }
 
-    /// Flushes the frame footer before the event log can publish RecordingCompleted.
-    pub(crate) fn finish(&mut self) -> Result<()> {
-        if let Some(active) = self.active.take() {
-            let mut file = active.finish()?;
+    fn finish_stream(&mut self, stream: usize) -> Result<()> {
+        if let Some(shard) = self.active[stream].take() {
+            let mut file = shard.encoder.finish()?;
             file.flush()?;
             self.closed_bytes += file.get_ref().metadata()?.len();
-            self.active_bytes = 0;
+        }
+        Ok(())
+    }
+
+    /// Publish all frame footers before the event log publishes RecordingCompleted.
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        for stream in 0..self.active.len() {
+            self.finish_stream(stream)?;
         }
         Ok(())
     }
@@ -200,6 +235,13 @@ impl DecodedShard {
     }
 }
 
+/// Partial JSON for semantic reduction. The parallel tree contains a payload ID at each
+/// missing slot. Other positions have no ID, even if the literal value looks like one.
+pub(crate) struct ObservedJson {
+    pub(crate) value: Value,
+    pub(crate) missing: Value,
+}
+
 /// Keeps the two most recently read shards so replay can cross a shard boundary
 /// in either direction. A shard larger than the target occupies the cache alone.
 pub struct PayloadReader {
@@ -230,28 +272,37 @@ impl PayloadReader {
             return self.read_inner(payload, /*require_sealed*/ false);
         }
         let mut bytes = Vec::new();
-        self.assemble(payload, &mut bytes)?;
+        self.assemble(payload, &mut bytes, &mut BTreeMap::new())?;
         self.assembled = bytes;
         Ok(&self.assembled)
     }
 
-    /// Read the surviving structure for reduction. Known gaps occupy their original slots.
-    /// Exact replay uses `read`, which rejects a body with any missing descendant.
-    pub(crate) fn observed_json(&mut self, payload: &RawPayloadRef) -> Result<serde_json::Value> {
+    /// Read what survived capture, keeping gap metadata separate from the observed value.
+    pub(crate) fn observed_json(&mut self, payload: &RawPayloadRef) -> Result<ObservedJson> {
         if payload.is_complete() {
-            return self.read_json(payload);
+            return Ok(ObservedJson {
+                value: self.read_json(payload)?,
+                missing: Value::Null,
+            });
         }
         let mut bytes = Vec::new();
-        self.assemble(payload, &mut bytes)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        let mut gaps = BTreeMap::new();
+        self.assemble(payload, &mut bytes, &mut gaps)?;
+        let value = serde_json::from_slice(&bytes)?;
+        let raw = serde_json::from_slice(&bytes)?;
+        let missing = missing_slots(raw, bytes.as_ptr() as usize, &gaps)?;
+        Ok(ObservedJson { value, missing })
     }
 
-    fn assemble(&mut self, payload: &RawPayloadRef, bytes: &mut Vec<u8>) -> Result<()> {
+    fn assemble<'a>(
+        &mut self,
+        payload: &'a RawPayloadRef,
+        bytes: &mut Vec<u8>,
+        gaps: &mut BTreeMap<usize, &'a str>,
+    ) -> Result<()> {
         if !payload.capture.is_complete() {
-            serde_json::to_writer(
-                bytes,
-                &serde_json::json!({"$trace_unavailable": payload.raw_payload_id}),
-            )?;
+            gaps.insert(bytes.len(), &payload.raw_payload_id);
+            bytes.extend_from_slice(b"null");
         } else if payload.parts.is_empty() {
             bytes.extend_from_slice(self.read_inner(payload, /*require_sealed*/ false)?);
         } else {
@@ -261,7 +312,7 @@ impl PayloadReader {
             )?;
             bytes.extend_from_slice(fragments[0].as_bytes());
             for (part, suffix) in payload.parts.iter().zip(&fragments[1..]) {
-                self.assemble(part, bytes)?;
+                self.assemble(part, bytes, gaps)?;
                 bytes.extend_from_slice(suffix.as_bytes());
             }
         }
@@ -290,16 +341,20 @@ impl PayloadReader {
         recording_closed: bool,
     ) -> Result<()> {
         // Group reads to decompress each shard just once during validation.
-        // Only the last shard can legitimately lack its footer in a live recording.
         let mut refs: Vec<_> = index.values().collect();
         refs.sort_unstable_by_key(|p| p.shard);
-        let last = refs.last().and_then(|p| p.shard);
+        // Either stream can rotate while the other stays open at an older shard number.
+        let mut last_shard = [None; 2];
+        for payload in &refs {
+            last_shard[stream_index(payload.kind)] = payload.shard;
+        }
         for payload in refs {
             if matches!(payload.capture, PayloadCapture::Omitted { .. }) {
                 ensure!(payload.shard.is_none(), "omitted payload has a shard");
                 continue;
             }
-            let sealed = recording_closed || payload.shard != last;
+            let sealed =
+                recording_closed || payload.shard != last_shard[stream_index(payload.kind)];
             let bytes = self.read_inner(payload, sealed)?;
             if let PayloadCapture::Truncated {
                 original_bytes,
@@ -361,6 +416,34 @@ impl PayloadReader {
             })?;
         Ok(&cached.bytes[range.clone()])
     }
+}
+
+/// Project missing byte offsets onto JSON positions. Only descend into containers with gaps.
+fn missing_slots(raw: &RawValue, base: usize, gaps: &BTreeMap<usize, &str>) -> Result<Value> {
+    let token = raw.get();
+    let start = token.as_ptr() as usize - base;
+    if let Some(id) = gaps.get(&start) {
+        return Ok(Value::String((*id).to_owned()));
+    }
+    if gaps.range(start..start + token.len()).next().is_none() {
+        return Ok(Value::Null);
+    }
+    if token.starts_with('[') {
+        let items: Vec<&RawValue> = serde_json::from_str(token)?;
+        return items
+            .into_iter()
+            .map(|item| missing_slots(item, base, gaps))
+            .collect();
+    }
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(token)?;
+    let mut missing = serde_json::Map::new();
+    for (key, child) in fields {
+        let slot = missing_slots(child, base, gaps)?;
+        if !slot.is_null() {
+            missing.insert(key, slot);
+        }
+    }
+    Ok(Value::Object(missing))
 }
 
 fn decode_fragments(bytes: &[u8], parts: usize) -> Result<Vec<String>> {

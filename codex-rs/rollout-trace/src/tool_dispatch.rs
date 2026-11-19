@@ -103,21 +103,6 @@ struct DispatchedToolTraceRequest<'a> {
     payload: &'a JsonValue,
 }
 
-/// Raw response payload for dispatch-level tool trace events.
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum DispatchedToolTraceResponse<'a> {
-    DirectResponse {
-        response_item: &'a ResponseInputItem,
-    },
-    CodeModeResponse {
-        value: &'a JsonValue,
-    },
-    Error {
-        error: String,
-    },
-}
-
 impl ToolDispatchTraceContext {
     /// Builds a context that accepts trace calls and records nothing.
     pub(crate) fn disabled() -> Self {
@@ -153,15 +138,7 @@ impl ToolDispatchTraceContext {
         let Some(context) = self.active.take() else {
             return;
         };
-        let response = match &result {
-            ToolDispatchResult::DirectResponse { response_item } => {
-                DispatchedToolTraceResponse::DirectResponse { response_item }
-            }
-            ToolDispatchResult::CodeModeResponse { value } => {
-                DispatchedToolTraceResponse::CodeModeResponse { value }
-            }
-        };
-        append_tool_call_ended(&context, status, &response);
+        append_tool_call_ended(&context, status, &result);
     }
 
     /// Records a dispatch failure before the tool produced a normal result payload.
@@ -172,9 +149,7 @@ impl ToolDispatchTraceContext {
         append_tool_call_ended(
             &context,
             ExecutionStatus::Failed,
-            &DispatchedToolTraceResponse::Error {
-                error: error.to_string(),
-            },
+            &json!({"type": "error", "error": error.to_string()}),
         );
     }
 }
@@ -344,7 +319,7 @@ fn truncate_preview(value: &str) -> String {
 fn append_tool_call_ended(
     context: &EnabledToolDispatchTraceContext,
     status: ExecutionStatus,
-    response: &DispatchedToolTraceResponse<'_>,
+    response: &impl Serialize,
 ) {
     let tool_call_id = context.tool_call_id.clone();
     let _ = context.writer.event_with_payload(

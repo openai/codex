@@ -386,7 +386,7 @@ fn record_partial_response(
     attempt: &EnabledInferenceTraceAttempt,
     upstream_request_id: Option<&str>,
     output_items: &[ResponseItem],
-    event: impl FnOnce(Option<crate::RawPayloadRef>) -> RawTraceEventPayload + Send + 'static,
+    event: impl FnOnce(Option<crate::RawPayloadRef>) -> RawTraceEventPayload + Clone + Send + 'static,
 ) {
     let ctx = &attempt.context;
     let envelope = RawTraceEventContext::turn(&ctx.thread_id, &ctx.codex_turn_id);

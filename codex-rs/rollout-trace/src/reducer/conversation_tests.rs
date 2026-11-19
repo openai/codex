@@ -556,6 +556,62 @@ fn request_reuses_prior_tool_outputs_with_internal_metadata() -> anyhow::Result<
 }
 
 #[test]
+fn tool_search_outputs_keep_the_evidence_for_each_version() -> anyhow::Result<()> {
+    let long_text = "prefix".repeat(340);
+    let a = json!(format!("{long_text}A"));
+    let b = json!(format!("{long_text}B"));
+    let null = json!(null);
+    for body_cap in [512, 8192] {
+        let (root, writer) = crate::writer::capture_tests::limited_trace(body_cap, 128 << 10)?;
+        start_thread(&writer, ROOT_THREAD_ID, "/root")?;
+        let mut requests = Vec::new();
+        for (index, (first, second)) in [
+            (&a, &null),
+            (&b, &null),
+            (&b, &null),
+            (&null, &b),
+            (&null, &null),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let turn = format!("turn-{index}");
+            start_turn(&writer, &turn)?;
+            let mut output = json!({"type": "tool_search_output", "call_id": "search", "tools": [
+                {"name": "one", "text": first}, {"name": "two", "text": second}
+            ]});
+            if index == 2 {
+                output["internal_chat_message_metadata_passthrough"] = json!({"text": a});
+            }
+            let request = writer
+                .write_json_payload(RawPayloadKind::InferenceRequest, &json!({"input":[output]}))?;
+            assert_eq!(
+                request.is_complete(),
+                body_cap > long_text.len() || index == 4
+            );
+            requests.push(request.raw_payload_id.clone());
+            append_inference_start(&writer, &format!("inference-{index}"), &turn, request)?;
+        }
+        drop(writer);
+        let rollout = replay_bundle(root.path())?;
+        // A changed value or a moved missing slot gets its own evidence. An exact repeat
+        // reuses the first sighting, and genuine JSON nulls form a distinct observation.
+        for (index, source) in [0, 1, 1, 3, 4].into_iter().enumerate() {
+            let item_id =
+                &rollout.inference_calls[&format!("inference-{index}")].request_item_ids[0];
+            let [ConversationPart::Json { raw_payload_id, .. }] =
+                rollout.conversation_items[item_id].body.parts.as_slice()
+            else {
+                panic!("expected JSON tool-search output");
+            };
+            assert_eq!(raw_payload_id, &requests[source]);
+        }
+        assert_eq!(rollout.conversation_items.len(), 4);
+    }
+    Ok(())
+}
+
+#[test]
 fn tool_output_versions_preserve_different_nested_metadata() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;

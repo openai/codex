@@ -328,6 +328,40 @@ fn accepted_tool_results_survive_without_inference_and_reuse_their_ids() -> anyh
 }
 
 #[test]
+fn capped_tool_output_keeps_the_next_stripped_id_in_its_original_slot() -> anyhow::Result<()> {
+    let (temp, writer) =
+        crate::writer::capture_tests::limited_trace(/*body*/ 512, /*bundle*/ 64 << 10)?;
+    start_thread(&writer, "thread-root", "/root")?;
+    start_turn(&writer, "turn-1")?;
+    let request = json!({"input": [
+        {"type": "function_call_output", "output": "x".repeat(1024)},
+        {"type": "function_call_output", "output": "retained"}
+    ]});
+    writer.append(RawTraceEventPayload::InferenceStarted {
+        inference_call_id: "sample".into(),
+        thread_id: "thread-root".into(),
+        codex_turn_id: "turn-1".into(),
+        model: "model".into(),
+        provider_name: "test".into(),
+        request_payload: writer.write_json_payload(RawPayloadKind::InferenceRequest, &request)?,
+        prepared_prompt_payload: writer
+            .write_json_payload(RawPayloadKind::PreparedPrompt, &request)?,
+        warmup_context_payload: None,
+        stripped_tool_output_ids: vec![(0, "large".into()), (1, "small".into())],
+    })?;
+    let state = replay_bundle(temp.path())?;
+    let ids = &state.inference_calls["sample"].request_item_ids;
+    assert_eq!(ids.len(), 1);
+    assert_eq!(
+        state.conversation_items[&ids[0]]
+            .responses_item_id
+            .as_deref(),
+        Some("small")
+    );
+    Ok(())
+}
+
+#[test]
 fn injected_outputs_keep_their_request_positions_and_native_ids() -> anyhow::Result<()> {
     for accept_first in [true, false] {
         let temp = TempDir::new()?;

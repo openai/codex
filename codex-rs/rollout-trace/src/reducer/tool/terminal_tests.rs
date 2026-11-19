@@ -19,6 +19,7 @@ use crate::model::TerminalResult;
 use crate::model::TerminalSession;
 use crate::model::ToolCallKind;
 use crate::model::ToolCallSummary;
+use crate::payload::PayloadCapture;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::ROOT_THREAD_ID;
@@ -37,8 +38,30 @@ use crate::writer::TraceWriter;
 
 #[test]
 fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
-    let temp = TempDir::new()?;
-    let writer = create_started_writer(&temp)?;
+    check_exec_terminal_result("ok\n", /*exit_code*/ 0, Some("ok\n"))
+}
+
+#[test]
+fn exec_end_retains_exit_code_and_session_when_output_is_omitted() -> anyhow::Result<()> {
+    // Numbered lines stay larger than the bundle budget even after compression.
+    let output = (0..32_768)
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    check_exec_terminal_result(
+        &output, /*exit_code*/ 17, /*expected_stdout*/ None,
+    )
+}
+
+fn check_exec_terminal_result(
+    output: &str,
+    exit_code: i32,
+    expected_stdout: Option<&str>,
+) -> anyhow::Result<()> {
+    let (temp, writer) = crate::writer::capture_tests::limited_trace(
+        /*body*/ 256 << 10,
+        /*bundle*/ 24 << 10,
+    )?;
+    start_thread(&writer, ROOT_THREAD_ID, "/root")?;
     start_turn(&writer, "turn-1")?;
     append_inference_with_tool_call(&writer)?;
 
@@ -94,11 +117,16 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
             "turn_id": "turn-1",
             "command": ["cargo", "test"],
             "cwd": "/repo",
-            "aggregated_output": "ok\n",
-            "exit_code": 0,
+            "aggregated_output": output,
+            "exit_code": exit_code,
             "status": "completed"
         }),
     )?;
+    if expected_stdout.is_none() {
+        assert!(runtime_end_payload.capture.is_complete());
+        assert!(matches!(runtime_end_payload.parts.as_slice(), [child]
+            if matches!(child.capture, PayloadCapture::Omitted { .. })));
+    }
     let runtime_end_payload_id = runtime_end_payload.raw_payload_id.clone();
     let runtime_end = writer.append_with_context(
         trace_context("turn-1"),
@@ -188,8 +216,8 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
                 max_output_tokens: None,
             },
             result: Some(TerminalResult {
-                exit_code: Some(0),
-                stdout: "ok\n".to_string(),
+                exit_code: Some(exit_code),
+                stdout: expected_stdout.unwrap_or_default().to_string(),
                 stderr: String::new(),
                 formatted_output: None,
                 original_token_count: None,
@@ -570,8 +598,91 @@ fn invalid_write_stdin_arguments_remain_failed_tool_calls() -> anyhow::Result<()
 
 #[test]
 fn code_mode_write_stdin_result_projects_structured_exec_fields() -> anyhow::Result<()> {
-    let temp = TempDir::new()?;
-    let writer = create_started_writer(&temp)?;
+    check_code_mode_write_stdin_result(/*body_limit*/ 128 << 10)
+}
+
+#[test]
+fn capped_code_mode_write_stdin_retains_structured_exec_fields() -> anyhow::Result<()> {
+    check_code_mode_write_stdin_result(/*body_limit*/ 4096)
+}
+
+fn check_code_mode_write_stdin_result(body_limit: usize) -> anyhow::Result<()> {
+    let output = "x".repeat(80 << 10);
+    let response = json!({
+        "type": "code_mode_response",
+        "value": {
+            "chunk_id": "abc123",
+            "wall_time_seconds": 1.25,
+            "exit_code": 0,
+            "original_token_count": 3,
+            "output": output
+        }
+    });
+    let retained_output = (body_limit > output.len()).then_some(output);
+    assert_eq!(
+        replay_write_stdin_result(body_limit, response, ExecutionStatus::Completed)?,
+        Some(TerminalResult {
+            exit_code: Some(0),
+            stdout: retained_output.clone().unwrap_or_default(),
+            stderr: String::new(),
+            formatted_output: retained_output,
+            original_token_count: Some(3),
+            chunk_id: Some("abc123".to_string()),
+        }),
+    );
+    Ok(())
+}
+
+#[test]
+fn capped_write_stdin_only_recovers_structured_output() -> anyhow::Result<()> {
+    let body_limit = 4 << 10;
+    let text = "x".repeat(80 << 10);
+    for (response, status) in [
+        (
+            json!({"type": "direct_response", "response_item": {"type": "function_call_output", "output": text}}),
+            ExecutionStatus::Completed,
+        ),
+        (
+            json!({"type": "error", "error": text}),
+            ExecutionStatus::Failed,
+        ),
+        // A literal null and a gap elsewhere do not identify a missing terminal output.
+        (
+            json!({"type": "code_mode_response", "value": {"output": null, "text": text}}),
+            ExecutionStatus::Completed,
+        ),
+    ] {
+        assert_eq!(
+            replay_write_stdin_result(body_limit, response, status)?,
+            None
+        );
+    }
+    let response = json!({
+        "type": "code_mode_response",
+        "value": {"output": "done", "exit_code": 17, "text": text},
+    });
+    assert_eq!(
+        replay_write_stdin_result(body_limit, response, ExecutionStatus::Completed)?,
+        Some(TerminalResult {
+            exit_code: Some(17),
+            stdout: "done".into(),
+            formatted_output: Some("done".into()),
+            stderr: String::new(),
+            original_token_count: None,
+            chunk_id: None,
+        })
+    );
+    Ok(())
+}
+
+fn replay_write_stdin_result(
+    body_limit: usize,
+    response: serde_json::Value,
+    status: ExecutionStatus,
+) -> anyhow::Result<Option<TerminalResult>> {
+    let (temp, writer) =
+        crate::writer::capture_tests::limited_trace(body_limit, /*bundle*/ 1 << 20)?;
+    start_thread(&writer, ROOT_THREAD_ID, "/root")?;
     start_turn(&writer, "turn-1")?;
 
     let request_payload = writer.write_json_payload(
@@ -587,19 +698,6 @@ fn code_mode_write_stdin_result_projects_structured_exec_fields() -> anyhow::Res
                     "yield_time_ms": 1000,
                     "max_output_tokens": 4000
                 }).to_string()
-            }
-        }),
-    )?;
-    let response_payload = writer.write_json_payload(
-        RawPayloadKind::ToolResult,
-        &json!({
-            "type": "code_mode_response",
-            "value": {
-                "chunk_id": "abc123",
-                "wall_time_seconds": 1.25,
-                "exit_code": 0,
-                "original_token_count": 3,
-                "output": "done\n"
             }
         }),
     )?;
@@ -625,29 +723,22 @@ fn code_mode_write_stdin_result_projects_structured_exec_fields() -> anyhow::Res
             invocation_payload: Some(request_payload),
         },
     )?;
-    writer.append_with_context(
+    writer.event_with_payload(
         trace_context("turn-1"),
-        RawTraceEventPayload::ToolCallEnded {
+        RawPayloadKind::ToolResult,
+        &response,
+        move |response_payload| RawTraceEventPayload::ToolCallEnded {
             tool_call_id: "tool-stdin".to_string(),
-            status: ExecutionStatus::Completed,
+            status,
             result_payload: Some(response_payload),
         },
     )?;
+    writer.flush()?;
 
     let rollout = replay_bundle(temp.path())?;
-    assert_eq!(
-        rollout.terminal_operations["terminal_operation:1"].result,
-        Some(TerminalResult {
-            exit_code: Some(0),
-            stdout: "done\n".to_string(),
-            stderr: String::new(),
-            formatted_output: Some("done\n".to_string()),
-            original_token_count: Some(3),
-            chunk_id: Some("abc123".to_string()),
-        }),
-    );
-
-    Ok(())
+    Ok(rollout.terminal_operations["terminal_operation:1"]
+        .result
+        .clone())
 }
 
 fn append_inference_with_tool_call(writer: &TraceWriter) -> anyhow::Result<()> {

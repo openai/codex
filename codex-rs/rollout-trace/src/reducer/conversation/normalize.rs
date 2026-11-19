@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 
 use crate::model::AgentMessageMetadata;
 use crate::model::ConversationBody;
@@ -31,6 +32,7 @@ pub(super) struct NormalizedConversationItem {
     pub(super) kind: ConversationItemKind,
     pub(super) agent_message: Option<AgentMessageMetadata>,
     pub(super) body: ConversationBody,
+    pub(super) structured_output_hash: Option<[u8; 32]>,
     pub(super) call_id: Option<String>,
 }
 
@@ -48,14 +50,15 @@ impl NormalizedConversationItem {
 pub(super) fn normalize_model_items(
     items: &[Value],
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<Vec<NormalizedConversationItem>> {
     let mut normalized_items = Vec::new();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         // Tools and reasoning settings configure inference. Their raw payload retains the control.
         if matches!(
             item.get("type").and_then(Value::as_str),
             Some("additional_tools" | "configuration_update")
-        ) || unavailable_ref(item, raw_payload).is_some()
+        ) || missing[index].is_string()
         {
             continue;
         }
@@ -64,7 +67,11 @@ pub(super) fn normalize_model_items(
         if let Some(object) = model_visible_item.as_object_mut() {
             object.remove("internal_chat_message_metadata_passthrough");
         }
-        normalized_items.push(normalize_model_item(&model_visible_item, raw_payload)?);
+        normalized_items.push(normalize_model_item(
+            &mut model_visible_item,
+            raw_payload,
+            &missing[index],
+        )?);
     }
     Ok(normalized_items)
 }
@@ -80,8 +87,9 @@ pub(super) fn token_usage_from_value(value: &Value) -> Option<TokenUsage> {
 }
 
 pub(super) fn normalize_model_item(
-    item: &Value,
+    item: &mut Value,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<NormalizedConversationItem> {
     let Some(item_type) = item.get("type").and_then(Value::as_str) else {
         bail!(
@@ -90,11 +98,12 @@ pub(super) fn normalize_model_item(
         );
     };
     let mut normalized = match item_type {
-        "message" => normalize_message_item(item, raw_payload),
-        "agent_message" => normalize_agent_message_item(item, raw_payload),
-        "reasoning" => normalize_reasoning_item(item, raw_payload),
+        "message" => normalize_message_item(item, raw_payload, missing),
+        "agent_message" => normalize_agent_message_item(item, raw_payload, missing),
+        "reasoning" => normalize_reasoning_item(item, raw_payload, missing),
         "function_call" => Ok(NormalizedConversationItem {
             responses_item_id: None,
+            structured_output_hash: None,
             role: ConversationRole::Assistant,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCall,
@@ -107,11 +116,12 @@ pub(super) fn normalize_model_item(
         }),
         "function_call_output" => Ok(NormalizedConversationItem {
             responses_item_id: None,
+            structured_output_hash: None,
             role: ConversationRole::Tool,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCallOutput,
             agent_message: None,
-            body: tool_output_body(item.get("output"), raw_payload)?,
+            body: tool_output_body(item.get("output"), raw_payload, &missing["output"])?,
             call_id: item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -119,6 +129,7 @@ pub(super) fn normalize_model_item(
         }),
         "custom_tool_call" => Ok(NormalizedConversationItem {
             responses_item_id: None,
+            structured_output_hash: None,
             role: ConversationRole::Assistant,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::CustomToolCall,
@@ -131,11 +142,12 @@ pub(super) fn normalize_model_item(
         }),
         "custom_tool_call_output" => Ok(NormalizedConversationItem {
             responses_item_id: None,
+            structured_output_hash: None,
             role: ConversationRole::Tool,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::CustomToolCallOutput,
             agent_message: None,
-            body: tool_output_body(item.get("output"), raw_payload)?,
+            body: tool_output_body(item.get("output"), raw_payload, &missing["output"])?,
             call_id: item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -144,6 +156,7 @@ pub(super) fn normalize_model_item(
         "tool_search_call" | "web_search_call" | "image_generation_call" | "local_shell_call" => {
             Ok(NormalizedConversationItem {
                 responses_item_id: None,
+                structured_output_hash: None,
                 role: ConversationRole::Assistant,
                 channel: Some(ConversationChannel::Commentary),
                 kind: ConversationItemKind::FunctionCall,
@@ -155,21 +168,37 @@ pub(super) fn normalize_model_item(
                     .map(ToString::to_string),
             })
         }
-        "tool_search_output" | "mcp_tool_call_output" => Ok(NormalizedConversationItem {
-            responses_item_id: None,
-            role: ConversationRole::Tool,
-            channel: Some(ConversationChannel::Commentary),
-            kind: ConversationItemKind::FunctionCallOutput,
-            agent_message: None,
-            body: json_body(item, raw_payload),
-            call_id: item
-                .get("call_id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-        }),
+        "tool_search_output" | "mcp_tool_call_output" => {
+            // A preview can truncate a difference or show null for two different missing
+            // values. Hash the full visible JSON and the missing child IDs at their paths.
+            let body = json_body(item, raw_payload);
+            item.sort_all_objects();
+            let gaps: BTreeMap<_, _> = missing
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(key, _)| item.get(key).is_some())
+                .collect();
+            let mut hash = Sha256::new();
+            serde_json::to_writer(&mut hash, &(&*item, gaps))?;
+            Ok(NormalizedConversationItem {
+                responses_item_id: None,
+                structured_output_hash: Some(hash.finalize().into()),
+                role: ConversationRole::Tool,
+                channel: Some(ConversationChannel::Commentary),
+                kind: ConversationItemKind::FunctionCallOutput,
+                agent_message: None,
+                body,
+                call_id: item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            })
+        }
         "compaction" | "compaction_summary" | "context_compaction" => {
             Ok(NormalizedConversationItem {
                 responses_item_id: None,
+                structured_output_hash: None,
                 role: ConversationRole::Assistant,
                 channel: Some(ConversationChannel::Summary),
                 kind: ConversationItemKind::Message,
@@ -190,6 +219,7 @@ pub(super) fn normalize_model_item(
 fn normalize_message_item(
     item: &Value,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<NormalizedConversationItem> {
     let Some(role) = item.get("role").and_then(Value::as_str) else {
         bail!(
@@ -205,6 +235,7 @@ fn normalize_message_item(
     };
     Ok(NormalizedConversationItem {
         responses_item_id: None,
+        structured_output_hash: None,
         role,
         channel: item
             .get("phase")
@@ -213,7 +244,7 @@ fn normalize_message_item(
         kind: ConversationItemKind::Message,
         agent_message: None,
         body: ConversationBody {
-            parts: content_parts(item.get("content"), raw_payload)?,
+            parts: content_parts(item.get("content"), raw_payload, &missing["content"])?,
         },
         call_id: None,
     })
@@ -222,17 +253,20 @@ fn normalize_message_item(
 fn normalize_agent_message_item(
     item: &Value,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<NormalizedConversationItem> {
     let raw_payload_id = &raw_payload.raw_payload_id;
     let routing = AgentMessageMetadata::deserialize(item).with_context(|| {
         format!("failed to parse agent_message routing in payload {raw_payload_id}")
     })?;
     let mut parts = Vec::new();
-    for part in item["content"]
+    for (index, part) in item["content"]
         .as_array()
         .context("expected agent_message content array")?
+        .iter()
+        .enumerate()
     {
-        if let Some(missing) = unavailable_ref(&part["text"], raw_payload) {
+        if let Some(missing) = missing["content"][index]["text"].as_str() {
             parts.push(payload_ref_part("text", missing));
             continue;
         }
@@ -252,6 +286,7 @@ fn normalize_agent_message_item(
 
     Ok(NormalizedConversationItem {
         responses_item_id: None,
+        structured_output_hash: None,
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Message,
@@ -264,6 +299,7 @@ fn normalize_agent_message_item(
 fn normalize_reasoning_item(
     item: &Value,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<NormalizedConversationItem> {
     let mut parts = Vec::new();
     append_reasoning_parts(
@@ -271,6 +307,7 @@ fn normalize_reasoning_item(
         "content",
         ReasoningPartKind::Content,
         raw_payload,
+        missing,
         &mut parts,
     )?;
     append_reasoning_parts(
@@ -278,6 +315,7 @@ fn normalize_reasoning_item(
         "summary",
         ReasoningPartKind::Summary,
         raw_payload,
+        missing,
         &mut parts,
     )?;
 
@@ -309,6 +347,7 @@ fn normalize_reasoning_item(
 
     Ok(NormalizedConversationItem {
         responses_item_id: None,
+        structured_output_hash: None,
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Reasoning,
@@ -329,6 +368,7 @@ fn append_reasoning_parts(
     key: &str,
     kind: ReasoningPartKind,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
     parts: &mut Vec<ConversationPart>,
 ) -> Result<()> {
     let Some(items) = item.get(key) else {
@@ -344,7 +384,7 @@ fn append_reasoning_parts(
         );
     };
 
-    for content_item in items {
+    for (index, content_item) in items.iter().enumerate() {
         let Some(item_type) = content_item.get("type").and_then(Value::as_str) else {
             bail!(
                 "reasoning item in payload {} had {key} entry without string type",
@@ -372,7 +412,7 @@ fn append_reasoning_parts(
             }
         };
 
-        if let Some(missing) = unavailable_ref(&content_item["text"], raw_payload) {
+        if let Some(missing) = missing[key][index]["text"].as_str() {
             parts.push(payload_ref_part(expected_type, missing));
             continue;
         }
@@ -417,31 +457,27 @@ fn channel_from_phase(phase: &str) -> Option<ConversationChannel> {
     }
 }
 
-/// Only interpret recorder-produced gaps backed by a partial reference in this payload.
-fn unavailable_ref<'a>(value: &Value, root: &'a RawPayloadRef) -> Option<&'a RawPayloadRef> {
-    let marker = value.as_object().filter(|obj| obj.len() == 1)?;
-    let id = marker.get("$trace_unavailable")?.as_str()?;
-    root.references()
-        .find(|r| r.raw_payload_id == id && !r.capture.is_complete())
-}
-
 fn content_parts(
     content: Option<&Value>,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<Vec<ConversationPart>> {
     let Some(content) = content.and_then(Value::as_array) else {
-        return Ok(vec![payload_ref_part("content", raw_payload)]);
+        return Ok(vec![payload_ref_part(
+            "content",
+            &raw_payload.raw_payload_id,
+        )]);
     };
 
     let mut parts = Vec::new();
-    for part in content {
+    for (index, part) in content.iter().enumerate() {
         match part.get("type").and_then(Value::as_str) {
             Some("input_text" | "output_text" | "text") => {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                     parts.push(ConversationPart::Text {
                         text: text.to_string(),
                     });
-                } else if let Some(missing) = unavailable_ref(&part["text"], raw_payload) {
+                } else if let Some(missing) = missing[index]["text"].as_str() {
                     parts.push(payload_ref_part("text", missing));
                 }
             }
@@ -452,12 +488,16 @@ fn content_parts(
                 canonical.sort_all_objects();
                 let mut digest = Sha256::new();
                 serde_json::to_writer(&mut digest, &canonical)?;
+                let missing_image = missing[index]["image_url"].as_str();
+                if let Some(id) = missing_image {
+                    digest.update([0]); // Include the shared child's identity in a partial observation.
+                    digest.update(id.as_bytes());
+                }
                 parts.push(ConversationPart::PayloadRef {
                     label: other.unwrap_or("content").to_string(),
-                    raw_payload_id: unavailable_ref(&part["image_url"], raw_payload)
-                        .unwrap_or(raw_payload)
-                        .raw_payload_id
-                        .clone(),
+                    raw_payload_id: missing_image
+                        .unwrap_or(&raw_payload.raw_payload_id)
+                        .to_owned(),
                     content_sha256: Some(format!("{:x}", digest.finalize())),
                 });
             }
@@ -500,7 +540,7 @@ fn raw_text_or_json_body(value: Option<&Value>, raw_payload: &RawPayloadRef) -> 
         }
         Some(value) => json_body(value, raw_payload),
         None => ConversationBody {
-            parts: vec![payload_ref_part("payload", raw_payload)],
+            parts: vec![payload_ref_part("payload", &raw_payload.raw_payload_id)],
         },
     }
 }
@@ -508,17 +548,18 @@ fn raw_text_or_json_body(value: Option<&Value>, raw_payload: &RawPayloadRef) -> 
 fn tool_output_body(
     output: Option<&Value>,
     raw_payload: &RawPayloadRef,
+    missing: &Value,
 ) -> Result<ConversationBody> {
     Ok(match output {
         Some(Value::String(text)) => ConversationBody {
             parts: vec![ConversationPart::Text { text: text.clone() }],
         },
         Some(Value::Array(_)) => ConversationBody {
-            parts: content_parts(output, raw_payload)?,
+            parts: content_parts(output, raw_payload, missing)?,
         },
         Some(value) => json_body(value, raw_payload),
         None => ConversationBody {
-            parts: vec![payload_ref_part("tool_output", raw_payload)],
+            parts: vec![payload_ref_part("tool_output", &raw_payload.raw_payload_id)],
         },
     })
 }
@@ -550,10 +591,10 @@ fn json_body(value: &Value, raw_payload: &RawPayloadRef) -> ConversationBody {
     }
 }
 
-fn payload_ref_part(label: &str, raw_payload: &RawPayloadRef) -> ConversationPart {
+fn payload_ref_part(label: &str, id: &str) -> ConversationPart {
     ConversationPart::PayloadRef {
         label: label.to_string(),
-        raw_payload_id: raw_payload.raw_payload_id.clone(),
+        raw_payload_id: id.to_string(),
         content_sha256: None,
     }
 }

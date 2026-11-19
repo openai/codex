@@ -124,12 +124,32 @@ A trace bundle contains:
 - `state.json`: reduced trace for consumers, written by `codex debug trace-reduce`.
 
 Schema v3 indexes numbered Zstandard shards in `state.json` under `raw_payloads`.
-Prepared prompts share exact input items. Inline images have independent references and shards,
-so losing an attachment preserves its position, sibling text and tool links. A composite record
-stores the literal JSON fragments around its ordered `parts`. Interleaving both reconstructs the
-original bytes, including whitespace and escapes. Hashes cover each entire value before truncation.
-`PayloadReader::read` returns the original bytes for complete bodies. A truncated body
-records its original and retained lengths and can be inspected with `read_prefix`.
+Prepared prompts share exact input items. In tool results and tool runtime events, the writer
+can share any string value whose JSON encoding is at least 64 KiB, including quotes and escapes.
+Each occurrence keeps its own parent record. Within one bundle, identical encoded values reuse
+one child reference. The writer hashes the complete value before applying capture limits.
+
+For example, two results might carry the same large string under unrelated keys:
+
+```text
+result A: {"preview": <large string>, "source": "raw_payload:7"}
+result B: {"attachments": [<same large string>]}
+
+A's literal fragments   {"preview":  |  , "source": "raw_payload:7"}
+A's parts                           [child #7]
+B's literal fragments   {"attachments": [  |  ]}
+B's parts                                 [child #7]
+```
+
+Only entries in the recorder's ordered `parts` are references. The reader inserts each child's
+bytes between adjacent fragments. Once it reaches a record with no parts, it returns its bytes
+verbatim. The literal `"raw_payload:7"` survives even when it names a real child in that bundle.
+
+`PayloadReader::read` reconstructs the original bytes, including whitespace and escapes, or
+reports an incomplete capture. The reducer can also read surviving JSON with a separate map of
+missing slots. This preserves the difference between a literal `null` and a value omitted by
+the recorder. A truncated record has original and retained lengths and can be inspected with
+`read_prefix`.
 
 Configure the capture limits in `config.toml`. Both values are in bytes.
 
@@ -158,16 +178,19 @@ The worker serializes the prompt, compresses both bodies, and writes them before
 publishing the start event. Remote compaction uses the same worker to snapshot
 the model, instructions, input history, and parallel tool-call setting. Up to
 eight jobs can wait for the worker. Use `TraceWriter::flush` to read a live
-snapshot. Shutdown waits for the worker to finish accepted jobs, seal the shard,
+snapshot. Shutdown waits for the worker to finish accepted jobs, seal the shards,
 and write the closing marker. A recording failure prevents the marker.
 
+The writer keeps one active shard for separated content values and one for all other
+records. Alternating between a value and its parent layout keeps both compression windows open.
 Each shard is one Zstandard frame (level 3, 8 MiB window, checksum enabled).
 Each record contains a little-endian 16-bit ID length, a little-endian 64-bit
 retained body length, the UTF-8 ID, then the retained bytes. The writer flushes a record
-before publishing its reference, and rotates before the next record would
-exceed 8 MiB uncompressed. An oversized record occupies one shard. The final
-frame is sealed before the writer publishes `RecordingCompleted`. A live bundle
-can be reduced through its published records with the last frame still open.
+before publishing its reference. Each stream rotates before its next record would
+exceed 8 MiB uncompressed. An oversized record occupies one shard. Near the
+bundle byte limit, a record can be admitted as a separately compressed frame.
+A live bundle can be reduced with both current frames open. The writer seals
+both before publishing `RecordingCompleted`.
 
 `trace_id` identifies this diagnostic artifact. `rollout_id` identifies the
 Codex rollout/session being observed. Keeping those separate lets us reason about
