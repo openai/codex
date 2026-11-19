@@ -7,12 +7,12 @@ expression: "screen(&view, 160, 22)"
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                                                                   Status         Updated  │ Task details
   Pinned  2                                                                                                           │
-  › ○ ☁︎ Current task                                                                          Ready              now  │ ☁︎ Current task
+  › ○ ☁️  Current task                                                                         Ready              now  │ ☁️  Current task
     ● Needs an answer                                                                         Needs input     2h ago  │ ○ Ready
                                                                                                                       │
   /tmp/project  4                                                                                                     │ Model: Unknown
-    ○ ☁︎ A longer task title that uses the available column                            voice   Ready           5m ago  │ Reasoning: Unknown
-    ● ☁︎ Failed task                                                                           Error           1h ago  │
+    ○ ☁️  A longer task title that uses the available column                           voice   Ready           5m ago  │ Reasoning: Unknown
+    ● ☁️  Failed task                                                                          Error           1h ago  │
     ● Working task                                                                            Working         1d ago  │ Project
     ○ Unloaded task                                                                           Inactive        2d ago  │ /tmp/project
                                                                                                                       │

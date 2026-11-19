@@ -4893,7 +4893,7 @@ mod tests {
         state.cloud_backends.insert(state.backend_id);
         insta::assert_snapshot!(
             render_expanded_session_details(&row, &state, /*width*/ 53)[0].to_string(),
-            @"  │ Session:    ☁︎ feat(tui): add raw scrollback mode…"
+            @"  │ Session:    ☁️ feat(tui): add raw scrollback mod…"
         );
         assert!(rendered.contains("Branch:      codex/raw-scrollback-mode"));
         assert!(rendered.contains("Conversation:"));
@@ -5243,7 +5243,7 @@ mod tests {
             )[0]
                 .to_string()
                 .trim_end(),
-            @"  42s ago     ☁︎ Fix resume p…"
+            @"  42s ago     ☁️ Fix resume …"
         );
     }
 

@@ -22,8 +22,8 @@ impl ThreadLabelStyle {
     fn prefix(self) -> &'static str {
         match self {
             Self::Plain => "",
-            // U+FE0E requests text presentation on terminals with emoji-capable fonts.
-            Self::Cloud => "☁\u{fe0e} ",
+            // U+FE0F requests emoji presentation.
+            Self::Cloud => "☁\u{fe0f} ",
         }
     }
 

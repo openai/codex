@@ -5392,7 +5392,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
     insta::assert_snapshot!(
         header.split_inclusive('×').take(2).collect::<String>(),
-        @" ☁︎ Investigate …×  ☁︎ Fix cache    ×"
+        @" ☁️  Investigate…×  ☁️  Fix cache   ×"
     );
     keys!(prefix, chooser_key);
     let frame = side_frame(&mut app, &mut tui, even)?;
@@ -5402,12 +5402,12 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         .filter_map(|line| line.split_once('│').map(|(_, pane)| pane))
         .filter(|pane| pane.contains("Investigate rendering") || pane.contains("Fix cache"))
         .map(|pane| pane.trim().trim_start_matches(['›', '○', ' ']))
-        .filter(|pane| pane.starts_with("☁︎"))
+        .filter(|pane| pane.starts_with("☁️"))
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(labels, @"
-    ☁︎ Investigate rendering
-    ☁︎ Fix cache
+    ☁️  Investigate rendering
+    ☁️  Fix cache
     ");
     keys!(KeyCode::Enter.into());
     app.backend_registry = local_registry;

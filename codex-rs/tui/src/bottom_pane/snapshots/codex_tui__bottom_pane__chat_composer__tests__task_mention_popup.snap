@@ -6,7 +6,7 @@ expression: terminal.backend()
 "  Mentions                                                                                          "
 "   All Results   Filesystem Only   Plugins                                                          "
 "  migr                                                                                              "
-"› ☁︎ Review database migration  /workspace/project                                             Task  "
+"› ☁️ Review database migration  /workspace/project                                            Task  " Hidden by multi-width symbols: [(3, " ")]
 "  enter/tab insert · esc close · ↑/↓ select · ←/→ filter                                            "
 "                                                                                                    "
 "› @migr                                                                                             "
