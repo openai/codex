@@ -3,28 +3,22 @@ use crate::SandboxTransformError;
 use crate::manager::SandboxBackend;
 use crate::manager::launch::SandboxOperation;
 use codex_network_proxy::ManagedNetworkSandboxContext;
-use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::PROXY_URL_ENV_KEYS;
-use codex_network_proxy::has_proxy_url_env_vars;
-use codex_network_proxy::proxy_url_env_value;
 use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
-use url::Url;
 
 pub(super) struct Seatbelt<'a> {
     pub(super) operation: &'a SandboxOperation,
     pub(super) allowed_symlinked_codex_home: Option<&'a AbsolutePathBuf>,
     pub(super) enforce_managed_network: bool,
-    pub(super) route: Option<ManagedNetworkSandboxContext>,
+    pub(super) route: Option<&'a ManagedNetworkSandboxContext>,
 }
 
 impl SandboxBackend for Seatbelt<'_> {
@@ -36,21 +30,6 @@ impl SandboxBackend for Seatbelt<'_> {
     ) -> Result<(), SandboxTransformError> {
         let (file_system_sandbox_policy, network_sandbox_policy) =
             exec.permission_profile.to_runtime_permissions();
-        let managed_network = match (self.route.take(), &exec.network) {
-            (None, Some(proxy)) => {
-                let prepared = proxy
-                    .prepare_for_optional_environment(
-                        std::mem::take(&mut exec.env),
-                        exec.network_environment_id.as_deref(),
-                    )
-                    .map_err(|err| {
-                        SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
-                    })?;
-                exec.env = prepared.env;
-                Some(prepared.sandbox_context)
-            }
-            (context, _) => context,
-        };
         let (profile, sockets) = match self.operation {
             SandboxOperation::Command => (MacosSeatbeltProfile::Process, [].as_slice()),
             SandboxOperation::InheritedTerminal { allow_unix_sockets } => (
@@ -68,21 +47,14 @@ impl SandboxBackend for Seatbelt<'_> {
                 network_sandbox_policy,
                 sandbox_policy_cwd: policy_cwd,
                 enforce_managed_network: self.enforce_managed_network,
-                managed_network: managed_network.as_ref(),
-                environment_id: exec.network_environment_id.as_deref(),
-                network: exec.network.as_ref(),
+                managed_network: self.route,
                 extra_allow_unix_sockets: sockets,
             },
             profile,
             self.allowed_symlinked_codex_home,
         )
-        .map_err(|err| match err {
-            SeatbeltPreparationError::FileSystem(message) => {
-                SandboxTransformError::SeatbeltPreparation(message)
-            }
-            SeatbeltPreparationError::EnvironmentNetworkProxy(message) => {
-                SandboxTransformError::EnvironmentNetworkProxy(message)
-            }
+        .map_err(|SeatbeltPreparationError::FileSystem(message)| {
+            SandboxTransformError::SeatbeltPreparation(message)
         })?;
         exec.command = std::iter::once(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_owned())
             .chain(args)
@@ -116,15 +88,12 @@ pub(crate) enum MacosSeatbeltProfile {
 #[derive(Debug)]
 pub(crate) enum SeatbeltPreparationError {
     FileSystem(String),
-    EnvironmentNetworkProxy(String),
 }
 
 impl std::fmt::Display for SeatbeltPreparationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FileSystem(message) | Self::EnvironmentNetworkProxy(message) => {
-                f.write_str(message)
-            }
+            Self::FileSystem(message) => f.write_str(message),
         }
     }
 }
@@ -134,53 +103,6 @@ impl std::fmt::Display for SeatbeltPreparationError {
 /// PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
 /// already has root access.
 pub const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
-}
-
-fn proxy_scheme_default_port(scheme: &str) -> u16 {
-    match scheme {
-        "https" => 443,
-        "socks5" | "socks5h" | "socks4" | "socks4a" => 1080,
-        _ => 80,
-    }
-}
-
-fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
-    let mut ports = BTreeSet::new();
-    for key in PROXY_URL_ENV_KEYS {
-        let Some(proxy_url) = proxy_url_env_value(env, key) else {
-            continue;
-        };
-        let trimmed = proxy_url.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let candidate = if trimmed.contains("://") {
-            trimmed.to_string()
-        } else {
-            format!("http://{trimmed}")
-        };
-        let Ok(parsed) = Url::parse(&candidate) else {
-            continue;
-        };
-        let Some(host) = parsed.host_str() else {
-            continue;
-        };
-        if !is_loopback_host(host) {
-            continue;
-        }
-
-        let scheme = parsed.scheme().to_ascii_lowercase();
-        let port = parsed
-            .port()
-            .unwrap_or_else(|| proxy_scheme_default_port(scheme.as_str()));
-        ports.insert(port);
-    }
-    ports.into_iter().collect()
-}
 
 #[derive(Debug, Default)]
 struct ProxyPolicyInputs {
@@ -232,59 +154,30 @@ struct UnixSocketPathParam {
 
 fn proxy_policy_inputs(
     managed_network: Option<&ManagedNetworkSandboxContext>,
-    network: Option<&NetworkProxy>,
-    environment_id: Option<&str>,
     extra_allow_unix_sockets: &[AbsolutePathBuf],
-) -> Result<ProxyPolicyInputs, String> {
+) -> ProxyPolicyInputs {
     let extra_allowed = extra_allow_unix_sockets
         .iter()
         .filter_map(|socket_path| normalize_path_for_sandbox(socket_path.as_path()))
         .collect::<Vec<_>>();
-
-    // Prefer this command's prepared Unix-socket policy.
-    // Fall back to the live proxy only when no prepared context exists.
-    let unix_domain_socket_policy = match (managed_network, network) {
-        (Some(context), _) if context.dangerously_allow_all_unix_sockets => {
-            UnixDomainSocketPolicy::AllowAll
-        }
-        (Some(context), _) => {
-            UnixDomainSocketPolicy::from_allowlist(&context.allow_unix_sockets, extra_allowed)
-        }
-        (None, Some(network)) if network.dangerously_allow_all_unix_sockets() => {
-            UnixDomainSocketPolicy::AllowAll
-        }
-        (None, Some(network)) => {
-            UnixDomainSocketPolicy::from_allowlist(&network.allow_unix_sockets(), extra_allowed)
-        }
-        (None, None) => UnixDomainSocketPolicy::Restricted {
-            allowed: extra_allowed,
-        },
-    };
-    if let Some(managed_network) = managed_network {
-        return Ok(ProxyPolicyInputs {
-            ports: managed_network.loopback_ports.clone(),
-            has_proxy_config: true,
-            allow_local_binding: managed_network.allow_local_binding,
-            unix_domain_socket_policy,
-        });
-    }
-    match network {
-        Some(network) => {
-            let mut env = HashMap::new();
-            network
-                .apply_to_env_for_optional_environment(&mut env, environment_id)
-                .map_err(|err| err.to_string())?;
-            Ok(ProxyPolicyInputs {
-                ports: proxy_loopback_ports_from_env(&env),
-                has_proxy_config: has_proxy_url_env_vars(&env),
-                allow_local_binding: network.allow_local_binding(),
-                unix_domain_socket_policy,
-            })
-        }
-        None => Ok(ProxyPolicyInputs {
-            unix_domain_socket_policy,
+    let Some(context) = managed_network else {
+        return ProxyPolicyInputs {
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: extra_allowed,
+            },
             ..Default::default()
-        }),
+        };
+    };
+    let unix_domain_socket_policy = if context.dangerously_allow_all_unix_sockets {
+        UnixDomainSocketPolicy::AllowAll
+    } else {
+        UnixDomainSocketPolicy::from_allowlist(&context.allow_unix_sockets, extra_allowed)
+    };
+    ProxyPolicyInputs {
+        ports: context.loopback_ports.clone(),
+        has_proxy_config: true,
+        allow_local_binding: context.allow_local_binding,
+        unix_domain_socket_policy,
     }
 }
 
@@ -412,18 +305,6 @@ fn dynamic_network_policy_for_network(
             policy.push_str(&unix_socket_policy);
         }
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
-    }
-
-    if proxy.has_proxy_config {
-        // Proxy configuration is present but we could not infer any valid loopback endpoints.
-        // Fail closed to avoid silently widening network access in proxy-enforced sessions.
-        return String::new();
-    }
-
-    if enforce_managed_network {
-        // Managed network requirements are active but no usable proxy endpoints
-        // are available. Fail closed for network access.
-        return String::new();
     }
 
     if network_policy.is_enabled() {
@@ -873,8 +754,6 @@ pub(crate) struct CreateSeatbeltCommandArgsParams<'a> {
     pub sandbox_policy_cwd: &'a Path,
     pub enforce_managed_network: bool,
     pub managed_network: Option<&'a ManagedNetworkSandboxContext>,
-    pub environment_id: Option<&'a str>,
-    pub network: Option<&'a NetworkProxy>,
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
@@ -902,8 +781,6 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         sandbox_policy_cwd,
         enforce_managed_network,
         managed_network,
-        environment_id,
-        network,
         extra_allow_unix_sockets,
     } = args;
 
@@ -1049,13 +926,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
             }
         };
 
-    let proxy = proxy_policy_inputs(
-        managed_network,
-        network,
-        environment_id,
-        extra_allow_unix_sockets,
-    )
-    .map_err(SeatbeltPreparationError::EnvironmentNetworkProxy)?;
+    let proxy = proxy_policy_inputs(managed_network, extra_allow_unix_sockets);
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 

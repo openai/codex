@@ -214,8 +214,6 @@ pub(crate) async fn execute_user_shell_command(
         exec_command,
         cwd.clone(),
         exec_env_map,
-        /*network*/ None,
-        /*network_environment_id*/ None,
         timeout_ms.unwrap_or(USER_SHELL_TIMEOUT_MS).into(),
         ExecCapturePolicy::ShellTool,
         SandboxType::None,

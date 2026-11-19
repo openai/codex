@@ -10,7 +10,7 @@ use std::path::Path;
 
 pub(super) struct Mxc<'a> {
     pub(super) sandbox_exe: Option<&'a Path>,
-    pub(super) route: Option<ManagedNetworkSandboxContext>,
+    pub(super) route: Option<&'a ManagedNetworkSandboxContext>,
 }
 
 impl SandboxBackend for Mxc<'_> {
@@ -28,7 +28,7 @@ impl SandboxBackend for Mxc<'_> {
                 command: std::mem::take(&mut exec.command),
                 permission_profile: &exec.permission_profile,
                 sandbox_policy_cwd: policy_cwd,
-                managed_network: self.route.as_ref(),
+                managed_network: self.route,
                 env: &mut exec.env,
             })
             .map_err(|err| SandboxTransformError::WindowsMxcPreparation(err.to_string()))?;

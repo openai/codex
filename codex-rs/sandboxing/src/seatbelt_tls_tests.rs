@@ -155,8 +155,6 @@ fn trust_evaluation_agent_access_follows_network_policy() {
             sandbox_policy_cwd: workspace.path(),
             enforce_managed_network: managed_network.is_some(),
             managed_network,
-            environment_id: None,
-            network: None,
             extra_allow_unix_sockets: extra_unix_sockets,
         })
         .expect("generated Seatbelt arguments");

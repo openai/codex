@@ -15,7 +15,6 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::ManagedNetworkSandboxContext;
-use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
@@ -135,8 +134,6 @@ impl ExecRequest {
         command: Vec<String>,
         cwd: AbsolutePathBuf,
         env: HashMap<String, String>,
-        network: Option<NetworkProxy>,
-        network_environment_id: Option<String>,
         expiration: ExecExpiration,
         capture_policy: ExecCapturePolicy,
         sandbox: SandboxType,
@@ -153,8 +150,8 @@ impl ExecRequest {
                 command,
                 cwd,
                 env,
-                network,
-                network_environment_id,
+                network: None,
+                network_environment_id: None,
                 sandbox,
                 sandbox_policy_cwd: windows_sandbox_policy_cwd,
                 windows_sandbox_level,

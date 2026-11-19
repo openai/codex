@@ -28,7 +28,6 @@ serde_json = { workspace = true }
 regex-lite = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true, features = ["log"] }
-url = { workspace = true }
 which = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

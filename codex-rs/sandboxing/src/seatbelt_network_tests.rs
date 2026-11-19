@@ -41,8 +41,6 @@ fn managed_local_binding_does_not_allow_external_dns() {
         sandbox_policy_cwd: workspace.path(),
         enforce_managed_network: true,
         managed_network: Some(&managed_network),
-        environment_id: None,
-        network: None,
         extra_allow_unix_sockets: &[],
     })
     .expect("generated Seatbelt arguments");

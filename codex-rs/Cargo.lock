@@ -4989,7 +4989,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "url",
  "which 8.0.0",
 ]
 

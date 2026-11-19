@@ -67,8 +67,6 @@ assert p.recv(2) == b'ok'
         sandbox_policy_cwd: workspace.path(),
         enforce_managed_network: false,
         managed_network: None,
-        environment_id: None,
-        network: None,
         extra_allow_unix_sockets: &[AbsolutePathBuf::from_absolute_path(root).unwrap()],
     })
     .unwrap();

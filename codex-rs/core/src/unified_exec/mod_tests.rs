@@ -70,14 +70,11 @@ fn test_exec_request(
     env: HashMap<String, String>,
 ) -> ExecRequest {
     let permission_profile = turn.permission_profile();
-    let network = None;
     let arg0 = None;
     ExecRequest::new(
         command,
         cwd,
         env,
-        network,
-        /*network_environment_id*/ None,
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,
         SandboxType::None,

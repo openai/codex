@@ -56,7 +56,6 @@ pub(super) struct Linux<'a> {
     pub(super) transparent_tcp: bool,
     pub(super) sandbox_exe: Option<&'a Path>,
     pub(super) use_legacy_landlock: bool,
-    pub(super) enforce_managed_network: bool,
     pub(super) route: Option<ManagedNetworkSandboxContext>,
 }
 
@@ -70,26 +69,6 @@ impl SandboxBackend for Linux<'_> {
         let exe = self
             .sandbox_exe
             .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-        self.route = match (
-            self.enforce_managed_network,
-            self.route.take(),
-            &exec.network,
-        ) {
-            (false, _, _) => None,
-            (true, None, Some(proxy)) => {
-                let prepared = proxy
-                    .prepare_for_optional_environment(
-                        std::mem::take(&mut exec.env),
-                        exec.network_environment_id.as_deref(),
-                    )
-                    .map_err(|err| {
-                        SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
-                    })?;
-                exec.env = prepared.env;
-                Some(prepared.sandbox_context)
-            }
-            (true, context, _) => Some(context.unwrap_or_default()),
-        };
         let mode = LinuxSandboxMode::resolve(self.use_legacy_landlock, self.route.as_ref());
         #[cfg(target_os = "linux")]
         if crate::bwrap::is_wsl1() {

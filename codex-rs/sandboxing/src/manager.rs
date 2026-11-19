@@ -464,7 +464,7 @@ impl SandboxManager {
                 }
             }
         }
-        let command = request.command;
+        let mut command = request.command;
         let SandboxNetwork {
             enforce_managed_network,
             proxy: network,
@@ -540,13 +540,25 @@ impl SandboxManager {
         .filter(|path| path.to_str().is_none())
         .map(OsStr::to_owned);
         let inner_arg_count = 1 + command.args.len();
+        let managed_network = match (command.managed_network, network) {
+            // A caller-prepared route already includes shell-specific credential handling.
+            (None, Some(proxy)) => {
+                let prepared = proxy
+                    .prepare_for_optional_environment(command.env, environment_id)
+                    .map_err(|err| {
+                        SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                    })?;
+                command.env = prepared.env;
+                Some(prepared.sandbox_context)
+            }
+            (route, _) => route,
+        };
         let wrapped = |request, windows_session| WrappedSandboxCommand {
             request,
             windows_session,
             inner_arg_count,
         };
-        let managed_network = command
-            .managed_network
+        let managed_network = managed_network
             .filter(|_| enforce_managed_network || backend == SandboxType::MacosSeatbelt);
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program.to_string_lossy().into_owned());
@@ -570,9 +582,12 @@ impl SandboxManager {
         }
         let managed_mitm_ca_trust_bundle_path = match request.executables {
             SandboxExecutables::Executor { .. } => None,
-            SandboxExecutables::Launcher(_) => {
-                network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path)
-            }
+            SandboxExecutables::Launcher(_) => network
+                .and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path)
+                .filter(|path| {
+                    path.to_str()
+                        .is_some_and(codex_network_proxy::is_managed_mitm_ca_trust_bundle_path)
+                }),
         };
         #[cfg(windows)]
         let mut session = None;
@@ -585,15 +600,14 @@ impl SandboxManager {
                 transparent_tcp: self.linux_sandbox_transparent_tcp,
                 sandbox_exe,
                 use_legacy_landlock: request.use_legacy_landlock,
-                enforce_managed_network,
-                route: managed_network,
+                route: enforce_managed_network.then(|| managed_network.unwrap_or_default()),
             },
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => &mut crate::seatbelt::Seatbelt {
                 operation: &self.operation,
                 allowed_symlinked_codex_home: self.allowed_symlinked_codex_home.as_ref(),
                 enforce_managed_network,
-                route: managed_network,
+                route: managed_network.as_ref(),
             },
             #[cfg(not(target_os = "macos"))]
             SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
@@ -603,24 +617,15 @@ impl SandboxManager {
                         "native MXC is unavailable on this executor".into(),
                     ));
                 }
-                let route = match managed_network {
-                    None if enforce_managed_network => {
-                        let proxy = network.ok_or_else(|| {
-                            SandboxTransformError::WindowsMxcPreparation(
-                                "managed networking requires an executor-local proxy".to_string(),
-                            )
-                        })?;
-                        let prepared = proxy
-                            .prepare_for_optional_environment(exec.env, environment_id)
-                            .map_err(|err| {
-                                SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
-                            })?;
-                        exec.env = prepared.env;
-                        Some(prepared.sandbox_context)
-                    }
-                    route => route,
-                };
-                &mut crate::windows_mxc::Mxc { sandbox_exe, route }
+                if enforce_managed_network && managed_network.is_none() {
+                    return Err(SandboxTransformError::WindowsMxcPreparation(
+                        "managed networking requires an executor-local proxy".into(),
+                    ));
+                }
+                &mut crate::windows_mxc::Mxc {
+                    sandbox_exe,
+                    route: managed_network.as_ref(),
+                }
             }
             #[cfg(not(windows))]
             SandboxType::WindowsRestrictedToken => {

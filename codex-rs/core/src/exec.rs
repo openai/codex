@@ -42,6 +42,7 @@ use codex_sandboxing::SandboxExecutables;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxNetwork;
 use codex_sandboxing::SandboxSelection;
+use codex_sandboxing::SandboxTransformError;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -125,16 +126,6 @@ pub enum ExecCapturePolicy {
     FullBufferWithExpiration,
     /// Full-buffer helpers that honor expiration and suppress unredacted sandbox diagnostics.
     SensitiveFullBuffer,
-}
-
-fn network_proxy_environment_error(
-    network_environment_id: Option<&str>,
-    err: impl std::fmt::Display,
-) -> CodexErr {
-    let environment_id = network_environment_id.unwrap_or("default");
-    CodexErr::Io(io::Error::other(format!(
-        "failed to prepare network proxy for environment `{environment_id}`: {err}"
-    )))
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -358,16 +349,6 @@ pub async fn build_exec_request(
 
     let manager = SandboxManager::new();
     let enforce_managed_network = network.is_some();
-    let (env, managed_network) = if let Some(network) = network.as_ref() {
-        let prepared = network
-            .prepare_for_optional_environment(env, network_environment_id.as_deref())
-            .map_err(|err| {
-                network_proxy_environment_error(network_environment_id.as_deref(), err)
-            })?;
-        (prepared.env, Some(prepared.sandbox_context))
-    } else {
-        (env, None)
-    };
     let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd);
     let workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
         std::slice::from_ref(&sandbox_policy_cwd_uri)
@@ -386,7 +367,7 @@ pub async fn build_exec_request(
         args: args.to_vec(),
         cwd,
         env,
-        managed_network,
+        managed_network: None,
         additional_permissions: None,
     };
     // An already-bound profile only needs its concrete paths validated. Its Windows
@@ -396,29 +377,39 @@ pub async fn build_exec_request(
     } else {
         &[]
     };
+    let request = SandboxTransformRequest {
+        command,
+        permissions: permission_profile,
+        workspace_roots: Some(policy_roots),
+        selection: SandboxSelection::Platform {
+            preference: SandboxablePreference::Auto,
+            windows_sandbox: windows_sandbox_type,
+        },
+        network: SandboxNetwork::new(
+            enforce_managed_network,
+            network.as_ref(),
+            network_environment_id.as_deref(),
+        ),
+        sandbox_policy_cwd: &sandbox_policy_cwd_uri,
+        executables: SandboxExecutables::Launcher(if cfg!(windows) {
+            codex_self_exe.as_deref()
+        } else {
+            codex_linux_sandbox_exe.as_deref()
+        }),
+        use_legacy_landlock,
+        windows_sandbox_level,
+    };
+    let wrapped = manager.transform(request).map_err(|err| match err {
+        SandboxTransformError::EnvironmentNetworkProxy(message) => {
+            let environment_id = network_environment_id.as_deref().unwrap_or("default");
+            CodexErr::Io(io::Error::other(format!(
+                "failed to prepare network proxy for environment `{environment_id}`: {message}"
+            )))
+        }
+        other => other.into(),
+    })?;
     let request = PreparedLocalExecRequest::from_wrapped(
-        manager.transform(SandboxTransformRequest {
-            command,
-            permissions: permission_profile,
-            workspace_roots: Some(policy_roots),
-            selection: SandboxSelection::Platform {
-                preference: SandboxablePreference::Auto,
-                windows_sandbox: windows_sandbox_type,
-            },
-            network: SandboxNetwork::new(
-                enforce_managed_network,
-                network.as_ref(),
-                network_environment_id.as_deref(),
-            ),
-            sandbox_policy_cwd: &sandbox_policy_cwd_uri,
-            executables: SandboxExecutables::Launcher(if cfg!(windows) {
-                codex_self_exe.as_deref()
-            } else {
-                codex_linux_sandbox_exe.as_deref()
-            }),
-            use_legacy_landlock,
-            windows_sandbox_level,
-        })?,
+        wrapped,
         expiration,
         capture_policy,
         workspace_roots,
@@ -616,7 +607,7 @@ async fn exec_windows_sandbox(
     let ExecParams {
         command,
         cwd,
-        mut env,
+        env,
         network,
         network_environment_id,
         expiration,
@@ -624,13 +615,6 @@ async fn exec_windows_sandbox(
         windows_sandbox_level,
         ..
     } = params;
-    if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
-            .map_err(|err| {
-                network_proxy_environment_error(network_environment_id.as_deref(), err)
-            })?;
-    }
     let network_proxy_restricting_sid = network
         .as_ref()
         .map(|network| {
@@ -922,9 +906,10 @@ async fn exec(
     let ExecParams {
         command,
         cwd,
-        mut env,
-        network,
-        network_environment_id,
+        env,
+        // Retain the proxy for the lifetime of the child.
+        network: _network,
+        network_environment_id: _,
         arg0,
         expiration,
         capture_policy,
@@ -936,13 +921,6 @@ async fn exec(
         sandbox_permissions: _,
         justification: _,
     } = params;
-    if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
-            .map_err(|err| {
-                network_proxy_environment_error(network_environment_id.as_deref(), err)
-            })?;
-    }
 
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -957,9 +935,6 @@ async fn exec(
         arg0: arg0_ref,
         cwd,
         network_sandbox_policy,
-        // The environment already has attempt-scoped proxy settings from
-        // apply_to_env_for_attempt above. Passing network here would reapply
-        // non-attempt proxy vars and drop attempt correlation metadata.
         network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
