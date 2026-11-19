@@ -97,6 +97,7 @@ impl GuardianV2Extension {
             return;
         }
         let parent_model = input.thread_store.get::<ModelInfo>();
+        let probe_comparison = Some(super::probe_shadow::ProbeComparison::capture(&input));
         let policy = guardian_config.policy_for_model(
             parent_model.as_deref(),
             config.config_layer_stack.requirements(),
@@ -176,9 +177,11 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some(super::metrics::sampler_failure_reason(&error)),
                 );
                 return;
@@ -216,9 +219,11 @@ impl GuardianV2Extension {
                 score_progress.invalidate(tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some("thread_context_error"),
                 );
                 event_sink.emit_warning(ExtensionWarning {
@@ -265,9 +270,11 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some("configuration_error"),
                 );
                 self.event_sink.emit_warning(ExtensionWarning {
@@ -317,9 +324,11 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     outcome,
+                    /*classification_risk*/ None,
                     failure_reason,
                 );
                 return;
@@ -339,9 +348,11 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some("input_too_large"),
                 );
                 return;
@@ -350,9 +361,11 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some("action_serialization_error"),
                 );
                 event_sink.emit_warning(ExtensionWarning {
@@ -395,15 +408,18 @@ impl GuardianV2Extension {
             score_progress.fail_closed(sampled_at, tool_call_index);
             record_classification(
                 metrics.as_deref(),
+                probe_comparison.as_ref(),
                 context_mode,
                 classification_started_at.elapsed(),
                 "failure",
+                /*classification_risk*/ None,
                 Some("permission_resolution_error"),
             );
             return;
         };
         let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
         let classification = Classification {
+            probe_comparison,
             reservation,
             classification_started_at,
             decisions_sampler: input

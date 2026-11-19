@@ -52,7 +52,6 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::approvals::GuardianAssessmentStatus;
-use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
@@ -3258,6 +3257,24 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
     let server = start_mock_server().await;
     let completed_response =
         |id: &str, item| sse(vec![ev_response_created(id), item, ev_completed(id)]);
+    if tool == "mcp_elicitation" {
+        // Probe flags are observational, so the async scorer still runs. Keep its
+        // responses separate from the parent and synchronous Guardian review.
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_partial_json(json!({
+                "model": "gpt-5.6-luna",
+                "tool_choice": "none",
+            })))
+            .respond_with(core_test_support::responses::sse_response(
+                completed_response(
+                    "resp-guardian-score",
+                    ev_assistant_message("msg-guardian-score", "high"),
+                ),
+            ))
+            .with_priority(/*p*/ 1)
+            .mount(&server)
+            .await;
+    }
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -3409,17 +3426,18 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
         .await?;
     wait_for_response_request_count(&responses, /*expected_count*/ 1).await;
     attach_tx.send(()).expect("attach remote environment");
-    let mut denial_reason = None;
+    let mut was_denied = false;
     wait_for_event(&test.codex, |event| {
         if let EventMsg::GuardianAssessment(assessment) = event
             && assessment.status == GuardianAssessmentStatus::Denied
             && assessment.target_item_id.as_deref() == Some(EXEC_CALL_ID)
         {
-            denial_reason = assessment.review_reason;
+            was_denied = true;
         }
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    assert!(was_denied, "Guardian should deny the action");
 
     let requests = responses.requests();
     assert!(
@@ -3437,8 +3455,6 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
     let guardian_context = guardian_request.message_input_texts("user").join("\n");
     // Both actions start in the remote-primary step, but the MCP server runs locally.
     let (owner_denied_path, other_denied_path) = if tool == "mcp_elicitation" {
-        // The low score is labeled local, but the model saw the remote primary's rules.
-        assert_eq!(denial_reason, Some(GuardianReviewReason::FreshRequired));
         (&local_denied_path, &remote_denied_path)
     } else {
         (&remote_denied_path, &local_denied_path)

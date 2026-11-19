@@ -187,6 +187,26 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
             );
+            tracing::event!(
+                target: "codex_otel.log_only",
+                tracing::Level::INFO,
+                event.name = "codex.guardian_probe_comparison",
+                stage = "sync_guardian",
+                thread_id = %self.thread_id,
+                turn_id = self.turn_id,
+                call_id = self.tool_call_id,
+                review_id = self.approval_id,
+                model = self.sampling_model,
+                guardian_context_mode = completed.analytics.guardian_context_mode.unwrap_or("not_reported"),
+                sync_outcome = if cached_approval { "async_approval" } else if completed.assessment_outcome.is_some() { "completed" } else { "failure" },
+                sync_decision = match completed.assessment_outcome {
+                    Some(GuardianAssessmentOutcome::Allow) => "allow",
+                    Some(GuardianAssessmentOutcome::Deny) => "deny",
+                    None => "not_reported",
+                },
+                failure_reason = ?completed.analytics.failure_reason,
+                "Guardian probe comparison"
+            );
             if self.log_assessments
                 && !cached_approval
                 && let Some(event) = &completed.event

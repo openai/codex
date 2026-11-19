@@ -16,6 +16,9 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
 use codex_extension_api::TurnContextContributionInput;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -2958,7 +2961,23 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
 }
 
 #[derive(Clone)]
-struct SettingsEcho(Arc<Mutex<Option<ConversationHistory>>>);
+struct SettingsEcho {
+    history: Arc<Mutex<Option<ConversationHistory>>>,
+    sampling_model: Arc<Mutex<Option<String>>>,
+}
+
+impl ToolLifecycleContributor for SettingsEcho {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if input.tool_name.is_default_namespace()
+                && input.tool_name.name == "extension_settings"
+            {
+                *self.sampling_model.lock().expect("sampling model lock") =
+                    Some(input.sampling_model.to_owned());
+            }
+        })
+    }
+}
 
 impl ToolContributor for SettingsEcho {
     fn tools(
@@ -2991,7 +3010,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
         'call: 'a,
     {
         Box::pin(async move {
-            *self.0.lock().expect("history lock") = Some(call.conversation_history);
+            *self.history.lock().expect("history lock") = Some(call.conversation_history);
             let metadata: Value = serde_json::from_str(
                 call.codex_turn_metadata
                     .as_deref()
@@ -3000,6 +3019,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
             .expect("metadata JSON");
             Ok(Box::new(JsonToolOutput::new(json!({
                 "model": call.model,
+                "sampling_model": self.sampling_model.lock().expect("sampling model lock").clone(),
                 "metadata_model": metadata["model"],
                 "effort": metadata["reasoning_effort"],
                 "output_bytes": call.truncation_policy.byte_budget(),
@@ -3011,7 +3031,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
 #[test_case(ThreadHistoryMode::Legacy; "legacy")]
 #[test_case(ThreadHistoryMode::Paginated; "paginated")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn captured_step_settings_and_history_reach_extension_executor(
+async fn captured_step_settings_and_history_reach_extensions(
     history_mode: ThreadHistoryMode,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -3032,7 +3052,12 @@ async fn captured_step_settings_and_history_reach_extension_executor(
     .await;
     let history = Arc::default();
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.tool_contributor(Arc::new(SettingsEcho(Arc::clone(&history))));
+    let extension = Arc::new(SettingsEcho {
+        history: Arc::clone(&history),
+        sampling_model: Arc::default(),
+    });
+    extensions.tool_contributor(extension.clone());
+    extensions.tool_lifecycle_contributor(extension);
     let test = direct_tool_settings_test()
         .with_history_mode(history_mode)
         .with_extensions(Arc::new(extensions.build()))
@@ -3067,6 +3092,7 @@ async fn captured_step_settings_and_history_reach_extension_executor(
         serde_json::from_str::<Value>(&output)?,
         json!({
             "model": MODEL_B,
+            "sampling_model": MODEL_B,
             "metadata_model": MODEL_B,
             "effort": "high",
             "output_bytes": 512,

@@ -362,7 +362,9 @@ async fn installed_extension_keeps_parent_program_out_of_websocket_and_http_revi
         }
         registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe: None,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &session_store,
                 thread_store,
@@ -645,7 +647,9 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     ] {
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe: None,
                 permissions: Box::pin(async { panic!("unexpected permission resolution") }),
                 session_store: &fixture.session_store,
                 thread_store,
@@ -749,7 +753,9 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     };
     fixture.registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { Some(Default::default()) }),
             session_store: &fixture.session_store,
             thread_store,
@@ -974,7 +980,9 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     for _ in 0..ignored_calls {
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe: None,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &fixture.session_store,
                 thread_store,
@@ -1257,7 +1265,9 @@ async fn sample_configured_conversation_history_with_delivery(
 
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { Some(Default::default()) }),
             session_store: &session_store,
             thread_store,
@@ -1408,7 +1418,9 @@ impl GuardianFailureFixture {
         };
         self.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe: None,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &self.session_store,
                 thread_store,
@@ -1568,7 +1580,7 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
 #[tokio::test(flavor = "multi_thread")]
 async fn late_turn_actions_invalidate_the_current_policy_score() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let fixture = GuardianFailureFixture::new().await?;
+    let fixture = GuardianFailureFixture::with_config("").await?;
     let server = responses::start_mock_server().await;
     let responses = ["low", "high", "invalid"].map(|risk| {
         responses::sse(vec![
@@ -1612,21 +1624,30 @@ async fn late_turn_actions_invalidate_the_current_policy_score() -> Result<()> {
         executions + 1
     );
     let mut expected: Option<crate::async_scorer::score::CachedScore> = None;
-    for (turn, call_id, risk, expected_approval) in [
-        (&new_turn, "new-score", 0.0, Some(ReviewDecision::Approved)),
+    for (turn, call_id, guardian_probe, risk, expected_approval) in [
+        (
+            &new_turn,
+            "new-score",
+            Some(true),
+            0.0,
+            Some(ReviewDecision::Approved),
+        ),
         (
             &old_turn,
             "late-old-score",
+            Some(false),
             1.0,
             Some(ReviewDecision::Approved),
         ),
-        (&old_turn, "late-old-failure", 1.0, None),
+        (&old_turn, "late-old-failure", None, 1.0, None),
     ] {
         let backend = ConversationBackend::for_turn(store, turn).unwrap();
         let mut updates = backend.progress.updates.subscribe();
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &fixture.session_store,
                 thread_store: store,
@@ -2885,7 +2906,9 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     let previous_score = cached_score(thread_store);
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { panic!("unexpected permission resolution") }),
             session_store: &session_store,
             thread_store,
@@ -3241,7 +3264,9 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
     };
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { Some(Default::default()) }),
             session_store: &session_store,
             thread_store,
@@ -3777,7 +3802,9 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
 
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { Some(Default::default()) }),
             session_store: &session_store,
             thread_store,
@@ -3873,7 +3900,9 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         let call_id = format!("call-{}", index + 2);
         registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                sampling_model: "gpt-5.5",
                 serving_assessment: None,
+                guardian_probe: None,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &session_store,
                 thread_store,
@@ -3985,7 +4014,9 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
             },
         };
         progress.observe(&ToolStartInput {
+            sampling_model: "gpt-5.5",
             serving_assessment: None,
+            guardian_probe: None,
             permissions: Box::pin(async { Some(Default::default()) }),
             session_store: &fixture.session_store,
             thread_store: store,
@@ -4194,7 +4225,9 @@ fn seed_cached_score(
 
 fn observe_unscored_call(progress: &GuardianV2ScoreProgress, store: &ExtensionData) -> usize {
     progress.observe(&ToolStartInput {
+        sampling_model: "gpt-5.5",
         serving_assessment: None,
+        guardian_probe: None,
         permissions: Box::pin(async { Some(Default::default()) }),
         session_store: store,
         thread_store: store,

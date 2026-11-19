@@ -1,4 +1,4 @@
-//! Exercises async and serving assessments through real tool calls, hooks, and approval results.
+//! Exercises async Guardian and observational probe flags through real tool calls and approvals.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -374,9 +374,9 @@ enum ProbeCase {
     IncompleteAuthorization,
 }
 
-#[test_case::test_case(Some(false), false, "probe-item", ProbeCase::Standard, 0; "direct_low")]
+#[test_case::test_case(Some(false), false, "probe-item", ProbeCase::Standard, 1; "direct_low")]
 #[test_case::test_case(Some(true), false, "probe-item", ProbeCase::Standard, 1; "direct_review")]
-#[test_case::test_case(Some(false), true, "probe-item", ProbeCase::Standard, 0; "code_cell_low")]
+#[test_case::test_case(Some(false), true, "probe-item", ProbeCase::Standard, 2; "code_cell_low")]
 #[test_case::test_case(Some(true), true, "probe-item", ProbeCase::Standard, 2; "code_cell_review")]
 #[test_case::test_case(None, false, "probe-item", ProbeCase::Standard, 1; "missing_uses_async")]
 #[test_case::test_case(Some(false), false, "other-item", ProbeCase::Standard, 1; "mismatched_uses_async")]
@@ -385,11 +385,11 @@ enum ProbeCase {
 #[test_case::test_case(Some(false), true, "probe-item", ProbeCase::Rewrite, 2; "nested_hook_rewrite")]
 #[test_case::test_case(Some(true), false, "probe-item", ProbeCase::Interrupted, 0; "interrupted_direct_review")]
 #[test_case::test_case(Some(true), true, "probe-item", ProbeCase::Interrupted, 0; "interrupted_cell_review")]
-#[test_case::test_case(Some(false), false, "probe-item", ProbeCase::CatalogPolicy, 0; "catalog_low_without_legacy_flag")]
+#[test_case::test_case(Some(false), false, "probe-item", ProbeCase::CatalogPolicy, 1; "catalog_low_without_legacy_flag")]
 #[test_case::test_case(Some(true), false, "probe-item", ProbeCase::CatalogPolicy, 1; "catalog_review_without_legacy_flag")]
 #[test_case::test_case(Some(false), false, "probe-item", ProbeCase::IncompleteAuthorization, 1; "incomplete_authorization_still_reviews")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serving_assessment_replaces_async_scoring(
+async fn probe_flags_keep_async_scoring(
     requires_review: Option<bool>,
     code_mode: bool,
     assessed_item: &str,
@@ -459,13 +459,11 @@ async fn serving_assessment_replaces_async_scoring(
         ],
     )
     .await;
-    let uses_async = requires_review.is_none()
-        || assessed_item != "probe-item"
-        || scenario == ProbeCase::Rewrite;
-    let expected_scores = if uses_async {
-        1..=if code_mode { 2 } else { 1 }
-    } else {
+    let expected_scores = if scenario == ProbeCase::Interrupted {
         0..=0
+    } else {
+        // The enclosing code wrapper also remains on the async path.
+        1..=if code_mode { 3 } else { 1 }
     };
     Mock::given(method("POST"))
         .and(body_partial_json(json!({"model": "gpt-5.6-luna"})))
@@ -600,7 +598,7 @@ async fn serving_assessment_replaces_async_scoring(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    if uses_async {
+    if scenario != ProbeCase::Interrupted {
         timeout(Duration::from_secs(30), async {
             loop {
                 if server

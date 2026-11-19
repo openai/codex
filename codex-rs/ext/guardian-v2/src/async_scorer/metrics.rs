@@ -8,6 +8,7 @@ use codex_core::context::GuardianContextMode;
 use codex_extension_api::ExtensionMetrics;
 
 use super::decisions::DecisionsError;
+use super::probe_shadow::ProbeComparison;
 use super::sampler::LunaSamplerError;
 
 pub(super) const CLASSIFICATION_METRIC: &str = "codex.guardian_v2.classification";
@@ -73,11 +74,23 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
 
 pub(super) fn record_classification(
     metrics: Option<&dyn ExtensionMetrics>,
+    probe_comparison: Option<&ProbeComparison>,
     context_mode: GuardianContextMode,
     duration: Duration,
     outcome: &str,
+    classification_risk: Option<&str>,
     failure_reason: Option<&str>,
 ) {
+    // Shadow comparisons cover every reported classification outcome, including early exits.
+    if let Some(comparison) = probe_comparison {
+        comparison.record(
+            context_mode,
+            outcome,
+            classification_risk,
+            duration,
+            failure_reason,
+        );
+    }
     if outcome == "failure" {
         tracing::warn!(
             failure_reason,

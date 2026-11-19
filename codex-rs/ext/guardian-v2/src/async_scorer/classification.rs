@@ -58,6 +58,7 @@ use super::trusted_tools::trusted_tool_context;
 
 pub(super) struct Classification {
     pub(super) reservation: Reservation,
+    pub(super) probe_comparison: Option<super::probe_shadow::ProbeComparison>,
     pub(super) classification_started_at: Instant,
     pub(super) decisions_sampler: Option<Arc<super::decisions::DecisionsSampler>>,
     pub(super) guardian_config: GuardianV2Config,
@@ -113,6 +114,7 @@ impl Classification {
     pub(super) async fn run(self) {
         let Self {
             reservation,
+            probe_comparison,
             classification_started_at,
             decisions_sampler,
             guardian_config,
@@ -177,9 +179,11 @@ impl Classification {
         else {
             record_classification(
                 metrics.as_deref(),
+                probe_comparison.as_ref(),
                 context_mode,
                 classification_started_at.elapsed(),
                 "superseded",
+                /*classification_risk*/ None,
                 /*failure_reason*/ None,
             );
             return;
@@ -271,9 +275,11 @@ impl Classification {
                 score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    probe_comparison.as_ref(),
                     context_mode,
                     classification_started_at.elapsed(),
                     "failure",
+                    /*classification_risk*/ None,
                     Some("context_build_error"),
                 );
                 event_sink.emit_warning(ExtensionWarning {
@@ -453,9 +459,11 @@ impl Classification {
         };
         record_classification(
             metrics.as_deref(),
+            probe_comparison.as_ref(),
             context_mode,
             duration,
             outcome,
+            classification_risk,
             result.is_err().then_some(failure_reason),
         );
         if let Some(analytics) = analytics {

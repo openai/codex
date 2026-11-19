@@ -5165,7 +5165,7 @@ try {
 #[derive(Default)]
 struct ResponseIdObserver {
     response_ids: Mutex<Vec<(String, Option<String>)>>,
-    serving_assessments: Mutex<Vec<Option<bool>>>,
+    guardian_probes: Mutex<Vec<Option<bool>>>,
     originating_items: Mutex<Vec<(String, Option<codex_protocol::ResponseItemId>)>>,
     wait_started: tokio::sync::Notify,
 }
@@ -5180,10 +5180,10 @@ impl ToolLifecycleContributor for ResponseIdObserver {
                     .as_str()
                     .is_some_and(|cmd| cmd.starts_with("printf 'phase "))
             {
-                self.serving_assessments
+                self.guardian_probes
                     .lock()
                     .unwrap()
-                    .push(input.serving_assessment);
+                    .push(input.guardian_probe);
             }
             if matches!(input.tool_name.name.as_str(), "exec" | "exec_command") {
                 self.originating_items.lock().unwrap().push((
@@ -5208,9 +5208,9 @@ impl ToolLifecycleContributor for ResponseIdObserver {
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
-#[test_case::test_case(None; "without_assessment")]
-#[test_case::test_case(Some(false); "low_risk_assessment")]
-#[test_case::test_case(Some(true); "review_required_assessment")]
+#[test_case::test_case(None; "without_probe")]
+#[test_case::test_case(Some(false); "low_risk_probe")]
+#[test_case::test_case(Some(true); "review_required_probe")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_yield_and_resume_with_wait(requires_review: Option<bool>) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -5220,10 +5220,11 @@ async fn code_mode_can_yield_and_resume_with_wait(requires_review: Option<bool>)
         .and(wiremock::matchers::body_partial_json(
             serde_json::json!({"model": "gpt-5.6-luna"}),
         ))
-        .respond_with(responses::sse_response(sse(vec![ev_completed(
-            "unexpected-score",
-        )])))
-        .expect(0)
+        .respond_with(responses::sse_response(sse(vec![
+            ev_assistant_message("score", "low"),
+            ev_completed("score"),
+        ])))
+        .with_priority(/*p*/ 1)
         .mount(&server)
         .await;
     let observer = Arc::new(ResponseIdObserver::default());
@@ -5406,7 +5407,7 @@ text((await tools.exec_command({{cmd: "printf 'phase 3'"}})).output);
     );
 
     assert_eq!(
-        *observer.serving_assessments.lock().unwrap(),
+        *observer.guardian_probes.lock().unwrap(),
         vec![requires_review; 3]
     );
     let observed = observer.response_ids.lock().unwrap();

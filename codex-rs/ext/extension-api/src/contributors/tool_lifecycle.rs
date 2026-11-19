@@ -122,9 +122,14 @@ impl McpToolContext {
 
 /// Input supplied when the host starts executing one tool call.
 pub struct ToolStartInput<'a> {
+    /// Model that issued this call or its enclosing code cell, preserved across yields and waits.
+    pub sampling_model: &'a str,
     /// Final serving assessment for the unchanged action, including its code cell's value.
     /// When present, replaces asynchronous scoring; it does not grant execution permission.
     pub serving_assessment: Option<bool>,
+    /// Existing serving review flag for this action or its enclosing code cell, in shadow mode.
+    /// Absence means no flag was reported, not that the action was scored as low risk.
+    pub guardian_probe: Option<bool>,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

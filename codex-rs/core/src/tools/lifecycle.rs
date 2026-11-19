@@ -45,11 +45,13 @@ pub(crate) async fn notify_tool_start(
     for contributor in contributors {
         contributor
             .on_tool_start(ToolStartInput {
+                sampling_model: &invocation.step_context.settings.model_info.slug,
                 serving_assessment: invocation
                     .step_context
                     .serving_assessment
                     .as_ref()
                     .map(|value| value.requires_review),
+                guardian_probe: invocation.step_context.guardian_probe,
                 session_store: &invocation.session.services.session_extension_data,
                 thread_store,
                 turn_store: invocation.turn.extension_data.as_ref(),

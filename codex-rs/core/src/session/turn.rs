@@ -3076,17 +3076,6 @@ async fn try_run_sampling_request(
     let mut pending_assessment: Option<codex_api::GuardianAssessment> = None;
     let mut response_completed = false;
     let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
-    // Catalog policies can enable adaptive review independently of the legacy scorer flag.
-    // Capture evidence whenever Guardian is available; the reviewer resolves the policy.
-    let assessment_authorization = if turn_context
-        .config
-        .features
-        .enabled(Feature::GuardianApproval)
-    {
-        Some(crate::guardian::ScoreAuthorization::for_session(&sess, &Default::default()).await)
-    } else {
-        None
-    };
     let mut resampling = crate::guardian::ResponseResampling::new(&sess);
     let prompt = Arc::new(prompt);
     let interrupt_at_boundary = SamplingInterrupt::enabled(&turn_context);
@@ -3318,6 +3307,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created { response_id } => {
                 answer_moderation = None;
+                pending_assessment = None;
                 response_id_for_assessment.clone_from(&response_id);
                 if let Some(response_id) = response_id {
                     turn_context
@@ -3335,16 +3325,10 @@ async fn try_run_sampling_request(
                 between_items = true;
                 // Serving emits one final value immediately before this item's completion.
                 // After this handoff, the invocation/cell owns it independently of the stream.
-                let assessment = pending_assessment
+                let guardian_probe = pending_assessment
                     .take()
                     .filter(|value| item.id().is_some_and(|id| id.as_str() == value.item_id))
-                    .zip(assessment_authorization.as_ref())
-                    .map(|(value, authorization)| {
-                        Arc::new(crate::guardian::ServingAssessment {
-                            requires_review: value.requires_review,
-                            authorization: authorization.clone(),
-                        })
-                    });
+                    .map(|value| value.requires_review);
                 if item.id().is_none_or(|id| id.is_empty())
                     && let Some(active_item) = &active_item
                 {
@@ -3411,8 +3395,11 @@ async fn try_run_sampling_request(
                 }
 
                 let mut tool_runtime = tool_runtime.clone();
-                if assessment.is_some() {
-                    Arc::make_mut(&mut tool_runtime.step_context).serving_assessment = assessment;
+                if guardian_probe.is_some() {
+                    let tool_step = Arc::make_mut(&mut tool_runtime.step_context);
+                    // Probe results are observations; async Guardian remains authoritative.
+                    tool_step.serving_assessment = None;
+                    tool_step.guardian_probe = guardian_probe;
                 }
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),

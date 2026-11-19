@@ -25,6 +25,9 @@ use tokio_util::sync::CancellationToken;
 /// One captured action and its host-enforced constraints. Guardian derives the
 /// contributor input and owns cancellation for the complete review operation.
 pub struct ReviewRequest<'a, H> {
+    /// Issuing action's model and turn, retained across yielded code cells.
+    pub sampling_model: &'a str,
+    pub turn_id: &'a str,
     /// Final serving value retained by the host for this action.
     pub serving_assessment: Option<bool>,
     pub host: H,

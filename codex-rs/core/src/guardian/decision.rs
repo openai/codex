@@ -190,6 +190,8 @@ pub(crate) fn decide_approval(
         }
         let retried = reasons.retry.is_some();
         let decision = codex_guardian_reviewer::ReviewRequest {
+            sampling_model: &context.model_info.slug,
+            turn_id: &turn.sub_id,
             serving_assessment: context.serving_assessment.as_ref().map(|value| value.requires_review),
             host: ReviewRuntime {
                 attached_reviewer,

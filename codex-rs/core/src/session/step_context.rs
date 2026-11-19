@@ -30,6 +30,8 @@ pub(crate) struct StepContext {
     pub(crate) sampled_through_sequence: Option<u64>,
     /// Final serving value for this invocation; retained by its code cell across waits.
     pub(crate) serving_assessment: Option<Arc<crate::guardian::ServingAssessment>>,
+    /// Existing serving review flag, retained only for shadow logging.
+    pub(crate) guardian_probe: Option<bool>,
     pub(crate) turn: Arc<TurnContext>,
     /// Cancels work owned by this turn, independently of steers or session shutdown.
     pub(crate) turn_cancellation: CancellationToken,
