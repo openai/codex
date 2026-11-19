@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::super::FunctionCallOutputPayload;
 use super::super::ResponseInputItem;
@@ -35,6 +36,15 @@ fn result_metadata_comparison_tracks_raw_values_and_call_bindings() {
         serde_json::json!({ "query": "same" }),
     )]);
     assert!(empty.has_same_tool_result_metadata(&without_metadata));
+
+    let mut body_only = without_metadata.clone();
+    let binding = ToolResultMetadata::default().with_result_id(Some(Uuid::new_v4()));
+    first_executed_tool_call(&mut body_only)
+        .unwrap()
+        .set_tool_result_metadata(binding);
+    assert!(!without_metadata.has_same_tool_result_metadata(&body_only));
+    body_only.clear_tool_result_ids();
+    assert_eq!(body_only, without_metadata);
 
     let mut with_metadata = without_metadata.clone();
     first_executed_tool_call(&mut with_metadata)
@@ -309,11 +319,13 @@ fn tool_result_metadata_is_host_only_and_redacted_without_a_per_result_limit() -
         serde_json::json!({}),
         serde_json::json!(null),
     ] {
-        let capture = ToolResultMetadata::new(&metadata);
+        let id = Uuid::new_v4();
+        let capture = ToolResultMetadata::new(&metadata).with_result_id(Some(id));
         assert_eq!(format!("{capture:?}"), "ToolResultMetadata([redacted])");
         assert!(capture.is_some());
         call.set_tool_result_metadata(capture);
-        let wire = serde_json::to_value(&call)?;
+        assert_eq!(call.clone().tool_result_id(), Some(id));
+        let mut wire = serde_json::to_value(&call)?;
         assert_eq!(
             wire,
             serde_json::json!({
@@ -323,6 +335,8 @@ fn tool_result_metadata_is_host_only_and_redacted_without_a_per_result_limit() -
             })
         );
         assert!(!format!("{call:?}").contains("not-for-debug"));
+        wire["tool_result_id"] = serde_json::json!(id);
+        wire["tool_result"] = serde_json::json!({"content": []});
         assert_eq!(
             serde_json::from_value::<ExecutedToolCall>(wire)?,
             without_metadata
@@ -332,7 +346,60 @@ fn tool_result_metadata_is_host_only_and_redacted_without_a_per_result_limit() -
 }
 
 #[test]
+fn projected_tool_result_preserves_only_eligible_fields_within_receiver_limits() -> Result<()> {
+    let mut nested = serde_json::Value::Null;
+    for _ in 2..MAX_TOOL_RESULT_DEPTH {
+        nested = serde_json::Value::Array(vec![nested]);
+    }
+    let expected = json!({
+        "content": [{"type": "text", "text": "private é\n"}, {"type": "text", "text": ""}],
+        "structuredContent": {"nested": nested, "padding": ""},
+    });
+    let mut result: CallToolResult = serde_json::from_value(expected.clone())?;
+    result.meta = Some(json!({"provider": 1}));
+    result.content[0]["annotations"] = json!({});
+    let body = ToolResultBody::from_mcp_result(&result).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(body.as_json())?, expected);
+    assert!(!format!("{body:?}").contains("private"));
+
+    result.structured_content.as_mut().unwrap()["padding"] =
+        json!("x".repeat(MAX_TOOL_RESULT_BYTES - body.compact_bytes()));
+    let body = ToolResultBody::from_mcp_result(&result).unwrap();
+    assert_eq!(body.as_json().len(), MAX_TOOL_RESULT_BYTES);
+    result.content[1]["text"] = json!("!");
+    assert!(ToolResultBody::from_mcp_result(&result).is_none());
+
+    result.content.clear();
+    assert!(ToolResultBody::from_mcp_result(&result).is_some());
+    result.structured_content = Some(json!({"extra": expected["structuredContent"]}));
+    assert!(ToolResultBody::from_mcp_result(&result).is_none());
+    Ok(())
+}
+
+#[test]
+fn projected_tool_result_rejects_ineligible_results() -> Result<()> {
+    let text = json!({"type": "text", "text": "first"});
+    let encrypted =
+        json!({"type": "text", "text": "cipher", "_meta": {"codex/encryptedContent": true}});
+    for value in [
+        json!({"content": [text], "isError": true}),
+        json!({"content": [text], "structuredContent": []}),
+        json!({"content": [text, {"type": "image", "mimeType": "image/png", "data": "AQID"}]}),
+        json!({"content": [text, encrypted]}),
+        json!({"content": [text, {"type": "text"}]}),
+    ] {
+        let result = serde_json::from_value(value)?;
+        assert!(
+            ToolResultBody::from_mcp_result(&result).is_none(),
+            "accepted {result:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
+    let result_id = Some(Uuid::new_v4());
     let resource_only = serde_json::json!({
         "openai/resource_access": { "resource_coverage": "complete", "resources": [] },
     });
@@ -343,7 +410,8 @@ fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
             ToolResultMetadata::new(&serde_json::json!({
                 "openai/resource_access": resource_only["openai/resource_access"],
                 "payload": "x".repeat(512),
-            })),
+            }))
+            .with_result_id(result_id),
             ToolResultMetadata::new(&serde_json::json!({
                 "omitted_due_to_size_limit": { "overage_bytes": 1 },
                 "payload": "x".repeat(512),
@@ -372,7 +440,9 @@ fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
         .executed_tool_calls
         .as_mut()
         .unwrap();
-    calls[0].set_tool_result_metadata(ToolResultMetadata::new(&resource_only));
+    calls[0].set_tool_result_metadata(
+        ToolResultMetadata::new(&resource_only).with_result_id(result_id),
+    );
     calls[1].set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
         /*overage_bytes*/ 77,
     ));
@@ -381,17 +451,18 @@ fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
     item.retain_tool_resource_access_or_omit_metadata(/*overage_bytes*/ 1_234);
     assert_eq!(item, expected);
 
+    let omitted = ToolResultMetadata::omitted_due_to_size_limit(/*overage_bytes*/ 1);
     first_executed_tool_call(&mut expected)
         .unwrap()
-        .set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
-            /*overage_bytes*/ 1,
-        ));
+        .set_tool_result_metadata(omitted.with_result_id(result_id));
     item.omit_tool_result_metadata(/*overage_bytes*/ 1);
     assert_eq!(item, expected);
     item.omit_tool_result_metadata(/*overage_bytes*/ 99_999);
     assert_eq!(item, expected);
     item.clear_tool_result_metadata();
     assert!(!item.has_tool_result_metadata());
+    let retained = first_executed_tool_call(&mut item).unwrap();
+    assert_eq!(retained.tool_result_id(), result_id);
 }
 
 #[test]

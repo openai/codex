@@ -1693,6 +1693,7 @@ impl<'a> ResponsesHttpExecutor<'a> {
                 headers
             },
             compression,
+            tool_results: Vec::new(),
             turn_state: Some(Arc::clone(turn_state)),
         }
     }

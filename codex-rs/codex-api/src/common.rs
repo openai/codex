@@ -3,6 +3,7 @@ use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ToolResultBody;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -27,6 +28,74 @@ use tokio::sync::oneshot;
 
 pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
 pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
+
+/// Maximum outgoing Responses message size for attaching optional tool observations.
+pub const MAX_RESPONSE_MESSAGE_BYTES: usize = 15 * 1024 * 1024;
+
+/// Adds authorized connector results to the selected rows without re-encoding the ordinary request.
+/// Borrowed raw JSON leaves routing field order, tool schemas, and unrelated inputs intact.
+pub(crate) fn with_tool_results(
+    json: &str,
+    results: &[(usize, usize, Arc<ToolResultBody>)],
+) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Input<'a> {
+        #[serde(borrow)]
+        input: Vec<Item<'a>>,
+    }
+    #[derive(Deserialize)]
+    struct Item<'a> {
+        #[serde(borrow)]
+        internal_chat_message_metadata_passthrough: Option<Metadata<'a>>,
+    }
+    #[derive(Deserialize)]
+    struct Metadata<'a> {
+        #[serde(borrow)]
+        executed_tool_calls: Option<Vec<&'a RawValue>>,
+    }
+
+    let mut remaining = MAX_RESPONSE_MESSAGE_BYTES.checked_sub(json.len())?;
+    if results.is_empty() || remaining == 0 {
+        return None;
+    }
+    let input: Input<'_> = serde_json::from_str(json).ok()?;
+    let mut enriched = String::new();
+    let mut cursor = 0;
+    for (item, call, body) in results {
+        let row = input
+            .input
+            .get(*item)?
+            .internal_chat_message_metadata_passthrough
+            .as_ref()?
+            .executed_tool_calls
+            .as_ref()?
+            .get(*call)?
+            .get();
+        // Native ExecutedToolCall rows always contain name and arguments.
+        let row_fields = row.strip_prefix('{')?.strip_suffix('}')?;
+        if row_fields.is_empty() {
+            return None;
+        }
+        let close = row.as_ptr() as usize - json.as_ptr() as usize + row.len() - 1;
+        if close <= cursor {
+            return None;
+        }
+        const FIELD: &str = r#","tool_result":"#;
+        let Some(next_remaining) = remaining.checked_sub(FIELD.len() + body.compact_bytes()) else {
+            continue;
+        };
+        enriched.push_str(&json[cursor..close]);
+        enriched.push_str(FIELD);
+        enriched.push_str(body.as_json());
+        cursor = close;
+        remaining = next_remaining;
+    }
+    if enriched.is_empty() {
+        return None;
+    }
+    enriched.push_str(&json[cursor..]);
+    Some(enriched)
+}
 
 /// Explicit per-request access selection using the Responses API wire values.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -359,6 +428,7 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
             model: &request.model,
             previous_response_id: None,
             input: &request.input,
+            tool_results: Vec::new(),
             tools: request.tools.as_ref().map(ResponsesApiTools::as_raw_value),
             tool_choice: &request.tool_choice,
             parallel_tool_calls: request.parallel_tool_calls,
@@ -390,6 +460,9 @@ pub struct ResponseCreateWsRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: &'a [ResponseItem],
+    /// Observations for this wire frame only. Canonical request serialization omits them.
+    #[serde(skip)]
+    pub tool_results: Vec<(usize, usize, Arc<ToolResultBody>)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<&'a RawValue>,
     pub tool_choice: &'a str,

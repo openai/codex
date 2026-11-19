@@ -1,6 +1,7 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
+use crate::common::with_tool_results;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -14,10 +15,13 @@ use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
+use codex_client::TransportError;
+use codex_protocol::models::ToolResultBody;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
+use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -35,6 +39,7 @@ pub struct ResponsesOptions {
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
     pub compression: Compression,
+    pub tool_results: Vec<(usize, usize, Arc<ToolResultBody>)>,
     pub turn_state: Option<Arc<OnceLock<String>>>,
 }
 
@@ -66,7 +71,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             .await
     }
 
-    /// Gives the observer a shared copy of the exact JSON before transport dispatch.
+    /// Observes the encoded request before private connector results are attached.
     #[instrument(
         name = "responses.stream_request",
         level = "info",
@@ -89,6 +94,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             session_source,
             extra_headers,
             compression,
+            tool_results,
             turn_state,
         } = options;
         let body = EncodedJsonBody::encode(&request)
@@ -104,6 +110,30 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
+        if !tool_results.is_empty()
+            && let Ok(json) = std::str::from_utf8(body.as_bytes())
+            && let Some(json) = with_tool_results(json, &tool_results)
+        {
+            let stream = self
+                .stream_encoded(
+                    body.with_private_json(json),
+                    headers.clone(),
+                    compression,
+                    turn_state.clone(),
+                )
+                .await;
+            // A redirect that preserves the request body must start over without private results.
+            if !matches!(
+                stream,
+                Err(ApiError::Transport(TransportError::Http {
+                    status: StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT,
+                    headers: Some(ref headers),
+                    ..
+                })) if headers.get(http::header::LOCATION).is_some_and(|location| !location.is_empty())
+            ) {
+                return stream;
+            }
+        }
         self.stream_encoded(body, headers, compression, turn_state)
             .await
     }
