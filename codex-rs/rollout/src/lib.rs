@@ -149,6 +149,7 @@ pub use model_context::ModelContextScanProgress;
 pub use persistence_metrics::RolloutPersistenceBatchMeasurement;
 pub use persistence_metrics::RolloutPersistenceTelemetry;
 pub use persistence_metrics::measure_and_filter_rollout_items;
+pub use policy::PERSISTED_MCP_RESULT_MAX_BYTES;
 pub use policy::into_persisted_rollout_items;
 pub use policy::persisted_rollout_item;
 pub use policy::persisted_rollout_items;

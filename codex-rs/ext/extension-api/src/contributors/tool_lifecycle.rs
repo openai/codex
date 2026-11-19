@@ -65,6 +65,8 @@ pub enum McpToolSource {
 pub struct McpToolContext {
     tool: crate::McpToolInfo,
     source: McpToolSource,
+    /// Package ID of the plugin that registered this call's MCP server.
+    pub plugin_id: Option<String>,
 }
 
 impl McpToolContext {
@@ -100,7 +102,11 @@ impl McpToolContext {
             McpToolSource::Other
         };
 
-        Self { tool, source }
+        Self {
+            tool,
+            source,
+            plugin_id: call.plugin_id().map(str::to_owned),
+        }
     }
 
     /// Returns frozen metadata for the exact model-visible MCP tool being executed.

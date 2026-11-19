@@ -32,6 +32,33 @@ use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+struct NotesMetadata;
+
+impl codex_extension_api::ToolLifecycleContributor for NotesMetadata {
+    fn mcp_tool_request_meta(
+        &self,
+        _thread: &codex_extension_api::ExtensionData,
+        _turn: &codex_extension_api::ExtensionData,
+        tool: &codex_extension_api::McpToolContext,
+    ) -> Option<(&'static str, Value)> {
+        (tool.plugin_id.as_deref() == Some("env-a:notes")).then(|| ("x-notes-preview", json!(true)))
+    }
+
+    fn on_mcp_tool_result<'a>(
+        &'a self,
+        input: codex_extension_api::McpToolResultInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        if input.call_id.starts_with("plugin-") {
+            assert_eq!(
+                self.mcp_tool_request_meta(input.thread_store, input.turn_store, input.mcp_tool)
+                    .is_some(),
+                input.call_id == "plugin-first",
+            );
+        }
+        Box::pin(async {})
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn same_named_executor_mcps_keep_calls_and_approvals_separate() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -39,6 +66,7 @@ async fn same_named_executor_mcps_keep_calls_and_approvals_separate() -> Result<
     let first_endpoint = start_mock_server().await;
     let second_endpoint = start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.tool_lifecycle_contributor(Arc::new(NotesMetadata));
     codex_mcp_extension::install_plugins(
         &mut extensions,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -146,7 +174,7 @@ async fn same_named_executor_mcps_keep_calls_and_approvals_separate() -> Result<
             ),
         )?;
         // Keep config-backed docs and add a separate plugin-backed server on each executor.
-        let plugin_root = home.path().join("notes");
+        let plugin_root = home.path().join("plugins/cache/market/notes/1.0.0");
         fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
         fs::write(
             plugin_root.join(".codex-plugin/plugin.json"),
@@ -383,6 +411,15 @@ async fn same_named_executor_mcps_keep_calls_and_approvals_separate() -> Result<
     ] {
         let calls = recorded_apps_tool_calls(endpoint).await;
         assert_eq!(calls[2]["params"]["_meta"]["plugin_id"], plugin_id);
+        for call in &calls {
+            let title = call["params"]["arguments"]["title"].as_str();
+            assert_eq!(
+                call["params"]["_meta"]
+                    .get("x-notes-preview")
+                    .and_then(Value::as_bool),
+                (title == Some("plugin-first")).then_some(true),
+            );
+        }
         assert_eq!(
             calls
                 .iter()

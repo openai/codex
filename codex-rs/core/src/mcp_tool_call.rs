@@ -553,6 +553,10 @@ async fn handle_approved_mcp_tool_call(
         }
         Ok(())
     };
+    let mcp_tool = McpToolContext::from_prepared_call(
+        &prepared_call,
+        turn_context.config.mcp_servers.get().get(&server),
+    );
     let result = async {
         let result = async {
             let result = prepared_call
@@ -702,6 +706,25 @@ async fn handle_approved_mcp_tool_call(
                         )
                         .await?;
                     }
+                    for contributor in sess.services.extensions.tool_lifecycle_contributors() {
+                        if let Some((key, value)) = contributor.mcp_tool_request_meta(
+                            &sess.services.thread_extension_data,
+                            &turn_context.extension_data,
+                            &mcp_tool,
+                        ) {
+                            let meta = request_meta
+                                .get_or_insert_with(|| serde_json::json!({}))
+                                .as_object_mut()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("missing MCP request metadata object")
+                                })?;
+                            anyhow::ensure!(
+                                !meta.contains_key(key),
+                                "MCP request metadata already contains {key}"
+                            );
+                            meta.insert(key.to_owned(), value);
+                        }
+                    }
                     Ok((rewritten_arguments, request_meta))
                 })
                 .await
@@ -735,10 +758,6 @@ async fn handle_approved_mcp_tool_call(
             );
             // Capture trusted server metadata before result callbacks or model-facing rewrites.
             elicitation_type = mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
-            let mcp_tool = McpToolContext::from_prepared_call(
-                &prepared_call,
-                turn_context.config.mcp_servers.get().get(&server),
-            );
             process_mcp_tool_result(
                 sess,
                 turn_context,

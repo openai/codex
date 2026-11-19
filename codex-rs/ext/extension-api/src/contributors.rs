@@ -468,6 +468,17 @@ pub trait ToolLifecycleContributor: Send + Sync {
         Box::pin(std::future::ready(()))
     }
 
+    /// Provides one private request metadata entry for an MCP call. Use the captured
+    /// registration to scope data to its intended recipient. Keys must be unique.
+    fn mcp_tool_request_meta(
+        &self,
+        _thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
+        _mcp_tool: &McpToolContext,
+    ) -> Option<(&'static str, serde_json::Value)> {
+        None
+    }
+
     /// Runs before the MCP result is sent to the client and model.
     fn on_mcp_tool_result<'a>(&'a self, _input: McpToolResultInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
