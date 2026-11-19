@@ -1,4 +1,5 @@
 //! Prepare the policy and dependency facts, then run checks per dependency.
+//! Runtime checks are paused; retain the implementation for isolated tests.
 //! Results never affect execution. See AGENTS.md for scope and accepted approximations.
 
 use super::backend;
@@ -13,12 +14,16 @@ use std::io;
 use std::time::Duration;
 use std::time::Instant;
 
+// Pause all observations to avoid duplicating enforcement's policy preparation.
+const INTEGRITY_CHECKS_ENABLED: bool = false;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 
 /// Observe executor-local containment dependencies without affecting the launch.
 /// Used by both exec-server and the legacy local execution path.
 pub async fn run_integrity_checks(request: SandboxIntegrityRequest<'_>) {
-    run_checks_with_metrics(request, codex_otel::global().as_ref()).await;
+    if INTEGRITY_CHECKS_ENABLED {
+        run_checks_with_metrics(request, codex_otel::global().as_ref()).await;
+    }
 }
 
 async fn run_checks_with_metrics(

@@ -1,6 +1,11 @@
 # Sandbox integrity: scope and review contract
 
-These checks currently emit telemetry only. Findings and preparation errors must
+Runtime integrity checks are paused at the shared runner entry point. Do not
+perform dependency discovery, policy preparation, checks, or telemetry during
+command execution. The checker implementation and isolated tests remain for now;
+the command-launch failure/timeout integration test is ignored while paused.
+
+When enabled, these checks emit telemetry only. Findings and preparation errors must
 not change sandbox construction, permissions, approvals, or command execution.
 Supported backends are Seatbelt, bubblewrap, and MXC; legacy Windows is out of scope.
 
