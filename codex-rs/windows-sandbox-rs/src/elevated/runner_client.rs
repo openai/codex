@@ -36,6 +36,7 @@ use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::ERROR_ACCOUNT_DISABLED;
 use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+use windows_sys::Win32::Foundation::ERROR_LOGON_TYPE_NOT_GRANTED;
 use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING;
@@ -77,7 +78,11 @@ pub(crate) struct RunnerLogonError {
 
 impl std::fmt::Display for RunnerLogonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CreateProcessWithLogonW failed: {}", self.code)
+        write!(f, "CreateProcessWithLogonW failed: {}", self.code)?;
+        if self.code == ERROR_LOGON_TYPE_NOT_GRANTED {
+            f.write_str(". Windows security policy blocked the sandbox account from signing in. Check the “Allow log on locally” and “Deny log on locally” permissions. Contact your administrator if this PC is managed.")?;
+        }
+        Ok(())
     }
 }
 
@@ -494,6 +499,17 @@ mod tests {
     use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
     use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
     use windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING;
+
+    #[test]
+    fn logon_policy_denial_explains_why_the_command_cannot_start() {
+        let error = RunnerLogonError {
+            code: super::ERROR_LOGON_TYPE_NOT_GRANTED,
+        };
+        assert!(error.to_string().contains(
+            "1385. Windows security policy blocked the sandbox account from signing in."
+        ));
+        assert!(!is_refreshable_sandbox_creds_error(&error.into(), &[]));
+    }
 
     #[test]
     fn logon_service_already_running_retries_once_without_refresh() {
