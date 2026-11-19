@@ -577,6 +577,7 @@ pub(crate) struct ChatWidget {
     status_account_display: Option<StatusAccountDisplay>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     pub(crate) app_server_path_convention: Option<PathConvention>,
+    pub(crate) statusline_feature_enabled: bool,
     statusline_read: Option<statusline_reader::ActiveStatuslineRead>,
     pub(crate) statusline_disconnected: bool,
     /// Remote app servers cannot read image paths on the TUI host.

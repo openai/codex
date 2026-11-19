@@ -54,6 +54,7 @@ fn experimental_features_display_metadata() {
         Feature::AnalyticsPlanHistory,
         Feature::LoginShellPackagePath,
         Feature::RespectSystemProxy,
+        Feature::TuiExtensionsStatusLine,
     ] {
         let stage = feature.stage();
         let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();

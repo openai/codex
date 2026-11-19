@@ -1177,7 +1177,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiExtensionsStatusLine,
         key: "tui_extensions_statusline",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Custom status line",
+            menu_description: "Restart the TUI, then use /statusline.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

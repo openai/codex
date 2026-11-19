@@ -4,7 +4,6 @@ use crate::chatwidget::ChatWidget;
 use crate::legacy_core::config::Config;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::OtelExporterKind;
-use codex_features::Feature;
 use codex_otel::MetricsClient;
 
 #[derive(Default)]
@@ -59,11 +58,7 @@ impl StatuslineMetrics {
             return;
         }
         self.first_prompt_recorded = true;
-        let mode = if !chat
-            .config_ref()
-            .features
-            .enabled(Feature::TuiExtensionsStatusLine)
-        {
+        let mode = if !chat.custom_statusline_enabled() {
             "feature_off"
         } else if chat.selected_statusline_provider().is_some() {
             "custom"

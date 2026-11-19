@@ -2030,8 +2030,7 @@ async fn first_prompt_counts_once_before_and_after_resume() -> Result<()> {
         )
         .await?;
         drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
-        app.chat_widget
-            .set_feature_enabled(Feature::TuiExtensionsStatusLine, mode == "builtin");
+        app.chat_widget.statusline_feature_enabled = mode == "builtin";
         for text in ["first prompt", "follow-up"] {
             let sent = responses::mount_sse_once(&model, responses::sse_completed("ok")).await;
             app.chat_widget.apply_external_edit(text.into());

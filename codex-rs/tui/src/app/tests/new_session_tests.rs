@@ -1854,11 +1854,6 @@ async fn fresh_session_saves_input_restored_by_a_late_interrupt() -> Result<()> 
 #[tokio::test]
 async fn create_statusline_keeps_the_draft_editable() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
-    app.config
-        .features
-        .enable(Feature::TuiExtensionsStatusLine)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
     let cwd = app.config.codex_home.to_path_buf();
     let user_skill = cwd.join("skills/create-statusline");
     std::fs::create_dir_all(&user_skill)?;
@@ -1869,6 +1864,7 @@ async fn create_statusline_keeps_the_draft_editable() -> Result<()> {
     let source = ThreadId::new();
     app.enqueue_primary_thread_session(test_thread_session(source, cwd), Vec::new())
         .await?;
+    app.chat_widget.statusline_feature_enabled = true;
     app.chat_widget.handle_server_notification(
         turn_started_notification(source, "running"),
         /*replay_kind*/ None,

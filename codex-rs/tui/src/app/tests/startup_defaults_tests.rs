@@ -3,7 +3,9 @@
 use super::*;
 use crate::app::backend_sessions::InitialBackendSessions;
 use crate::app::startup::prepare_fresh_startup_config;
+use crate::app::startup::startup_config_cwd;
 use crate::app::startup::startup_model;
+use crate::app::startup::statusline_enabled;
 use crate::app::startup_bootstrap::bootstrap_server_owned_start;
 use pretty_assertions::assert_eq;
 
@@ -461,15 +463,21 @@ requires_openai_auth = false
         if !server_owned {
             server.bootstrap(&config).await?;
         }
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            startup_config_cwd(&config, &server, &target)
+                .display()
+                .to_string(),
+        )
+        .await?;
         prepare_fresh_startup_config(
             &mut config,
             &server,
-            &target,
+            &defaults,
             &cli_kv_overrides,
             &harness_overrides,
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         if server_owned {
             bootstrap_server_owned_start(
                 &mut server,
@@ -677,15 +685,22 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             bootstrap.default_model.as_deref(),
             Some("stale-client-model")
         );
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            startup_config_cwd(&config, &server, &target)
+                .display()
+                .to_string(),
+        )
+        .await?;
+        assert!(!statusline_enabled(&defaults.config));
         let defaults_read = prepare_fresh_startup_config(
             &mut config,
             &server,
-            &target,
+            &defaults,
             &[],
             &ConfigOverrides::default(),
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         assert!(!defaults_read.prompt_windows_sandbox);
         assert_eq!(config.model, None);
         let selected_model =

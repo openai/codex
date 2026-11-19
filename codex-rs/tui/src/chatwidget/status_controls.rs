@@ -332,11 +332,7 @@ impl ChatWidget {
         use crate::bottom_pane::StatuslineProviderActions;
 
         let configured_status_line_items = self.configured_status_line_items();
-        let providers = if !self
-            .config
-            .features
-            .enabled(codex_features::Feature::TuiExtensionsStatusLine)
-        {
+        let providers = if !self.custom_statusline_enabled() {
             StatuslineProviderActions::Hidden
         } else if self.thread_params_mode == crate::ThreadParamsMode::Cloud {
             StatuslineProviderActions::Choose
