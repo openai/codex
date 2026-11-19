@@ -56,16 +56,22 @@ pub(super) async fn admit(
     // A cancelled/replaced task must never install its permit into a newer task,
     // even if recovery reused the turn ID.
     let mut active = session.active_turn.lock().await;
-    let task = active
+    let turn = active
         .as_mut()
-        .and_then(|turn| turn.task.as_mut())
+        .filter(|turn| turn.turn_id.as_deref() == Some(context.sub_id.as_str()))
+        .ok_or_else(|| CodexErr::new(CodexErrorDetails::TurnAborted))?;
+    let task = turn
+        .task
+        .as_mut()
         .filter(|task| Arc::ptr_eq(&task.turn_context, context))
         .filter(|_| !cancellation.is_cancelled())
         .ok_or_else(|| CodexErr::new(CodexErrorDetails::TurnAborted))?;
-    task._agent_execution_guard = Some(guard);
-    task.pending_initial_input.take().ok_or_else(|| {
+    let input = task.pending_initial_input.take().ok_or_else(|| {
         CodexErr::Fatal("initial input missing from the task awaiting host admission".into())
-    })
+    })?;
+    task._agent_execution_guard = Some(guard);
+    turn.admitted = true;
+    Ok(input)
 }
 
 impl Session {

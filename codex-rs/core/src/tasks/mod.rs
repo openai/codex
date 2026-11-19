@@ -368,8 +368,13 @@ impl Session {
                 };
             }
             let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
+            if turn.turn_id.is_some() || turn.task.is_some() || turn.finishing.is_some() {
+                return TurnInputSubmission::NotSubmitted {
+                    reason: NotSubmittedReason::Superseded,
+                };
+            }
             turn.turn_id = Some(turn_context.sub_id.clone());
+            turn.admitted = false;
             turn.finishing = None;
             Arc::clone(&turn.turn_state)
         };
@@ -432,6 +437,8 @@ impl Session {
                 None,
             ),
         };
+        // Native admission is synchronous, including unrestricted turns that have no guard.
+        turn.admitted = host_admission.is_none();
         let done_clone = Arc::clone(&done);
         let session = Arc::clone(self);
         let ctx = Arc::clone(&turn_context);
