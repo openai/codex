@@ -136,6 +136,8 @@ pub(super) fn build_request(
     }
     let policy = materialize_temporary_paths(permissions.file_system_sandbox_policy(), &env)?;
     #[cfg(windows)]
+    crate::windows::log_launch("phase=prepare_deny_parents");
+    #[cfg(windows)]
     for denied in policy.get_unreadable_roots_with_cwd(cwd) {
         let Some(parent) = denied.as_path().parent() else {
             continue;
@@ -185,6 +187,8 @@ pub(super) fn build_request(
         }
     }
     let full_disk_write = policy.has_full_disk_write_access();
+    #[cfg(windows)]
+    crate::windows::log_launch("phase=resolve_filesystem_policy");
     let volumes = volume_roots
         .iter()
         .map(PathUri::from_host_native_path)
@@ -199,6 +203,8 @@ pub(super) fn build_request(
     let (roots, readable_roots, denied_paths) = if fs == policy {
         let resolved =
             fs.resolve_for_enforcement(cwd, FileSystemPolicyProjection::PreserveMutableRoots)?;
+        #[cfg(windows)]
+        crate::windows::log_launch("phase=resolve_deny_paths");
         let denies = expand_windows_deny_read_paths(&resolved, &absolute_cwd);
         (resolved.writable_roots, resolved.readable_roots, denies)
     } else {
@@ -209,9 +215,12 @@ pub(super) fn build_request(
         } else {
             fs.get_writable_roots_with_cwd_preserving_mutable_paths(cwd)
         };
+        let readable_roots = fs.get_readable_roots_with_cwd(cwd);
+        #[cfg(windows)]
+        crate::windows::log_launch("phase=resolve_deny_paths");
         (
             roots,
-            fs.get_readable_roots_with_cwd(cwd),
+            readable_roots,
             resolve_windows_deny_read_paths(&policy, &absolute_cwd),
         )
     };
@@ -266,6 +275,8 @@ pub(super) fn build_request(
         .iter()
         .map(PathUri::from_host_native_path)
         .collect::<std::io::Result<HashSet<_>>>()?;
+    #[cfg(windows)]
+    crate::windows::log_launch("phase=expand_volume_grants");
     prune_unavailable_volume_roots(&mut write, &volume_roots);
     prune_unavailable_volume_roots(&mut read, &volume_roots);
     // BaseContainer owns alias precedence for the emitted paths. Do not call
@@ -326,6 +337,13 @@ pub(super) fn build_request(
             Ok((key.to_owned(), value.to_owned()))
         })
         .collect::<Result<Vec<_>, PolicyError>>()?;
+    #[cfg(windows)]
+    crate::windows::log_launch(format_args!(
+        "filesystem grants read={} write={} deny={}",
+        read.len(),
+        write.len(),
+        deny.len()
+    ));
     Ok(ContainerRequest {
         working_directory: Some(
             command_cwd
