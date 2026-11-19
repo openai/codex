@@ -365,6 +365,7 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
         codex_app_server_client::AppServerClient::Cloud(client),
         crate::ThreadParamsMode::Cloud,
     );
+    let mut interactive_thread = thread.clone();
     let service = tokio::spawn(async move {
         let mut turn_pages = Vec::new();
         let mut item_pages = Vec::new();
@@ -373,6 +374,24 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
                 panic!("expected a history read")
             };
             let response = match *request {
+                ClientRequest::ThreadTurnsList { .. } if item_pages.len() >= 4 => {
+                    json!({"data": [test_turn("middle", TurnStatus::InProgress, vec![])], "nextCursor": null})
+                }
+                ClientRequest::ThreadItemsList { params, .. } if item_pages.len() >= 4 => {
+                    item_pages.push(params.cursor.clone());
+                    match params.cursor {
+                        None => json!({"data": [{"turnId":"middle","item":{
+                            "type":"userMessage","id":"z","content":[{"type":"text","text":"Question"}]
+                        },"completedAtMs":2}],"nextCursor":"interactive"}),
+                        Some(Opaque(cursor)) if cursor == "interactive" => json!({"data":[
+                            {"turnId":"middle","item":{"type":"agentMessage","id":"b","text":""},"startedAtMs":1},
+                            {"turnId":"middle","item":{"type":"agentMessage","id":"d","text":"Visible prefix"},"startedAtMs":1},
+                            {"turnId":"middle","item":{"type":"agentMessage","id":"c","text":""},"startedAtMs":1},
+                            {"turnId":"middle","item":{"type":"agentMessage","id":"a","text":"Earlier prefix"},"startedAtMs":1}
+                        ],"nextCursor":null}),
+                        other => panic!("unexpected interactive cursor {other:?}"),
+                    }
+                }
                 ClientRequest::ThreadRead { .. } => json!({"thread": thread}),
                 ClientRequest::ThreadTurnsList { params, .. } => {
                     let page = match params.cursor.as_deref() {
@@ -399,7 +418,11 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
                         other => panic!("unexpected item cursor {other:?}"),
                     }
                 }
-                _ => panic!("unexpected request"),
+                ClientRequest::PluginInstalled { .. } => json!({"marketplaces":[]}),
+                ClientRequest::ThreadBackgroundTerminalsList { .. } => {
+                    json!({"data": [], "nextCursor": null})
+                }
+                other => panic!("unexpected request: {other:?}"),
             };
             command.response.send(Ok(Ok(response))).unwrap();
         }
@@ -427,6 +450,78 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
     {
         assert!(lines_to_single_string(&cell.raw_lines()).contains(expected));
     }
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.app_server_target = AppServerTarget::Cloud;
+    app.local_settings.transcript_mode = TranscriptMode::Terminal;
+    app.local_settings.tui.terminal_resize_reflow_max_rows = Some(1);
+    interactive_thread.cwd = app.config.cwd.clone().into();
+    server
+        .hydrate_initial_thread_history(
+            &mut interactive_thread,
+            /*turn_cursor*/ None,
+            /*item_cursor*/ None,
+            Some(&app.config),
+            Some(&app.local_settings),
+            HistoryHydrationScope::Initial,
+        )
+        .await?;
+    app.enqueue_primary_thread_session(
+        test_thread_session(id, app.config.cwd.to_path_buf()),
+        interactive_thread.turns,
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+    let cursor = server.begin_older_history_page(id).expect("older page");
+    let page = server
+        .thread_items_page(
+            id,
+            /*turn_id*/ None,
+            Some(cursor.clone()),
+            /*limit*/ 100,
+        )
+        .await?;
+    app.handle_older_history_page(&mut tui, &mut server, id, &cursor, Ok(page))
+        .await?;
+    for (item_id, text) in [
+        ("a", "Earlier final answer"),
+        ("c", "Previously empty answer"),
+        ("d", r#"::git-stage{cwd="/repo"}"#),
+        ("b", "Later answer"),
+    ] {
+        let payload: ThreadItemPayload =
+            serde_json::from_value(json!({"type":"agentMessage","id":item_id,"text":text}))?;
+        let completed = codex_app_server_protocol::ItemCompletedNotification::new(
+            id.to_string(),
+            "middle".into(),
+            payload,
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 3,
+        );
+        app.enqueue_thread_notification(id, ServerNotification::ItemCompleted(completed))
+            .await?;
+        let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+        app.handle_thread_event_now(event);
+        drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+    }
+    let replies = app
+        .transcript_cells
+        .iter()
+        .flat_map(|cell| cell.display_lines(/*width*/ 80))
+        .map(|line| line.to_string())
+        .filter(|line| line.starts_with("• "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(replies, @"
+    • Earlier final answer
+    • Previously empty answer
+    • Later answer
+    ");
+    assert_eq!(
+        app.chat_widget.last_agent_markdown_text(),
+        Some("Later answer")
+    );
+    drop(app);
     drop(server);
     let (turn_pages, item_pages) = service.await?;
     assert_eq!(
@@ -435,7 +530,9 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
             None,
             Some(Opaque("end".into())),
             None,
-            Some(Opaque("end".into()))
+            Some(Opaque("end".into())),
+            None,
+            Some(Opaque("interactive".into())),
         ]
     );
     assert_eq!(

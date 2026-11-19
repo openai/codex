@@ -7,6 +7,48 @@
 use super::*;
 
 impl ChatWidget {
+    /// Record replies newest-to-oldest before the loaded response window, without replay effects.
+    pub(crate) fn remember_older_cloud_reply(
+        &mut self,
+        turn_id: &str,
+        entry: &codex_app_server_protocol::ThreadItem,
+        status: &TurnStatus,
+    ) -> Option<(String, String)> {
+        let key = (turn_id.to_owned(), entry.id().to_owned());
+        if self.transcript.has_replayed_cloud_text(turn_id, entry.id()) {
+            return None;
+        }
+        let seen = self.transcript.replayed_cloud_text.as_mut()?;
+        self.transcript.older_response_order -= 1;
+        let position = self.transcript.older_response_order;
+        let finished = entry.completed_at_ms.is_some()
+            || (entry.started_at_ms.is_none() && *status != TurnStatus::InProgress);
+        if finished {
+            if self.transcript.last_agent_source.is_none()
+                && let ThreadItemPayload::AgentMessage { text, .. } = &entry.payload
+            {
+                let parsed = parse_assistant_markdown(text, self.config.cwd.as_path());
+                if !parsed.visible_markdown.trim().is_empty() {
+                    let committed = self.transcript.committed_turn_response.take();
+                    self.transcript
+                        .record_agent_markdown(parsed.visible_markdown, text.clone());
+                    self.transcript.historical_copy_order = Some(position);
+                    self.transcript.last_agent_copy_item = Some(key);
+                    if self.last_turn_id() != Some(turn_id) {
+                        self.transcript.committed_turn_response = committed;
+                    } else if let Some((order, _)) = &mut self.transcript.committed_turn_response {
+                        *order = position;
+                    }
+                }
+            }
+            return None;
+        }
+        seen.entry(turn_id.to_owned())
+            .or_default()
+            .insert(entry.id().to_owned(), (false, position));
+        Some(key)
+    }
+
     /// Restores the active typed reasoning item after a thread switch or session refresh.
     /// Its completion carries the full summary if the bounded event buffer lost earlier deltas.
     pub(crate) fn restore_active_reasoning_item(
@@ -202,8 +244,9 @@ impl ChatWidget {
                         Some((summary, content)),
                     );
                 } else {
-                    self.transcript.recording_finished_cloud_text =
-                        status != TurnStatus::InProgress || entry.completed_at_ms.is_some();
+                    // Item and turn pages can reflect different points in time.
+                    self.transcript.recording_finished_cloud_text = entry.completed_at_ms.is_some()
+                        || (entry.started_at_ms.is_none() && status != TurnStatus::InProgress);
                     self.replay_thread_item(item, turn_id.clone(), replay_kind);
                     self.transcript.recording_finished_cloud_text = false;
                 }

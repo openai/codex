@@ -282,7 +282,7 @@ impl ChatWidget {
         if self.daybreak_enabled && previous_thread_id != self.thread_id {
             self.add_info_message("Daybreak is on for new turns.".into(), /*hint*/ None);
         }
-        self.transcript.saw_copy_source_this_turn = false;
+        self.transcript.committed_turn_response = None;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         self.refresh_connector_mentions(/*force_refresh*/ false);
         let initial_user_message_pending = self.initial_user_message.is_some();

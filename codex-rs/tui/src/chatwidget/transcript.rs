@@ -31,6 +31,9 @@ pub(super) struct StatusCopySource {
     pub(super) fields: Vec<(String, Arc<str>)>,
 }
 
+/// Completion status and observation order for each replayed assistant item in one turn.
+type ReplayedCloudItems = std::collections::HashMap<String, (bool, i64)>;
+
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
@@ -45,12 +48,12 @@ pub(super) struct TranscriptState {
     pub(super) last_agent_markdown: Option<String>,
     /// Original source of that response, before display sanitization, for exact block copying.
     pub(super) last_agent_source: Option<String>,
+    pub(super) last_agent_copy_item: Option<(String, String)>,
     /// Latest `/status` card and fields, retained across copying until a later turn or command.
     pub(super) last_status_copy_targets: Option<StatusCopySource>,
     pub(super) last_completed_agent_message: Option<(String, String)>,
-    /// Finished assistant items projected into this widget from Cloud history, keyed by turn.
-    pub(super) replayed_cloud_text:
-        Option<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// Whether each assistant item projected from Cloud history was finished, keyed by turn.
+    pub(super) replayed_cloud_text: Option<std::collections::HashMap<String, ReplayedCloudItems>>,
     pub(super) recording_finished_cloud_text: bool,
     /// Turn and item IDs for the agent message currently supplying streamed deltas.
     pub(super) active_streamed_agent_message: Option<(String, String)>,
@@ -58,8 +61,13 @@ pub(super) struct TranscriptState {
     pub(super) last_flushed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
-    /// Whether this turn already produced a copyable response.
-    pub(super) saw_copy_source_this_turn: bool,
+    /// Observation order shared by assistant replies and proposed plans.
+    pub(super) response_order: i64,
+    /// Negative positions for replies prepended by older history pages.
+    pub(super) older_response_order: i64,
+    pub(super) historical_copy_order: Option<i64>,
+    /// Last completed response from this turn, independent of provisional copy text.
+    pub(super) committed_turn_response: Option<(i64, String)>,
     /// Whether the current turn emitted a plan update.
     pub(super) saw_plan_update_this_turn: bool,
     /// Whether the current turn emitted a proposed plan item that has not been superseded by a
@@ -85,7 +93,8 @@ impl TranscriptState {
         self.replayed_cloud_text
             .as_ref()
             .and_then(|turns| turns.get(turn_id))
-            .is_some_and(|items| items.contains(item_id))
+            .and_then(|items| items.get(item_id))
+            .is_some_and(|(finished, _)| *finished)
     }
 
     pub(super) fn bump_active_cell_revision(&mut self) {
@@ -109,18 +118,25 @@ impl TranscriptState {
         self.last_agent_markdown =
             Some(crate::markdown_render::followup_labels(&markdown).into_owned());
         self.last_agent_source = Some(source);
-        self.saw_copy_source_this_turn = true;
+        self.last_agent_copy_item = None;
+        self.historical_copy_order = None;
+        self.committed_turn_response = self
+            .last_agent_markdown
+            .clone()
+            .map(|text| (self.response_order, text));
     }
 
     pub(super) fn reset_copy_history(&mut self) {
         self.last_status_copy_targets = None;
         self.last_agent_markdown = None;
         self.last_agent_source = None;
-        self.saw_copy_source_this_turn = false;
+        self.last_agent_copy_item = None;
+        self.historical_copy_order = None;
+        self.committed_turn_response = None;
     }
 
     pub(super) fn reset_turn_flags(&mut self) {
-        self.saw_copy_source_this_turn = false;
+        self.committed_turn_response = None;
         self.last_completed_agent_message = None;
         self.active_streamed_agent_message = None;
         self.last_flushed_agent_message = None;

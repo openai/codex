@@ -420,10 +420,16 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
         TurnStatus::InProgress,
         vec![
             commentary.clone(),
+            agent_item("blank-item", "", None),
             agent_item("live-item", "Partial response", None),
+            agent_item("late-directive", "::git-pu", None),
+            agent_item("directive-item", "::git-st", None),
         ],
     );
     ongoing_turn.items[0].completed_at_ms = Some(1);
+    ongoing_turn.items[1].started_at_ms = Some(1);
+    ongoing_turn.items[3].started_at_ms = Some(1);
+    ongoing_turn.items[4].started_at_ms = Some(1);
     let mut original_thread = overview_thread(
         original,
         /*parent_thread_id*/ None,
@@ -599,6 +605,14 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let rendered_transcript = |app: &App| {
+        app.transcript_cells
+            .iter()
+            .flat_map(|cell| cell.display_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let mut tui = crate::tui::test_support::make_test_tui()?;
     while events.try_recv().is_ok() {}
     for thread_id in [other, original] {
@@ -621,8 +635,68 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             • Commentary response
             • Partial response
             ");
+            assert!(rendered_transcript(&app).contains("::git-st"));
+            assert_eq!(app.chat_widget.last_agent_markdown_text(), Some("::git-st"));
+            let directive = agent_item("directive-item", r#"::git-stage{cwd="/repo"}"#, None);
+            for notification in [
+                agent_message_delta_notification(other, ongoing, "directive-item", "age"),
+                completed(other, ongoing, directive.clone()),
+            ] {
+                app.enqueue_thread_notification(other, notification).await?;
+                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                app.handle_thread_event_now(event);
+            }
+            drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+            assert!(!rendered_transcript(&app).contains("::git-st"));
+            assert!(app.transcript_cells.iter().all(|cell| {
+                !cell
+                    .copy_source()
+                    .is_some_and(|source| source.contains("::git-st"))
+            }));
+            assert_eq!(app.chat_widget.last_agent_markdown_text(), Some("::git-pu"));
+            let mut view = crate::transcript_view::TranscriptView::default();
+            let area = ratatui::layout::Rect::new(0, 0, 80, 20);
+            view.render(
+                area,
+                &mut ratatui::buffer::Buffer::empty(area),
+                &app.transcript_cells,
+            );
+            assert!(view.begin_copy_mode(&app.transcript_cells, /*guard*/ None));
+            let selection = view.selected_text(&app.transcript_cells).unwrap();
+            let mut copied = String::new();
+            view.copy_selected_text_with(
+                &app.transcript_cells,
+                &selection,
+                /*clear_selection*/ false,
+                |text, _| {
+                    copied = text.to_owned();
+                    Ok(crate::clipboard_copy::CopyStatus::Confirmed)
+                },
+            )
+            .unwrap();
+            assert_eq!(copied, "::git-pu");
             for notification in [
                 agent_message_delta_notification(other, ongoing, "live-item", "Live response "),
+                agent_message_delta_notification(other, ongoing, "late-directive", "sh"),
+                completed(
+                    other,
+                    ongoing,
+                    agent_item(
+                        "late-directive",
+                        r#"::git-push{cwd="/repo" branch="feat"}"#,
+                        None,
+                    ),
+                ),
+            ] {
+                app.enqueue_thread_notification(other, notification).await?;
+                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                app.handle_thread_event_now(event);
+            }
+            drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+            let intermediate = rendered_transcript(&app);
+            assert!(intermediate.contains("Live response"));
+            assert!(!intermediate.contains("::git-pu"));
+            for notification in [
                 agent_message_delta_notification(
                     other,
                     ongoing,
@@ -631,6 +705,23 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 ),
                 completed(other, ongoing, commentary.clone()),
                 agent_message_delta_notification(other, ongoing, "live-item", "continues"),
+                completed(
+                    other,
+                    ongoing,
+                    agent_item("live-item", "Canonical final response", None),
+                ),
+                completed(
+                    other,
+                    ongoing,
+                    agent_item("live-item", "Canonical final response", None),
+                ),
+                completed(other, ongoing, directive),
+                agent_message_delta_notification(other, ongoing, "blank-item", "Earlier "),
+                completed(
+                    other,
+                    ongoing,
+                    agent_item("blank-item", "Earlier final response", None),
+                ),
                 turn_completed_notification(other, ongoing, TurnStatus::Completed),
             ] {
                 app.enqueue_thread_notification(other, notification).await?;
@@ -638,11 +729,37 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 app.handle_thread_event_now(event);
             }
             drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
-            insta::assert_snapshot!(rendered_responses(&app), @"
+            let live_responses = rendered_responses(&app);
+            let live_transcript = rendered_transcript(&app);
+            assert!(!live_transcript.contains("::git-st"));
+            assert!(!live_transcript.contains("::git-pu"));
+            assert_eq!(
+                app.chat_widget.last_agent_markdown_text(),
+                Some("Canonical final response")
+            );
+            insta::assert_snapshot!(&live_responses, @"
             • Commentary response
-            • Partial response
-            • Live response continues
+            • Earlier final response
+            • Canonical final response
             ");
+            let channel = app.ensure_thread_channel(other);
+            let snapshot = channel.store.lock().await.snapshot();
+            app.render_thread_snapshot(
+                &mut tui,
+                &mut server,
+                other,
+                snapshot,
+                /*resume_restored_queue*/ false,
+            )
+            .await?;
+            drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+            assert_eq!(rendered_responses(&app), live_responses);
+            assert!(!rendered_transcript(&app).contains("::git-st"));
+            assert!(!rendered_transcript(&app).contains("::git-pu"));
+            assert_eq!(
+                app.chat_widget.last_agent_markdown_text(),
+                Some("Canonical final response")
+            );
         }
     }
 

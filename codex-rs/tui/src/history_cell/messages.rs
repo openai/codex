@@ -570,6 +570,24 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
+/// An unfinished Cloud reply's position before it has any visible text.
+#[derive(Debug)]
+pub(crate) struct PendingAgentMessageCell(pub(crate) (String, String));
+
+impl HistoryCell for PendingAgentMessageCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
+    }
+}
+
 /// A consolidated agent message cell that stores raw markdown source and re-renders from it.
 ///
 /// After a stream finalizes, the `ConsolidateAgentMessage` handler in `App`
@@ -586,7 +604,7 @@ impl HistoryCell for AgentMessageCell {
 /// because resolving their local file links depends on filesystem state that can change later.
 #[derive(Debug)]
 pub(crate) struct AgentMarkdownCell {
-    /// Identifies an interrupted reply that can still receive its authoritative completion.
+    /// Reply identity used for completion replacement and corrected copy ordering.
     pub(crate) interrupted_item: Option<(String, String)>,
     pub(crate) phase: Option<codex_protocol::models::MessagePhase>,
     markdown_source: String,

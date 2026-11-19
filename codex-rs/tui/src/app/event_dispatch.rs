@@ -1227,10 +1227,13 @@ impl App {
             AppEvent::CorrectFlushedAgentMessage { item, cell } => {
                 let belongs_to_item = |cell: &Arc<dyn HistoryCell>| {
                     cell.as_any().downcast_ref::<history_cell::AgentMarkdownCell>().is_some_and(|cell| cell.interrupted_item.as_ref() == Some(&item))
+                        || cell.as_any().downcast_ref::<history_cell::PendingAgentMessageCell>().is_some_and(|cell| cell.0 == item)
                 };
+                let hidden = cell.copy_source() == Some("");
                 if let Some(index) = self.transcript_cells.iter().position(belongs_to_item) {
-                    // Keep the reply where it first appeared, with intervening tools in order.
-                    if self.transcript_cells.extract_if(index + 1.., |cell| belongs_to_item(cell)).count() > 0 {
+                    // Remove a hidden reply entirely; otherwise retain its original position.
+                    let remove_from = index + usize::from(!hidden);
+                    if self.transcript_cells.extract_if(remove_from.., |cell| belongs_to_item(cell)).count() > 0 {
                         self.native_history.retain(&self.transcript_cells);
                         self.transcript_view.restart_search();
                         self.transcript_view.history_loaded(&self.transcript_cells, 0..0);
@@ -1238,8 +1241,19 @@ impl App {
                             overlay.replace_cells(self.transcript_cells.clone());
                         }
                     }
-                    self.replace_agent_message(tui, index..index + 1, cell, crate::app_event::ConsolidationScrollbackReflow::Required)?;
-                } else {
+                    if hidden {
+                        self.finish_required_stream_reflow(tui)?;
+                    } else {
+                        self.replace_agent_message(tui, index..index + 1, cell, crate::app_event::ConsolidationScrollbackReflow::Required)?;
+                    }
+                    let previous = self.transcript_cells.iter().rev().find(|cell| {
+                        (cell.as_any().is::<history_cell::AgentMarkdownCell>() && !cell.raw_lines().is_empty())
+                            || cell.as_any().is::<history_cell::ProposedPlanCell>()
+                    });
+                    self.chat_widget.reconcile_corrected_cloud_copy(
+                        &item, previous.map(AsRef::as_ref),
+                    );
+                } else if !hidden {
                     self.insert_history_cell(tui, Box::new(cell));
                 }
             }
