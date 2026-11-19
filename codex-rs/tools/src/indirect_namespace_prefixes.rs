@@ -1,6 +1,5 @@
 //! Adds namespace guidance to indirect tool descriptions after selection.
 //! Conflicting prefixes for the same final namespace are rejected before rendering.
-//! Direct specifications, search indexes, and cached definitions remain unchanged.
 
 use crate::LoadableToolSpec;
 use crate::ToolName;
@@ -26,6 +25,8 @@ pub struct IndirectNamespacePrefixConflict {
 /// Borrowed model text applied only to fresh indirect presentation data.
 pub struct IndirectNamespacePrefixes<'a> {
     prefixes: BTreeMap<String, &'a str>,
+    // This selector annotates namespace headers only, including shared headers.
+    builtin_headers: BTreeMap<&'a str, &'a str>,
 }
 
 impl<'a> IndirectNamespacePrefixes<'a> {
@@ -34,6 +35,7 @@ impl<'a> IndirectNamespacePrefixes<'a> {
     pub fn new<'s>(
         prefixes: Option<&'a IndirectDescriptionPrefixes>,
         namespaces: impl IntoIterator<Item = (&'s str, &'s str)>,
+        builtin_tools: impl IntoIterator<Item = &'s ToolName>,
     ) -> Result<Self, IndirectNamespacePrefixConflict> {
         let mut resolved = BTreeMap::new();
         if let Some(namespaces) = prefixes.and_then(|prefixes| prefixes.namespaces.as_ref()) {
@@ -50,30 +52,51 @@ impl<'a> IndirectNamespacePrefixes<'a> {
         {
             for (server, namespace) in namespaces {
                 if let Some(prefix) = servers.get(server) {
-                    let prefix = prefix.trim();
-                    match resolved.entry(namespace.to_owned()) {
-                        Entry::Vacant(entry) => {
-                            entry.insert((prefix, format!("mcp_servers.{server}")));
-                        }
-                        Entry::Occupied(entry) if entry.get().0 != prefix => {
-                            return Err(IndirectNamespacePrefixConflict {
-                                namespace: namespace.to_owned(),
-                                first_source: entry.get().1.clone(),
-                                second_source: format!("mcp_servers.{server}"),
-                            });
-                        }
-                        Entry::Occupied(_) => {}
-                    }
+                    insert_prefix(
+                        &mut resolved,
+                        namespace,
+                        prefix,
+                        format!("mcp_servers.{server}"),
+                    )?;
+                }
+            }
+        }
+        let mut builtin_headers = BTreeMap::new();
+        if let Some(configured) = prefixes.and_then(|p| p.builtin_tool_namespaces.as_ref())
+            && !configured.is_empty()
+        {
+            let registered = builtin_tools
+                .into_iter()
+                .map(namespace_name)
+                .collect::<BTreeSet<_>>();
+            for (namespace, prefix) in configured {
+                if !registered.contains(namespace.as_str()) {
+                    continue;
+                }
+                if resolved.contains_key(namespace) {
+                    insert_prefix(
+                        &mut resolved,
+                        namespace,
+                        prefix,
+                        format!("builtin_tool_namespaces.{namespace}"),
+                    )?;
+                } else if !prefix.trim().is_empty() {
+                    builtin_headers.insert(namespace.as_str(), prefix.trim());
                 }
             }
         }
         Ok(Self {
+            builtin_headers,
             prefixes: resolved
                 .into_iter()
                 .filter(|(_, (prefix, _))| !prefix.is_empty())
                 .map(|(namespace, (prefix, _))| (namespace, prefix))
                 .collect(),
         })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.prefixes.is_empty() && self.builtin_headers.is_empty()
     }
 
     /// ALL_TOOLS is flat, so each entry carries its namespace's guidance.
@@ -89,18 +112,18 @@ impl<'a> IndirectNamespacePrefixes<'a> {
 
     /// Adds guidance to one owned description without copying the tool's schemas.
     pub fn apply_code_mode_description(&self, tool_name: &ToolName, description: &mut String) {
-        if let Some(prefix) = self.prefix(namespace_name(tool_name)) {
+        if let Some(prefix) = self.flat_prefix(tool_name) {
             prepend(prefix, description);
         }
     }
 
-    /// Adds one prefix per namespace actually embedded in the exec description.
+    /// Apply guidance once to each namespace embedded in the Code Mode prompt.
     pub fn apply_exec_prompt(
         &self,
         tools: &mut [ToolDefinition],
         namespaces: &mut BTreeMap<String, ToolNamespaceDescription>,
     ) {
-        if self.prefixes.is_empty() {
+        if self.is_empty() {
             return;
         }
         let mut has_default_prefix = false;
@@ -137,24 +160,56 @@ impl<'a> IndirectNamespacePrefixes<'a> {
 
     /// Applies prefixes after search ranking and namespace coalescing.
     pub fn apply_search(&self, tools: &mut [LoadableToolSpec]) {
-        if self.prefixes.is_empty() {
+        if self.is_empty() {
             return;
         }
         for spec in tools {
-            if let LoadableToolSpec::Namespace(namespace) = spec
-                && let Some(prefix) = self.prefix(&namespace.name)
-            {
+            let LoadableToolSpec::Namespace(namespace) = spec else {
+                continue;
+            };
+            if let Some(prefix) = self.prefix(&namespace.name) {
                 prepend(prefix, &mut namespace.description);
             }
         }
     }
 
+    /// Guidance attached to an individual entry in a flat Code Mode listing.
+    fn flat_prefix(&self, tool_name: &ToolName) -> Option<&'a str> {
+        self.prefixes.get(namespace_name(tool_name)).copied()
+    }
+
     fn prefix(&self, namespace: &str) -> Option<&'a str> {
-        self.prefixes.get(namespace).copied()
+        self.prefixes
+            .get(namespace)
+            .or_else(|| self.builtin_headers.get(namespace))
+            .copied()
     }
 }
 
-fn prepend(prefix: &str, description: &mut String) {
+fn insert_prefix<'a>(
+    resolved: &mut BTreeMap<String, (&'a str, String)>,
+    namespace: &str,
+    prefix: &'a str,
+    source: String,
+) -> Result<(), IndirectNamespacePrefixConflict> {
+    let prefix = prefix.trim();
+    match resolved.entry(namespace.to_owned()) {
+        Entry::Vacant(entry) => {
+            entry.insert((prefix, source));
+        }
+        Entry::Occupied(entry) if entry.get().0 != prefix => {
+            return Err(IndirectNamespacePrefixConflict {
+                namespace: namespace.to_owned(),
+                first_source: entry.get().1.clone(),
+                second_source: source,
+            });
+        }
+        Entry::Occupied(_) => {}
+    }
+    Ok(())
+}
+
+pub(super) fn prepend(prefix: &str, description: &mut String) {
     *description = if description.is_empty() {
         prefix.to_string()
     } else {

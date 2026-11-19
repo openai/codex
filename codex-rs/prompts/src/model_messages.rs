@@ -64,6 +64,7 @@ const REMINDER_MESSAGE_TEMPLATE: &str = concat!(
 const PERSISTENT_INSTRUCTIONS: &str = include_str!("../templates/persistent_mode.md");
 const CONTENT_FILTER_GUIDANCE: &str = "Your previous response was blocked by a content filter. Do not treat this as a transient failure or try to reproduce or work around the blocked content through repeated attempts, altered formatting, splitting, encoding, tools, subagents, or later wakes. Briefly explain the limitation and offer a permitted alternative. Continue unrelated authorized work.";
 const MAX_CONTENT_FILTER_GUIDANCE_BYTES: usize = 512;
+const DEFAULT_DESCRIPTION_PREFIX_BUDGET_BYTES: usize = 512;
 
 /// Resolves model-owned text from catalog overrides or bundled defaults, one family at a time.
 ///
@@ -231,6 +232,39 @@ impl<'a> ResolvedModelMessages<'a> {
             .as_ref()?
             .mcp_resources
             .as_ref()
+    }
+
+    /// Bound the selected model's configured prefix text before resolving tool availability.
+    pub fn validate_description_prefix_budget(&self) -> Result<(), String> {
+        let Some(tools) = self
+            .catalog_messages
+            .and_then(|messages| messages.tools.as_ref())
+        else {
+            return Ok(());
+        };
+        let indirect = tools.indirect_description_prefixes.as_ref();
+        let bytes: usize = [
+            tools
+                .functions_namespace_functions_description_prefixes
+                .as_ref(),
+            indirect.and_then(|prefixes| prefixes.namespaces.as_ref()),
+            indirect.and_then(|prefixes| prefixes.builtin_tool_namespaces.as_ref()),
+            indirect.and_then(|prefixes| prefixes.mcp_servers.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(|map| map.values())
+        .map(|prefix| prefix.trim().len())
+        .sum();
+        let limit = tools
+            .description_prefix_budget_bytes
+            .unwrap_or(DEFAULT_DESCRIPTION_PREFIX_BUDGET_BYTES);
+        if bytes > limit {
+            return Err(format!(
+                "Model catalog tool description prefixes total {bytes} UTF-8 bytes, exceeding description_prefix_budget_bytes ({limit})"
+            ));
+        }
+        Ok(())
     }
 
     /// Selects indirect tool guidance; tool rendering owns namespace mapping and normalization.

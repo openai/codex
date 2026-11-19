@@ -240,8 +240,14 @@ impl ToolRouter {
         self.registry.deferred_tool_namespaces()
     }
 
-    pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.registry.mcp_namespaces()
+    pub(crate) fn indirect_namespace_prefixes<'a>(
+        &self,
+        prefixes: Option<&'a codex_protocol::openai_models::IndirectDescriptionPrefixes>,
+    ) -> Result<
+        codex_tools::IndirectNamespacePrefixes<'a>,
+        codex_tools::IndirectNamespacePrefixConflict,
+    > {
+        self.registry.indirect_namespace_prefixes(prefixes)
     }
 
     #[cfg(test)]

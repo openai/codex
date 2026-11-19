@@ -669,13 +669,17 @@ pub struct ToolMessages {
     pub incremental_tools: Option<IncrementalToolMessages>,
     /// Prefixes for individual functions in the `functions` namespace, keyed by unqualified name.
     /// Applies to direct declarations, Code Mode, and tool search, including custom tools.
-    /// Values are trimmed; empty values and unavailable functions add nothing. The trimmed
-    /// values for available functions plus separating blank lines must fit in 256 UTF-8 bytes
-    /// in total. This bounds the added text, not the complete definition or its token count.
+    /// Only available functions are annotated. All configured prefixes share the
+    /// `description_prefix_budget_bytes` limit with indirect namespace guidance.
     /// Other namespaces are never affected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub functions_namespace_functions_description_prefixes:
         Option<std::collections::BTreeMap<String, String>>,
+    /// Maximum total UTF-8 bytes of trimmed prefix values in this model's catalog entry.
+    /// Defaults to 512. Each configured dictionary entry counts once, including unused
+    /// selectors. Keys, paragraph separators, and rendered copies are excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_prefix_budget_bytes: Option<usize>,
     /// Optional guidance for indirectly presented tools; missing or empty adds no prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indirect_description_prefixes: Option<IndirectDescriptionPrefixes>,
@@ -696,9 +700,14 @@ pub struct ToolMessages {
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct IndirectDescriptionPrefixes {
     /// Exact rendered namespaces, including `functions` for plain tools.
-    /// Overlap with an MCP server prefix is allowed only when the trimmed values match.
+    /// Overlapping selectors must have the same trimmed value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespaces: Option<std::collections::BTreeMap<String, String>>,
+    /// Exact rendered namespaces of registered built-in tools, including `functions` for plain tools.
+    /// Adds guidance once to the namespace header, including a header shared with client tools.
+    /// Flat listings have no header and omit this selector. External-only namespaces are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_tool_namespaces: Option<std::collections::BTreeMap<String, String>>,
     /// Configured MCP server names, before callable namespace normalization.
     /// Each prefix applies to all namespaces exposed by that server.
     #[serde(default, skip_serializing_if = "Option::is_none")]

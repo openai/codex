@@ -406,6 +406,10 @@ pub(crate) fn finalize_tool_router(
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
     let model_messages = ResolvedModelMessages::from_model(model_info);
+    model_messages
+        .validate_description_prefix_budget()
+        .map_err(CodexErrorDetails::InvalidRequest)?;
+
     hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     enforce_strict_3p_tools(turn_context, model_info, &mut registry);
@@ -476,12 +480,9 @@ pub(crate) fn finalize_tool_router(
         }
     }
 
-    prepare_function_description_prefixes(
-        turn_context,
-        model_info,
-        &mut registry,
-        search_exposure,
-    )?;
+    registry.apply_functions_namespace_function_prefixes(
+        model_messages.functions_namespace_functions_description_prefixes(),
+    );
 
     if let Some(exposure) = search_exposure {
         append_tool_search_executor(
@@ -492,11 +493,9 @@ pub(crate) fn finalize_tool_router(
         );
     }
 
-    let indirect_prefixes = IndirectNamespacePrefixes::new(
-        model_messages.indirect_description_prefixes(),
-        registry.mcp_namespaces(),
-    )
-    .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
+    let indirect_prefixes = registry
+        .indirect_namespace_prefixes(model_messages.indirect_description_prefixes())
+        .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
     let (code_mode_tool_names, exec_definitions) =
         register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
     let include_tool_namespaces_info = turn_context
@@ -923,69 +922,6 @@ fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) 
     })
 }
 
-fn prepare_function_description_prefixes(
-    turn_context: &TurnContext,
-    model_info: &ModelInfo,
-    registry: &mut ToolRegistry,
-    search_exposure: Option<ToolExposure>,
-) -> CodexResult<()> {
-    let model_messages = ResolvedModelMessages::from_model(model_info);
-    let prefixes = model_messages.functions_namespace_functions_description_prefixes();
-    let mut available_tools = Vec::new();
-    if prefixes.is_some_and(|prefixes| !prefixes.is_empty()) {
-        let code_mode_enabled = matches!(
-            effective_tool_mode(turn_context, model_info),
-            ToolMode::CodeMode | ToolMode::CodeModeOnly
-        );
-        let search_name = ToolName::plain(TOOL_SEARCH_TOOL_NAME);
-        let search_visible = search_exposure.is_some_and(|exposure| {
-            !is_hidden_by_code_mode_only(turn_context, model_info, &search_name, exposure)
-                || (code_mode_enabled
-                    && registry
-                        .tool_policy
-                        .allows(&ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME))
-                    && turn_context
-                        .config
-                        .features
-                        .enabled(Feature::CodeModeToolSearch)
-                    && exposure.is_available_in_code_mode()
-                    && !is_excluded_from_code_mode(turn_context, &search_name))
-        });
-        available_tools.extend(
-            registry
-                .entries()
-                .filter(|tool| {
-                    is_directly_visible(turn_context, model_info, tool)
-                        || (search_visible
-                            && tool.exposure.is_deferred()
-                            && tool.runtime.search_info().is_some())
-                })
-                .map(|tool| tool.runtime.tool_name()),
-        );
-        available_tools.extend(
-            code_mode_tools(turn_context, model_info, registry)
-                .map(|(_, _, tool)| tool.runtime.tool_name()),
-        );
-        // These wrappers are generated after their inner descriptions are ready.
-        if code_mode_enabled {
-            available_tools.extend(
-                [
-                    codex_code_mode::PUBLIC_TOOL_NAME,
-                    codex_code_mode::WAIT_TOOL_NAME,
-                ]
-                .into_iter()
-                .map(ToolName::plain)
-                .filter(|name| registry.tool_policy.allows(name)),
-            );
-        }
-    }
-    registry
-        .apply_functions_namespace_function_prefixes(prefixes, available_tools)
-        .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_owned()).into())
-}
-
-/// Select the same nested tools for prefix budgeting and Code Mode construction.
-/// A registered tool alone is not reachable when policy disallows the exec wrapper.
 fn code_mode_tools<'a>(
     turn_context: &'a TurnContext,
     model_info: &'a ModelInfo,

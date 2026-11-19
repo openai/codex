@@ -8870,12 +8870,18 @@ async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools(
         .with_model_info_override("gpt-5.5", |model_info| {
             model_info.supports_search_tool = true;
             model_info.tool_mode = Some(ToolMode::CodeMode);
-            model_info
+            let tools = model_info
                 .model_messages
                 .get_or_insert_default()
                 .tools
-                .get_or_insert_default()
-                .functions_namespace_functions_description_prefixes =
+                .get_or_insert_default();
+            tools.indirect_description_prefixes = Some(
+                serde_json::from_value(serde_json::json!({
+                    "builtin_tool_namespaces": {"functions": "Builtin."}
+                }))
+                .unwrap(),
+            );
+            tools.functions_namespace_functions_description_prefixes =
                 Some(std::collections::BTreeMap::from([(
                     "hidden-dynamic-tool".to_string(),
                     "Function guidance.".to_string(),
@@ -8943,6 +8949,9 @@ const out = await tools[tool.name]({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
+    builtinLabel: ALL_TOOLS.find(t => t.name === "view_image").description.startsWith("Builtin.\n\n"),
+    dynamicLabel: ALL_TOOLS.find(t => t.name === tool.name).description.includes("Builtin."),
+    searchLabel: tool.description.includes("Builtin."),
     description: tool?.description ?? null,
     out,
     recoveredFromInvalidArguments: errors.length === 2,
@@ -9062,6 +9071,9 @@ text(
         Some(&Value::String("hidden-ok".to_string()))
     );
     assert_eq!(parsed["recoveredFromInvalidArguments"], true);
+    assert_eq!(parsed["builtinLabel"], false);
+    assert_eq!(parsed["dynamicLabel"], false);
+    assert_eq!(parsed["searchLabel"], false);
     let loaded = search_response.single_request().tool_search_output("find");
     let loaded = loaded["tools"]
         .as_array()
@@ -9069,6 +9081,14 @@ text(
         .iter()
         .find(|tool| tool["name"] == namespace)
         .expect("loaded namespace");
+    assert_eq!(
+        loaded["description"],
+        if namespace == "functions" {
+            "Builtin.\n\nCodex app tools."
+        } else {
+            "Codex app tools."
+        }
+    );
     assert_eq!(
         loaded["tools"][0]["description"],
         if namespace == "functions" {

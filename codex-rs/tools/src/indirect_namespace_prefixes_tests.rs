@@ -1,6 +1,7 @@
 //! Checks prefix normalization and rendering without exercising tool execution.
 
 use super::*;
+use crate::ResponsesApiNamespaceTool;
 use codex_code_mode::CodeModeToolKind;
 use codex_protocol::openai_models::IndirectDescriptionPrefixes;
 use codex_protocol::openai_models::ToolMessages;
@@ -59,7 +60,7 @@ fn plain_tools_join_an_existing_functions_group_only_with_a_prefix() {
         let configured: ToolMessages = serde_json::from_value(messages).unwrap();
         let mut tools = original_tools.clone();
         let mut namespaces = original_namespaces.clone();
-        IndirectNamespacePrefixes::new(configured.indirect_description_prefixes.as_ref(), [])
+        IndirectNamespacePrefixes::new(configured.indirect_description_prefixes.as_ref(), [], [])
             .unwrap()
             .apply_exec_prompt(&mut tools, &mut namespaces);
         assert_eq!(render(&tools, &namespaces), original);
@@ -71,15 +72,99 @@ fn plain_tools_join_an_existing_functions_group_only_with_a_prefix() {
         )])),
         ..Default::default()
     };
-    let mut tools = original_tools;
+    let mut tools = original_tools.clone();
     let mut namespaces = original_namespaces;
-    IndirectNamespacePrefixes::new(Some(&configured), [])
+    IndirectNamespacePrefixes::new(Some(&configured), [], [])
         .unwrap()
         .apply_exec_prompt(&mut tools, &mut namespaces);
     let rendered = render(&tools, &namespaces);
     assert_eq!(rendered.matches("## functions").count(), 1);
     assert!(rendered.contains("## functions\nCatalog guidance.\n\nOriginal namespace guidance."));
     assert!(rendered.find("## functions").unwrap() < rendered.find("### `plain`").unwrap());
+
+    // A client function and a built-in can share the default namespace.
+    let builtin_only = IndirectDescriptionPrefixes {
+        builtin_tool_namespaces: configured.namespaces.clone(),
+        ..Default::default()
+    };
+    let inventory = [&original_tools[0].tool_name];
+    let prefixes = IndirectNamespacePrefixes::new(Some(&builtin_only), [], inventory).unwrap();
+    let mut tools = original_tools.clone();
+    let mut namespaces = BTreeMap::new();
+    prefixes.apply_exec_prompt(&mut tools, &mut namespaces);
+    assert_eq!(namespaces["functions"].description, "Catalog guidance.");
+    for (tool, original) in tools.iter().zip(&original_tools) {
+        assert_eq!(tool.description, original.description);
+    }
+    let mut flat = original_tools.clone();
+    prefixes.apply_code_mode(&mut flat);
+    assert_eq!(flat, original_tools);
+
+    // Search coalesces both owners under one header. Both member descriptions are preserved.
+    let mut search = [LoadableToolSpec::Namespace(crate::ResponsesApiNamespace {
+        name: "functions".into(),
+        description: "Shared namespace.".into(),
+        tools: original_tools
+            .iter()
+            .map(|tool| {
+                ResponsesApiNamespaceTool::Function(crate::ResponsesApiTool {
+                    name: tool.tool_name.name.clone(),
+                    description: tool.description.clone(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: crate::JsonSchema::object(
+                        BTreeMap::new(),
+                        /*required*/ None,
+                        Some(false.into()),
+                    ),
+                    output_schema: None,
+                })
+            })
+            .collect(),
+    })];
+    let mut expected = search.clone();
+    let LoadableToolSpec::Namespace(namespace) = &mut expected[0] else {
+        unreachable!()
+    };
+    namespace.description = "Catalog guidance.\n\nShared namespace.".into();
+    prefixes.apply_search(&mut search);
+    assert_eq!(search, expected);
+
+    let mut shared = builtin_only.clone();
+    let server_namespaces = [("calendar", "functions")];
+    shared.mcp_servers = Some(BTreeMap::from([(
+        "calendar".into(),
+        " Catalog guidance. ".into(),
+    )]));
+    let prefixes =
+        IndirectNamespacePrefixes::new(Some(&shared), server_namespaces, inventory).unwrap();
+    let mut namespaces = BTreeMap::new();
+    let mut tools = original_tools.clone();
+    prefixes.apply_exec_prompt(&mut tools, &mut namespaces);
+    assert_eq!(namespaces["functions"].description, "Catalog guidance.");
+    shared.mcp_servers = Some(BTreeMap::from([(
+        "calendar".into(),
+        "Different guidance.".into(),
+    )]));
+    assert_eq!(
+        IndirectNamespacePrefixes::new(Some(&shared), server_namespaces, inventory)
+            .err()
+            .expect("conflicting contributors")
+            .to_string(),
+        "Conflicting indirect description prefixes for namespace `functions`: `mcp_servers.calendar` and `builtin_tool_namespaces.functions`",
+    );
+
+    let overlapping = IndirectDescriptionPrefixes {
+        namespaces: Some(BTreeMap::from([("functions".into(), " ".into())])),
+        ..builtin_only
+    };
+    assert_eq!(
+        IndirectNamespacePrefixes::new(Some(&overlapping), [], inventory)
+            .err()
+            .expect("explicit empty prefix conflicts")
+            .to_string(),
+        "Conflicting indirect description prefixes for namespace `functions`: `namespaces.functions` and `builtin_tool_namespaces.functions`"
+    );
 }
 
 #[test]
@@ -101,7 +186,7 @@ fn flat_tool_descriptions_use_trimmed_namespace_prefixes() {
         output_schema: None,
     };
     let mut tools = [original.clone()];
-    IndirectNamespacePrefixes::new(Some(&configured), [])
+    IndirectNamespacePrefixes::new(Some(&configured), [], [])
         .unwrap()
         .apply_code_mode(&mut tools);
     assert_eq!(
@@ -126,6 +211,7 @@ fn matching_prefixes_cover_each_namespace_once() {
     let configured = IndirectDescriptionPrefixes {
         namespaces: Some(exact),
         mcp_servers: Some(servers),
+        ..Default::default()
     };
     let original = ["gmail", "calendar", "drive", "slack"].map(|app| ToolDefinition {
         name: format!("mcp__codex_apps__{app}__search"),
@@ -144,7 +230,7 @@ fn matching_prefixes_cover_each_namespace_once() {
             ("codex_apps", "mcp__codex_apps__gmail"),
             ("apps_alias", "mcp__codex_apps__gmail"),
         ]);
-    IndirectNamespacePrefixes::new(Some(&configured), namespaces)
+    IndirectNamespacePrefixes::new(Some(&configured), namespaces, [])
         .unwrap()
         .apply_code_mode(&mut tools);
     let expected = original
@@ -173,10 +259,12 @@ fn conflicting_namespace_and_server_prefixes_report_keys_without_values() {
                 "reports.one".to_string(),
                 server_prefix.to_string(),
             )])),
+            ..Default::default()
         };
         let error = IndirectNamespacePrefixes::new(
             Some(&configured),
             [("reports.one", "mcp__reports_one")],
+            [],
         )
         .err()
         .expect("conflicting prefixes")
@@ -200,6 +288,7 @@ fn conflicting_mcp_servers_report_the_shared_namespace() {
     let error = IndirectNamespacePrefixes::new(
         Some(&configured),
         [("reports.one", "shared"), ("reports.two", "shared")],
+        [],
     )
     .err()
     .expect("conflicting prefixes")

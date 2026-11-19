@@ -63,6 +63,34 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
             )]))
             .expect("MCP fixture allowed");
     });
+    if include_search {
+        // Four maps contribute 508 + 1 + 1 + 1 + 1 bytes. Count both matching
+        // MCP selectors and the unused built-in selector, regardless of rendered copies.
+        for (slug, extra, limit) in [
+            ("prefixes-at-budget", "", None),
+            ("prefixes-over-budget", "x", None),
+            ("prefixes-raised-budget", "x", Some(513)),
+        ] {
+            builder = builder.with_model_info_override(slug, move |model| {
+                model.tool_mode = Some(tool_mode);
+                model.supports_search_tool = true;
+                model.model_messages.as_mut().expect("model messages").tools = Some(
+                    serde_json::from_value(json!({
+                        "description_prefix_budget_bytes": limit,
+                        "functions_namespace_functions_description_prefixes": {
+                            "exec": format!(" {}{extra} ", "é".repeat(254)), "view_image": "v"
+                        },
+                        "indirect_description_prefixes": {
+                            "namespaces": {"mcp__reports_one": "m"},
+                            "builtin_tool_namespaces": {"unavailable": "b"},
+                            "mcp_servers": {"reports.one": "m"}
+                        }
+                    }))
+                    .expect("prefix budget catalog"),
+                );
+            });
+        }
+    }
     for (slug, prefixes, mcp_prefix) in [
         (
             "prefixes-conflicting",
@@ -74,14 +102,7 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
             json!({"functions": "", "collaboration": ""}),
             "",
         ),
-        (
-            "gpt-5.5",
-            json!({
-                "functions": "  Functions context.  ",
-                "collaboration": "Agents context.",
-            }),
-            "Reports context.",
-        ),
+        ("gpt-5.5", json!({}), "Reports context."),
     ] {
         builder = builder.with_model_info_override(slug, move |model| {
             model.tool_mode = Some(tool_mode);
@@ -95,6 +116,10 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
                     } else { json!({}) },
                     "indirect_description_prefixes": {
                         "namespaces": prefixes,
+                        "builtin_tool_namespaces": if slug == "gpt-5.5" {
+                            json!({"functions": "Functions context.", "collaboration": "Agents context.",
+                                "mcp__reports_one": "Built-ins only."})
+                        } else { json!({}) },
                         "mcp_servers": {"reports.one": mcp_prefix},
                     },
                 }))
@@ -231,20 +256,18 @@ text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0]
             .as_str()
             .expect("tool description")
     ));
-    for (index, prefix) in prefixes.iter().enumerate() {
-        expected["descriptions"][index] = json!(format!(
-            "{prefix}\n\n{}",
-            expected["descriptions"][index]
-                .as_str()
-                .expect("tool description")
-        ));
-    }
+    expected["descriptions"][2] = json!(format!(
+        "Reports context.\n\n{}",
+        expected["descriptions"][2]
+            .as_str()
+            .expect("MCP tool description")
+    ));
     assert_eq!(outputs[0], expected);
     if tool_mode == ToolMode::CodeModeOnly {
         insta::assert_snapshot!(
             "catalog_indirect_namespace_prefixes",
             context_snapshot::format_request_history_snapshot(
-                "Function prefixes annotate direct and indirect tools; namespace prefixes annotate embedded namespace docs, loaded namespaces, and flat indirect entries. A model switch clears both without changing dispatch.",
+                "Function prefixes annotate individual tools. Built-in namespace prefixes annotate headers. MCP guidance also appears in flat entries. A model switch clears both without changing dispatch.",
                 &requests,
                 &ContextSnapshotOptions::default()
                     .rewrite_known_segments()
@@ -290,6 +313,51 @@ text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0]
             requests.len(),
             "conflicting prefixes must fail before another model request",
         );
+    }
+    if include_search {
+        for (slug, accepted) in [
+            ("prefixes-at-budget", true),
+            ("prefixes-raised-budget", true),
+            ("prefixes-over-budget", false),
+        ] {
+            let mock = responses::mount_sse_once(
+                &server,
+                responses::sse(vec![
+                    responses::ev_assistant_message("budget", "Done."),
+                    responses::ev_completed("budget"),
+                ]),
+            )
+            .await;
+            test.codex
+                .start_or_steer_turn(
+                    TurnInputRequest::user_input(vec![UserInput::Text {
+                        text: "Check the prefix budget.".into(),
+                        text_elements: vec![],
+                    }])
+                    .with_thread_settings(ThreadSettingsOverrides {
+                        model: Some(slug.into()),
+                        ..Default::default()
+                    }),
+                )
+                .await?;
+            let EventMsg::TurnComplete(completed) = wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_))
+            })
+            .await
+            else {
+                unreachable!()
+            };
+            if accepted {
+                assert_eq!(completed.error, None);
+                assert_eq!(mock.requests().len(), 1);
+            } else {
+                assert_eq!(
+                    completed.error.expect("over budget").message,
+                    "Model catalog tool description prefixes total 513 UTF-8 bytes, exceeding description_prefix_budget_bytes (512)"
+                );
+                assert!(mock.requests().is_empty());
+            }
+        }
     }
     test.codex.shutdown_and_wait().await?;
     Ok(())

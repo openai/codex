@@ -243,11 +243,10 @@ impl ToolSearchHandler {
         }
 
         let model_messages = ResolvedModelMessages::from_model(&step_context.settings.model_info);
-        let indirect_prefixes = IndirectNamespacePrefixes::new(
-            model_messages.indirect_description_prefixes(),
-            step_context.tool_router.mcp_namespaces(),
-        )
-        .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
+        let indirect_prefixes = step_context
+            .tool_router
+            .indirect_namespace_prefixes(model_messages.indirect_description_prefixes())
+            .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
 
         if nested {
             let tools = self.search_code_mode(
@@ -388,15 +387,12 @@ mod tests {
         let replacement = cache.get_or_build(&replacement_registry, ToolSearchSourceListing::Omit);
         assert!(!Arc::ptr_eq(&without_sources, &replacement));
 
-        registry
-            .apply_functions_namespace_function_prefixes(
-                Some(&std::collections::BTreeMap::from([(
-                    "create_event".to_string(),
-                    "Guidance.".to_string(),
-                )])),
-                [ToolName::plain("create_event")],
-            )
-            .expect("valid function prefixes");
+        registry.apply_functions_namespace_function_prefixes(Some(
+            &std::collections::BTreeMap::from([(
+                "create_event".to_string(),
+                "Guidance.".to_string(),
+            )]),
+        ));
         let prefixed = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         let reused = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         assert!(Arc::ptr_eq(&prefixed, &reused));
@@ -413,9 +409,7 @@ mod tests {
         };
         tool.description = format!("Guidance.\n\n{}", tool.description);
         assert_eq!(prefixed.search("Create events", /*limit*/ 1), expected);
-        registry
-            .apply_functions_namespace_function_prefixes(/*prefixes*/ None, [])
-            .expect("clear prefixes");
+        registry.apply_functions_namespace_function_prefixes(/*prefixes*/ None);
         let cleared = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         assert_eq!(
             cleared.search("Create events", /*limit*/ 1),
