@@ -1,0 +1,15 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(r\"\\[\n\\varphi=\\underbrace{(x\\lor y\\lor z)}_{C_1}\\land\\underbrace{(\\neg x\\lor y)}_{C_2}\n\\]\n\n$$\\underbrace{x}_{\\text{term}}+\\underbrace{xy}_{C_3}+\\underbrace{x+y}_{C_4}$$\n\n$$\\underbrace{a+bc}_{\\text{total}}$$\",\n80)"
+---
+φ=(x∨ y∨ z)∧ (¬ x∨ y)
+  └───┬───┘  └──┬───┘
+      C₁        C₂
+
+ x  + xy+ x+y
+ ┬    └┘  └┬┘
+term  C₃   C₄
+
+ a+bc
+ └┬─┘
+total

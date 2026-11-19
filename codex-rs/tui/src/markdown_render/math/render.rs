@@ -247,7 +247,7 @@ impl MathParser<'_> {
             {
                 self.display_operator(symbol(name)?)
             }
-            "begin" | "boxed" | "underset" | "overset" | "substack" | "mathcal" => {
+            "begin" | "boxed" | "underset" | "overset" | "underbrace" | "substack" | "mathcal" => {
                 self.structured_command(name)
             }
             "frac" | "dfrac" | "tfrac" => {
