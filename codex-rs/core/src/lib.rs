@@ -193,6 +193,7 @@ pub use thread_manager::AgentTreeShutdownFailure;
 pub use thread_manager::AgentTreeShutdownFailureReason;
 pub use thread_manager::AgentTreeShutdownReport;
 pub use thread_manager::ForkSnapshot;
+pub use thread_manager::GuardianPolicyLoader;
 pub use thread_manager::InternalSessionParent;
 pub use thread_manager::LoadedSuspendedAgent;
 pub use thread_manager::McpRefreshReason;

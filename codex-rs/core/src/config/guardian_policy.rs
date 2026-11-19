@@ -5,8 +5,25 @@ use super::guardian_policy_config_from_requirements;
 use super::normalize_guardian_policy_config;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::GuardianPolicySnapshot;
 use codex_config::config_toml::AutoReviewToml;
 use codex_protocol::config_types::ApprovalsReviewer;
+
+impl super::Config {
+    pub(crate) fn apply_guardian_policy(
+        &mut self,
+        snapshot: &GuardianPolicySnapshot,
+    ) -> std::io::Result<()> {
+        self.config_layer_stack.apply_guardian_policy(snapshot);
+        let fallback = self.config_layer_stack.guardian_config()?;
+        (self.guardian_policy_config, self.guardian_extra_policy) = resolve_guardian_policy_text(
+            self.config_layer_stack.requirements_toml(),
+            Some(&fallback),
+        );
+        self.guardian_policy_revision = snapshot.revision;
+        Ok(())
+    }
+}
 
 pub(crate) fn resolve_guardian_policy_text(
     requirements: &ConfigRequirementsToml,

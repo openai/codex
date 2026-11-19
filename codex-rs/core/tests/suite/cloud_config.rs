@@ -2,10 +2,12 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::config::ConfigBuilder;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -91,6 +93,69 @@ async fn session_requires_managed_configuration_from_configured_service() -> Res
             }
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn guardian_refresh_reports_live_thread_rejection() -> Result<()> {
+    struct TestPolicyLoader {
+        home: Arc<TempDir>,
+        bundle: RwLock<CloudConfigBundleLoader>,
+    }
+    impl codex_core::GuardianPolicyLoader for TestPolicyLoader {
+        fn load_guardian_policy_snapshot(
+            &self,
+            revision: u64,
+        ) -> futures::future::BoxFuture<'_, std::io::Result<codex_config::GuardianPolicySnapshot>>
+        {
+            let bundle = self.bundle.read().unwrap().clone();
+            Box::pin(async move {
+                load_guardian_policy_snapshot(
+                    LOCAL_FS.as_ref(),
+                    self.home.path(),
+                    &LoaderOverrides::without_managed_config_for_tests(),
+                    &bundle,
+                    revision,
+                )
+                .await
+            })
+        }
+    }
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let loader = Arc::new(TestPolicyLoader {
+        home: Arc::clone(&home),
+        bundle: RwLock::new(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "guardian_policy_config = 'startup policy'",
+            ),
+        ),
+    });
+    let test = test_codex()
+        .with_home(home)
+        .with_thread_manager({
+            let loader = Arc::clone(&loader);
+            move |manager| manager.with_guardian_policy_loader(loader)
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let startup = test.codex.config().await;
+    assert!(startup.guardian_policy_revision > 0);
+    let policy = startup.guardian_policy_config.as_deref();
+    assert_eq!(policy, Some("startup policy"));
+    *loader.bundle.write().unwrap() =
+        CloudConfigBundleFixture::loader_with_enterprise_config("auto_review = false");
+
+    let error = test
+        .thread_manager
+        .refresh_guardian_policy()
+        .await
+        .expect_err("the live thread cannot apply the invalid Guardian fallback");
+    assert_eq!(
+        error.to_string(),
+        "Guardian policy refresh rejected by one or more live threads"
+    );
     Ok(())
 }
 

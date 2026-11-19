@@ -1,8 +1,10 @@
 mod managed;
 mod model_catalog;
+mod registry;
 mod shared_instructions;
 mod shutdown;
 
+pub use registry::GuardianPolicyLoader;
 pub use shutdown::AgentTreeShutdown;
 pub use shutdown::AgentTreeShutdownFailure;
 pub use shutdown::AgentTreeShutdownFailureReason;
@@ -11,6 +13,7 @@ pub use shutdown::LoadedSuspendedAgent;
 pub use shutdown::SuspendedAgentTree;
 pub(crate) use shutdown::thread_store_error_kind;
 
+use self::registry::ThreadRegistry;
 use crate::CodexAppsToolsCache;
 use crate::CodexThreadSettingsOverrides;
 use crate::agent::AgentStatus;
@@ -126,7 +129,6 @@ use codex_utils_git_discovery::GitRootDiscovery;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
@@ -134,8 +136,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tracing::instrument;
 use tracing::warn;
 
@@ -599,7 +601,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     // Eviction updates this registry and residency together, locking the registry first.
-    pub(crate) threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    pub(crate) threads: ThreadRegistry,
+    guardian_policy_loader: Option<Arc<dyn GuardianPolicyLoader>>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
@@ -702,7 +705,8 @@ impl ThreadManager {
             };
         Self {
             state: Arc::new(ThreadManagerState {
-                threads: Arc::new(RwLock::new(HashMap::new())),
+                threads: ThreadRegistry::default(),
+                guardian_policy_loader: None,
                 shared_thread_instructions: Default::default(),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
@@ -765,6 +769,15 @@ impl ThreadManager {
             unreachable!("agent controller factory must be set before thread manager is shared");
         };
         state.agent_control_factory = Some(Arc::new(move |thread_id| Box::pin(factory(thread_id))));
+        self
+    }
+
+    /// Installs the host loader used to read Guardian policy for startup and refresh.
+    pub fn with_guardian_policy_loader(mut self, loader: Arc<dyn GuardianPolicyLoader>) -> Self {
+        let Some(state) = Arc::get_mut(&mut self.state) else {
+            unreachable!("Guardian policy loader must be set before the thread manager is shared");
+        };
+        state.guardian_policy_loader = Some(loader);
         self
     }
 
@@ -906,7 +919,8 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 runtime_auth,
-                threads: Arc::new(RwLock::new(HashMap::new())),
+                threads: ThreadRegistry::default(),
+                guardian_policy_loader: None,
                 shared_thread_instructions: Default::default(),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
@@ -1247,6 +1261,22 @@ impl ThreadManager {
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.state.list_thread_ids().await
+    }
+
+    /// Reserves a Guardian policy revision before a host loads thread startup configuration.
+    pub async fn reserve_guardian_policy_revision(&self) -> std::io::Result<u64> {
+        self.state.threads.reserve_guardian_policy_revision().await
+    }
+
+    /// Loads managed Guardian requirements before publishing them to live and starting threads.
+    /// A live thread can reject the update after the policy has been published.
+    pub async fn refresh_guardian_policy(&self) -> std::io::Result<()> {
+        let loader = self
+            .state
+            .guardian_policy_loader
+            .as_deref()
+            .ok_or_else(|| std::io::Error::other("Guardian policy loader is not configured"))?;
+        self.state.threads.refresh_guardian_policy(loader).await
     }
 
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
@@ -2739,6 +2769,21 @@ impl ThreadManagerState {
                 thread.session.services.mcp_runtime.revoke_ema();
             }
         }
+        if !session_source.is_internal()
+            && let Err(error) = runtime
+                .shutdown
+                .run_until_cancelled(self.threads.prepare_startup_guardian_policy(
+                    &mut config,
+                    self.guardian_policy_loader.as_deref(),
+                ))
+                .await
+                .ok_or(CodexErr::TurnAborted)?
+        {
+            warn!(kind = ?error.kind(), "could not load Guardian policy for startup");
+            return Err(CodexErr::InvalidRequest(
+                "Could not load Guardian policy for thread startup".into(),
+            ));
+        }
         let supplied_thread_instructions =
             thread_extension_init.remove::<InheritedThreadInstructions>();
         let supplied_exec_policy = thread_extension_init.remove::<InheritedExecPolicy>();
@@ -3059,9 +3104,11 @@ impl ThreadManagerState {
                 warn!(%thread_id, %source_thread_id, %error, "failed to copy fork attachments");
             }
         }
-        let finalize_result = self
-            .finalize_thread_spawn(session, io, tracked_session_source, &registered)
-            .await;
+        let finalize_result = tokio::select! {
+            biased;
+            _ = runtime.shutdown.cancelled() => Err(CodexErr::TurnAborted),
+            result = self.finalize_thread_spawn(session, io, tracked_session_source, &registered) => result,
+        };
         let (new_thread, tier_acceptance) = match finalize_result {
             Ok(registered) => registered,
             Err(error) => {
@@ -3107,7 +3154,7 @@ impl ThreadManagerState {
     ) -> CodexResult<(NewThread, Option<ServiceTierAcceptance>)> {
         let thread_id = session.thread_id();
         let event = io.next_event().await?;
-        let session_configured = match event {
+        let mut session_configured = match event {
             Event {
                 id,
                 msg: EventMsg::SessionConfigured(session_configured),
@@ -3117,13 +3164,37 @@ impl ThreadManagerState {
             }
         };
 
-        let ema_cancellation = session
-            .get_config()
-            .await
+        let mut startup_config = session.get_config().await;
+        let mcp_ema_cancellation = startup_config
             .config_layer_stack
             .mcp_ema_cancellation()
             .clone();
-        {
+        let policy_changed = "Guardian policy changed during startup; retry starting the thread";
+        let check_guardian = !session_source.is_internal();
+        let mut reload_policy = false;
+        let mut pending_refresh: Option<watch::Receiver<()>> = None;
+        let startup_error = loop {
+            if let Some(mut pending) = pending_refresh.take() {
+                let _ = pending.changed().await;
+            }
+            if std::mem::take(&mut reload_policy) {
+                // A revision orders load starts. Re-read here because the startup may
+                // have read newer local requirements than the published snapshot did.
+                let Ok(snapshot) = self
+                    .threads
+                    .load_startup_guardian_policy(self.guardian_policy_loader.as_deref())
+                    .await
+                else {
+                    break policy_changed.to_owned();
+                };
+                if session.refresh_guardian_policy(&snapshot).await
+                    != crate::ConfigRefreshOutcome::Published
+                {
+                    break policy_changed.to_owned();
+                }
+                startup_config = session.get_config().await;
+                session_configured.approvals_reviewer = startup_config.approvals_reviewer;
+            }
             let pending_service_tier = if self.agent_control_factory.is_some()
                 || matches!(
                     &session.agent_runtime,
@@ -3134,9 +3205,31 @@ impl ThreadManagerState {
             } else {
                 None
             };
-            let mut threads = self.threads.write().await;
-            if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
-                ema_cancellation.publish();
+            let mut registry = self.threads.state.write().await;
+            if check_guardian && let Some(wait) = registry.pending_guardian_refresh() {
+                pending_refresh = Some(wait);
+                continue;
+            }
+            let revision = startup_config.guardian_policy_revision;
+            let refresh_crossed_load = registry.published_guardian_revision > revision;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                registry.threads.entry(thread_id)
+            {
+                if check_guardian && refresh_crossed_load {
+                    reload_policy = true;
+                    continue;
+                }
+                // Source validity is held through insertion, after the last await.
+                let binding = (check_guardian && revision != 0)
+                    .then(|| startup_config.config_layer_stack.guardian_policy_binding())
+                    .flatten()
+                    .map(codex_config::CloudConfigBundleBinding::read);
+                if binding.as_ref().is_some_and(|binding| {
+                    binding.status != codex_config::CloudConfigBundleBindingStatus::Current
+                }) {
+                    break policy_changed.to_owned();
+                }
+                mcp_ema_cancellation.publish();
                 let thread = Arc::new(CodexThread::new(
                     Arc::clone(&session),
                     io,
@@ -3146,7 +3239,7 @@ impl ThreadManagerState {
                 ));
                 // All registration checks passed; publish the receipt with this insertion.
                 registered.store(true, Ordering::Release);
-                e.insert(thread.clone());
+                entry.insert(Arc::clone(&thread));
                 let tier_acceptance = pending_service_tier.and_then(|(mut state, update)| {
                     state.service_tier_acceptance =
                         crate::agent::host::propagate_config_update(&session, update);
@@ -3160,14 +3253,13 @@ impl ThreadManagerState {
                 };
                 return Ok((new_thread, tier_acceptance));
             }
-        }
+            break format!("thread {thread_id} is already running");
+        };
 
         if let Err(err) = io.shutdown_and_wait().await {
-            warn!("failed to shut down duplicate thread {thread_id}: {err}");
+            warn!(%thread_id, %err, %startup_error, "failed to shut down rejected thread");
         }
-        Err(CodexErr::InvalidRequest(format!(
-            "thread {thread_id} is already running"
-        )))
+        Err(CodexErr::InvalidRequest(startup_error))
     }
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
