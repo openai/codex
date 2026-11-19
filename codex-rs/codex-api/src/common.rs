@@ -26,6 +26,10 @@ use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+#[path = "common_tests.rs"]
+mod tests;
+
 pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
 pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
 
@@ -81,12 +85,22 @@ pub(crate) fn with_tool_results(
             return None;
         }
         const FIELD: &str = r#","tool_result":"#;
-        let Some(next_remaining) = remaining.checked_sub(FIELD.len() + body.compact_bytes()) else {
+        const CALL_ID_FIELD: &str = r#","tool_result_call_id":"#;
+        let call_id_field_bytes = body
+            .nested_call_id_json()
+            .map_or(0, |_| CALL_ID_FIELD.len());
+        let Some(next_remaining) =
+            remaining.checked_sub(FIELD.len() + body.compact_bytes() + call_id_field_bytes)
+        else {
             continue;
         };
         enriched.push_str(&json[cursor..close]);
         enriched.push_str(FIELD);
         enriched.push_str(body.as_json());
+        if let Some(id) = body.nested_call_id_json() {
+            enriched.push_str(CALL_ID_FIELD);
+            enriched.push_str(id);
+        }
         cursor = close;
         remaining = next_remaining;
     }

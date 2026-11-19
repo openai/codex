@@ -575,7 +575,10 @@ impl ToolResultMetadata {
 /// Projected successful Apps result, kept separately from the ordinary tool output and history.
 #[derive(derive_more::Debug)]
 #[debug("ToolResultBody([redacted])")]
-pub struct ToolResultBody(Box<str>);
+pub struct ToolResultBody {
+    json: Box<str>,
+    nested_call_id_json: Option<Box<str>>,
+}
 
 impl ToolResultBody {
     /// Projects only plaintext and structured content that fits the receiver's limits.
@@ -619,15 +622,28 @@ impl ToolResultBody {
             structured,
         };
         let json = to_json_string_bounded(&body, MAX_TOOL_RESULT_BYTES).ok()?;
-        Some(Self(json.into_boxed_str()))
+        Some(Self {
+            json: json.into_boxed_str(),
+            nested_call_id_json: None,
+        })
+    }
+
+    /// Keep the execution ID with the private body so both fit or are omitted together.
+    pub fn set_nested_call_id(&mut self, call_id: &str) {
+        let id = Value::String(call_id.to_owned()).to_string();
+        self.nested_call_id_json = Some(id.into_boxed_str());
+    }
+
+    pub fn nested_call_id_json(&self) -> Option<&str> {
+        self.nested_call_id_json.as_deref()
     }
 
     pub fn compact_bytes(&self) -> usize {
-        self.0.len()
+        self.json.len() + self.nested_call_id_json().map_or(0, str::len)
     }
 
     pub fn as_json(&self) -> &str {
-        &self.0
+        &self.json
     }
 }
 

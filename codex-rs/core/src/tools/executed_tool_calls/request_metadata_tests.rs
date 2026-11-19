@@ -9,6 +9,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::*;
+use crate::tools::executed_tool_calls::direct_tests::connector_result_turn;
 
 impl ExecutedToolCalls {
     fn record_tool_result_metadata(
@@ -134,6 +135,138 @@ fn selected_exec_result_uses_only_the_retained_wrapper_inventory() {
 
     recorder.attach_to_prompt(&mut [], &mut HashMap::new());
     assert!(!recorder.exec_output_matches(&exec, &tools));
+}
+
+#[test]
+fn capture_only_request_metadata_omits_unbound_calls_and_empty_waits() {
+    let mut features = Features::default();
+    features.enable(Feature::ConnectorToolResultPassthrough);
+    let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+    // No body turn or grant exists. Connector-looking names and provider metadata are insufficient.
+    let mut items = [
+        output("shell"),
+        exec_output("exec"),
+        output("wait"),
+        ResponseItem::from(ResponseInputItem::ToolSearchOutput {
+            call_id: "search".into(),
+            status: "completed".into(),
+            execution: "client".into(),
+            tools: vec![json!({"type": "function", "name": "existing_tool"})],
+        }),
+    ];
+    items[0].append_executed_tool_calls(vec![ExecutedToolCall::new(
+        "exec_command".into(),
+        json!({"cmd": "pwd"}),
+    )]);
+    let mut unbound = ExecutedToolCall::new("mcp__codex_apps__search".into(), json!({}));
+    unbound.set_tool_result_metadata(ToolResultMetadata::new(&json!({
+        "openai/resource_access": {"connector": "example"}
+    })));
+    items[1].append_executed_tool_calls(vec![unbound]);
+    items[3].append_executed_tool_calls(vec![ExecutedToolCall::new(
+        "tool_search".into(),
+        json!({"query": "tools"}),
+    )]);
+    for item in &mut items {
+        item.set_turn_id_if_missing("original-turn");
+        item.set_create_time_if_missing(123.into());
+        item.set_tool_call_cell_id("exec");
+        item.mark_tool_calls_complete();
+    }
+    let original = items.clone();
+    let mut scoped = items.clone();
+    for item in &mut scoped {
+        item.clear_executed_tool_calls();
+    }
+    for enabled in [false, true, false] {
+        features.set_enabled(Feature::ExecutedToolCallMetadata, enabled);
+        recorder.refresh(&features);
+        let saved = recorder.scope_request_metadata(&mut items);
+        assert_eq!(
+            items,
+            if enabled {
+                original.clone()
+            } else {
+                scoped.clone()
+            }
+        );
+        assert_eq!(saved.len(), if enabled { 0 } else { 4 });
+        ExecutedToolCalls::restore_request_metadata(&mut items, saved);
+        assert_eq!(items, original);
+    }
+}
+
+#[tokio::test]
+async fn capture_only_request_metadata_preserves_late_bindings_and_restores_full_inventory() {
+    let turn = connector_result_turn().await;
+    let mut features = turn.config.features.clone();
+    features.disable(Feature::ExecutedToolCallMetadata).unwrap();
+    let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+    let capture = recorder.begin_turn(&turn).unwrap();
+    let cell = CellId::new("cell".to_string());
+    recorder.start_cell(&cell, "exec");
+    for id in ["shell", "connector", "late"] {
+        recorder.record_nested_tool_call(
+            cell.clone(),
+            id.into(),
+            ExecutedToolCall::new(id.into(), json!({})),
+            /*original_bytes*/ 2,
+        );
+    }
+    let record = |id: &str| {
+        let source = ToolCallSource::CodeMode {
+            cell_id: cell.as_str().to_string(),
+            runtime_tool_call_id: id.into(),
+        };
+        let output =
+            captured_mcp_output(&capture, json!({"content": [{"type": "text", "text": id}]}));
+        recorder.record_accepted_result(&source, id, &output);
+    };
+    record("connector");
+    recorder.finish_cell_recording(&cell);
+    let mut output = exec_output("exec");
+    recorder.attach_direct_call_to_output(
+        &mut output,
+        /*prepared*/ None,
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
+    let mut items = [exec_input("exec"), output];
+    let history = items.clone();
+    let mut retry_cache = HashMap::new();
+    recorder.attach_to_prompt(&mut items, &mut retry_cache);
+    let selected = |items: &[ResponseItem]| {
+        capture
+            .for_input(items, &turn.auth_manager.as_ref().unwrap().auth_owner())
+            .into_iter()
+            .map(|(item, row, _)| (item, row))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(selected(&items), [(1, 1)]);
+    assert_eq!(tool_calls_complete(&items[1]), Some(true));
+    let original = items.clone();
+    let saved = recorder.scope_request_metadata(&mut items);
+    assert_eq!(selected(&items), [(1, 0)]);
+    assert_eq!(tool_calls_complete(&items[1]), None);
+    assert_eq!(
+        items[1]
+            .executed_tool_call_metadata()
+            .unwrap()
+            .cell_id
+            .as_deref(),
+        Some("exec"),
+    );
+    assert!(recorder.scope_request_metadata(&mut items).is_empty());
+    ExecutedToolCalls::restore_request_metadata(&mut items, saved);
+    assert_eq!(items, original);
+
+    // The omitted row still has its original live slot when its result arrives after publication.
+    record("late");
+    items = history;
+    recorder.attach_to_prompt(&mut items, &mut retry_cache);
+    assert_eq!(selected(&items), [(1, 1), (1, 2)]);
+    let _ = recorder.scope_request_metadata(&mut items);
+    assert_eq!(selected(&items), [(1, 0), (1, 1)]);
+    assert_eq!(tool_calls_complete(&items[1]), None);
 }
 
 #[test]
@@ -1248,9 +1381,103 @@ fn large_wrapped_arguments_preserve_later_wait_completeness() {
     assert_eq!(tool_calls_complete(&wait[1]), Some(true));
 }
 
-#[test]
-fn result_metadata_updates_the_exact_retained_call_and_preserves_large_retries() {
-    let recorder = new_recorder(InitialHistory::Forked(Vec::new()));
+fn captured_mcp_output(
+    capture: &Arc<ResultBodyTurn>,
+    result: JsonValue,
+) -> crate::tools::context::McpToolOutput {
+    let result = serde_json::from_value(result).unwrap();
+    crate::tools::context::McpToolOutput {
+        result_capture: capture
+            .start_capture(/*nested_call_id*/ None)
+            .and_then(|call| call.record(&result, |_| true)),
+        result,
+        tool_input: JsonValue::Null,
+        result_metadata_capture_allowed: true,
+        wall_time: std::time::Duration::ZERO,
+        original_image_detail_supported: false,
+        truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+    }
+}
+
+#[test_case::test_case(false; "pruned from sampling")]
+#[test_case::test_case(true; "invalidated output")]
+#[tokio::test]
+async fn nested_result_budget_reopens_after_binding_loss(invalidate_origin: bool) {
+    let turn = connector_result_turn().await;
+    let recorder = ExecutedToolCalls::new(&turn.config.features, &InitialHistory::New);
+    let capture = recorder.begin_turn(&turn).unwrap();
+    let record = |origin: &str, id: &str, text_bytes: usize| {
+        let source = ToolCallSource::CodeMode {
+            cell_id: origin.to_string(),
+            runtime_tool_call_id: id.to_string(),
+        };
+        let output = captured_mcp_output(
+            &capture,
+            json!({
+                "content": [{"type": "text", "text": "x".repeat(text_bytes)}], "_meta": {"id": id}
+            }),
+        );
+        recorder.record_accepted_result(&source, id, &output);
+    };
+    let bind = |id: &str, text_bytes: usize| {
+        let cell = CellId::new(id.to_string());
+        recorder.start_cell(&cell, id);
+        record_nested_call(&recorder, &cell, id);
+        record(id, id, text_bytes);
+        let mut output = exec_output(id);
+        recorder.attach_direct_call_to_output(
+            &mut output,
+            /*prepared*/ None,
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        );
+        [exec_input(id), output]
+    };
+    let selected = |items: &[ResponseItem]| {
+        capture
+            .for_input(items, &turn.auth_manager.as_ref().unwrap().auth_owner())
+            .into_iter()
+            .map(|(item, row, _)| (item, row))
+            .collect::<Vec<_>>()
+    };
+    let mut history = bind("old", 600 * 1024).to_vec();
+    record_nested_call(&recorder, &CellId::new("old".to_string()), "late");
+    history.extend(bind("survivor", 1));
+    let mut retry_cache = HashMap::new();
+    let mut original = history.clone();
+    recorder.attach_to_prompt(&mut original, &mut retry_cache);
+    recorder.attach_to_compaction_prompt(&mut history[2..].to_vec());
+    assert_eq!(selected(&original), [(1, 0), (3, 0)]);
+
+    if invalidate_origin {
+        recorder.observe_non_dispatched_call(&history[0]);
+        record("old", "late", 600 * 1024);
+    } else {
+        recorder.attach_to_prompt(&mut history[2..].to_vec(), &mut retry_cache);
+    }
+    // An already projected request still holds the old UUID.
+    assert_eq!(selected(&original), [(3, 0)]);
+    history.extend(bind("replacement", 600 * 1024));
+    recorder.attach_to_prompt(&mut history, &mut retry_cache);
+    assert_eq!(selected(&history), [(3, 0), (5, 0)]);
+    if invalidate_origin {
+        let output = serde_json::to_value(&history[1]).unwrap();
+        assert_eq!(
+            output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][1]["tool_result_metadata"],
+            json!({"id": "late"}),
+        );
+    }
+}
+
+#[test_case::test_case(false; "yielded")]
+#[test_case::test_case(true; "finished")]
+#[tokio::test]
+async fn result_metadata_updates_the_exact_retained_call_and_preserves_large_retries(
+    finished: bool,
+) {
+    let turn = connector_result_turn().await;
+    let recorder =
+        ExecutedToolCalls::new(&turn.config.features, &InitialHistory::Forked(Vec::new()));
+    let capture = recorder.begin_turn(&turn).unwrap();
     let cell_id = CellId::new("metadata-cell".to_string());
     recorder.start_cell(&cell_id, "exec");
     let call = ExecutedToolCall::new("nested_tool".to_string(), json!({}));
@@ -1262,10 +1489,17 @@ fn result_metadata_updates_the_exact_retained_call_and_preserves_large_retries()
             /*original_bytes*/ 2,
         );
     }
-    recorder.finish_cell_recording(&cell_id);
+    if finished {
+        recorder.finish_cell_recording(&cell_id);
+    }
     let mut retry_cache = HashMap::new();
-    let mut initial = [exec_input("exec"), exec_output("exec")];
-    assert!(recorder.attach_pending_to_prompt(&mut initial, &mut retry_cache));
+    let mut history = [exec_input("exec"), exec_output("exec")];
+    recorder.attach_direct_call_to_output(
+        &mut history[1],
+        /*prepared*/ None,
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
+    assert!(recorder.attach_pending_to_prompt(&mut history.clone(), &mut retry_cache));
 
     let metadata = json!({ "all-keys": { "ids": ["R1"] }, "other": true });
     let source = |cell_id: &str| ToolCallSource::CodeMode {
@@ -1276,12 +1510,32 @@ fn result_metadata_updates_the_exact_retained_call_and_preserves_large_retries()
     assert!(!recorder.record_tool_result_metadata(&source(cell_id.as_str()), "unknown", &metadata));
     assert!(recorder.record_tool_result_metadata(&source(cell_id.as_str()), "first", &metadata));
 
+    // The unbound result and the second call each fit, but together exceed the turn budget.
+    let json = json!({"content": [{"type": "text", "text": "private".repeat(80 * 1024)}]});
+    for id in ["unknown", "second"] {
+        let output = captured_mcp_output(&capture, json.clone());
+        recorder.record_accepted_result(&source(cell_id.as_str()), id, &output);
+    }
+    assert!(recorder.attach_pending_to_prompt(&mut history, &mut retry_cache));
+    let bodies = capture.for_input(&history, &turn.auth_manager.as_ref().unwrap().auth_owner());
+    let [(1, 1, body)] = bodies.as_slice() else {
+        panic!("expected the second call's result")
+    };
+    assert_eq!(
+        serde_json::from_str::<JsonValue>(body.as_json()).unwrap(),
+        json
+    );
+    assert!(!serde_json::to_string(&history).unwrap().contains("private"));
+
+    // A fresh output with the same model call ID recovers only provider metadata.
     let mut expected_call = call.clone();
     expected_call.set_tool_result_metadata(ToolResultMetadata::new(&metadata));
     let mut expected = exec_output("exec");
     expected.append_executed_tool_calls(vec![expected_call, call]);
     expected.set_tool_call_cell_id("exec");
-    expected.mark_tool_calls_complete();
+    if finished {
+        expected.mark_tool_calls_complete();
+    }
     let mut retry = [exec_output("exec")];
     assert!(recorder.attach_pending_to_prompt(&mut retry, &mut retry_cache));
     assert_eq!(retry, [expected]);
@@ -1292,7 +1546,7 @@ fn result_metadata_updates_the_exact_retained_call_and_preserves_large_retries()
         "first",
         &large_metadata,
     ));
-    let mut expected = serde_json::to_value(&initial[1..]).unwrap();
+    let mut expected = serde_json::to_value(&retry).unwrap();
     expected[0]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"] =
         large_metadata;
     let mut retry = [exec_output("exec")];

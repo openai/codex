@@ -125,6 +125,57 @@ pub(super) async fn connector_result_turn() -> TurnContext {
     turn
 }
 
+#[test_case::test_case(512; "shed on attach")]
+#[test_case::test_case(MAX_RETAINED_DIRECT_METADATA_BYTES; "pruned from sampling")]
+#[tokio::test]
+async fn direct_result_body_budget_reopens_when_the_output_is_lost(available: usize) {
+    let turn = connector_result_turn().await;
+    let recorder = ExecutedToolCalls::new(&turn.config.features, &InitialHistory::New);
+    let capture = recorder.begin_turn(&turn).unwrap();
+    recorder.retained_direct_metadata_bytes.store(
+        MAX_RETAINED_DIRECT_METADATA_BYTES - available,
+        Ordering::Relaxed,
+    );
+    let bodies = |items: &[ResponseItem]| {
+        capture.for_input(items, &turn.auth_manager.as_ref().unwrap().auth_owner())
+    };
+    // Each body fits by itself. Only the first call's larger arguments can force row shedding.
+    let result = serde_json::from_value(json!({
+        "content": [{"type": "text", "text": "x".repeat(600 * 1024)}]
+    }))
+    .unwrap();
+    let attach = |id: &str, args| {
+        let mut call = ExecutedToolCall::new("read".into(), args);
+        let body_id = capture
+            .start_capture(/*nested_call_id*/ None)
+            .and_then(|call| call.record(&result, |_| true))
+            .and_then(|pending| pending.accept())
+            .expect("room for the Direct body");
+        call.set_tool_result_metadata(ToolResultMetadata::default().with_result_id(Some(body_id)));
+        let mut item = output(id);
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((call, recorder.reserve_direct_call().unwrap())),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        );
+        item
+    };
+    let mut first = [attach("first", json!({"argument": "x".repeat(1024)}))];
+    if available == MAX_RETAINED_DIRECT_METADATA_BYTES {
+        recorder.attach_to_compaction_prompt(&mut []);
+        recorder.attach_to_prompt(&mut first, &mut HashMap::new());
+        assert!(matches!(bodies(&first).as_slice(), [(0, 0, _)]));
+        recorder.attach_to_prompt(&mut [], &mut HashMap::new());
+    } else {
+        assert!(first[0].executed_tool_call_metadata().is_none());
+    }
+
+    let [first] = first;
+    let mut retry = [first, attach("second", json!({}))];
+    recorder.attach_to_prompt(&mut retry, &mut HashMap::new());
+    assert!(matches!(bodies(&retry).as_slice(), [(1, 0, _)]));
+}
+
 #[test_case::test_case(1, 600 * 1024; "byte limit")]
 #[test_case::test_case(MAX_PENDING_EXECUTED_TOOL_CALLS, 1; "count limit")]
 #[tokio::test]
@@ -191,7 +242,12 @@ async fn direct_result_bodies_require_the_originating_output_turn_and_owner(
     let attach = |id: &str| {
         let mut call = ExecutedToolCall::new("read".into(), json!({"id": id}));
         call.set_tool_result_metadata(
-            ToolResultMetadata::new(&metadata).with_result_id(capture.record(&result)),
+            ToolResultMetadata::new(&metadata).with_result_id(
+                capture
+                    .start_capture(/*nested_call_id*/ None)
+                    .and_then(|call| call.record(&result, |_| true))
+                    .and_then(|pending| pending.accept()),
+            ),
         );
         let mut item = output(id);
         recorder.attach_direct_call_to_output(

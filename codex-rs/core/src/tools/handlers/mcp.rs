@@ -300,7 +300,16 @@ impl McpHandler {
             .map(TruncationPolicy::Tokens)
             .unwrap_or(step_context.settings.model_info.truncation_policy.into());
         let started = Instant::now();
-        let recorder = &session.services.executed_tool_calls;
+        let capture = prepared
+            .filter(|_| result_metadata_capture_allowed)
+            .and_then(|call| {
+                let child_id =
+                    matches!(source, ToolCallSource::CodeMode { .. }).then_some(call_id.as_str());
+                session
+                    .services
+                    .executed_tool_calls
+                    .start_mcp_result_capture(&step_context.turn, call, child_id)
+            });
         let mut result_capture = None;
         // Bound the compiler's async-layout query depth for approval and dispatch.
         let result = Box::pin(handle_mcp_tool_call(
@@ -316,11 +325,10 @@ impl McpHandler {
             &source,
             payload,
             |call, raw| {
-                if result_metadata_capture_allowed
-                    && !matches!(source, ToolCallSource::CodeMode { .. })
-                {
-                    result_capture = recorder.capture_mcp_result(&step_context.turn, call, raw);
-                }
+                // Recovery may have selected an independent credential after dispatch.
+                result_capture = capture.and_then(|capture| {
+                    capture.record(raw, |session_auth| call.permits_result_body(session_auth))
+                });
             },
         ))
         .await;

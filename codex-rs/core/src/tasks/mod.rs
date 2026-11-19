@@ -468,7 +468,10 @@ impl Session {
                     ).await?,
                     None => task_input,
                 };
-                if task_kind == TaskKind::Regular {
+                if task_kind == TaskKind::Regular
+                    && session.services.executed_tool_calls.captures_result_bodies()
+                    && session.services.analytics_events_client.is_enabled()
+                {
                     _tool_result_capture = session.services.executed_tool_calls.begin_turn(&ctx);
                 }
                 task_for_run

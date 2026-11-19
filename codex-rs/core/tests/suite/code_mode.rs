@@ -2345,6 +2345,27 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
     Ok(())
 }
 
+fn apps_rpc_call_id(rpc: &Value) -> &str {
+    rpc["params"]["_meta"]["_codex_apps"]["call_id"]
+        .as_str()
+        .expect("Apps request carries the executed call ID")
+}
+
+fn assert_nested_apps_call_ids(rpcs: &[Value]) {
+    let mut ids = std::collections::HashSet::new();
+    for rpc in rpcs {
+        let call_id = apps_rpc_call_id(rpc);
+        let suffix = call_id
+            .strip_prefix("exec-")
+            .expect("nested call ID prefix");
+        let uuid = uuid::Uuid::parse_str(suffix).expect("nested call UUID");
+        assert_eq!(uuid.get_version(), Some(uuid::Version::Random));
+        assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122);
+        assert_eq!(suffix, uuid.to_string());
+        assert!(ids.insert(call_id), "nested call IDs must be distinct");
+    }
+}
+
 #[test_case(ToolMode::Direct; "direct")]
 #[test_case(ToolMode::CodeModeOnly; "code_mode")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2481,9 +2502,9 @@ async fn result_metadata_preserves_results_within_request_budget(
         !direct,
     );
     let request = follow_up.single_request();
-    let mut actual_arguments = recorded_apps_tool_calls(&server)
-        .await
-        .into_iter()
+    let executed = recorded_apps_tool_calls(&server).await;
+    let mut actual_arguments = executed
+        .iter()
         .map(|call| {
             assert_eq!(call["params"]["name"], RESULT_METADATA_TOOL);
             call["params"]["arguments"].clone()
@@ -2492,7 +2513,12 @@ async fn result_metadata_preserves_results_within_request_budget(
     actual_arguments.sort_by_key(Value::to_string);
     assert_eq!(actual_arguments, arguments);
     if direct {
-        for call_id in call_ids {
+        for (call_id, args) in call_ids.iter().zip(&arguments) {
+            let rpc = executed
+                .iter()
+                .find(|rpc| &rpc["params"]["arguments"] == args)
+                .expect("each direct call reached the Apps server");
+            assert_eq!(apps_rpc_call_id(rpc), *call_id);
             let output = request.function_call_output(call_id);
             assert_eq!(
                 &output["output"].as_array().expect("direct output content")[1..],
@@ -2504,6 +2530,7 @@ async fn result_metadata_preserves_results_within_request_budget(
             assert!(!output["output"].to_string().contains("payload"));
         }
     } else {
+        assert_nested_apps_call_ids(&executed);
         let (body, success) = custom_tool_output_body_and_success(&request, "call-1");
         assert_ne!(success, Some(false), "Code Mode failed: {body}");
         assert_eq!(

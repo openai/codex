@@ -279,7 +279,7 @@ impl ExecutedToolCalls {
             }
             for cell_id in &untrusted_cells {
                 if let Some(cell) = state.cells.get_mut(cell_id) {
-                    cell.truncated_metadata_binding_valid = false;
+                    cell.invalidate_binding(&state.body_turn);
                 }
             }
             for retained in state.retained_calls.values_mut() {
@@ -288,7 +288,7 @@ impl ExecutedToolCalls {
                     .as_ref()
                     .is_some_and(|id| untrusted_cells.contains(id))
                 {
-                    retained.clear_late_truncated_metadata();
+                    retained.invalidate_output(&state.body_turn);
                 }
             }
         }
@@ -330,6 +330,7 @@ impl ExecutedToolCalls {
                 cached.clone()
             } else {
                 let mut runtime_cell_id = None;
+                let mut output_item_id = None;
                 let mut calls = Vec::new();
                 let mut call_index_by_id = HashMap::new();
                 let mut truncated_call_index_by_id = HashMap::new();
@@ -361,14 +362,22 @@ impl ExecutedToolCalls {
                         cell.completion = CellCompletion::Incomplete;
                         cell.truncated_metadata_binding_valid = false;
                     }
+                    if cell.truncated_metadata_binding_valid
+                        && cell.output_item_id.as_ref() == item.id()
+                    {
+                        output_item_id = cell.output_item_id.take();
+                    }
                     let pending_calls = cell.pending_calls.len();
-                    for (call_id, call) in cell.pending_calls.drain(..) {
+                    for (call_id, mut call) in cell.pending_calls.drain(..) {
                         if matches!(call.arguments(), ExecutedToolCallArguments::Raw(_)) {
                             call_index_by_id.insert(call_id, calls.len());
                         } else if cell.truncated_metadata_binding_valid
                             && !call.has_tool_result_metadata()
                         {
                             truncated_call_index_by_id.insert(call_id, calls.len());
+                        }
+                        if output_item_id.is_none() {
+                            ResultBodyTurn::discard_call(&state.body_turn, &mut call);
                         }
                         calls.push(call);
                     }
@@ -407,6 +416,7 @@ impl ExecutedToolCalls {
                 state.retained_calls.insert(
                     key,
                     RetainedToolCalls {
+                        output_item_id,
                         calls: calls.clone(),
                         complete,
                         cell_id: cell_id.clone(),
@@ -434,9 +444,11 @@ impl ExecutedToolCalls {
         // Compaction may retry with a shortened history without installing that history.
         // Keep absent observations until a normal sampling request confirms the live window.
         if request_kind == RequestKind::Sampling && !pending_outputs.is_empty() {
-            state
-                .retained_calls
-                .retain(|key, _| !pending_outputs.contains(key));
+            for key in pending_outputs {
+                if let Some(mut retained) = state.retained_calls.remove(&key) {
+                    retained.invalidate_output(&state.body_turn);
+                }
+            }
         }
         let mut invalid_cells = HashSet::new();
         for index in 0..items.len() {
@@ -476,6 +488,9 @@ impl ExecutedToolCalls {
             let intact =
                 output_counts.get(call_id) == Some(&1) && matches_inventory && matches_input;
             retained.complete &= intact;
+            if !intact {
+                retained.invalidate_output(&state.body_turn);
+            }
             if !intact && let Some(cell) = retained.runtime_cell_id.clone() {
                 invalid_cells.insert(cell);
             }
@@ -483,7 +498,7 @@ impl ExecutedToolCalls {
         for cell_id in &invalid_cells {
             if let Some(cell) = state.cells.get_mut(cell_id) {
                 cell.completion = CellCompletion::Incomplete;
-                cell.truncated_metadata_binding_valid = false;
+                cell.invalidate_binding(&state.body_turn);
             }
         }
         if !invalid_cells.is_empty() {
@@ -494,8 +509,8 @@ impl ExecutedToolCalls {
                     .is_some_and(|cell_id| invalid_cells.contains(cell_id))
                 {
                     retained.complete = false;
+                    retained.invalidate_output(&state.body_turn);
                     retained.call_index_by_id.clear();
-                    retained.clear_late_truncated_metadata();
                 }
             }
         }
@@ -507,9 +522,15 @@ impl ExecutedToolCalls {
                 continue;
             };
             let key = (std::mem::discriminant(&*item), call_id.to_string());
-            let Some(retained) = state.retained_calls.get(&key) else {
-                continue;
-            };
+            let retained = state.retained_calls.get(&key);
+            if state.body_turn.strong_count() != 0
+                && retained
+                    .and_then(|row| row.output_item_id.as_ref())
+                    .is_none_or(|id| Some(id) != item.id())
+            {
+                item.clear_tool_result_ids();
+            }
+            let Some(retained) = retained else { continue };
             if retained.complete {
                 item.mark_tool_calls_complete();
             } else {
