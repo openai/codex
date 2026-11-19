@@ -7,6 +7,8 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_core::config::ConfigOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_login::CodexAuth;
+use codex_protocol::config_types::ApprovalsReviewer::AutoReview;
+use codex_protocol::config_types::ApprovalsReviewer::User;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -69,14 +71,17 @@ async fn reloads_accept_a_provider_supplied_by_thread_overrides() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn user_reload_promotes_plugin_and_feature_requirements_without_server_changes()
+async fn user_reload_refreshes_independent_requirements_without_server_changes()
 -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
     let requirements_path = home.path().join("requirements.toml");
-    std::fs::write(&requirements_path, "")?;
+    std::fs::write(
+        &requirements_path,
+        "allowed_approvals_reviewers = ['auto_review']\nguardian_policy_config = 'first policy'\nguardian_extra_policy = 'first extra'\n",
+    )?;
     std::fs::write(
         home.path().join(codex_config::CONFIG_TOML_FILE),
-        "[features]\nenable_mcp_apps = true\n",
+        "approvals_reviewer = 'user'\n[features]\nenable_mcp_apps = true\n",
     )?;
     let mut overrides = codex_config::LoaderOverrides::without_managed_config_for_tests();
     overrides.ignore_managed_requirements = false;
@@ -99,7 +104,8 @@ async fn user_reload_promotes_plugin_and_feature_requirements_without_server_cha
             initial.model_provider.clone(),
             initial.codex_home.to_path_buf(),
             Arc::new(EnvironmentManager::default_for_tests()),
-        ),
+        )
+        .with_guardian_policy_loader(Arc::new(manager.clone())),
     );
     assert!(
         initial
@@ -111,17 +117,17 @@ async fn user_reload_promotes_plugin_and_feature_requirements_without_server_cha
         .start_thread(codex_core::StartThreadOptions::new(initial))
         .await?
         .thread;
+    assert_eq!(
+        thread.config_snapshot().await.approvals_reviewer,
+        AutoReview
+    );
     std::fs::write(
         &requirements_path,
-        "[features]\nenable_mcp_apps = false\n[plugins.example.mcp_servers]\n",
+        "guardian_policy_config = 'first policy'\nguardian_extra_policy = 'first extra'\n[features]\nenable_mcp_apps = false\n[plugins.example.mcp_servers]\n",
     )?;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        reload_user_config(&manager, &threads),
-    )
-    .await
-    .expect("policy promotion must terminate");
+    reload_user_config(&manager, &threads).await;
     let config = thread.config().await;
+    assert_eq!(config.approvals_reviewer, User);
     assert_eq!(config.mcp_servers.get(), &original_servers);
     assert!(
         !config
@@ -149,6 +155,85 @@ async fn user_reload_promotes_plugin_and_feature_requirements_without_server_cha
             .requirements()
             .feature_requirements
             .is_some()
+    );
+    for requirements in [
+        "guardian_policy_config = 'replacement policy'\nguardian_extra_policy = 'first extra'",
+        "guardian_policy_config = 'replacement policy'\nguardian_extra_policy = 'replacement extra'",
+        "",
+    ] {
+        let requirements = format!(
+            "{requirements}\n[features]\nenable_mcp_apps = false\n[plugins.example.mcp_servers]\n"
+        );
+        std::fs::write(&requirements_path, &requirements)?;
+        let expected: codex_config::ConfigRequirementsToml = toml::from_str(&requirements)?;
+        reload_user_config(&manager, &threads).await;
+        let config = thread.config().await;
+        assert_eq!(config.mcp_servers.get(), &original_servers);
+        assert_eq!(
+            (
+                config.guardian_policy_config.as_deref(),
+                config.guardian_extra_policy.as_deref()
+            ),
+            (
+                expected.guardian_policy_config.as_deref(),
+                expected.guardian_extra_policy.as_deref()
+            )
+        );
+    }
+    // Guardian still applies changed requirements when user config cannot load.
+    let model = thread.config_snapshot().await.model;
+    std::fs::write(
+        &requirements_path,
+        format!(
+            "allowed_approvals_reviewers = ['auto_review']\n[auto_review]\nrequired_on_models = ['{model}']"
+        ),
+    )?;
+    std::fs::write(
+        home.path().join(codex_config::CONFIG_TOML_FILE),
+        "model_provider = 'missing-provider'",
+    )?;
+    reload_user_config(&manager, &threads).await;
+    assert_eq!(
+        thread.config_snapshot().await.approvals_reviewer,
+        AutoReview
+    );
+    let config = thread.config().await;
+    assert!(
+        config
+            .config_layer_stack
+            .requirements()
+            .approvals_reviewer
+            .can_set(&AutoReview)
+            .is_ok()
+    );
+    let restored = thread.restorable_thread_settings().await;
+    thread.restore_thread_settings(restored).await?;
+    // An explicit user reload resolves new local fallbacks on its first invocation.
+    std::fs::write(&requirements_path, "")?;
+    std::fs::write(
+        home.path().join(codex_config::CONFIG_TOML_FILE),
+        "[auto_review]\npolicy = 'new user fallback'",
+    )?;
+    reload_user_config(&manager, &threads).await;
+    let config = thread.config().await;
+    assert_eq!(
+        (
+            config.guardian_policy_config.as_deref(),
+            config.guardian_extra_policy.as_deref(),
+            config.approvals_reviewer
+        ),
+        (Some("new user fallback"), None, User)
+    );
+    thread
+        .restore_thread_settings(codex_core::CodexThreadSettingsOverrides {
+            approvals_reviewer: Some(AutoReview),
+            ..Default::default()
+        })
+        .await?;
+    reload_user_config(&manager, &threads).await;
+    assert_eq!(
+        thread.config_snapshot().await.approvals_reviewer,
+        AutoReview
     );
     Ok(())
 }

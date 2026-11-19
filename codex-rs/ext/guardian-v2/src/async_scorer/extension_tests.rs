@@ -2,9 +2,14 @@ use crate::async_scorer::conversation::ConversationBackend;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::task::Poll;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::GuardianPolicySnapshot;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::LoaderOverrides;
@@ -67,6 +72,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestEnv;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -1771,6 +1777,49 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
         .await,
         Some(ReviewDecision::Approved)
     );
+    // Tightening while a review is pending must prevent a late low-risk score from releasing it.
+    const TIGHTENED_REVISION: u64 = 1;
+    const RELAXED_REVISION: u64 = TIGHTENED_REVISION + 1;
+    let fs = TestEnv::local().await?.environment().get_filesystem();
+    let overrides = LoaderOverrides::without_managed_config_for_tests();
+    let load = |loader, revision| {
+        load_guardian_policy_snapshot(
+            fs.as_ref(),
+            test.codex_home_path(),
+            &overrides,
+            loader,
+            revision,
+        )
+    };
+    let tightened = CloudConfigBundleFixture::loader_with_enterprise_requirement(
+        "allowed_approvals_reviewers = ['auto_review']",
+    );
+    store.insert(vec![
+        load(&tightened, TIGHTENED_REVISION).await?,
+        load(&CloudConfigBundleLoader::default(), RELAXED_REVISION).await?,
+    ]);
+    store.insert_arc(Arc::clone(&test.codex));
+    let mut score = cached_score(&turn_store).unwrap();
+    score.scores.insert("action_risk".to_owned(), 1.0);
+    set_cached_score(&turn_store, score);
+    let scored_action = r#"{"id":"call-1","tool":"read_file"}"#;
+    assert_eq!(
+        cached_approval(
+            &registry,
+            store,
+            &turn_store,
+            scored_action,
+            /*metrics*/ None,
+        )
+        .await,
+        None
+    );
+    assert_eq!(
+        test.codex.config().await.guardian_policy_revision,
+        RELAXED_REVISION
+    );
+    store.remove::<Vec<GuardianPolicySnapshot>>();
+    store.remove::<codex_core::CodexThread>();
     Ok(())
 }
 
@@ -3975,14 +4024,46 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
     Ok(())
 }
 
-struct CacheMiss;
-impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss {
+struct CacheMiss<'a> {
+    thread_store: &'a ExtensionData,
+    turn_store: &'a ExtensionData,
+}
+impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss<'_> {
     fn review<'a>(
         &'a self,
         _reason: codex_protocol::approvals::GuardianReviewReason,
-        _async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
+        async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
     ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
-        Box::pin(async { Some(ReviewDecision::denied("cache miss")) })
+        Box::pin(async move {
+            if let Some(snapshots) = self.thread_store.get::<Vec<GuardianPolicySnapshot>>() {
+                let mut pending = async_approval.expect("adaptive review should be pending");
+                assert!(
+                    std::future::poll_fn(|context| Poll::Ready(pending.as_mut().poll(context)))
+                        .await
+                        .is_pending()
+                );
+                let thread = self.thread_store.get::<codex_core::CodexThread>().unwrap();
+                let cache =
+                    ConversationBackend::for_turn(self.thread_store, self.turn_store).unwrap();
+                let progress = &cache.progress;
+                for (snapshot, expected) in snapshots.iter().zip([Poll::Pending, Poll::Ready(())]) {
+                    assert_eq!(
+                        thread.refresh_guardian_policy(snapshot).await,
+                        codex_core::ConfigRefreshOutcome::Published
+                    );
+                    let mut score = cached_score(self.turn_store).unwrap();
+                    score.scores.insert("action_risk".to_owned(), 0.0);
+                    set_cached_score(self.turn_store, score);
+                    progress.updates.send_replace(());
+                    assert_eq!(
+                        std::future::poll_fn(|context| Poll::Ready(pending.as_mut().poll(context)))
+                            .await,
+                        expected
+                    );
+                }
+            }
+            Some(ReviewDecision::denied("cache miss"))
+        })
     }
 }
 
@@ -4189,7 +4270,10 @@ async fn cached_approval(
         require_fresh_review: false,
         full_access: false,
         metrics,
-        synchronous_reviewer: &CacheMiss,
+        synchronous_reviewer: &CacheMiss {
+            thread_store,
+            turn_store,
+        },
     };
     match registry.decide_approval(&input).await {
         Some(codex_extension_api::ApprovalDecision::Allow) => Some(ReviewDecision::Approved),

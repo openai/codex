@@ -427,8 +427,16 @@ pub(super) async fn reload_user_config(
     config_manager: &ConfigManager,
     thread_manager: &ThreadManager,
 ) {
-    // Reload owns several config snapshots; do not inline that future into dispatch.
+    // Publish local layers first so Guardian resolves their new policy fallbacks.
     Box::pin(reload_user_config_inner(config_manager, thread_manager)).await;
+    // Guardian still refreshes when unrelated configuration could not load.
+    refresh_guardian_policy(thread_manager).await;
+}
+
+pub(super) async fn refresh_guardian_policy(thread_manager: &ThreadManager) {
+    if let Err(error) = Box::pin(thread_manager.refresh_guardian_policy()).await {
+        tracing::warn!(kind = ?error.kind(), "failed to refresh Guardian policy");
+    }
 }
 
 async fn reload_user_config_inner(config_manager: &ConfigManager, thread_manager: &ThreadManager) {
