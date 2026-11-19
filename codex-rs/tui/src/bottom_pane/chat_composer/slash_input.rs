@@ -16,8 +16,6 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::bottom_pane::slash_commands::has_slash_command_prefix;
 use crate::slash_command::SlashCommand;
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
 
 use super::super::footer::reset_mode_after_activity;
 use super::ActivePopup;
@@ -554,34 +552,6 @@ pub(super) fn selected_command_completion(
 pub(super) fn prepared_args(prepared_text: &str) -> Option<(&str, usize)> {
     let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(prepared_text)?;
     Some((prepared_rest, prepared_rest_offset))
-}
-
-/// Translate full-text element ranges into command-argument ranges.
-///
-/// `rest_offset` is the byte offset where `rest` begins in the full text.
-pub(super) fn args_elements(
-    rest: &str,
-    rest_offset: usize,
-    text_elements: &[TextElement],
-) -> Vec<TextElement> {
-    if rest.is_empty() || text_elements.is_empty() {
-        return Vec::new();
-    }
-    text_elements
-        .iter()
-        .filter_map(|elem| {
-            if elem.byte_range.end <= rest_offset {
-                return None;
-            }
-            let start = elem.byte_range.start.saturating_sub(rest_offset);
-            let mut end = elem.byte_range.end.saturating_sub(rest_offset);
-            if start >= rest.len() {
-                return None;
-            }
-            end = end.min(rest.len());
-            (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
-        })
-        .collect()
 }
 
 pub(super) fn command_popup_filter_text(first_line: &str, cursor: usize) -> Option<String> {

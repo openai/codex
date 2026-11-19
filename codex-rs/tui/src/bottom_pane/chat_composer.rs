@@ -395,6 +395,7 @@ use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::prompt_args::parse_slash_name;
+use super::prompt_args::slash_args_elements;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands::ServiceTierCommand;
@@ -3534,7 +3535,7 @@ impl ChatComposer {
 
         self.stage_slash_command_history(&command);
 
-        let mut args_elements = slash_input::args_elements(
+        let mut args_elements = slash_args_elements(
             inline_command.rest,
             inline_command.rest_offset,
             &self.draft.textarea.text_elements(),
@@ -3568,7 +3569,7 @@ impl ChatComposer {
         let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
         let (prepared_rest, prepared_rest_offset) = slash_input::prepared_args(&prepared_text)?;
         let mut args_elements =
-            slash_input::args_elements(prepared_rest, prepared_rest_offset, &prepared_elements);
+            slash_args_elements(prepared_rest, prepared_rest_offset, &prepared_elements);
         let trimmed_rest = prepared_rest.trim();
         args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
         self.draft.textarea.enter_vim_insert_mode();
