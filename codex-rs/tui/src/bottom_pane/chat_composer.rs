@@ -388,7 +388,6 @@ use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
-use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::mention_usage::MentionUsage;
 use super::mentions_v2::MentionV2Popup;
@@ -824,6 +823,7 @@ impl ChatComposer {
                 ide_context_active: false,
                 status_line_value: None,
                 labeled_status_line: Default::default(),
+                status_line_area: std::cell::Cell::default(),
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
@@ -1532,29 +1532,6 @@ impl ChatComposer {
         self.draft.textarea.vim_mode_indicator_span()
     }
 
-    fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        if let Some(vim_mode) = self.vim_mode_indicator_span() {
-            spans.push(vim_mode);
-        }
-        if let Some(indicators) = status_line_right_indicator_line(
-            self.footer.collaboration_mode_indicator,
-            self.footer.goal_status_indicator.as_ref(),
-            self.footer.ide_context_active,
-            show_cycle_hint,
-        ) {
-            if !spans.is_empty() {
-                spans.push(" | ".dim());
-            }
-            spans.extend(indicators.spans);
-        }
-        if spans.is_empty() {
-            None
-        } else {
-            Some(Line::from(spans))
-        }
-    }
-
     fn right_footer_line_with_context(&self) -> Line<'static> {
         let mut line = if self.footer.context_window_hidden {
             Line::default()
@@ -1961,10 +1938,6 @@ impl ChatComposer {
 
     pub(crate) fn local_image_paths(&self) -> Vec<PathBuf> {
         self.attachments.local_image_paths()
-    }
-
-    pub(crate) fn status_line_content(&self) -> Option<&StatusLine> {
-        self.footer.status_line_value.as_ref()
     }
 
     pub(crate) fn local_images(&self) -> &[LocalImageAttachment] {

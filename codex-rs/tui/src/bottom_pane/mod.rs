@@ -1414,6 +1414,10 @@ impl BottomPane {
         self.status_widget().is_some()
     }
 
+    pub(crate) fn status_line_area(&self) -> ratatui::layout::Rect {
+        self.composer.status_line_area()
+    }
+
     pub(crate) fn status_line_content(&self) -> Option<&StatusLine> {
         self.composer.status_line_content()
     }

@@ -131,6 +131,15 @@ impl super::ChatWidget {
         state.synced_cells = Some(cells.to_vec());
     }
 
+    pub(crate) fn warning_notice_at(
+        &self,
+        point: ratatui::layout::Position,
+    ) -> Option<ratatui::layout::Rect> {
+        self.bottom_pane
+            .warning_notice_area()
+            .filter(|area| area.contains(point))
+    }
+
     pub(crate) fn handle_warning_event(
         &mut self,
         event: &TuiEvent,
@@ -170,8 +179,8 @@ impl super::ChatWidget {
             && mouse.kind
                 == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
             && self
-                .bottom_pane
-                .warning_notice_contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                .warning_notice_at((mouse.column, mouse.row).into())
+                .is_some()
         {
             self.open_warnings(cells);
             return true;

@@ -57,7 +57,7 @@ mod cursor;
 #[path = "custom_terminal_test_support.rs"]
 pub(crate) mod test_support;
 
-fn osc8_hyperlink_parts(symbol: &str) -> Option<(&str, &str)> {
+pub(crate) fn osc8_hyperlink_parts(symbol: &str) -> Option<(&str, &str)> {
     let content = symbol.strip_prefix("\x1b]8;;")?;
     let destination_end = content.find('\x07')?;
     let destination = &content[..destination_end];

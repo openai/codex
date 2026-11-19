@@ -33,7 +33,9 @@ impl BottomPane {
         self.active_warning().is_some()
     }
 
-    pub(crate) fn warning_notice_contains(&self, position: ratatui::layout::Position) -> bool {
-        self.no_modal_or_popup_active() && self.composer.warning_notice_contains(position)
+    pub(crate) fn warning_notice_area(&self) -> Option<ratatui::layout::Rect> {
+        self.composer
+            .warning_notice_area()
+            .filter(|_| self.no_modal_or_popup_active())
     }
 }

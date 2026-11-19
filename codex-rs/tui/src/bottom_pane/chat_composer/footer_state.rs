@@ -418,6 +418,7 @@ pub(super) struct FooterState {
     pub(super) ide_context_active: bool,
     pub(super) status_line_value: Option<StatusLine>,
     pub(super) labeled_status_line: std::cell::RefCell<Option<StatusLine>>,
+    pub(super) status_line_area: std::cell::Cell<Rect>,
     pub(super) status_line_enabled: bool,
     pub(super) side_conversation_context_label: Option<String>,
     pub(super) active_agent_label: Option<String>,

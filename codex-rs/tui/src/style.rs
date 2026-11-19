@@ -5,6 +5,7 @@ mod contrast;
 
 use crate::color::blend;
 use crate::color::is_light;
+use crate::color::perceptual_distance;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
@@ -160,13 +161,36 @@ pub(crate) fn accent_color_on(background: Option<Color>) -> Color {
     accent_color_for(background_rgb(background))
 }
 
+/// Use the terminal foreground when the control is already close to the hover accent.
+pub(crate) fn hover_foreground(foreground: Color, background: Color) -> Option<Color> {
+    let background = Some(background);
+    let accent = accent_color_on(background);
+    if accent == Color::Reset {
+        return None;
+    }
+    let near_accent = explicit_rgb(foreground)
+        .zip(explicit_rgb(accent))
+        .is_some_and(|(foreground, accent)| perceptual_distance(foreground, accent) < 20.0);
+    Some(if foreground == accent || near_accent {
+        readable_color_on(Color::Reset, background)
+    } else {
+        accent
+    })
+}
+
 fn background_rgb(background: Option<Color>) -> Option<(u8, u8, u8)> {
     match background {
-        Some(Color::Rgb(r, g, b)) => Some((r, g, b)),
-        Some(Color::Indexed(index)) if index >= 16 => {
+        None | Some(Color::Reset) => default_bg(),
+        Some(color) => explicit_rgb(color),
+    }
+}
+
+fn explicit_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Indexed(index) if index >= 16 => {
             Some(crate::terminal_palette::XTERM_COLORS[usize::from(index)])
         }
-        None | Some(Color::Reset) => default_bg(),
         _ => None,
     }
 }

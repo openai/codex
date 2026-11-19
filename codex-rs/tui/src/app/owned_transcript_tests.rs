@@ -2340,6 +2340,134 @@ async fn fullscreen_composer_remote_images_leave_an_editable_prompt_row() -> Res
 }
 
 #[tokio::test]
+async fn clickable_transcript_foreground_follows_mouse_motion() -> Result<()> {
+    use ratatui::style::Stylize;
+
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = tui.terminal.size()?;
+    app.local_settings.tui.collapse_turn_details = true;
+    app.transcript_cells = vec![
+        user_cell("See https://prompt.example/ for context."),
+        Arc::new(history_cell::AgentMarkdownCell::new(
+            "Plain text. [guide](https://example.com/docs) [日本語](https://example.com/ja).\n\n| Item |\n| --- |\n| [Table guide](https://example.com/table) |".into(),
+            app.config.cwd.as_path(),
+        )),
+        Arc::new(history_cell::empty_mcp_output()),
+    ];
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::new_warning_event("Example warning".into())),
+    );
+    let mut status = HyperlinkLine::default();
+    status.push_span("PR #42".underlined(), Some("https://example.com/pull/42"));
+    app.chat_widget.set_status_line(Some(status.into()));
+    app.chat_widget
+        .apply_external_edit("https://draft.example/".into());
+    crate::chatwidget::tests::helpers::set_active_cell(
+        &mut app.chat_widget,
+        Box::new(crate::exec_cell::new_active_exec_command(
+            "hover".into(),
+            vec!["printf sample".into()],
+            Vec::new(),
+            codex_app_server_protocol::CommandExecutionSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        )),
+    );
+
+    let render = |app: &mut App, tui: &mut tui::Tui| -> Result<Buffer> {
+        crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+            app.render_owned_transcript(tui, size)
+        })?;
+        Ok(tui.terminal.previous_buffer().clone())
+    };
+    let rest = render(&mut app, &mut tui)?;
+    let text = crate::terminal_hyperlinks::strip_osc8(&buffer_text(&rest));
+    let position = |label| {
+        text.lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                let (prefix, _) = line.split_once(label)?;
+                Some(ratatui::layout::Position::new(
+                    prefix.chars().count() as u16,
+                    row as u16,
+                ))
+            })
+            .unwrap_or_else(|| panic!("Missing {label} in {text}"))
+    };
+    let plain = position("Plain text");
+    let draft = position("https://draft.example/");
+    let move_to = |point: ratatui::layout::Position, modifiers| {
+        TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: point.x,
+            row: point.y,
+            modifiers,
+        })
+    };
+    app.handle_tui_event(&mut tui, &mut server, move_to(draft, KeyModifiers::NONE))
+        .await?;
+    assert_eq!(render(&mut app, &mut tui)?[draft], rest[draft]);
+
+    let mut styles = Vec::new();
+    let mut redraws = crate::tui::test_support::record_frame_requests(&mut tui);
+    for (label, columns, modifiers) in [
+        ("https://prompt.example/", 1, KeyModifiers::NONE),
+        ("guide", 1, KeyModifiers::NONE),
+        ("日本語", 6, KeyModifiers::NONE),
+        ("Table guide", 1, KeyModifiers::NONE),
+        ("MCP docs", 1, KeyModifiers::NONE),
+        ("Running", 1, KeyModifiers::NONE),
+        ("1 warning", 1, KeyModifiers::NONE),
+        ("1 warning", 1, KeyModifiers::CONTROL),
+        ("PR #42", 1, KeyModifiers::NONE),
+    ] {
+        let start = position(if label == "日本語" { "日" } else { label });
+        let area = Rect::new(start.x, start.y, columns, /*height*/ 1);
+        // KeyModifiers displays Control differently across platforms.
+        let name = if modifiers == KeyModifiers::CONTROL {
+            format!("{label} (Ctrl)")
+        } else {
+            label.to_string()
+        };
+        for pointer in area.positions() {
+            while redraws.try_recv().is_ok() {}
+            app.handle_tui_event(&mut tui, &mut server, move_to(pointer, modifiers))
+                .await?;
+            assert!(redraws.try_recv().is_ok(), "enter {name} at {pointer:?}");
+            let hover = render(&mut app, &mut tui)?;
+            assert_eq!(hover[plain], rest[plain]);
+            for target in area.positions() {
+                assert_ne!(hover[target].fg, rest[target].fg, "{name} at {pointer:?}");
+                let mut hovered_cell = hover[target].clone();
+                hovered_cell.fg = rest[target].fg;
+                assert_eq!(hovered_cell, rest[target]);
+            }
+            if pointer == start {
+                styles.push(format!(
+                    "{name}: {:?} → {:?}",
+                    rest[start].fg, hover[start].fg
+                ));
+            }
+
+            app.handle_tui_event(&mut tui, &mut server, move_to(plain, KeyModifiers::NONE))
+                .await?;
+            let leave = render(&mut app, &mut tui)?;
+            for target in area.positions() {
+                assert_eq!(leave[target], rest[target]);
+            }
+        }
+    }
+    insta::assert_snapshot!(styles.join("\n"));
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn footer_selection_defers_warning_clicks_and_preserves_the_draft() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     app.local_settings.tui.copy_on_select = CopyOnSelect::Never;

@@ -930,16 +930,7 @@ impl App {
             tui.frame_requester().schedule_frame();
             return Ok(AppRunControl::Continue);
         }
-        let previous = tui.link_hover.position();
-        tui.link_hover.observe(&event);
-        let current = tui.link_hover.position();
-        if previous != current
-            && (self.hovered_sidebar_target(previous) != self.hovered_sidebar_target(current)
-                || previous.is_some_and(|point| self.transcript_view.has_document_link_at(point))
-                || current.is_some_and(|point| self.transcript_view.has_document_link_at(point)))
-        {
-            tui.frame_requester().schedule_frame();
-        }
+        self.observe_pointer(tui, &event);
         if Box::pin(sidebar_close::handle(self, tui, app_server, &event)).await {
             return Ok(AppRunControl::Continue);
         }

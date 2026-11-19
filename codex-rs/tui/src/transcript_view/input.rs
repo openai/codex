@@ -608,10 +608,7 @@ impl TranscriptView {
         mode: MouseMode<'_>,
     ) -> Option<ViewAction> {
         let was_following = self.is_following();
-        if !self.is_select_mode()
-            && event.modifiers.is_empty()
-            && self.toggle_disclosure_at(cells, event.column, event.row)
-        {
+        if event.modifiers.is_empty() && self.toggle_disclosure_at(cells, event.column, event.row) {
             // Keep the patch anchored for inspection, then follow again when the prompt closes.
             if was_following && let MouseMode::Selection(Some((thread_id, id))) = mode {
                 self.disclosure.resume_after_approval = Some((thread_id, id.to_owned()));

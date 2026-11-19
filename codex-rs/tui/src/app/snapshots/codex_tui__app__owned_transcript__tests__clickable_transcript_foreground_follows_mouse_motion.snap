@@ -1,0 +1,14 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+assertion_line: 2464
+expression: "styles.join(\"\\n\")"
+---
+https://prompt.example/: Rgb(238, 238, 238) → Rgb(121, 180, 249)
+guide: Rgb(137, 180, 250) → Reset
+日本語: Rgb(137, 180, 250) → Reset
+Table guide: Rgb(137, 180, 250) → Reset
+MCP docs: Reset → Rgb(99, 168, 248)
+Running: Reset → Rgb(99, 168, 248)
+1 warning: Rgb(196, 167, 103) → Rgb(99, 168, 248)
+1 warning (Ctrl): Rgb(196, 167, 103) → Rgb(99, 168, 248)
+PR #42: Reset → Rgb(99, 168, 248)

@@ -13,11 +13,8 @@ pub(super) fn before_warning(mut area: Rect, warning: Option<Rect>) -> Rect {
 }
 
 impl ChatComposer {
-    pub(crate) fn warning_notice_contains(&self, position: ratatui::layout::Position) -> bool {
-        self.footer
-            .warning_notice_area
-            .get()
-            .is_some_and(|area| area.contains(position))
+    pub(crate) fn warning_notice_area(&self) -> Option<Rect> {
+        self.footer.warning_notice_area.get()
     }
 
     pub(super) fn show_warning_notice(&self, options: ComposerRenderOptions<'_>) -> bool {

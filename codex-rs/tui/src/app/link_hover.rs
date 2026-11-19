@@ -1,5 +1,6 @@
-//! Match hover feedback to transcript links and the pane divider. Keep passive link drags with their original view.
-//! Recheck after painting so scrolling and live output cannot leave a hand over stale content.
+//! Match pointer and foreground feedback to the last painted click targets.
+//! Recheck on repaint so scrolling and live output cannot leave hover on stale content.
+//! Keep passive link drags with their original view.
 
 use codex_protocol::ThreadId;
 use crossterm::event::KeyModifiers;
@@ -10,10 +11,17 @@ use crossterm::event::MouseEventKind::Moved;
 use crossterm::event::MouseEventKind::ScrollDown;
 use crossterm::event::MouseEventKind::ScrollUp;
 use crossterm::event::MouseEventKind::Up;
+use ratatui::buffer::Buffer;
+use ratatui::buffer::CellDiffOption;
+use ratatui::buffer::CellWidth;
+use ratatui::layout::Position;
+use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 use super::App;
 use super::side_companion::SideCompanion;
 use crate::app_event::AppEvent;
+use crate::custom_terminal::osc8_hyperlink_parts;
 use crate::terminal_hyperlinks::ReaderLink;
 use crate::transcript_view::ViewAction;
 use crate::tui::PointerShape;
@@ -21,6 +29,81 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 
 impl App {
+    pub(super) fn observe_pointer(&self, tui: &mut Tui, event: &TuiEvent) {
+        let previous = tui.link_hover.mouse;
+        let previous_position = tui.link_hover.position();
+        tui.link_hover.observe(event);
+        let current = tui.link_hover.mouse;
+        if previous == current {
+            return;
+        }
+        let current_position = tui.link_hover.position();
+        let buffer = tui.terminal.previous_buffer();
+        if self.hovered_sidebar_target(previous_position)
+            != self.hovered_sidebar_target(current_position)
+            || [previous_position, current_position]
+                .into_iter()
+                .flatten()
+                .any(|point| self.transcript_view.has_document_link_at(point))
+            || self.hover_target_area(self.hover_pointer(tui, previous), buffer)
+                != self.hover_target_area(self.hover_pointer(tui, current), buffer)
+        {
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    pub(super) fn hover_pointer(&self, tui: &Tui, mouse: Option<MouseEvent>) -> Option<MouseEvent> {
+        mouse.filter(|mouse| {
+            tui.is_owned_screen()
+                && self.overlay.is_none()
+                && !tui.shortcut_hud_contains(*mouse)
+                && self.pane_resize.is_none()
+                && self.sidebar().is_none_or(|pane| pane.close.is_none())
+        })
+    }
+
+    pub(super) fn hover_target_area(
+        &self,
+        mouse: Option<MouseEvent>,
+        buf: &Buffer,
+    ) -> Option<Rect> {
+        let mouse = mouse?;
+        let point = Position::new(mouse.column, mouse.row);
+        if !buf.area.contains(point) {
+            return None;
+        }
+        let passive = self
+            .conversation_frame
+            .side_pane()
+            .is_some_and(|panes| panes.passive.contains(point));
+        let ordinary_input = self.chat_widget.no_modal_or_popup_active();
+        if !passive {
+            // Inline approvals allow disclosure in the transcript above the prompt.
+            if mouse.modifiers.is_empty()
+                && (ordinary_input
+                    || (self.chat_widget.has_active_modal()
+                        && self.chat_widget.centered_dialog().is_none()))
+                && let Some(area) = self.transcript_view.disclosure_hover_area(point)
+            {
+                return Some(area);
+            }
+            if let Some(area) = self.chat_widget.warning_notice_at(point) {
+                return Some(area);
+            }
+        }
+        if !ordinary_input {
+            return None;
+        }
+        if self.chat_widget.status_line_area().contains(point)
+            || ((passive || !self.transcript_view.is_select_mode())
+                && self.transcript_link_at(mouse).is_some())
+        {
+            painted_link_area(buf, point)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn transcript_link_at(&self, mouse: MouseEvent) -> Option<ReaderLink> {
         if !mouse.modifiers.is_empty()
             && !mouse
@@ -185,5 +268,42 @@ impl App {
         }
         tui.link_hover.shape = shape;
         tui.set_pointer_shape(shape)
+    }
+}
+
+/// Read a single visible link fragment from the OSC 8 markers attached by the renderer.
+fn painted_link_area(buf: &Buffer, point: Position) -> Option<Rect> {
+    let mut column = buf.area.left();
+    let mut start = column;
+    let mut destination = None;
+    let right = buf.area.right();
+    while column < right {
+        let cell = &buf[(column, point.y)];
+        let link = if cell.diff_option == CellDiffOption::Skip {
+            destination
+        } else {
+            osc8_hyperlink_parts(cell.symbol()).map(|(url, _)| url)
+        };
+        if link != destination {
+            if column > point.x {
+                break;
+            }
+            start = column;
+            destination = link;
+        }
+        // A wide glyph carries the link on its first column only.
+        column = column.saturating_add(cell.cell_width().max(1)).min(right);
+    }
+    destination.map(|_| Rect::new(start, point.y, column - start, /*height*/ 1))
+}
+
+pub(super) fn paint_hover_foreground(area: Rect, buf: &mut Buffer) {
+    for point in area.intersection(buf.area).positions() {
+        let cell = &mut buf[point];
+        if !cell.modifier.contains(Modifier::REVERSED)
+            && let Some(foreground) = crate::style::hover_foreground(cell.fg, cell.bg)
+        {
+            cell.set_fg(foreground);
+        }
     }
 }

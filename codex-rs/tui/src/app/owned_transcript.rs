@@ -326,6 +326,7 @@ impl App {
         let sidebar_image_protocol = self.preview_image_protocol(tui);
         let sidebar_motion =
             MotionMode::from_animations_enabled(self.local_settings.tui.animations);
+        let hover_mouse = self.hover_pointer(tui, tui.link_hover.mouse);
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
         let backdrop = caller_inset.map(|_| {
@@ -627,8 +628,15 @@ impl App {
                 frame.cursor_position = None;
                 self.conversation_frame.close_buttons = buttons;
             }
+            if let Some(area) = self.hover_target_area(hover_mouse, frame.buffer) {
+                super::link_hover::paint_hover_foreground(area, frame.buffer);
+            }
             self.paint_centered_dialog(frame);
         })?;
+        // A shortcut HUD is painted after the conversation and can move over a stationary pointer.
+        if hover_mouse != self.hover_pointer(tui, tui.link_hover.mouse) {
+            frames.schedule_frame();
+        }
         self.finish_conversation(tui, painted)
     }
 

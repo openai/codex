@@ -180,28 +180,41 @@ impl TranscriptView {
         }
     }
 
+    pub(crate) fn disclosure_hover_area(&self, point: ratatui::layout::Position) -> Option<Rect> {
+        self.disclosure_at(point).map(|(_, area)| area)
+    }
+
+    fn disclosure_at(&self, point: ratatui::layout::Position) -> Option<(&VisibleRow, Rect)> {
+        if self.is_select_mode()
+            || self.detailed
+            || self.mode != HistoryRenderMode::Rich
+            || !self.area.contains(point)
+        {
+            return None;
+        }
+        let visible = self.visible.get(usize::from(point.y - self.area.y))?;
+        if visible.layout.disclosure_row() != Some(visible.row) {
+            return None;
+        }
+        let columns = visible.layout.disclosure_columns();
+        let area = Rect::new(
+            self.area.x + columns.start,
+            point.y,
+            columns.end - columns.start,
+            /*height*/ 1,
+        );
+        area.contains(point).then_some((visible, area))
+    }
+
     pub(super) fn toggle_disclosure_at(
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
         column: u16,
         row: u16,
     ) -> bool {
-        if self.detailed || self.mode != HistoryRenderMode::Rich {
-            return false;
-        }
-        let Some(visible) = row
-            .checked_sub(self.area.y)
-            .and_then(|row| self.visible.get(usize::from(row)))
-        else {
+        let Some((visible, _)) = self.disclosure_at((column, row).into()) else {
             return false;
         };
-        if visible.layout.disclosure_row() != Some(visible.row)
-            || column
-                .checked_sub(self.area.x)
-                .is_none_or(|column| !visible.layout.disclosure_columns().contains(&column))
-        {
-            return false;
-        }
         let Some(index) = self.canonical_activity_index(cells, &visible.activity_ids) else {
             return false;
         };
