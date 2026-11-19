@@ -9,7 +9,9 @@ For latest, current, default, or unspecified-model upgrades:
 3. Treat the live guides as canonical.
 4. If remote retrieval fails, disclose that bundled fallback guidance is being used.
 
-For an explicitly requested GPT-6 model:
+For an explicit GPT-6.2 Astra or Sol target, use the [GPT-6.2 migration quickstart](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.2-astra#gpt-6.2-astra-migration-quickstart). Both models support Responses and Chat Completions. Tool calling requires Responses.
+
+For another explicitly requested GPT-6 model with guidance in the GPT-6 Astra guide:
 
 1. Preserve the user's explicit target; do not run the latest-model resolver.
 2. Fetch the live GPT-6 model guidance:
