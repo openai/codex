@@ -3,6 +3,8 @@ use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
+use codex_otel::EXEC_COMMAND_COUNT_METRIC;
+use codex_otel::EXEC_COMMAND_DURATION_TOTAL_METRIC;
 use codex_otel::MULTI_AGENT_SPAWN_FAILURE_METRIC;
 use codex_otel::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
 use codex_otel::PLUGIN_INSTALL_SUGGESTION_METRIC;
@@ -21,6 +23,146 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+#[tokio::test]
+async fn exec_command_latency_keeps_snapshot_cohorts_and_the_full_tool_interval() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+    let manager = SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+    .with_product_sku(Some("codex"));
+
+    for (tool, mode, result) in [
+        (ToolName::plain("exec_command"), "v1", Ok(true)),
+        (
+            ToolName::namespaced("functions", "exec_command"),
+            "v1",
+            Ok(true),
+        ),
+        (ToolName::plain("exec_command"), "v2", Ok(false)),
+        (ToolName::plain("exec_command"), "v2", Err("launch failed")),
+        (ToolName::plain("write_stdin"), "v1", Ok(true)),
+        (
+            ToolName::namespaced("mcp__example", "exec_command"),
+            "v2",
+            Ok(true),
+        ),
+    ] {
+        assert_eq!(
+            manager
+                .log_tool_result_with_tags(
+                    &tool,
+                    "call-1",
+                    "{}",
+                    &[("shell_snapshot_mode", mode)],
+                    &[],
+                    || async {
+                        // Include awaited handler work so a zero-duration regression fails.
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        result
+                    },
+                    |success| (String::new(), *success),
+                )
+                .await,
+            result,
+        );
+    }
+    manager.tool_result_with_tags(
+        &ToolName::plain("exec_command"),
+        "rejected-before-handler",
+        "{}",
+        Duration::ZERO,
+        /*success*/ false,
+        "rejected",
+        &[("shell_snapshot_mode", "v1")],
+        &[],
+    );
+    manager.shutdown_metrics()?;
+    let resource_metrics = latest_metrics(&exporter);
+    let histogram_metric =
+        find_metric(&resource_metrics, TOOL_CALL_DURATION_METRIC).expect("tool duration metric");
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = histogram_metric.data() else {
+        panic!("expected duration histogram");
+    };
+    let expected = histogram
+        .data_points()
+        .filter_map(|point| {
+            let mut tags = attributes_to_map(point.attributes());
+            if tags.remove("tool").as_deref() != Some("exec_command")
+                || (tags["shell_snapshot_mode"] == "v1" && tags["success"] == "false")
+            {
+                return None;
+            }
+            Some((tags, (point.count(), point.sum() as u64)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut snapshots = BTreeMap::new();
+    for name in [
+        EXEC_COMMAND_COUNT_METRIC,
+        EXEC_COMMAND_DURATION_TOTAL_METRIC,
+    ] {
+        let metric = find_metric(&resource_metrics, name).expect("exec counter");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+            panic!("expected counter");
+        };
+        let points = sum
+            .data_points()
+            .map(|point| (attributes_to_map(point.attributes()), point.value()))
+            .collect::<BTreeMap<_, _>>();
+        snapshots.insert(name, points);
+    }
+    assert_eq!(
+        snapshots[EXEC_COMMAND_COUNT_METRIC],
+        expected
+            .iter()
+            .map(|(tags, (count, _))| (tags.clone(), *count))
+            .collect(),
+    );
+    assert_eq!(
+        snapshots[EXEC_COMMAND_DURATION_TOTAL_METRIC],
+        expected
+            .iter()
+            .map(|(tags, (_, total_ms))| (tags.clone(), *total_ms))
+            .collect(),
+    );
+    assert!(
+        snapshots[EXEC_COMMAND_DURATION_TOTAL_METRIC]
+            .values()
+            .all(|total_ms| *total_ms > 0)
+    );
+    assert_eq!(
+        snapshots[EXEC_COMMAND_COUNT_METRIC],
+        BTreeMap::from([
+            (
+                BTreeMap::from([
+                    ("product_sku".to_string(), "codex".to_string()),
+                    ("shell_snapshot_mode".to_string(), "v1".to_string()),
+                    ("success".to_string(), "true".to_string()),
+                ]),
+                2
+            ),
+            (
+                BTreeMap::from([
+                    ("product_sku".to_string(), "codex".to_string()),
+                    ("shell_snapshot_mode".to_string(), "v2".to_string()),
+                    ("success".to_string(), "false".to_string()),
+                ]),
+                2
+            ),
+        ]),
+    );
+    Ok(())
+}
 
 #[test]
 fn tool_metrics_keep_product_skus_separate_on_a_shared_client() -> Result<()> {

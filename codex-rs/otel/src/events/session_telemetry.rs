@@ -5,6 +5,8 @@ use crate::events::shared::log_event;
 use crate::events::shared::trace_event;
 use crate::metrics::API_CALL_COUNT_METRIC;
 use crate::metrics::API_CALL_DURATION_METRIC;
+use crate::metrics::EXEC_COMMAND_COUNT_METRIC;
+use crate::metrics::EXEC_COMMAND_DURATION_TOTAL_METRIC;
 use crate::metrics::MULTI_AGENT_SPAWN_FAILURE_METRIC;
 use crate::metrics::MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC;
 use crate::metrics::MetricsClient;
@@ -1333,6 +1335,20 @@ impl SessionTelemetry {
             Ok(result) => log_output(result),
             Err(error) => (error.to_string(), false),
         };
+
+        if tool_name.is_default_namespace() && tool_name.name == "exec_command" {
+            // Use the full handler interval: shell setup/startup and command work until
+            // exit or the first yield. Direct tool_result_with_tags calls also report
+            // pre-handler rejections, which must not become zero-latency samples here.
+            let mut tags = extra_tags.to_vec();
+            tags.push(("success", if success { "true" } else { "false" }));
+            if let Some(product_sku) = self.metadata.product_sku {
+                tags.push(("product_sku", product_sku));
+            }
+            let duration_ms = duration.as_millis().min(i64::MAX as u128) as i64;
+            self.counter(EXEC_COMMAND_DURATION_TOTAL_METRIC, duration_ms, &tags);
+            self.counter(EXEC_COMMAND_COUNT_METRIC, /*inc*/ 1, &tags);
+        }
 
         self.tool_result_with_tags(
             tool_name,

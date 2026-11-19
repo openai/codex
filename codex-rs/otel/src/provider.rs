@@ -705,6 +705,8 @@ mod tests {
     use super::*;
     use crate::metrics::API_CALL_COUNT_METRIC;
     use crate::metrics::API_CALL_DURATION_METRIC;
+    use crate::metrics::EXEC_COMMAND_COUNT_METRIC;
+    use crate::metrics::EXEC_COMMAND_DURATION_TOTAL_METRIC;
     use crate::metrics::EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC;
     use crate::metrics::MetricsExporter;
     use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
@@ -895,6 +897,8 @@ mod tests {
         )?;
         metrics.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.record_duration(TOOL_CALL_DURATION_METRIC, Duration::from_millis(25), &[])?;
+        metrics.counter(EXEC_COMMAND_DURATION_TOTAL_METRIC, /*inc*/ 25, &[])?;
+        metrics.counter(EXEC_COMMAND_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.counter(TURN_COST_MICROUSD_METRIC, /*inc*/ 1, &[])?;
         metrics.histogram(TURN_TOKEN_USAGE_METRIC, /*value*/ 100, &[])?;
         metrics.counter("codex.turns", /*inc*/ 1, &[])?;
@@ -909,7 +913,14 @@ mod tests {
             .collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names, vec!["codex.turns"]);
+        assert_eq!(
+            names,
+            vec![
+                EXEC_COMMAND_COUNT_METRIC,
+                EXEC_COMMAND_DURATION_TOTAL_METRIC,
+                "codex.turns"
+            ],
+        );
 
         Ok(())
     }
