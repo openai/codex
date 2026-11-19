@@ -526,6 +526,12 @@ impl Session {
             done_clone.notify_waiters();
         }
         .instrument(task_span);
+        if task_kind == TaskKind::Regular {
+            crate::agent::turn_metrics::record_start(
+                &self.services.thread_extension_data,
+                &turn_context,
+            );
+        }
         let handle = tokio::spawn(storage_originator.scope(task_future));
         let timer = turn_context
             .session_telemetry

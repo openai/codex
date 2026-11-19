@@ -3841,23 +3841,29 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
 
 #[tokio::test]
 async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
-    let (mut session, mut turn) = make_session_and_context().await;
+    let (_, turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.features.enable(Feature::MultiAgentV2).unwrap();
+    config.apps_mcp_product_sku = Some("codex".into());
     let manager = thread_manager();
     let root = manager
-        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .start_thread(StartThreadOptions::new(config))
         .await
         .expect("root thread should start");
-    set_agent_control(&mut session, manager.agent_control());
-    session.thread_id = root.thread_id;
-    let mut config = (*turn.config).clone();
-    config
-        .features
-        .enable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    set_turn_config(&mut turn, config);
-
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
+    let session = root.thread.session.clone();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "core", "1", Default::default()).with_runtime_reader(),
+    )
+    .unwrap();
+    let attach_metrics = |mut turn: Arc<TurnContext>| {
+        let context = Arc::get_mut(&mut turn).unwrap();
+        context.session_telemetry = context
+            .session_telemetry
+            .clone()
+            .with_metrics(metrics.clone());
+        turn
+    };
+    let turn = attach_metrics(session.new_default_turn().await);
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
@@ -3882,10 +3888,11 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
         .await
         .expect("worker thread should be resident");
     let worker_session = worker_thread.session.clone();
+    let worker_turn = attach_metrics(worker_session.new_default_turn().await);
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             worker_session.clone(),
-            worker_session.new_default_turn().await,
+            worker_turn.clone(),
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect a child task",
@@ -3943,6 +3950,82 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     assert!(
         !ops.iter()
             .any(|(thread_id, op)| *thread_id == child_id && matches!(op, Op::InterruptAgent))
+    );
+
+    InterruptAgentHandler
+        .handle(invocation(
+            worker_session,
+            worker_turn,
+            "interrupt_agent",
+            function_payload(json!({"target": child_id.to_string()})),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        InterruptAgentHandler
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "interrupt_agent",
+                function_payload(json!({"target": "/root"}))
+            ))
+            .await
+            .is_err()
+    );
+    CloseAgentHandler
+        .handle(invocation(
+            session,
+            turn,
+            "close_agent",
+            function_payload(json!({"target": child_id.to_string()})),
+        ))
+        .await
+        .unwrap();
+
+    let snapshot = metrics.snapshot().unwrap();
+    let observations = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics);
+    let mut counts = BTreeMap::new();
+    for metric in observations.filter(|m| {
+        matches!(
+            m.name(),
+            codex_otel::MULTI_AGENT_SPAWNED_METRIC | codex_otel::MULTI_AGENT_STOP_ACCEPTED_METRIC
+        )
+    }) {
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+            panic!("subagent lifecycle metric should be a counter");
+        };
+        for point in sum.data_points() {
+            let label = |key| {
+                point
+                    .attributes()
+                    .find(|a| a.key.as_str() == key)
+                    .map(|a| a.value.as_str().into_owned())
+                    .unwrap_or_default()
+            };
+            assert_eq!(label("product_sku"), "codex");
+            *counts
+                .entry((metric.name().to_string(), label("caller"), label("action")))
+                .or_insert(0) += point.value();
+        }
+    }
+    let stop = codex_otel::MULTI_AGENT_STOP_ACCEPTED_METRIC;
+    assert_eq!(
+        counts,
+        BTreeMap::from([
+            (
+                (
+                    codex_otel::MULTI_AGENT_SPAWNED_METRIC.into(),
+                    String::new(),
+                    String::new()
+                ),
+                2
+            ),
+            ((stop.into(), "root".into(), "interrupt".into()), 1),
+            ((stop.into(), "root".into(), "close".into()), 1),
+            ((stop.into(), "subagent".into(), "interrupt".into()), 1),
+        ])
     );
 }
 

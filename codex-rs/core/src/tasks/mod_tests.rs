@@ -43,6 +43,153 @@ use tokio_util::sync::CancellationToken;
 
 struct PendingTask;
 
+#[tokio::test]
+async fn subagent_lifecycle_counts_each_regular_attempt_with_bounded_labels() {
+    use crate::agent::turn_metrics;
+    use codex_history::InitialHistory;
+    use codex_history::ResumedHistory;
+    use codex_history::RolloutItem;
+    use codex_otel::MULTI_AGENT_TURN_LIFECYCLE_METRIC;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TurnAbortReason;
+
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory(
+            "test",
+            "codex-core",
+            env!("CARGO_PKG_VERSION"),
+            InMemoryMetricExporter::default(),
+        )
+        .with_runtime_reader(),
+    )
+    .expect("metrics");
+    let (mut session, _, _rx) = make_session_and_context_with_rx().await;
+    let services = &mut Arc::get_mut(&mut session)
+        .expect("unique test session")
+        .services;
+    services.session_telemetry = services
+        .session_telemetry
+        .clone()
+        .with_product_sku(Some("codex"))
+        .with_metrics(metrics.clone());
+    let child = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let parent_input = ResponseInputItem::Message {
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "a turn from the parent".into(),
+        }],
+        phase: None,
+    };
+    let inherited = vec![RolloutItem::ResponseItem(
+        ResponseItem::from(parent_input).into(),
+    )];
+    let fork = InitialHistory::Forked(inherited.clone());
+    assert!(crate::thread_rollout_truncation::initial_history_has_prior_user_turns(&fork));
+    for source in [
+        SessionSource::Cli,
+        SessionSource::SubAgent(SubAgentSource::Review),
+    ] {
+        turn_metrics::register_thread(
+            &session.services.thread_extension_data,
+            &source,
+            &InitialHistory::New,
+        );
+        let turn = session.new_default_turn().await;
+        session
+            .spawn_task(Arc::clone(&turn), Vec::new(), PendingTask)
+            .await;
+        session.on_task_finished(turn, Ok(None)).await;
+    }
+    turn_metrics::register_thread(&session.services.thread_extension_data, &child, &fork);
+    let initial = session.new_default_turn().await;
+    session
+        .spawn_task(Arc::clone(&initial), Vec::new(), PendingTask)
+        .await;
+    session
+        .on_task_finished(Arc::clone(&initial), Ok(None))
+        .await;
+    // A second observer or shutdown action must not report another outcome.
+    turn_metrics::record_suspension(&initial);
+
+    let follow_up = session.new_default_turn().await;
+    session
+        .spawn_task(Arc::clone(&follow_up), Vec::new(), PendingTask)
+        .await;
+    session
+        .on_task_finished(follow_up, Err(CodexErr::ContextWindowExceeded))
+        .await;
+
+    turn_metrics::register_thread(
+        &session.services.thread_extension_data,
+        &child,
+        &InitialHistory::Resumed(ResumedHistory {
+            conversation_id: session.thread_id,
+            history: Arc::new(inherited),
+            history_revision: None,
+            rollout_path: None,
+        }),
+    );
+    let resumed = session.new_default_turn().await;
+    session
+        .spawn_task(Arc::clone(&resumed), Vec::new(), PendingTask)
+        .await;
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let suspended = session.new_default_turn().await;
+    session
+        .spawn_task(Arc::clone(&suspended), Vec::new(), PendingTask)
+        .await;
+    turn_metrics::record_suspension(&suspended);
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let snapshot = metrics.snapshot().expect("snapshot metrics");
+    let metric = find_metric(&snapshot, MULTI_AGENT_TURN_LIFECYCLE_METRIC);
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("expected a counter");
+    };
+    let actual: BTreeMap<_, _> = sum
+        .data_points()
+        .map(|point| {
+            let mut tags = attributes_to_map(point.attributes());
+            assert_eq!(tags.remove("product_sku").as_deref(), Some("codex"));
+            assert_eq!(tags.remove("originator").as_deref(), Some("other"));
+            let kind = tags.remove("turn_kind").expect("turn kind");
+            let status = tags.remove("status").expect("turn status");
+            match status.as_str() {
+                "failed" => assert_eq!(
+                    tags.remove("error_kind").as_deref(),
+                    Some("context_window_exceeded")
+                ),
+                "interrupted" => {
+                    assert_eq!(tags.remove("abort_reason").as_deref(), Some("interrupted"))
+                }
+                _ => {}
+            }
+            assert!(tags.is_empty(), "unexpected metric labels: {tags:?}");
+            ((kind, status), point.value())
+        })
+        .collect();
+    let expected = [
+        ("initial", "started", 1),
+        ("initial", "completed", 1),
+        ("follow_up", "started", 1),
+        ("follow_up", "failed", 1),
+        ("resumed_thread", "started", 2),
+        ("resumed_thread", "interrupted", 1),
+        ("resumed_thread", "suspended", 1),
+    ]
+    .into_iter()
+    .map(|(kind, status, count)| ((kind.to_owned(), status.to_owned()), count))
+    .collect();
+    assert_eq!(actual, expected);
+}
+
 impl SessionTask for PendingTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular

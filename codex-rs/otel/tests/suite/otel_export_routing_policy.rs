@@ -4,10 +4,15 @@ use crate::harness::find_metric;
 use crate::harness::latest_metrics;
 use codex_api::AgentIdentityTelemetry;
 use codex_otel::AuthEnvTelemetryMetadata;
+use codex_otel::MULTI_AGENT_SPAWNED_METRIC;
+use codex_otel::MULTI_AGENT_STOP_ACCEPTED_METRIC;
+use codex_otel::MULTI_AGENT_TURN_LIFECYCLE_METRIC;
 use codex_otel::OtelProvider;
 use codex_otel::SSE_EVENT_COUNT_METRIC;
 use codex_otel::SSE_EVENT_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
+use codex_otel::SubagentStopAction;
+use codex_otel::SubagentTurnStatus;
 use codex_otel::TelemetryAuthMode;
 use opentelemetry::KeyValue;
 use opentelemetry::logs::AnyValue;
@@ -17,6 +22,7 @@ use opentelemetry_sdk::logs::SdkLogRecord;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::SumDataPoint;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
@@ -41,6 +47,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
@@ -105,6 +112,128 @@ fn find_span_event_by_name_attr<'a>(
                 .is_some_and(|value| value == event_name)
         })
         .expect("span event should exist")
+}
+
+#[test]
+fn subagent_lifecycle_links_every_spawn_and_accepted_stop_across_workers() {
+    let exporter = InMemoryLogExporter::default();
+    let provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    // A host's structured log subscriber can observe trace-safe events without an active span.
+    let subscriber = tracing_subscriber::registry().with(
+        opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&provider)
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "codex_otel.trace_safe"
+            })),
+    );
+    let root = ThreadId::from_u128(/*value*/ 1);
+    let parent = ThreadId::from_u128(/*value*/ 100);
+    let child = ThreadId::from_u128(/*value*/ 101);
+    let (metrics, metric_exporter) = build_metrics_with_defaults(&[]).expect("metrics");
+    let (product_sku, originator) = ("codex", "codex_cli_rs");
+    let telemetry = |thread_id| {
+        SessionTelemetry::new(
+            thread_id,
+            "model",
+            "model",
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
+            originator.to_string(),
+            /*log_user_prompts*/ false,
+            "tty".into(),
+            SessionSource::Cli,
+        )
+        .with_metrics_without_metadata_tags(metrics.clone())
+        .with_product_sku(Some(product_sku))
+    };
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let root_id = root.into();
+        telemetry(parent).record_multi_agent_spawned(root_id, "parent-turn", child);
+        telemetry(child).record_multi_agent_turn_lifecycle(
+            "child-turn",
+            "initial",
+            SubagentTurnStatus::Started,
+        );
+        telemetry(child).record_multi_agent_turn_lifecycle(
+            "child-turn",
+            "resumed_thread",
+            SubagentTurnStatus::Completed,
+        );
+        let status = AgentStatus::Completed(Some("private child output".into()));
+        telemetry(parent).record_multi_agent_stop_accepted(
+            root_id,
+            child,
+            "parent-call",
+            SubagentStopAction::Interrupt,
+            Some(&status),
+        );
+        telemetry(root).record_multi_agent_stop_accepted(
+            root_id,
+            child,
+            "root-call",
+            SubagentStopAction::Close,
+            /*previous_status*/ None,
+        );
+    });
+    let logs = exporter.get_emitted_logs().expect("export logs");
+    let events = logs
+        .iter()
+        .map(|log| log_attributes(&log.record))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 5);
+    assert!(
+        events
+            .iter()
+            .all(|fields| fields["child_thread_id"] == child.to_string()
+                && fields["product_sku"] == product_sku
+                && fields["originator"] == originator)
+    );
+    assert_eq!(events[0]["event.name"], MULTI_AGENT_SPAWNED_METRIC);
+    assert_eq!(events[0]["parent_turn_id"], "parent-turn");
+    assert_eq!(events[0]["root_thread_id"], root.to_string());
+    assert_eq!(events[1]["turn_id"], events[2]["turn_id"]);
+    assert_eq!(events[2]["status"], "completed");
+    assert_eq!(events[3]["caller"], "subagent");
+    assert_eq!(events[3]["previous_status"], "completed");
+    assert_eq!(events[4]["event.name"], MULTI_AGENT_STOP_ACCEPTED_METRIC);
+    assert_eq!(events[4]["caller"], "root");
+    assert_eq!(events[4]["action"], "close");
+    assert_eq!(events[4]["call_id"], "root-call");
+    assert_eq!(events[4]["caller_thread_id"], events[0]["root_thread_id"]);
+    metrics.shutdown().expect("flush counters");
+    let snapshot = latest_metrics(&metric_exporter);
+    for (name, count) in [
+        (MULTI_AGENT_SPAWNED_METRIC, 1),
+        (MULTI_AGENT_TURN_LIFECYCLE_METRIC, 2),
+        (MULTI_AGENT_STOP_ACCEPTED_METRIC, 2),
+    ] {
+        let counter = find_metric(&snapshot, name).expect("subagent counter");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+            panic!("expected subagent counter");
+        };
+        assert_eq!(
+            sum.data_points().map(SumDataPoint::value).sum::<u64>(),
+            count
+        );
+        for point in sum.data_points() {
+            let tags = attributes_to_map(point.attributes());
+            assert_eq!(tags["product_sku"], product_sku);
+            assert_eq!(tags["originator"], originator);
+            assert!(tags.keys().all(|key| matches!(
+                key.as_str(),
+                "product_sku"
+                    | "originator"
+                    | "turn_kind"
+                    | "status"
+                    | "action"
+                    | "caller"
+                    | "previous_status"
+            )));
+        }
+    }
 }
 
 fn auth_env_metadata() -> AuthEnvTelemetryMetadata {

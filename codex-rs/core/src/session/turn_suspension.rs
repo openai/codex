@@ -112,6 +112,7 @@ pub(super) async fn suspend_turn_and_shutdown(
         CodexErr::Fatal(format!("close suspended root turn writer failed: {error}"))
     })?;
     recorded?;
+    crate::agent::turn_metrics::record_suspension(&task.turn_context);
     // Announce completion only after extension cleanup and writer closure so a
     // replacement worker cannot write the same thread concurrently.
     session

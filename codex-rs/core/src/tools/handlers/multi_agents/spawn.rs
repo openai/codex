@@ -161,7 +161,14 @@ async fn handle_spawn_agent(
             collab_spawn_error(err)
         });
     let (new_thread_id, status) = match &result {
-        Ok((spawned_agent, _)) => (Some(spawned_agent.thread_id), spawned_agent.status.clone()),
+        Ok((spawned_agent, _)) => {
+            turn.session_telemetry.record_multi_agent_spawned(
+                session.session_id(),
+                &turn.sub_id,
+                spawned_agent.thread_id,
+            );
+            (Some(spawned_agent.thread_id), spawned_agent.status.clone())
+        }
         Err(_) => (None, AgentStatus::NotFound),
     };
     let agent_snapshot = result.as_ref().ok().map(|(_, config)| config);

@@ -115,6 +115,14 @@ pub(crate) async fn spawn(
         options: settings.options,
     };
     let (agent, config) = session.services.agent_control.spawn(request).await?;
+    step_context
+        .turn
+        .session_telemetry
+        .record_multi_agent_spawned(
+            session.session_id(),
+            &step_context.turn.sub_id,
+            agent.thread_id,
+        );
     Ok(ThreadSpawnResult {
         agent,
         config,

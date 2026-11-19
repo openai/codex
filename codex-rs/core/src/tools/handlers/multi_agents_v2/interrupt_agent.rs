@@ -2,6 +2,7 @@ use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::agent::api::AgentTarget;
 use crate::tools::handlers::multi_agents_spec::create_interrupt_agent_tool_v2;
+use codex_otel::SubagentStopAction;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
 
@@ -58,6 +59,13 @@ async fn handle_interrupt_agent(
     let agent_path = snapshot.metadata().agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
+    turn.session_telemetry.record_multi_agent_stop_accepted(
+        session.session_id(),
+        agent_id,
+        &call_id,
+        SubagentStopAction::Interrupt,
+        snapshot.status(),
+    );
     let previous_status = snapshot.status().cloned().unwrap_or(AgentStatus::NotFound);
     emit_sub_agent_activity(
         &session,

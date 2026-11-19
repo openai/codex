@@ -1083,6 +1083,11 @@ impl Session {
             thread_id.to_string(),
             thread_extension_init,
         );
+        crate::agent::turn_metrics::register_thread(
+            &thread_extension_data,
+            &session_source,
+            &initial_history,
+        );
         if let Some(required) = &required_cyber_access_programs {
             thread_extension_data.insert(
                 crate::cyber_access_program::RequiredCyberAccessProgramsSnapshot(Arc::clone(

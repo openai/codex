@@ -1,5 +1,6 @@
 use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
+use codex_otel::SubagentStopAction;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -68,10 +69,24 @@ async fn handle_close_agent(
     let previous_status = local_agent_control.get_status(agent_id).await;
     let result = local_agent_control.close_agent(agent_id).await;
     let (status, receiver_agent) = match &result {
-        Ok(snapshot) => (
-            snapshot.status().cloned().unwrap_or(AgentStatus::NotFound),
-            snapshot.metadata().clone(),
-        ),
+        Ok(snapshot) => {
+            // Legacy close can also address unrelated loaded threads.
+            if snapshot.metadata().agent_id.is_some()
+                && agent_id != ThreadId::from(session.session_id())
+            {
+                turn.session_telemetry.record_multi_agent_stop_accepted(
+                    session.session_id(),
+                    agent_id,
+                    &call_id,
+                    SubagentStopAction::Close,
+                    snapshot.status(),
+                );
+            }
+            (
+                snapshot.status().cloned().unwrap_or(AgentStatus::NotFound),
+                snapshot.metadata().clone(),
+            )
+        }
         Err(_) => (previous_status, receiver_agent),
     };
     session
