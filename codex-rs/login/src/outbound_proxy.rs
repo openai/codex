@@ -43,16 +43,21 @@ impl AuthRouteConfig {
         self.http_client_factory_for_bootstrap(endpoint.parse::<url::Url>())
     }
 
+    /// Returns the local administrator's HTTP policy when configured.
+    /// Discovery uses this policy before the OAuth endpoints are known.
+    pub fn bootstrap_http_client_factory(&self) -> &HttpClientFactory {
+        self.local_bootstrap_factory
+            .as_ref()
+            .unwrap_or(&self.http_client_factory)
+    }
+
     /// Uses local administrator network rules when available, limited to the supplied endpoints.
     /// Fetched policy must not block the sign-in and configuration requests needed to refresh it.
     pub fn http_client_factory_for_bootstrap(
         &self,
         endpoints: impl IntoIterator<Item = url::Url>,
     ) -> HttpClientFactory {
-        let factory = self
-            .local_bootstrap_factory
-            .as_ref()
-            .unwrap_or(&self.http_client_factory);
+        let factory = self.bootstrap_http_client_factory();
         factory.clone().with_network_policy(
             factory
                 .network_policy()

@@ -1,10 +1,14 @@
 //! Fetch managed configuration from a custom config server.
 //! Cache entries are scoped to the endpoint and the current OAuth sign-in.
+//! Failed discovery is retried on later reads; successful loaders retain their refresh worker.
 
 use crate::backend::BundleRequestError;
 use crate::backend::RetryableFailureKind;
 use crate::backend::fetch_bundle;
+use crate::bundle_loader::managed_config_bundle_loader_for_service;
 use crate::config_source::BundleSource;
+use crate::discovery::ConfigServerDiscovery;
+use crate::discovery::resolve_config_server;
 use crate::service::CLOUD_CONFIG_BUNDLE_TIMEOUT;
 use crate::service::CloudConfigBundleService;
 use codex_backend_client::Client as BackendClient;
@@ -12,6 +16,8 @@ use codex_config::CloudConfigBundle;
 use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudConfigBundlePolicy;
+use codex_config::CloudConfigBundleSnapshot;
 use codex_config::ConfigServer;
 use codex_http_client::HttpClientFactory;
 use codex_keyring_store::DefaultKeyringStore;
@@ -22,40 +28,139 @@ use codex_login::OAuthSessionManager;
 use codex_login::OAuthSessionRequest;
 use sha2::Digest;
 use sha2::Sha256;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 
-pub fn config_server_bundle_loader(
+pub async fn config_server_bundle_loader(
     config: ConfigServer,
     codex_home: PathBuf,
-    factory: HttpClientFactory,
+    routes: &AuthRouteConfig,
+    discovery: ConfigServerDiscovery,
 ) -> CloudConfigBundleLoader {
-    match ConfigServerSource::from_config_server(config.clone(), codex_home.clone(), factory) {
-        Ok(source) => {
-            let service = CloudConfigBundleService::from_source(
-                source,
-                codex_home,
-                CLOUD_CONFIG_BUNDLE_TIMEOUT,
-            );
-            crate::bundle_loader::managed_config_bundle_loader_for_service(service).0
+    let service = create_config_server_service(&config, &codex_home, routes, discovery).await;
+
+    let loader = match service {
+        Ok(service) => {
+            let (loader, _) = managed_config_bundle_loader_for_service(service);
+            loader
         }
-        Err(error) => CloudConfigBundleLoader::new(std::future::ready(Err(error))),
-    }
-    .with_config_server(config)
+        Err(error) => config_server_loader_after_failure(
+            config.clone(),
+            codex_home,
+            routes.clone(),
+            discovery,
+            error,
+        ),
+    };
+
+    loader.with_config_server(config)
 }
 
-pub fn config_server_auth_manager(
+async fn create_config_server_service(
+    config: &ConfigServer,
+    codex_home: &Path,
+    routes: &AuthRouteConfig,
+    discovery: ConfigServerDiscovery,
+) -> Result<CloudConfigBundleService<ConfigServerSource>, CloudConfigBundleLoadError> {
+    let resolved = resolve_config_server(config, routes, discovery)
+        .await
+        .map_err(|error| {
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::Internal,
+                /*status_code*/ None,
+                error.to_string(),
+            )
+        })?;
+
+    let factory = config_server_http_client_factory(&resolved, routes);
+    let codex_home = codex_home.to_path_buf();
+    let source = ConfigServerSource::from_config_server(resolved, codex_home.clone(), factory)?;
+
+    Ok(CloudConfigBundleService::from_source(
+        source,
+        codex_home,
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    ))
+}
+
+fn config_server_loader_after_failure(
+    config: ConfigServer,
+    codex_home: PathBuf,
+    routes: AuthRouteConfig,
+    discovery: ConfigServerDiscovery,
+    error: CloudConfigBundleLoadError,
+) -> CloudConfigBundleLoader {
+    let initialized = Arc::new(OnceCell::new());
+    let initial_error = Arc::new(Mutex::new(Some(error)));
+    let policy = CloudConfigBundlePolicy::default();
+    let snapshot_policy = policy.clone();
+
+    let get_snapshot = move || {
+        let initialized = Arc::clone(&initialized);
+        let initial_error = Arc::clone(&initial_error);
+        let config = config.clone();
+        let codex_home = codex_home.clone();
+        let routes = routes.clone();
+        let policy = snapshot_policy.clone();
+
+        async move {
+            // Surface the startup error on the first read. Later reads retry
+            // discovery until one can install a loader and its refresh worker.
+            let saved_error = initial_error.lock().await.take();
+            let loader = match saved_error {
+                Some(error) => Err(error),
+                None => {
+                    initialized
+                        .get_or_try_init(|| async move {
+                            let mut service = create_config_server_service(
+                                &config,
+                                &codex_home,
+                                &routes,
+                                discovery,
+                            )
+                            .await?;
+                            service.policy = policy;
+                            let (loader, _) = managed_config_bundle_loader_for_service(service);
+                            Ok(loader)
+                        })
+                        .await
+                }
+            };
+
+            match loader {
+                Ok(loader) => loader.get_snapshot().await,
+                Err(error) => CloudConfigBundleSnapshot {
+                    bundle: Err(error),
+                    binding: None,
+                    config_server: None,
+                },
+            }
+        }
+    };
+
+    let get_snapshot_for_bundle = get_snapshot.clone();
+    CloudConfigBundleLoader::from_getter(move || {
+        let snapshot = get_snapshot_for_bundle();
+        async move { snapshot.await.bundle }
+    })
+    .with_ema_policy_snapshots(policy, get_snapshot)
+}
+
+pub async fn config_server_auth_manager(
     service_config: &ConfigServer,
     codex_home: PathBuf,
-    factory: &HttpClientFactory,
+    routes: &AuthRouteConfig,
+    discovery: ConfigServerDiscovery,
 ) -> std::io::Result<Option<OAuthSessionManager>> {
-    service_config
-        .validated_base_url()
-        .map_err(std::io::Error::other)?;
-    oauth_session_manager(service_config.oauth.as_deref(), codex_home, factory)
+    let resolved = resolve_config_server(service_config, routes, discovery).await?;
+    let factory = config_server_http_client_factory(&resolved, routes);
+    oauth_session_manager(resolved.oauth.as_deref(), codex_home, &factory)
 }
 
-pub(crate) fn config_server_http_client_factory(
+fn config_server_http_client_factory(
     config: &ConfigServer,
     routes: &AuthRouteConfig,
 ) -> HttpClientFactory {

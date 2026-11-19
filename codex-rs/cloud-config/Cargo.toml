@@ -13,11 +13,13 @@ chrono = { workspace = true, features = ["serde"] }
 codex-async-utils = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rmcp-client = { workspace = true }
 hmac = "0.12.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -963,7 +963,8 @@ impl AccountRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager
-            .update_managed_config_loader(self.auth_manager.clone(), &self.config);
+            .update_managed_config_loader(self.auth_manager.clone(), &self.config)
+            .await;
         self.config_manager
             .sync_default_client_residency_requirement()
             .await;
@@ -1040,7 +1041,8 @@ impl AccountRequestProcessor {
                 .invalidate_mcp_runtimes_for(McpRefreshReason::AccountAuthReloaded)
                 .await;
             self.config_manager
-                .update_managed_config_loader(self.auth_manager.clone(), &self.config);
+                .update_managed_config_loader(self.auth_manager.clone(), &self.config)
+                .await;
             self.config_manager
                 .sync_default_client_residency_requirement()
                 .await;
@@ -1583,7 +1585,9 @@ pub(crate) async fn logout_configured_account(
         .reload_with_cached_auth()
         .await
         .map_err(|err| internal_error(format!("logout failed: {err}")))?;
-    config_manager.update_managed_config_loader(Arc::clone(auth_manager), fallback_config);
+    config_manager
+        .update_managed_config_loader(Arc::clone(auth_manager), fallback_config)
+        .await;
     let config = config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await;

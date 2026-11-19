@@ -126,7 +126,9 @@ pub(super) async fn configure(
     )
     .await
     .map_err(IoError::other)?;
-    config_manager.update_managed_config_loader(bootstrap_auth_manager, &bootstrap_config);
+    config_manager
+        .update_managed_config_loader(bootstrap_auth_manager, &bootstrap_config)
+        .await;
     let policy_config = config_manager
         .load_startup_config(Some(config.cwd.to_path_buf()))
         .await?
@@ -165,7 +167,9 @@ pub(super) async fn configure(
     config.application_auth_route_config = policy_config.application_auth_route_config;
     config.forced_login_method = policy_config.forced_login_method;
     config.forced_chatgpt_workspace_id = policy_config.forced_chatgpt_workspace_id;
-    config_manager.update_managed_config_loader(policy_auth_manager, config);
+    config_manager
+        .update_managed_config_loader(policy_auth_manager, config)
+        .await;
     codex_login::default_client::set_default_client_residency_requirement(
         config.enforce_residency.value(),
     );

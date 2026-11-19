@@ -608,7 +608,9 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
             .await
             .map_err(std::io::Error::other)?;
-    config_manager.update_managed_config_loader(auth_manager.clone(), &config);
+    config_manager
+        .update_managed_config_loader(auth_manager.clone(), &config)
+        .await;
     config_manager
         .sync_default_client_residency_requirement()
         .await;

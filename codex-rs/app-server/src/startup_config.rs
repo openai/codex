@@ -143,7 +143,9 @@ async fn read_startup_config(
         set_default_client_residency_requirement(config.enforce_residency.value());
         let config = logout_configured_account(&manager, &auth, &config).await?;
         clear_account_configuration(&manager, &config).await?;
-        manager.update_managed_config_loader(Arc::clone(&auth), &config);
+        manager
+            .update_managed_config_loader(Arc::clone(&auth), &config)
+            .await;
         manager
             .load_latest_config(cwd)
             .await

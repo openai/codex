@@ -585,7 +585,9 @@ async fn logout_config_server(config: &Config) -> std::io::Result<bool> {
     match codex_cloud_config::managed_config_auth_manager(
         config.auth_config(),
         config.config_layer_stack.requirements_toml(),
-    )? {
+    )
+    .await?
+    {
         Some(manager) => manager.logout().await,
         None => Ok(false),
     }
