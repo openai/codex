@@ -10,7 +10,7 @@ use crate::models::PermissionProfile;
 use crate::models::PermissionProfileSnapshot;
 use crate::protocol::AskForApproval;
 use crate::sandbox::SandboxType;
-use codex_execpolicy::RequirementsExecPolicy;
+use codex_execpolicy_rules::RequirementsExecPolicy;
 use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;

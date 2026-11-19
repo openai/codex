@@ -1,101 +1,47 @@
-use starlark::Error as StarlarkError;
+//! Diagnostics for loading and validating a Starlark policy file.
+
+use crate::ErrorLocation;
+use crate::RuleError;
+use codex_execpolicy_rules::TextPosition;
+use codex_execpolicy_rules::TextRange;
+use starlark::codemap::FileSpan;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextPosition {
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextRange {
-    pub start: TextPosition,
-    pub end: TextPosition,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorLocation {
-    pub path: String,
-    pub range: TextRange,
-}
-
+/// A failure to evaluate a policy file or validate its rules.
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid decision: {0}")]
-    InvalidDecision(String),
-    #[error("invalid pattern element: {0}")]
-    InvalidPattern(String),
-    #[error("invalid example: {0}")]
-    InvalidExample(String),
-    #[error("invalid rule: {0}")]
-    InvalidRule(String),
-    #[error(
-        "expected every example to match at least one rule. rules: {rules:?}; unmatched examples: \
-         {examples:?}"
-    )]
-    ExampleDidNotMatch {
-        rules: Vec<String>,
-        examples: Vec<String>,
-        location: Option<ErrorLocation>,
-    },
-    #[error("expected example to not match rule `{rule}`: {example}")]
-    ExampleDidMatch {
-        rule: String,
-        example: String,
-        location: Option<ErrorLocation>,
-    },
     #[error("starlark error: {0}")]
-    Starlark(StarlarkError),
+    Starlark(starlark::Error),
+    #[error(transparent)]
+    Rule(#[from] RuleError),
 }
 
 impl Error {
-    pub fn with_location(self, location: ErrorLocation) -> Self {
-        match self {
-            Error::ExampleDidNotMatch {
-                rules,
-                examples,
-                location: None,
-            } => Error::ExampleDidNotMatch {
-                rules,
-                examples,
-                location: Some(location),
-            },
-            Error::ExampleDidMatch {
-                rule,
-                example,
-                location: None,
-            } => Error::ExampleDidMatch {
-                rule,
-                example,
-                location: Some(location),
-            },
-            other => other,
-        }
-    }
-
+    /// Return the one-based source range when the failure has a span.
     pub fn location(&self) -> Option<ErrorLocation> {
         match self {
-            Error::ExampleDidNotMatch { location, .. }
-            | Error::ExampleDidMatch { location, .. } => location.clone(),
-            Error::Starlark(err) => err.span().map(|span| {
-                let resolved = span.resolve_span();
-                ErrorLocation {
-                    path: span.filename().to_string(),
-                    range: TextRange {
-                        start: TextPosition {
-                            line: resolved.begin.line + 1,
-                            column: resolved.begin.column + 1,
-                        },
-                        end: TextPosition {
-                            line: resolved.end.line + 1,
-                            column: resolved.end.column + 1,
-                        },
-                    },
-                }
-            }),
-            _ => None,
+            Error::Starlark(error) => error.span().map(error_location_from_file_span),
+            Error::Rule(error) => error.location(),
         }
+    }
+}
+
+/// Convert a parser span to the one-based coordinates used for policy diagnostics.
+pub(crate) fn error_location_from_file_span(span: &FileSpan) -> ErrorLocation {
+    let resolved = span.resolve_span();
+    ErrorLocation {
+        path: span.filename().to_string(),
+        range: TextRange {
+            start: TextPosition {
+                line: resolved.begin.line + 1,
+                column: resolved.begin.column + 1,
+            },
+            end: TextPosition {
+                line: resolved.end.line + 1,
+                column: resolved.end.column + 1,
+            },
+        },
     }
 }

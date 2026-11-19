@@ -7,7 +7,6 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use codex_execpolicy::Decision;
-use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::NetworkRuleProtocol;
@@ -17,6 +16,7 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::PrefixPattern;
 use codex_execpolicy::PrefixRule;
 use codex_execpolicy::RequirementsExecPolicy;
+use codex_execpolicy::RuleError;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
@@ -288,7 +288,7 @@ fn add_prefix_rule_rejects_empty_prefix() -> Result<()> {
     let result = policy.add_prefix_rule(&[], Decision::Allow);
 
     match result.unwrap_err() {
-        Error::InvalidPattern(message) => assert_eq!(message, "prefix cannot be empty"),
+        RuleError::InvalidPattern(message) => assert_eq!(message, "prefix cannot be empty"),
         other => panic!("expected InvalidPattern(..), got {other:?}"),
     }
     Ok(())

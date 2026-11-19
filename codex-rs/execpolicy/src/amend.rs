@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::decision::Decision;
+use crate::Decision;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::normalize_network_rule_host;
 use thiserror::Error;

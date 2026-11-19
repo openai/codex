@@ -166,7 +166,8 @@ pub struct NetworkRule {
     pub justification: Option<String>,
 }
 
-pub(crate) fn normalize_network_rule_host(raw: &str) -> Result<String> {
+/// Normalize a host for matching, dropping a port and IPv6 brackets when present.
+pub fn normalize_network_rule_host(raw: &str) -> Result<String> {
     let mut host = raw.trim();
     if host.is_empty() {
         return Err(Error::InvalidRule(
@@ -256,7 +257,7 @@ impl Rule for PrefixRule {
 }
 
 /// Count how many rules match each provided example and error if any example is unmatched.
-pub(crate) fn validate_match_examples(
+pub fn validate_match_examples(
     policy: &Policy,
     rules: &[RuleRef],
     matches: &[Vec<String>],
@@ -292,7 +293,7 @@ pub(crate) fn validate_match_examples(
 }
 
 /// Ensure that no rule matches any provided negative example.
-pub(crate) fn validate_not_match_examples(
+pub fn validate_not_match_examples(
     policy: &Policy,
     _rules: &[RuleRef],
     not_matches: &[Vec<String>],

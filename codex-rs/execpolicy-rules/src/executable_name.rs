@@ -3,7 +3,9 @@ use std::path::Path;
 #[cfg(windows)]
 const WINDOWS_EXECUTABLE_SUFFIXES: [&str; 4] = [".exe", ".cmd", ".bat", ".com"];
 
-pub(crate) fn executable_lookup_key(raw: &str) -> String {
+/// Return the key shared by host executable declarations and command lookups.
+/// Windows folds ASCII case and ignores a recognized executable suffix.
+pub fn executable_lookup_key(raw: &str) -> String {
     #[cfg(windows)]
     {
         let raw = raw.to_ascii_lowercase();
@@ -22,7 +24,8 @@ pub(crate) fn executable_lookup_key(raw: &str) -> String {
     }
 }
 
-pub(crate) fn executable_path_lookup_key(path: &Path) -> Option<String> {
+/// Derive a lookup key from the filename when it is valid UTF-8.
+pub fn executable_path_lookup_key(path: &Path) -> Option<String> {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(executable_lookup_key)

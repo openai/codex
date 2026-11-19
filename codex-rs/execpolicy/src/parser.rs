@@ -1,7 +1,7 @@
+use crate::error::error_location_from_file_span;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
 use starlark::any::ProvidesStaticType;
-use starlark::codemap::FileSpan;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
@@ -18,14 +18,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::decision::Decision;
-use crate::error::Error;
-use crate::error::ErrorLocation;
-use crate::error::Result;
-use crate::error::TextPosition;
-use crate::error::TextRange;
-use crate::executable_name::executable_lookup_key;
-use crate::executable_name::executable_path_lookup_key;
+use crate::Decision;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
@@ -34,6 +27,11 @@ use crate::rule::PrefixRule;
 use crate::rule::RuleRef;
 use crate::rule::validate_match_examples;
 use crate::rule::validate_not_match_examples;
+use codex_execpolicy_rules::Error;
+use codex_execpolicy_rules::ErrorLocation;
+use codex_execpolicy_rules::Result;
+use codex_execpolicy_rules::executable_lookup_key;
+use codex_execpolicy_rules::executable_path_lookup_key;
 
 pub struct PolicyParser {
     builder: RefCell<PolicyBuilder>,
@@ -54,7 +52,11 @@ impl PolicyParser {
 
     /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
     /// identifier alongside line numbers.
-    pub fn parse(&mut self, policy_identifier: &str, policy_file_contents: &str) -> Result<()> {
+    pub fn parse(
+        &mut self,
+        policy_identifier: &str,
+        policy_file_contents: &str,
+    ) -> crate::Result<()> {
         let pending_validation_count = self.builder.borrow().pending_example_validations.len();
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
@@ -63,14 +65,14 @@ impl PolicyParser {
             policy_file_contents.to_string(),
             &dialect,
         )
-        .map_err(Error::Starlark)?;
+        .map_err(crate::Error::Starlark)?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         Module::with_temp_heap(|module| {
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&self.builder);
             eval.eval_module(ast, &globals)
                 .map(|_| ())
-                .map_err(Error::Starlark)
+                .map_err(crate::Error::Starlark)
         })?;
         self.builder
             .borrow()
@@ -78,7 +80,7 @@ impl PolicyParser {
         Ok(())
     }
 
-    pub fn build(self) -> crate::policy::Policy {
+    pub fn build(self) -> crate::Policy {
         self.builder.into_inner().build()
     }
 }
@@ -137,7 +139,7 @@ impl PolicyBuilder {
                 rules_by_program.insert(rule.program().to_string(), rule.clone());
             }
 
-            let policy = crate::policy::Policy::from_parts(
+            let policy = crate::Policy::from_parts(
                 rules_by_program,
                 Vec::new(),
                 self.host_executables_by_name.clone(),
@@ -151,8 +153,8 @@ impl PolicyBuilder {
         Ok(())
     }
 
-    fn build(self) -> crate::policy::Policy {
-        crate::policy::Policy::from_parts(
+    fn build(self) -> crate::Policy {
+        crate::Policy::from_parts(
             self.rules_by_program,
             self.network_rules,
             self.host_executables_by_name,
@@ -254,23 +256,6 @@ fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
     match raw {
         "deny" => Ok(Decision::Forbidden),
         other => Decision::parse(other),
-    }
-}
-
-fn error_location_from_file_span(span: FileSpan) -> ErrorLocation {
-    let resolved = span.resolve_span();
-    ErrorLocation {
-        path: span.filename().to_string(),
-        range: TextRange {
-            start: TextPosition {
-                line: resolved.begin.line + 1,
-                column: resolved.begin.column + 1,
-            },
-            end: TextPosition {
-                line: resolved.end.line + 1,
-                column: resolved.end.column + 1,
-            },
-        },
     }
 }
 
@@ -378,6 +363,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .unwrap_or_default();
         let location = eval
             .call_stack_top_location()
+            .as_ref()
             .map(error_location_from_file_span);
 
         let mut builder = policy_builder(eval);

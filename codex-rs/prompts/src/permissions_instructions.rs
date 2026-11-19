@@ -12,7 +12,7 @@ use crate::model_messages::permissions::ResolvedPermissionMessages;
 use crate::model_messages::permissions::WORKSPACE_WRITE_TEMPLATE;
 use approval_instructions::ApprovalInstructions;
 use codex_context_fragments::ContextualUserFragment;
-use codex_execpolicy::Policy;
+use codex_execpolicy_rules::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItem;

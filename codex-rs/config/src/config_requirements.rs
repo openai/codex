@@ -2773,9 +2773,9 @@ mod tests {
     use crate::McpServerIdentity;
     use crate::McpServerValueMatcher;
     use anyhow::Result;
-    use codex_execpolicy::Decision;
-    use codex_execpolicy::Evaluation;
-    use codex_execpolicy::RuleMatch;
+    use codex_execpolicy_rules::Decision;
+    use codex_execpolicy_rules::Evaluation;
+    use codex_execpolicy_rules::RuleMatch;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::AbsolutePathBufGuard;

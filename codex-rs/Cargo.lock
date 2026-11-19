@@ -2937,7 +2937,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "codex-execpolicy",
+ "codex-execpolicy-rules",
  "codex-features",
  "codex-file-system",
  "codex-git-utils",
@@ -3519,8 +3519,8 @@ name = "codex-execpolicy"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "caseless",
  "clap",
+ "codex-execpolicy-rules",
  "codex-utils-absolute-path",
  "multimap",
  "pretty_assertions",
@@ -3531,6 +3531,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "codex-execpolicy-rules"
+version = "0.0.0"
+dependencies = [
+ "caseless",
+ "codex-utils-absolute-path",
+ "multimap",
+ "serde",
+ "shlex",
+ "thiserror 2.0.18",
  "unicode-normalization",
 ]
 
@@ -4713,7 +4725,7 @@ dependencies = [
  "anyhow",
  "codex-collaboration-mode-templates",
  "codex-context-fragments",
- "codex-execpolicy",
+ "codex-execpolicy-rules",
  "codex-git-utils",
  "codex-guardian-context",
  "codex-protocol",
@@ -4733,7 +4745,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "codex-async-utils",
- "codex-execpolicy",
+ "codex-execpolicy-rules",
  "codex-extension-items",
  "codex-http-client",
  "codex-network-proxy",

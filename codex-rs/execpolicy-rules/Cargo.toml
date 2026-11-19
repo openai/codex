@@ -1,0 +1,24 @@
+[package]
+name = "codex-execpolicy-rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-memory execution policy rules and evaluation."
+
+[lib]
+name = "codex_execpolicy_rules"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+caseless = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+multimap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+shlex = { workspace = true }
+thiserror = { workspace = true }
+unicode-normalization = { workspace = true }

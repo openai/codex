@@ -65,6 +65,7 @@ members = [
     "exec-server-cli",
     "exec-server/tests/support",
     "execpolicy",
+    "execpolicy-rules",
     "ext/agent",
     "ext/agent-message-board",
     "ext/connectors",
@@ -244,6 +245,7 @@ codex-exec-server = { path = "exec-server" }
 codex-exec-server-cli = { path = "exec-server-cli" }
 codex-exec-server-test-support = { path = "exec-server/tests/support" }
 codex-execpolicy = { path = "execpolicy" }
+codex-execpolicy-rules = { path = "execpolicy-rules" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-extension-items = { path = "ext/items" }
 codex-multi-env-copy-file = { path = "ext/multi-env-copy-file" }
