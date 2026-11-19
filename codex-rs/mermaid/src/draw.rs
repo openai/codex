@@ -39,9 +39,17 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
         .edges
         .iter()
         .flat_map(|edge| [&edge.label, &edge.target_label])
-        .map(|label| label.width())
+        .flat_map(|label| label.split('\n'))
+        .map(UnicodeWidthStr::width)
         .max()
         .unwrap_or(0);
+    let label_height = graph
+        .edges
+        .iter()
+        .flat_map(|edge| [&edge.label, &edge.target_label])
+        .map(|label| label.split('\n').count())
+        .max()
+        .unwrap_or(1);
     let box_cross = if horizontal {
         labels.iter().map(Vec::len).max().unwrap_or(0) + 2
     } else {
@@ -53,13 +61,22 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
             .unwrap_or(0)
             + 4
     };
+    // Vertical ports reserve one row per label line; horizontal ports use the width stride.
     let mut counts = vec![0; graph.nodes.len()];
     let mut ports = Vec::new();
     for edge in &graph.edges {
         let source = counts[edge.from];
-        counts[edge.from] += 1;
+        counts[edge.from] += if horizontal {
+            1
+        } else {
+            edge.label.split('\n').count()
+        };
         let target = counts[edge.to];
-        counts[edge.to] += 1;
+        counts[edge.to] += if horizontal {
+            1
+        } else {
+            edge.target_label.split('\n').count()
+        };
         ports.push((source, target));
     }
     let stride = if horizontal { label_width + 2 } else { 1 };
@@ -126,7 +143,13 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
             position += 1;
         }
     }
-    let first_lane = inset + box_cross + if horizontal { 4 } else { label_width + 5 };
+    let first_lane = inset
+        + box_cross
+        + if horizontal {
+            label_height + 3
+        } else {
+            label_width + 5
+        };
     let internal = graph
         .edges
         .iter()
@@ -299,7 +322,9 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
             } else {
                 (inset + box_cross + 2, port)
             };
-            put_text(&mut canvas.cells[y], x, label)?;
+            for (line_index, line) in label.split('\n').enumerate() {
+                put_text(&mut canvas.cells[y + line_index], x, line)?;
+            }
         }
     }
     Ok(finish(canvas.cells))

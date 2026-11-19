@@ -37,6 +37,39 @@ fn stadiums_with_other_shapes_in_every_direction() {
 }
 
 #[test]
+fn multiline_edge_labels_in_every_direction() {
+    let mut cases = Vec::new();
+    for direction in ["TD", "BT", "LR", "RL"] {
+        let source = format!(
+            "flowchart {direction}; A[Source] -->|\"one<br/>two\"| B[Target]; A -. retry<br />later .-> C[Other]; C -->|x<br>y| A"
+        );
+        let output = render(&source, /*max_width*/ 100).unwrap();
+        let width = output.lines().map(UnicodeWidthStr::width).max().unwrap();
+        assert_eq!(render(&source, width), Ok(output.clone()));
+        assert_eq!(render(&source, width - 1), Err(RenderError::TooWide));
+        cases.push(format!("{direction}\n{output}"));
+    }
+    for (with_spaces, empty) in [
+        ("one<br> <br>two", "one<br><br>two"),
+        ("   <br>go", "<br>go"),
+    ] {
+        assert_eq!(
+            render(
+                &format!("flowchart TD; A -->|{with_spaces}| B"),
+                /*max_width*/ 100
+            )
+            .unwrap(),
+            render(
+                &format!("flowchart TD; A -->|{empty}| B"),
+                /*max_width*/ 100
+            )
+            .unwrap(),
+        );
+    }
+    assert_snapshot!(cases.join("\n\n"));
+}
+
+#[test]
 fn equivalent_flowchart_forms_preserve_graph() {
     let quoted = r#"A["Review & confirm;"] -->|"Yes & continue"| B{"Ready?"}
 B --> C(["Checkout"])
@@ -184,6 +217,7 @@ fn quoted_flowchart_labels_reject_malformed_and_unsafe_text() {
         "\"before <b\"",
         "\"one<br/><b>two</b>\"",
         "\"one<br class='x'>two\"",
+        "\"one<br/>\t<br/>two\"",
         "\"\u{1b}\"",
     ] {
         for source in [
@@ -356,8 +390,6 @@ fn rejects_partial_or_unsupported_input() {
         "flowchart TD; A -->|unclosed B",
         "flowchart TD; A[لا]",
         "flowchart TD; A -->|yes┐| B",
-        "flowchart TD; A -->|one<br/>two| B",
-        "flowchart TD; A -- one<br>two --> B",
         "flowchart TD; A[<br/><br />]",
     ] {
         assert_eq!(
@@ -381,6 +413,8 @@ fn source_graph_and_width_limits() {
         format!("graph TD; A[\"{}\"]", "[]".repeat(21)),
         format!("graph TD; A([{}])", "x".repeat(41)),
         format!("graph TD; A[\"ok<br />{}\"]", "界".repeat(21)),
+        format!("graph TD; A -->|\"ok<br />{}\"| B", "界".repeat(21)),
+        format!("graph TD; A -->|\"one<br>{}<br>two\"| B", " ".repeat(41)),
         format!(
             "graph TD; {}",
             (0..17).map(|n| format!("N{n};")).collect::<String>()
@@ -389,15 +423,23 @@ fn source_graph_and_width_limits() {
     ] {
         assert_eq!(render(&source, /*max_width*/ 200), Err(RenderError::Limit));
     }
-    let source = format!(
-        "graph LR; A[\"{}<br/>{}\"] --> B[Done]",
-        "界".repeat(20),
-        "x".repeat(40)
-    );
-    let output = render(&source, /*max_width*/ 100).unwrap();
-    let width = output.lines().map(UnicodeWidthStr::width).max().unwrap();
-    assert_eq!(render(&source, width), Ok(output));
-    assert_eq!(render(&source, width - 1), Err(RenderError::TooWide));
+    for source in [
+        format!(
+            "graph LR; A[\"{}<br/>{}\"] --> B[Done]",
+            "界".repeat(20),
+            "x".repeat(40)
+        ),
+        format!(
+            "graph LR; A -->|\"{}<br/>{}\"| B",
+            "界".repeat(20),
+            "x".repeat(40)
+        ),
+    ] {
+        let output = render(&source, /*max_width*/ 100).unwrap();
+        let width = output.lines().map(UnicodeWidthStr::width).max().unwrap();
+        assert_eq!(render(&source, width), Ok(output));
+        assert_eq!(render(&source, width - 1), Err(RenderError::TooWide));
+    }
     assert_eq!(
         render("graph TD; A", /*max_width*/ 0),
         Err(RenderError::TooWide)

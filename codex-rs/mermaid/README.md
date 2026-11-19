@@ -27,7 +27,7 @@ return types. ER attribute types and names use the identifier grammar above.
 Flowchart node and edge labels may be enclosed in double quotes. Literal
 ampersands are supported in labels, as is printable punctuation after parsing.
 Quotes protect flowchart label delimiters such as brackets, pipes, and
-semicolons. Flowchart node labels support `<br>`, `<br/>`, and `<br />` as
+semicolons. Flowchart node and edge labels support `<br>`, `<br/>`, and `<br />` as
 line breaks. Other HTML and entity escapes remain unsupported.
 
 These are explicit subsets, not complete Mermaid compatibility. Compound states,

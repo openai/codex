@@ -47,7 +47,7 @@ fn mermaid_nested_fences_and_unicode() {
 fn mermaid_quoted_labels_and_ampersands() {
     let source = r#"```mermaid
 flowchart LR
-    A["Your saved order"] --> B["Review & confirm"] --> C["DoorDash checkout"]
+    A["Your saved order"] -->|"Review<br/>order"| B["Review & confirm"] --> C["DoorDash checkout"]
 ```"#;
     let output = markdown_text(source, /*width*/ 100);
     assert!(output.starts_with('┌'));

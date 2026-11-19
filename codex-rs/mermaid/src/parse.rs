@@ -110,8 +110,7 @@ pub(super) fn parse(header: &str, body: &[&str]) -> Result<Graph, RenderError> {
                 rest = after.trim_start();
                 if let Some(after) = rest.strip_prefix('|') {
                     let (text, remaining) = delimited_label(after, "|")?;
-                    label = flowchart_label(text)?.to_owned();
-                    check_label(&label)?;
+                    label = multiline_label(text)?;
                     rest = remaining;
                 }
                 (source, target, dashed)
@@ -132,8 +131,7 @@ pub(super) fn parse(header: &str, body: &[&str]) -> Result<Graph, RenderError> {
                 rest = remaining
                     .strip_prefix('>')
                     .ok_or(RenderError::Unsupported)?;
-                label = flowchart_label(text.trim())?.to_owned();
-                check_label(&label)?;
+                label = multiline_label(text.trim())?;
                 ('─', '◄', dashed)
             };
             let to = nodes(&mut rest, &mut graph, block)?;
@@ -217,16 +215,7 @@ fn node(rest: &mut &str, graph: &mut Graph, block: Option<usize>) -> Result<usiz
     }
     if let Some((open, close, shape)) = declaration {
         let (label, remaining) = delimited_label(&rest[open.len()..], close)?;
-        let label = flowchart_label(label)?
-            .replace("<br>", "\n")
-            .replace("<br/>", "\n")
-            .replace("<br />", "\n");
-        if label.trim().is_empty() {
-            return Err(RenderError::Unsupported);
-        }
-        for line in label.split('\n').filter(|line| !line.is_empty()) {
-            check_label(line)?;
-        }
+        let label = multiline_label(label)?;
         *rest = remaining;
         let node = &mut graph.nodes[index];
         if node.declared && (node.label != label || node.shape != shape) {
@@ -237,6 +226,25 @@ fn node(rest: &mut &str, graph: &mut Graph, block: Option<usize>) -> Result<usiz
         node.declared = true;
     }
     Ok(index)
+}
+
+fn multiline_label(label: &str) -> Result<String, RenderError> {
+    let label = flowchart_label(label)?
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+    if label.trim().is_empty() {
+        return Err(RenderError::Unsupported);
+    }
+    // Blank lines reserve space but must not paint spaces over an edge connector.
+    let lines = label
+        .split('\n')
+        .map(|line| {
+            check_label_content(line)?;
+            Ok(if line.trim().is_empty() { "" } else { line })
+        })
+        .collect::<Result<Vec<_>, RenderError>>()?;
+    Ok(lines.join("\n"))
 }
 
 fn flowchart_label(label: &str) -> Result<&str, RenderError> {
@@ -259,13 +267,19 @@ fn flowchart_label(label: &str) -> Result<&str, RenderError> {
 }
 
 pub(super) fn check_label(label: &str) -> Result<(), RenderError> {
+    if label.trim().is_empty() {
+        return Err(RenderError::Unsupported);
+    }
+    check_label_content(label)
+}
+
+fn check_label_content(label: &str) -> Result<(), RenderError> {
     // Markup needs deliberate decoding/layout; printable comparison operators are plain text.
     let markup = label.match_indices('<').any(|(index, _)| {
         let after = &label[index + 1..];
         after.starts_with(|ch: char| ch.is_ascii_alphabetic() || matches!(ch, '/' | '!' | '?'))
     });
     if markup
-        || label.trim().is_empty()
         || label.chars().any(|ch| {
             ch.is_control()
                 || matches!(ch, '┌' | '┐' | '└' | '┘' | '├' | '┤' | '╪' | '◄')
