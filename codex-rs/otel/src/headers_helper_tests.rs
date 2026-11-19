@@ -260,24 +260,60 @@ async fn grpc_and_builtin_metrics_do_not_start_the_helper() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn executable_paths_with_spaces_and_timeouts_are_supported() {
-    use std::os::unix::fs::PermissionsExt;
+async fn executable_paths_with_spaces_are_supported() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("helper with spaces");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &path,
         "#!/bin/sh\nprintf '%s' '{\"Authorization\":\"token\"}'",
     )
     .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(
         run_helper(path.to_str().unwrap(), dir.path())
             .await
             .unwrap()["authorization"],
         "token"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test(start_paused = true)]
+async fn a_stalled_helper_reports_its_timeout() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("gate");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let start = tokio::time::Instant::now();
+    let helper = run_helper("read -r line < gate", dir.path());
+    tokio::pin!(helper);
+    // Opening the writer waits for the helper's read; hold it open without sending data or EOF.
+    let path = fifo.clone();
+    let mut open_writer =
+        tokio::task::spawn_blocking(move || std::fs::File::options().write(true).open(path));
+    let _writer = tokio::select! {
+        result = &mut open_writer => result.unwrap().unwrap(),
+        result = &mut helper => {
+            // No child is left to open the reader. Unblock and join our writer before failing.
+            let _reader = std::fs::File::options()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+                .unwrap();
+            open_writer.await.unwrap().unwrap();
+            panic!("helper exited before it opened the FIFO: {result:?}");
+        }
+    };
     assert_eq!(
-        run_helper("sleep 60", dir.path()).await,
+        helper.await,
         Err("headers helper timed out after 10 seconds".to_string())
     );
+    assert_eq!(start.elapsed(), Duration::from_secs(10));
 }

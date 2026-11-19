@@ -73,7 +73,9 @@ rcgen = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 libc = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 seccompiler = { workspace = true }
