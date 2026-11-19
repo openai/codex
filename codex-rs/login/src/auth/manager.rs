@@ -3118,7 +3118,15 @@ impl AuthManager {
             .map_err(RefreshTokenError::Transient)
     }
 
-    async fn try_load_managed_auth(
+    // Keep managed credential loading out of each caller's async state machine.
+    fn try_load_managed_auth<'a>(
+        &'a self,
+        cached_auth: Option<&'a CodexAuth>,
+    ) -> Pin<Box<dyn Future<Output = std::io::Result<Option<CodexAuth>>> + Send + 'a>> {
+        Box::pin(self.try_load_managed_auth_impl(cached_auth))
+    }
+
+    async fn try_load_managed_auth_impl(
         &self,
         cached_auth: Option<&CodexAuth>,
     ) -> std::io::Result<Option<CodexAuth>> {
