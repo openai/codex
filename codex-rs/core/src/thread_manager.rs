@@ -1520,7 +1520,7 @@ impl ThreadManager {
             request
         };
         request.startup = startup;
-        Box::pin(self.state.spawn_thread(request)).await
+        self.state.spawn_thread(request).await
     }
 
     // TODO(jif) merge with fork_agent
@@ -1644,12 +1644,13 @@ impl ThreadManager {
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
-        Box::pin(self.state.spawn_thread(ThreadSpawnRequest::new(
-            options,
-            auth_manager,
-            agent_control,
-        )))
-        .await
+        self.state
+            .spawn_thread(ThreadSpawnRequest::new(
+                options,
+                auth_manager,
+                agent_control,
+            ))
+            .await
     }
 
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
@@ -1666,7 +1667,7 @@ impl ThreadManager {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.user_shell_override = Some(user_shell_override);
-        Box::pin(self.state.spawn_thread(request)).await
+        self.state.spawn_thread(request).await
     }
 
     pub(crate) async fn resume_legacy_thread_from_rollout_with_user_shell_override_for_tests(
@@ -1693,7 +1694,7 @@ impl ThreadManager {
         };
         let mut request = ThreadSpawnRequest::new(options, auth_manager, agent_control);
         request.user_shell_override = Some(user_shell_override);
-        Box::pin(self.state.spawn_thread(request)).await
+        self.state.spawn_thread(request).await
     }
 
     /// Removes the thread from the manager's internal map, though the thread is stored
@@ -1997,7 +1998,7 @@ impl ThreadManager {
         request.forked_from_thread_id = source_thread_id;
         request.fork_persistence = fork_persistence;
         request.inherited_instructions = Some(instructions);
-        Box::pin(self.state.spawn_thread(request)).await
+        self.state.spawn_thread(request).await
     }
 
     pub(crate) fn agent_control(&self) -> LocalAgentControl {
@@ -2414,7 +2415,7 @@ impl ThreadManagerState {
             request.forked_from_thread_id = parent_thread_id;
             request.fork_persistence = ForkPersistence::CopiedDeferred;
         }
-        Box::pin(self.spawn_thread(request)).await
+        self.spawn_thread(request).await
     }
 
     /// Starts a host-reserved child using inheritance captured from this manager's parent.
@@ -2453,7 +2454,7 @@ impl ThreadManagerState {
             originator: inheritance.originator,
             attachment_source: inheritance.attachment_source,
         });
-        Box::pin(self.spawn_thread(request)).await
+        self.spawn_thread(request).await
     }
 
     pub(crate) async fn resume_thread_with_history_with_source(
@@ -2500,7 +2501,7 @@ impl ThreadManagerState {
         request.inherited_environments = inherited_environments;
         request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
-        Box::pin(self.spawn_thread(request)).await
+        self.spawn_thread(request).await
     }
 
     async fn inherited_child_auth(
@@ -2543,7 +2544,12 @@ impl ThreadManagerState {
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
-    async fn spawn_thread(&self, mut request: ThreadSpawnRequest) -> CodexResult<NewThread> {
+    fn spawn_thread(&self, request: ThreadSpawnRequest) -> BoxFuture<'_, CodexResult<NewThread>> {
+        // Erase the startup future here so each caller doesn't compile its own copy.
+        Box::pin(self.spawn_thread_inner(request))
+    }
+
+    async fn spawn_thread_inner(&self, mut request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let cancellation = request
             .options
             .config
