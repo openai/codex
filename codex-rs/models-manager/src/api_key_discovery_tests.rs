@@ -45,6 +45,34 @@ async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
     let bundled = load_remote_models_from_file().unwrap();
     let config = ModelsManagerConfig::default();
 
+    // Per-request overrides must not change the shared bundled fallback used by later lookups.
+    let bundled_model = bundled.first().expect("bundled model");
+    let overrides = ModelsManagerConfig {
+        base_instructions: Some("Instructions for this request only".to_string()),
+        ..Default::default()
+    };
+    let mut expected_model = bundled_model.clone();
+    expected_model
+        .model_messages
+        .get_or_insert_default()
+        .instructions_template = overrides.base_instructions.clone();
+    assert_eq!(
+        manager
+            .get_model_info(&bundled_model.slug, &overrides)
+            .await,
+        CatalogModel {
+            model: expected_model.into(),
+            origin: ModelOrigin::Bundled,
+        }
+    );
+    assert_eq!(
+        manager.get_model_info(&bundled_model.slug, &config).await,
+        CatalogModel {
+            model: bundled_model.clone().into(),
+            origin: ModelOrigin::Bundled,
+        }
+    );
+
     for strategy in [
         RefreshStrategy::Online,
         RefreshStrategy::OnlineIfUncached,

@@ -28,6 +28,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
@@ -40,6 +41,11 @@ use tracing::info;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+
+// The embedded catalog cannot change during this process. Preserve the existing empty fallback
+// on parse failure, and share the parsed data until a caller needs an owned catalog to mutate.
+static BUNDLED_MODELS: LazyLock<Vec<ModelInfo>> =
+    LazyLock::new(|| load_remote_models_from_file().unwrap_or_default());
 
 /// Remote endpoint used by the OpenAI-compatible model manager.
 ///
@@ -352,9 +358,9 @@ enum CatalogSource {
 }
 
 impl CatalogSource {
-    fn fallback_models(&self) -> Option<Vec<ModelInfo>> {
+    fn fallback_models(&self) -> Option<&'static [ModelInfo]> {
         match self {
-            Self::Default => Some(load_remote_models_from_file().unwrap_or_default()),
+            Self::Default => Some(BUNDLED_MODELS.as_slice()),
             Self::ExplicitProvider(_) => None,
         }
     }
@@ -481,7 +487,7 @@ impl OpenAiModelsManager {
                 etag: None,
                 client_version: Some(crate::client_version_to_whole()),
                 identity: endpoint_client.identity(),
-                models: load_remote_models_from_file().unwrap_or_default(),
+                models: BUNDLED_MODELS.to_vec(),
             })),
             settings,
             endpoint_client,
@@ -730,7 +736,7 @@ impl OpenAiModelsManager {
         {
             SelectedCatalog::CurrentSnapshot(Cow::Borrowed(&entry.models))
         } else {
-            SelectedCatalog::Fallback(Cow::Owned(
+            SelectedCatalog::Fallback(Cow::Borrowed(
                 self.catalog_source.fallback_models().unwrap_or_default(),
             ))
         }
@@ -986,7 +992,8 @@ impl OpenAiModelsManager {
                         .auth_mode()
                         .is_some_and(AuthMode::has_chatgpt_account)
                 }));
-        if !remote_only && let Some(mut models) = self.catalog_source.fallback_models() {
+        if !remote_only && let Some(models) = self.catalog_source.fallback_models() {
+            let mut models = models.to_vec();
             for model in std::mem::take(&mut entry.models) {
                 if let Some(index) = models
                     .iter()
