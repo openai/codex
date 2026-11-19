@@ -276,7 +276,7 @@ impl AgentControl for TestAgentControl {
     fn record_usage(
         &self,
         _usage: Option<TokenUsage>,
-        _hook_charge: codex_core::HookCharge,
+        _hook_units: f64,
     ) -> BoxFuture<'_, CodexResult<()>> {
         Box::pin(async { Ok(()) })
     }

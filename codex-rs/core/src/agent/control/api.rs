@@ -290,9 +290,9 @@ impl AgentControl for LocalAgentControl {
     fn record_usage(
         &self,
         usage: Option<TokenUsage>,
-        hook_charge: codex_hooks::HookCharge,
+        hook_units: f64,
     ) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move { self.record_rollout_budget_usage(usage.as_ref(), hook_charge) })
+        Box::pin(async move { self.record_rollout_budget_usage(usage.as_ref(), hook_units) })
     }
 
     fn turn_finished<'a>(

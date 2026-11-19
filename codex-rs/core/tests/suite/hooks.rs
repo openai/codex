@@ -6217,7 +6217,7 @@ enum ToolDispatchCase {
 #[test_case::test_case(ToolDispatchCase::SyncHook; "streaming text and tools do not wait for synchronous pricing")]
 #[test_case::test_case(ToolDispatchCase::InterruptedHook; "interrupt discards the held response and its charge")]
 #[test_case::test_case(ToolDispatchCase::ExhaustedHook; "the response bill blocks its own tool")]
-#[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Host); "the host receives an overflow lower bound and keeps its policy")]
+#[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Host); "an overflowing hook charge never reaches the host")]
 #[test_case::test_case(ToolDispatchCase::OverflowHook(AgentRuntimeOwnership::Controller); "a native overflow closes even the largest allowance")]
 #[tokio::test]
 async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) -> Result<()> {
@@ -6520,19 +6520,7 @@ async fn model_request_post_hook_orders_tool_dispatch(case: ToolDispatchCase) ->
         );
         assert!(!marker.exists());
         if owner == AgentRuntimeOwnership::Host {
-            let reports = accounting.reports.lock().expect("usage reports");
-            let [bill] = reports.as_slice() else {
-                anyhow::bail!("expected one partial bill: {reports:?}");
-            };
-            assert_eq!(bill.additional_budget_units, 1e308);
-            assert!(bill.additional_budget_units_overflowed);
-            assert_eq!(
-                bill.usage
-                    .as_ref()
-                    .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
-                    .and_then(serde_json::Number::as_f64),
-                Some(1.0)
-            );
+            assert!(accounting.reports.lock().expect("usage reports").is_empty());
         }
         test.codex
             .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {

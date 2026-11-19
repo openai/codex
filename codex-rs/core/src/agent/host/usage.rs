@@ -15,8 +15,6 @@ pub struct AgentUsageReport {
     pub usage: Option<TokenUsage>,
     /// Synchronous post-hook contributions, independent of the provider's usage.
     pub additional_budget_units: f64,
-    /// If f64 summation overflowed, this is the largest individual hook price, not the total.
-    pub additional_budget_units_overflowed: bool,
 }
 
 /// Each decision means the host recorded the reported spending.

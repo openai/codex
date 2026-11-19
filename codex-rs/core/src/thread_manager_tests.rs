@@ -1985,7 +1985,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
                 output_tokens: 25,
                 ..Default::default()
             }),
-            codex_hooks::HookCharge::default(),
+            /*hook_units*/ 0.0,
         )
         .await
         .expect("record reviewer usage");

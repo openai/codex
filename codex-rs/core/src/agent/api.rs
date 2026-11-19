@@ -130,11 +130,8 @@ pub trait AgentControl: Send + Sync {
     /// Account for one inference response, including compaction. Each call records usage;
     /// callers report it once. `SessionBudgetExceeded` means the usage was recorded and
     /// the shared budget is now exhausted.
-    fn record_usage(
-        &self,
-        usage: Option<TokenUsage>,
-        hook_charge: codex_hooks::HookCharge,
-    ) -> BoxFuture<'_, Result<()>>;
+    fn record_usage(&self, usage: Option<TokenUsage>, hook_units: f64)
+    -> BoxFuture<'_, Result<()>>;
 
     /// Report the terminal result to the parent and completion activity to the task
     /// initiator. Local delivery remains best effort and uses the reporting runtime's

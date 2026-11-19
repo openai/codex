@@ -969,7 +969,6 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
                 ..Default::default()
             }),
             additional_budget_units: 0.0,
-            additional_budget_units_overflowed: false,
         }]
     );
     Ok(())

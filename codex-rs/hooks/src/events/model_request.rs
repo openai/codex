@@ -164,12 +164,17 @@ pub(crate) fn preview(
     .collect()
 }
 
-/// One response's successful hook prices. On overflow, units is a finite
-/// subtotal of real contributions, not the price of the entire response.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct HookCharge {
-    pub units: f64,
-    pub overflowed: bool,
+/// Sum of successful hook prices. An overflowing sum is rejected before posting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HookCharge {
+    Units(f64),
+    Overflow,
+}
+
+impl Default for HookCharge {
+    fn default() -> Self {
+        Self::Units(0.0)
+    }
 }
 
 /// A failed observer does not erase prices reported by successful siblings.
@@ -245,30 +250,23 @@ pub(crate) async fn run(
     )
     .await;
     let mut outcome = ModelRequestHookOutcome::default();
-    let mut reported_units = BudgetUnitsSum::default();
-    let mut largest_price = 0.0_f64;
+    let mut reported_units = Some(BudgetUnitsSum::default());
     let mut events = Vec::with_capacity(results.len());
     for result in results {
         if billable && let Some(price) = result.data {
             match price {
                 Ok(units) => {
-                    largest_price = largest_price.max(units);
-                    reported_units.add(units);
+                    reported_units = reported_units.and_then(|sum| sum.checked_add(units));
                 }
                 Err(error) => outcome.invalid_price = Some(error),
             }
         }
         events.push(result.completed);
     }
-    outcome.charge.units = reported_units.total();
-    if !outcome.charge.units.is_finite() {
-        // An individual price is a real lower bound, even if earlier f64 additions rounded up.
-        outcome.charge = HookCharge {
-            units: largest_price,
-            overflowed: true,
-        };
-        outcome.invalid_price = Some("total hook cost exceeds f64 range".into());
-    }
+    outcome.charge = match reported_units {
+        Some(sum) => HookCharge::Units(sum.total()),
+        None => HookCharge::Overflow,
+    };
     (events, outcome)
 }
 

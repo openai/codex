@@ -1469,10 +1469,7 @@ mod tests {
             ))),
             hook_output: crate::client_common::SamplingCharge {
                 hooks: codex_hooks::ModelRequestHookOutcome {
-                    charge: codex_hooks::HookCharge {
-                        units: 3.0,
-                        overflowed: false,
-                    },
+                    charge: codex_hooks::HookCharge::Units(3.0),
                     invalid_price: Some("negative sibling price".into()),
                 },
                 ..Default::default()
@@ -1520,7 +1517,6 @@ mod tests {
                 turn_id: turn_context.sub_id.clone(),
                 usage: Some(usage),
                 additional_budget_units: 3.0,
-                additional_budget_units_overflowed: false,
             }]
         );
     }
@@ -1560,10 +1556,7 @@ mod tests {
             }),
             hook_output: crate::client_common::SamplingCharge {
                 hooks: codex_hooks::ModelRequestHookOutcome {
-                    charge: codex_hooks::HookCharge {
-                        units: 42.0,
-                        overflowed: false,
-                    },
+                    charge: codex_hooks::HookCharge::Units(42.0),
                     invalid_price: bad_sibling.then(|| "negative sibling price".into()),
                 },
                 ..Default::default()
@@ -1601,7 +1594,6 @@ mod tests {
                 turn_id: turn.sub_id.clone(),
                 usage: provider_usage,
                 additional_budget_units: 42.0,
-                additional_budget_units_overflowed: false,
             }]
         );
     }

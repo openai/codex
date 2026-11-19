@@ -151,14 +151,27 @@ impl Session {
         usage: Option<&TokenUsage>,
         hook_charge: codex_hooks::HookCharge,
     ) -> CodexResult<()> {
-        if usage.is_none() && hook_charge == codex_hooks::HookCharge::default() {
+        let hook_units = match hook_charge {
+            codex_hooks::HookCharge::Units(units) => units,
+            codex_hooks::HookCharge::Overflow => {
+                if let Some(account) = self.native_rollout_budget()
+                    && account.config().is_some_and(|config| config.enforce_limit)
+                {
+                    account.stop_on_overflow();
+                }
+                return Err(CodexErr::UsageAccountingFailed(
+                    "responseChargeAmount: total hook cost exceeds f64 range".into(),
+                ));
+            }
+        };
+        if usage.is_none() && hook_units == 0.0 {
             return Ok(());
         }
         let stop_new_work = match &self.agent_runtime {
             AgentRuntimeServices::Controller => match self
                 .services
                 .agent_control
-                .record_usage(usage.cloned(), hook_charge)
+                .record_usage(usage.cloned(), hook_units)
                 .await
             {
                 Ok(()) => false,
@@ -180,8 +193,7 @@ impl Session {
                         thread_id: self.thread_id(),
                         turn_id: turn_id.to_owned(),
                         usage: usage.cloned(),
-                        additional_budget_units: hook_charge.units,
-                        additional_budget_units_overflowed: hook_charge.overflowed,
+                        additional_budget_units: hook_units,
                     })
                     .await
                     .map_err(|error| {
