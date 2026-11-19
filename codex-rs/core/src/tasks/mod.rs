@@ -456,6 +456,7 @@ impl Session {
         let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
         let task_future = async move {
             let ctx_for_finish = Arc::clone(&ctx);
+            let mut _tool_result_capture = None;
             let mut task_result = async {
                 let input = match host_admission {
                     Some(provider) => admission::admit(
@@ -467,6 +468,9 @@ impl Session {
                     ).await?,
                     None => task_input,
                 };
+                if task_kind == TaskKind::Regular {
+                    _tool_result_capture = session.services.executed_tool_calls.begin_turn(&ctx);
+                }
                 task_for_run
                     .run(
                         Arc::clone(&session),

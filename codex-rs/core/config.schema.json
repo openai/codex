@@ -976,6 +976,9 @@
             "concurrent_reasoning_summaries": {
               "type": "boolean"
             },
+            "connector_tool_result_passthrough": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -8339,6 +8342,9 @@
           "type": "boolean"
         },
         "concurrent_reasoning_summaries": {
+          "type": "boolean"
+        },
+        "connector_tool_result_passthrough": {
           "type": "boolean"
         },
         "connectors": {

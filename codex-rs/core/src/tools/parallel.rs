@@ -39,7 +39,6 @@ use codex_extension_api::ToolCallOutcome;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ToolResultMetadata;
 
 struct ToolCallTimingGuard {
     started_at: Option<Instant>,
@@ -176,10 +175,8 @@ impl ToolCallRuntime {
                 recorded_call.filter(|(_, recording)| recording.strong_count() > 0);
             let mut response = match result {
                 Ok(result) => {
-                    if let Some((call, _)) = recorded_call.as_mut()
-                        && let Some(metadata) = result.result.tool_result_metadata()
-                    {
-                        call.set_tool_result_metadata(ToolResultMetadata::new(metadata));
+                    if let Some((call, _)) = recorded_call.as_mut() {
+                        call.set_tool_result_metadata(result.result.tool_result_metadata());
                     }
                     result.into_response(file_backed_tool_audio)
                 }

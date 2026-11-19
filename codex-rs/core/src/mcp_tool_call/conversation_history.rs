@@ -175,6 +175,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                     result,
                     tool_input: arguments,
                     result_metadata_capture_allowed: false,
+                    result_capture: Default::default(),
                     wall_time: started.elapsed(),
                     original_image_detail_supported: false,
                     truncation_policy,

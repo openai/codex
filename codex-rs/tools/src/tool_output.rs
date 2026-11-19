@@ -4,6 +4,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ToolResultMetadata;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
@@ -79,9 +80,9 @@ pub trait ToolOutput: Send {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
 
-    /// Borrows original host-only metadata for recording, not for model output or logging.
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
-        None
+    /// Returns the host-observed result fields for executed-tool passthrough.
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
+        ToolResultMetadata::default()
     }
 }
 
@@ -141,7 +142,7 @@ where
         (**self).code_mode_result(payload)
     }
 
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
         (**self).tool_result_metadata()
     }
 }

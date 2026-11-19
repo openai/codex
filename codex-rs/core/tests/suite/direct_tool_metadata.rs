@@ -14,6 +14,8 @@ use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::apps_test_server::search_capable_apps_builder;
 use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::runtime_auth::PROBE_SERVER;
+use core_test_support::runtime_auth::run_harness_through_proxy;
 use core_test_support::wait_for_mcp_server;
 use wiremock::Mock;
 use wiremock::Request;
@@ -52,6 +54,190 @@ pub(super) fn tool_call_metadata(mut item: Value) -> Value {
     fields.remove("turn_id");
     fields.remove("create_time");
     metadata
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_direct_connector_result_is_sent_only_on_its_originating_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    if std::env::var_os(PROBE_SERVER).is_some() {
+        let mut builder =
+            search_capable_apps_builder(codex_model_provider::DEFAULT_CHATGPT_BASE_URL)
+                .with_config(|config| {
+                    config.model_provider.base_url =
+                        Some(codex_model_provider_info::CHATGPT_CODEX_BASE_URL.to_owned());
+                    config.model_provider.include_internal_metadata = true;
+                    config.analytics_enabled = Some(true);
+                    config
+                        .features
+                        .enable(Feature::ConnectorToolResultPassthrough)
+                        .unwrap();
+                    for feature in [
+                        Feature::ExecutedToolCallMetadata,
+                        Feature::CodeMode,
+                        Feature::CodeModeOnly,
+                    ] {
+                        config.features.disable(feature).unwrap();
+                    }
+                });
+        let fixture = start_mock_server().await;
+        let test = builder.build(&fixture).await?;
+        assert!(test.codex.analytics_enabled());
+        wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+        test.submit_turn("List events in [$calendar](app://calendar)")
+            .await?;
+        test.submit_turn("Continue").await?;
+        test.codex.shutdown_and_wait().await?;
+        return Ok(());
+    }
+
+    let server = start_mock_server().await;
+    AppsTestServer::mount(&server).await?;
+    let call = ev_function_call_with_namespace(
+        "list-events",
+        SEARCH_CALENDAR_NAMESPACE,
+        SEARCH_CALENDAR_LIST_TOOL,
+        r#"{"query":"today"}"#,
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![call, ev_completed("first")]),
+            sse(vec![ev_completed("followup")]),
+            sse(vec![ev_completed("next")]),
+        ],
+    )
+    .await;
+    const TEST_NAME: &str = "suite::direct_tool_metadata::local_direct_connector_result_is_sent_only_on_its_originating_turn";
+    run_harness_through_proxy(&server, TEST_NAME, /*realtime_target*/ None).await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let rpcs = recorded_apps_tool_calls(&server).await;
+    assert_eq!(rpcs.len(), 1);
+    let output = requests[1].function_call_output("list-events");
+    let row = "/internal_chat_message_metadata_passthrough/executed_tool_calls/0/tool_result";
+    assert_eq!(
+        output.pointer(row),
+        Some(&json!({
+            "content": [{"type": "text", "text": "called calendar_list_events for  at  with "}],
+            "structuredContent": {"_codex_apps": rpcs[0]["params"]["_meta"]["_codex_apps"]},
+        }))
+    );
+    let replay = requests[2].function_call_output("list-events");
+    assert_eq!(replay["output"], output["output"]);
+    assert!(replay.pointer(row).is_none());
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[test_case(false; "http")]
+#[test_case(true; "websocket")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connector_capture_does_not_publish_shell_metadata(websocket: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::CodeMode)
+            .expect("disable code mode");
+        config
+            .features
+            .disable(Feature::CodeModeOnly)
+            .expect("disable code-mode-only tools");
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("enable unified exec");
+        config
+            .features
+            .disable(Feature::ExecutedToolCallMetadata)
+            .expect("disable tool-call metadata");
+        config
+            .features
+            .enable(Feature::ConnectorToolResultPassthrough)
+            .expect("enable connector result passthrough");
+    });
+    let call = |id| {
+        let mut call = ev_function_call(
+            id,
+            "exec_command",
+            r#"{"cmd":"echo connector-capture-shell-marker"}"#,
+        );
+        call["item"]["id"] = json!(format!("fc_{id}"));
+        call
+    };
+    let events = vec![
+        vec![
+            ev_response_created("shell"),
+            call("shell-only"),
+            ev_completed("shell"),
+        ],
+        vec![
+            ev_response_created("second-shell"),
+            call("second-shell"),
+            ev_completed("second-shell"),
+        ],
+        vec![ev_response_created("done"), ev_completed("done")],
+    ];
+    let http_server = if websocket {
+        None
+    } else {
+        Some(start_mock_server().await)
+    };
+    let http_mock = if let Some(server) = &http_server {
+        Some(mount_sse_sequence(server, events.iter().cloned().map(sse).collect()).await)
+    } else {
+        None
+    };
+    let websocket_server = if websocket {
+        let mut responses = vec![vec![ev_response_created("warmup"), ev_completed("warmup")]];
+        responses.extend(events);
+        Some(start_websocket_server(vec![responses]).await)
+    } else {
+        None
+    };
+    let test = if let Some(server) = &websocket_server {
+        builder.build_with_websocket_server(server).await?
+    } else {
+        builder
+            .build_with_auto_env(http_server.as_ref().expect("HTTP test server"))
+            .await?
+    };
+    test.submit_turn("Run the shell command").await?;
+    let request = if let Some(server) = &websocket_server {
+        let connection = server.single_connection();
+        assert_eq!(connection.len(), 4);
+        assert_eq!(connection[2].body_json()["previous_response_id"], "shell");
+        let request = connection[3].body_json();
+        assert_eq!(request["previous_response_id"], "second-shell");
+        request
+    } else {
+        let requests = http_mock
+            .as_ref()
+            .expect("HTTP response sequence")
+            .requests();
+        assert_eq!(requests.len(), 3);
+        requests[2].body_json()
+    };
+    let outputs = request["input"]
+        .as_array()
+        .expect("follow-up input")
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), if websocket { 1 } else { 2 });
+    for output in outputs {
+        assert!(
+            output["output"]
+                .to_string()
+                .contains("connector-capture-shell-marker")
+        );
+        assert_eq!(tool_call_metadata(output.clone()), json!({}));
+    }
+    test.codex.shutdown_and_wait().await?;
+    if let Some(server) = websocket_server {
+        server.shutdown().await;
+    }
+    Ok(())
 }
 
 #[test_case(false; "http")]

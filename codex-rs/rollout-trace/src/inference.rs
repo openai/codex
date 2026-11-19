@@ -166,9 +166,14 @@ impl InferenceTraceAttempt {
         }
     }
 
+    /// Whether this attempt records inference payloads.
+    pub fn is_enabled(&self) -> bool {
+        matches!(&self.state, InferenceTraceAttemptState::Enabled(_))
+    }
+
     /// Whether terminal trace records need the completed output items.
     pub fn needs_output_items(&self) -> bool {
-        matches!(&self.state, InferenceTraceAttemptState::Enabled(_))
+        self.is_enabled()
     }
 
     fn inference_call_id(&self) -> Option<&str> {

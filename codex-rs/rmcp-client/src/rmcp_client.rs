@@ -464,6 +464,34 @@ impl RmcpClient {
         self.protocol_mode
     }
 
+    /// Matches the registered HTTP route and header configuration after dispatch.
+    /// A client that selected stored OAuth during session recovery no longer qualifies.
+    pub fn matches_result_body_source(
+        &self,
+        require_runtime_auth: bool,
+        expected_url: &str,
+        expected_headers: Option<&HashMap<String, String>>,
+        expected_env_headers: Option<&HashMap<String, String>>,
+    ) -> bool {
+        let TransportRecipe::StreamableHttp {
+            url,
+            auth_provider,
+            bearer_token: None,
+            http_headers,
+            env_http_headers,
+            pinned_credential_store,
+            ..
+        } = &self.transport_recipe
+        else {
+            return false;
+        };
+        (!require_runtime_auth || auth_provider.is_some())
+            && pinned_credential_store.get().is_none()
+            && url == expected_url
+            && http_headers.as_ref() == expected_headers
+            && env_http_headers.as_ref() == expected_env_headers
+    }
+
     pub async fn new_in_process_client(
         factory: Arc<dyn InProcessTransportFactory>,
     ) -> io::Result<Self> {

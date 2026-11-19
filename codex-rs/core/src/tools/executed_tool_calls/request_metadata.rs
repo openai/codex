@@ -1,6 +1,7 @@
 //! Attaches host observations to request metadata without changing tool execution.
 
 use super::*;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RequestKind {
@@ -9,6 +10,100 @@ enum RequestKind {
 }
 
 impl ExecutedToolCalls {
+    /// Projects only the wire metadata; retained calls keep their original indexes for late results.
+    /// Restore full WebSocket inputs before saving them as the continuation baseline.
+    pub(crate) fn scope_request_metadata(
+        &self,
+        items: &mut [ResponseItem],
+    ) -> Vec<(usize, InternalChatMessageMetadataPassthrough)> {
+        self.scope_request_metadata_with(|| items)
+    }
+
+    /// Only request mutable input when a connector-only projection is needed.
+    pub(crate) fn scope_request_metadata_with<'a>(
+        &self,
+        items: impl FnOnce() -> &'a mut [ResponseItem],
+    ) -> Vec<(usize, InternalChatMessageMetadataPassthrough)> {
+        if !self.captures_result_bodies
+            || self
+                .lock_state()
+                .as_ref()
+                .is_some_and(|state| state.include_general_metadata)
+        {
+            return Vec::new();
+        }
+        let mut originals = Vec::new();
+        for (index, item) in items().iter_mut().enumerate() {
+            let (ResponseItem::FunctionCallOutput {
+                internal_chat_message_metadata_passthrough: Some(metadata),
+                ..
+            }
+            | ResponseItem::CustomToolCallOutput {
+                internal_chat_message_metadata_passthrough: Some(metadata),
+                ..
+            }
+            | ResponseItem::ToolSearchOutput {
+                internal_chat_message_metadata_passthrough: Some(metadata),
+                ..
+            }) = item
+            else {
+                continue;
+            };
+            if metadata.executed_tool_calls.is_none()
+                && metadata.cell_id.is_none()
+                && metadata.tool_calls_complete.is_none()
+            {
+                continue;
+            }
+            if metadata.tool_calls_complete.is_none()
+                && metadata.executed_tool_calls.as_ref().is_some_and(|calls| {
+                    !calls.is_empty() && calls.iter().all(|call| call.tool_result_id().is_some())
+                })
+            {
+                continue;
+            }
+            originals.push((index, metadata.clone()));
+            if let Some(calls) = metadata.executed_tool_calls.as_mut() {
+                calls.retain(|call| call.tool_result_id().is_some());
+            }
+            // Earlier outputs from this cell can have omitted unrelated calls, including on a
+            // previous frame. A connector-only subset cannot claim a complete cell inventory.
+            metadata.tool_calls_complete = None;
+            if metadata
+                .executed_tool_calls
+                .as_ref()
+                .is_none_or(Vec::is_empty)
+            {
+                metadata.executed_tool_calls = None;
+                metadata.cell_id = None;
+            }
+        }
+        originals
+    }
+
+    pub(crate) fn restore_request_metadata(
+        items: &mut [ResponseItem],
+        originals: Vec<(usize, InternalChatMessageMetadataPassthrough)>,
+    ) {
+        for (index, original) in originals {
+            if let ResponseItem::FunctionCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | ResponseItem::CustomToolCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | ResponseItem::ToolSearchOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            } = &mut items[index]
+            {
+                *metadata = Some(original);
+            }
+        }
+    }
+
     pub(crate) fn attach_to_compaction_prompt(&self, items: &mut [ResponseItem]) {
         self.attach_to_request(items, &mut HashMap::new(), RequestKind::Compaction);
     }
@@ -36,8 +131,22 @@ impl ExecutedToolCalls {
             };
             for item in items.iter_mut() {
                 if let Some(call) = item.id().and_then(|id| state.direct_calls.get(id)) {
+                    let keep_result_id = call.tool_result_id().is_none_or(|id| {
+                        item.executed_tool_call_metadata().is_some_and(|metadata| {
+                            metadata.cell_id.is_none()
+                                && matches!(
+                                    metadata.executed_tool_calls.as_deref(),
+                                    Some([original]) if original.tool_result_id() == Some(id)
+                                )
+                        })
+                    });
+                    // Release the old arguments and metadata before cloning the cached row.
                     item.clear_executed_tool_calls();
-                    item.append_executed_tool_calls(vec![call.clone()]);
+                    let mut observation = call.clone();
+                    if !keep_result_id {
+                        observation.clear_tool_result_id();
+                    }
+                    item.append_executed_tool_calls(vec![observation]);
                     if call.has_complete_inventory() {
                         item.mark_tool_calls_complete();
                     }
@@ -50,7 +159,12 @@ impl ExecutedToolCalls {
                     .iter()
                     .filter_map(ResponseItem::id)
                     .collect::<HashSet<_>>();
-                state.direct_calls.retain(|id, _| output_ids.contains(id));
+                for (_, call) in state
+                    .direct_calls
+                    .extract_if(|id, _| !output_ids.contains(id))
+                {
+                    ResultBodyTurn::discard(&state.body_turn, call.tool_result_id());
+                }
             }
             Self::attach_pending_to_prompt_with_state(state, items, retry_cache, request_kind);
         }

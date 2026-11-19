@@ -15,7 +15,9 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::AppToolApproval;
+use codex_config::McpServerAuth;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -355,6 +357,39 @@ impl PreparedMcpCall {
             })
     }
 
+    /// Whether this completed Apps call can supply its result body to the session.
+    pub fn permits_result_body(&self, session_auth: AuthMode) -> bool {
+        let Some(server) = self.config.mcp_server_catalog.server(self.server_key()) else {
+            return false;
+        };
+        let config = server.config();
+        let codex_config::McpServerTransportConfig::StreamableHttp {
+            url,
+            http_headers,
+            env_http_headers,
+            bearer_token_env_var: None,
+            http_headers_helper: None,
+        } = &config.transport
+        else {
+            return false;
+        };
+        matches!(
+            session_auth,
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens
+        ) && config.auth == McpServerAuth::ChatGpt
+            && http_headers
+                .iter()
+                .flat_map(HashMap::keys)
+                .chain(env_http_headers.iter().flat_map(HashMap::keys))
+                .all(|name| is_apps_attribution_header(name))
+            && self.client.client.matches_result_body_source(
+                /*require_runtime_auth*/ true,
+                url,
+                http_headers.as_ref(),
+                env_http_headers.as_ref(),
+            )
+    }
+
     pub fn server_origin(&self) -> Option<&str> {
         self.server_metadata
             .origin
@@ -512,6 +547,10 @@ impl PreparedMcpCall {
             ))?
             .map(call_tool_result_from_rmcp)
     }
+}
+
+fn is_apps_attribution_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("x-openai-product-sku") || name.eq_ignore_ascii_case("originator")
 }
 
 pub(crate) fn call_tool_result_from_rmcp(result: rmcp::model::CallToolResult) -> CallToolResult {

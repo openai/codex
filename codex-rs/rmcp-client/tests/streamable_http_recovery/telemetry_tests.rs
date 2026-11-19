@@ -106,6 +106,13 @@ async fn recovery_retains_originator_without_initial_credentials() -> anyhow::Re
             call_echo_tool(&client, "recovered").await?,
             expected_echo_result("recovered")
         );
+        assert_eq!(
+            client.matches_result_body_source(
+                /*require_runtime_auth*/ false, &url, /*expected_headers*/ None,
+                /*expected_env_headers*/ None,
+            ),
+            recovery == 0
+        );
     }
 
     let snapshot = metrics.snapshot()?;

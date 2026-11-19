@@ -300,6 +300,8 @@ impl McpHandler {
             .map(TruncationPolicy::Tokens)
             .unwrap_or(step_context.settings.model_info.truncation_policy.into());
         let started = Instant::now();
+        let recorder = &session.services.executed_tool_calls;
+        let mut result_capture = None;
         // Bound the compiler's async-layout query depth for approval and dispatch.
         let result = Box::pin(handle_mcp_tool_call(
             Arc::clone(&session),
@@ -313,6 +315,13 @@ impl McpHandler {
             tool_name,
             &source,
             payload,
+            |call, raw| {
+                if result_metadata_capture_allowed
+                    && !matches!(source, ToolCallSource::CodeMode { .. })
+                {
+                    result_capture = recorder.capture_mcp_result(&step_context.turn, call, raw);
+                }
+            },
         ))
         .await;
 
@@ -327,6 +336,7 @@ impl McpHandler {
             result,
             tool_input,
             result_metadata_capture_allowed,
+            result_capture,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(
                 &step_context.settings.model_info,
@@ -833,6 +843,7 @@ mod tests {
                 }
             }),
             result_metadata_capture_allowed: false,
+            result_capture: Default::default(),
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),

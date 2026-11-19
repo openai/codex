@@ -11,6 +11,15 @@ use serde_json::json;
 use super::*;
 
 impl ExecutedToolCalls {
+    fn record_tool_result_metadata(
+        &self,
+        source: &ToolCallSource,
+        call_id: &str,
+        metadata: &JsonValue,
+    ) -> bool {
+        self.record_result_metadata(source, call_id, ToolResultMetadata::new(metadata))
+    }
+
     fn attach_pending_to_prompt(
         &self,
         items: &mut [ResponseItem],
@@ -489,13 +498,13 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
             panic!("recording must not rebuild the tool result")
         }
 
-        fn tool_result_metadata(&self) -> Option<&JsonValue> {
+        fn tool_result_metadata(&self) -> ToolResultMetadata {
             assert!(
                 self.2.state.try_lock().is_ok(),
                 "result callbacks must run unlocked"
             );
             self.0.set(self.0.get() + 1);
-            Some(&self.1)
+            ToolResultMetadata::new(&self.1)
         }
     }
 

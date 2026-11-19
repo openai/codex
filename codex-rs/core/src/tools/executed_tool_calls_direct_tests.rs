@@ -1,6 +1,11 @@
 //! Tests Direct metadata admission and permit lifetimes.
 //! Metadata limits must leave ordinary tool outputs unchanged.
 
+use codex_login::AuthHeaders;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -8,12 +13,44 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::*;
+use crate::session::turn_context::TurnContext;
+use codex_login::AuthManager;
 
 fn output(call_id: &str) -> ResponseItem {
     ResponseItem::from(ResponseInputItem::FunctionCallOutput {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload::from_text("tool result".to_string()),
     })
+}
+
+#[test]
+fn capture_only_does_not_publish_general_direct_metadata_after_refresh() {
+    let mut features = Features::default();
+    features.enable(Feature::ConnectorToolResultPassthrough);
+    let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+    for enabled in [false, true, false] {
+        let permit = recorder.reserve_direct_call().unwrap();
+        features.set_enabled(Feature::ExecutedToolCallMetadata, enabled);
+        recorder.refresh(&features);
+        let mut item = output("shell");
+        let original = item.clone();
+        let call = ExecutedToolCall::new("exec_command".into(), json!({"cmd": "pwd"}));
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((call.clone(), permit)),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        );
+        if enabled {
+            assert_eq!(
+                item.executed_tool_call_metadata()
+                    .and_then(|metadata| metadata.executed_tool_calls.as_ref()),
+                Some(&vec![call]),
+            );
+        } else {
+            assert_eq!(item, original);
+        }
+        assert_eq!(recorder.pending_direct_calls.load(Ordering::Relaxed), 0);
+    }
 }
 
 #[test]
@@ -68,6 +105,168 @@ fn direct_request_uses_live_window_after_persisted_budget_is_exhausted() {
     let mut after_refresh = vec![current];
     recorder.attach_to_prompt(&mut after_refresh, &mut HashMap::new());
     assert!(after_refresh[0].executed_tool_call_metadata().is_none());
+}
+
+pub(super) async fn connector_result_turn() -> TurnContext {
+    let (_, mut turn) = crate::session::tests::make_session_and_context().await;
+    let manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    turn.provider = codex_model_provider::create_model_provider(
+        codex_model_provider_info::ModelProviderInfo::create_openai_provider(
+            /*base_url*/ None,
+        ),
+        Some(Arc::clone(&manager)),
+    );
+    turn.auth_manager = Some(manager);
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ConnectorToolResultPassthrough)
+        .unwrap();
+    turn
+}
+
+#[test_case::test_case(1, 600 * 1024; "byte limit")]
+#[test_case::test_case(MAX_PENDING_EXECUTED_TOOL_CALLS, 1; "count limit")]
+#[tokio::test]
+async fn direct_result_bodies_require_the_originating_output_turn_and_owner(
+    capacity: usize,
+    text_bytes: usize,
+) -> anyhow::Result<()> {
+    struct SelectedAuth(CodexAuth);
+
+    impl ExternalAuth for SelectedAuth {
+        fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+            Box::pin(async { Ok(self.0.clone()) })
+        }
+
+        fn refresh(
+            &self,
+            _context: ExternalAuthRefreshContext,
+        ) -> ExternalAuthFuture<'_, CodexAuth> {
+            self.resolve()
+        }
+    }
+
+    let hosted = |token| {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("authorization", http::HeaderValue::from_static(token));
+        headers.insert("chatgpt-account-id", "workspace-a".parse().unwrap());
+        CodexAuth::Headers(AuthHeaders::new(headers))
+    };
+    let mut turn = connector_result_turn().await;
+    // Overflow keeps ordinary metadata under its separate rollout.
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .unwrap();
+    let recorder = ExecutedToolCalls::new(&turn.config.features, &InitialHistory::New);
+    let manager = Arc::clone(turn.auth_manager.as_ref().unwrap());
+    let provider = turn.provider.info().clone();
+    for config in [
+        json!({"auth": {"command": "get-token"}}),
+        json!({"requires_openai_auth": true, "base_url": "https://example.com/backend-api/codex"}),
+        json!({"requires_openai_auth": true, "http_headers": {"aUtHoRiZaTiOn": "independent"}}),
+        json!({"requires_openai_auth": true, "env_http_headers": {"Authorization": "TEST_MODEL_TOKEN"}}),
+        json!({"requires_openai_auth": true, "query_params": {"api-key": "alternate"}}),
+    ] {
+        turn.provider = codex_model_provider::create_model_provider(
+            serde_json::from_value(config)?,
+            Some(Arc::clone(&manager)),
+        );
+        assert!(recorder.begin_turn(&turn).is_none());
+    }
+    turn.provider =
+        codex_model_provider::create_model_provider(provider, Some(Arc::clone(&manager)));
+    let capture = recorder.begin_turn(&turn).unwrap();
+    let generation = manager
+        .auth_change_state_receiver()
+        .borrow()
+        .owner_generation;
+    let owner = manager.auth_owner();
+    let bodies = |items: &[ResponseItem]| capture.for_input(items, &owner);
+
+    let body = json!({"content": [{"type": "text", "text": "x".repeat(text_bytes)}]});
+    let result = serde_json::from_value(body.clone())?;
+    let metadata = json!({"provider": "observed"});
+    let attach = |id: &str| {
+        let mut call = ExecutedToolCall::new("read".into(), json!({"id": id}));
+        call.set_tool_result_metadata(
+            ToolResultMetadata::new(&metadata).with_result_id(capture.record(&result)),
+        );
+        let mut item = output(id);
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((call, recorder.reserve_direct_call().unwrap())),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        );
+        item
+    };
+    let mut history: Vec<_> = (0..=capacity).map(|i| attach(&i.to_string())).collect();
+    assert_eq!(
+        recorder.lock_state().as_ref().unwrap().direct_calls.len(),
+        history.len().min(MAX_PENDING_EXECUTED_TOOL_CALLS)
+    );
+    recorder.attach_to_prompt(&mut history, &mut HashMap::new());
+    let selected = bodies(&history[..capacity]);
+    assert_eq!(selected.len(), capacity);
+    assert_eq!(
+        serde_json::from_str::<JsonValue>(selected[0].2.as_json())?,
+        body
+    );
+    assert!(bodies(&history[capacity..]).is_empty());
+    let overflow = serde_json::to_value(&history[capacity])?;
+    assert_eq!(overflow["output"], "tool result");
+    assert_eq!(
+        overflow["internal_chat_message_metadata_passthrough"]["executed_tool_calls"],
+        json!([{
+            "name": "read",
+            "arguments": {"id": capacity.to_string()},
+            "tool_result_metadata": metadata,
+        }])
+    );
+
+    recorder.attach_to_prompt(&mut history[1..], &mut HashMap::new());
+    let history = [
+        history[0].clone(),
+        attach("replacement"),
+        attach("over-cap"),
+    ];
+    assert!(matches!(bodies(&history).as_slice(), [(1, 0, _)]));
+    let mut foreign = [output("replacement")];
+    foreign[0].set_id(history[1].id().cloned());
+    recorder.attach_to_prompt(&mut foreign, &mut HashMap::new());
+    assert!(bodies(&foreign).is_empty());
+    assert!(matches!(bodies(&history).as_slice(), [(1, 0, _)]));
+
+    let other_manager = AuthManager::from_auth_for_testing(manager.auth_cached().unwrap());
+    assert_eq!(
+        other_manager
+            .auth_change_state_receiver()
+            .borrow()
+            .owner_generation,
+        generation
+    );
+    assert!(
+        capture
+            .for_input(&history, &other_manager.auth_owner())
+            .is_empty()
+    );
+    // Switching away and back invalidates the request's original owner generation.
+    for auth in [hosted("Bearer rotated"), manager.auth_cached().unwrap()] {
+        manager
+            .set_external_auth(Arc::new(SelectedAuth(auth)))
+            .await?;
+    }
+    assert!(bodies(&history).is_empty());
+    let finished = Arc::downgrade(&capture);
+    drop(capture);
+    assert!(finished.upgrade().is_none());
+
+    // The next turn starts with an empty result store.
+    turn.sub_id = "next".into();
+    let next = recorder.begin_turn(&turn).unwrap();
+    assert!(next.for_input(&history, &manager.auth_owner()).is_empty());
+    Ok(())
 }
 
 #[test]

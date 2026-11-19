@@ -20,6 +20,8 @@ use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
+use codex_login::AuthHeaders;
+use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
@@ -369,12 +371,19 @@ async fn mcp_result_processing_precedes_completion(
 
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    let server_result: CallToolResult = serde_json::from_value(json!({
+    let mut server_result: CallToolResult = serde_json::from_value(json!({
         "content": [{"type": "text", "text": "server result"}],
         "structuredContent": {"text": "server result"},
         "isError": false,
         "_meta": {"private-mcp-metadata": "server"},
     }))?;
+    let unsupported_audio = matches!(processing, McpResultProcessing::Unchanged);
+    if unsupported_audio {
+        server_result.structured_content = None;
+        server_result
+            .content
+            .push(json!({"type": "audio", "data": "YQ==", "mimeType": "audio/wav"}));
+    }
     let response_result = server_result.clone();
     Mock::given(body_partial_json(json!({"method": "tools/call"})))
         .respond_with(move |request: &Request| {
@@ -400,7 +409,12 @@ async fn mcp_result_processing_precedes_completion(
             }))?)
         }
     };
-    let expected_result = replacement.clone().unwrap_or_else(|| server_result.clone());
+    let mut expected_result = replacement.clone().unwrap_or_else(|| server_result.clone());
+    if unsupported_audio {
+        expected_result.content[1] = json!({
+            "type": "text", "text": "<audio content omitted because you do not support audio input>",
+        });
+    }
     let (entered_tx, entered_rx) = oneshot::channel();
     let contributor = Arc::new(BlockingMcpResultContributor {
         entered: Mutex::new(Some(entered_tx)),
@@ -409,11 +423,27 @@ async fn mcp_result_processing_precedes_completion(
     });
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.tool_lifecycle_contributor(contributor.clone());
+    let mut headers = http::HeaderMap::new();
+    headers.insert("authorization", "Bearer session-token".parse()?);
+    headers.insert("chatgpt-account-id", "account_id".parse()?);
     let test = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .with_auth(CodexAuth::Headers(AuthHeaders::new(headers)))
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
             if matches!(mode, McpCallMode::CodeMode) {
                 let _ = config.features.enable(Feature::CodeMode);
+            } else {
+                config.model_provider.include_internal_metadata = true;
+                config.model_provider.requires_openai_auth = true;
+                let passthrough = Feature::ConnectorToolResultPassthrough;
+                config
+                    .features
+                    .enable(passthrough)
+                    .expect("enable connector result passthrough");
+                config
+                    .features
+                    .enable(Feature::ExecutedToolCallMetadata)
+                    .expect("enable tool-call metadata");
             }
         })
         .build_with_auto_env(&server)
@@ -491,10 +521,21 @@ async fn mcp_result_processing_precedes_completion(
         McpCallMode::Direct => request.function_call_output(call_id),
         McpCallMode::CodeMode => request.custom_tool_call_output(call_id),
     };
+    if matches!(mode, McpCallMode::Direct) {
+        let call = &output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0];
+        assert!(
+            call.get("tool_result").is_none(),
+            "custom Responses destination"
+        );
+        assert_eq!(call["tool_result_metadata"], json!(expected_result.meta));
+    }
     let output = output["output"].to_string();
     assert!(
         output.contains(
-            expected_result.content[0]["text"]
+            expected_result
+                .content
+                .last()
+                .context("fixture should contain content")?["text"]
                 .as_str()
                 .expect("fixture should contain text")
         )
