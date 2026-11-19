@@ -20,9 +20,13 @@ fn pending_action_replays_the_encrypted_call_with_its_evidence_output() {
         reason: None,
         tool_descriptions: None,
     };
-    let messages = ComposedContext::for_pending_action(action, /*permissions*/ None)
-        .unwrap()
-        .into_messages();
+    let messages = ComposedContext::for_pending_action(
+        action,
+        /*permissions*/ None,
+        crate::ContextBudgeting::Fixed,
+    )
+    .unwrap()
+    .into_messages();
     let [ResponseItem::Message { .. }, replay, output] = messages.as_slice() else {
         panic!("expected the review instruction, exact call, and evidence-only output");
     };
@@ -31,6 +35,65 @@ fn pending_action_replays_the_encrypted_call_with_its_evidence_output() {
         Some(output.clone()),
         crate::native_tool_call::evidence_output(&call)
     );
+}
+
+#[test]
+fn elastic_pending_action_defers_the_exact_call_to_final_admission() {
+    let fixed_limit_bytes = TruncationPolicy::Tokens(MAX_TEXT_PART_ESTIMATED_TOKENS).byte_budget();
+    let arguments = serde_json::json!({ "content": "x".repeat(fixed_limit_bytes) });
+    let call: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "function_call",
+        "name": "write_record",
+        "call_id": "write-1",
+        "arguments": arguments.to_string(),
+    }))
+    .unwrap();
+    let action = crate::PlannedAction {
+        kind: crate::PlannedActionKind::ToolCall(Box::new(call.clone())),
+        reason: None,
+        tool_descriptions: None,
+    };
+    assert!(matches!(
+        ComposedContext::for_pending_action(
+            action.clone(),
+            /*permissions*/ None,
+            crate::ContextBudgeting::Fixed
+        ),
+        Err(SectionError::EvidenceLimitExceeded {
+            section: "native_tool_call"
+        })
+    ));
+
+    let context = ComposedContext::for_pending_action(
+        action,
+        /*permissions*/ None,
+        crate::ContextBudgeting::Elastic,
+    )
+    .unwrap();
+    let config =
+        crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig::default());
+    let prepared = context.prepare_elastic_entries(&config).unwrap();
+    let budget = |max_input_tokens| crate::RequestBudget {
+        max_input_tokens,
+        existing_context_tokens: 0,
+    };
+    assert!(
+        prepared
+            .clone()
+            .enforce_budget(
+                budget(MAX_TEXT_PART_ESTIMATED_TOKENS),
+                "Evidence omitted.".into()
+            )
+            .is_err()
+    );
+    let messages = prepared
+        .enforce_budget(
+            budget(crate::DEFAULT_MAX_INPUT_TOKENS),
+            "Evidence omitted.".into(),
+        )
+        .unwrap()
+        .into_messages();
+    assert!(messages.contains(&call));
 }
 
 #[test]

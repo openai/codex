@@ -128,8 +128,12 @@ impl AttachedApproval {
                 Some(&approval.context),
             )
             .map_err(GuardianReviewSessionOutcome::PromptBuildFailed)?;
-            let action_context = ComposedContext::for_pending_action(action, permissions.as_ref())
-                .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?;
+            let action_context = ComposedContext::for_pending_action(
+                action,
+                permissions.as_ref(),
+                config.spawn_config.guardian_context_budgeting(),
+            )
+            .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?;
             let request = review_turn(
                 parent,
                 &approval.context,
@@ -146,7 +150,7 @@ impl AttachedApproval {
                 request,
                 evidence: PendingReviewContext {
                     context: action_context,
-                    elastic: None,
+                    elastic: config.spawn_config.guardian_sync_elastic_budget.clone(),
                 },
                 node_repl_evidence_sequence: None,
             };

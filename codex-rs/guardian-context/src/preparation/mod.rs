@@ -121,11 +121,6 @@ fn prepare_context_with_async_caps(
         ContextPresentation::Async | ContextPresentation::AsyncDelta => {
             (crate::ContextTarget::Async, None)
         }
-        ContextPresentation::SyncAction => {
-            return Err(SectionError::UnsupportedDelivery {
-                section: "sync_preparation",
-            });
-        }
     };
     if profile.target != target {
         return Err(SectionError::UnsupportedDelivery {
