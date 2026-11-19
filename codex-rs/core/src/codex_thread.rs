@@ -90,6 +90,7 @@ use codex_user_input::ResolvedUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use futures::future::BoxFuture;
 use rmcp::model::ReadResourceRequestParams;
 use std::any::Any;
 use std::path::PathBuf;
@@ -1135,7 +1136,15 @@ impl CodexThread {
     /// Inject raw Responses items. Plaintext agent-mail batches in a native MAv2
     /// runtime use queue-only mailbox delivery and its existing wake policy.
     /// Other batches retain history-injection semantics.
-    pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+    pub fn inject_response_items(
+        &self,
+        items: Vec<ResponseItem>,
+    ) -> BoxFuture<'_, CodexResult<()>> {
+        // Keep the concrete future in core so callers don't each compile their own copy.
+        Box::pin(self.inject_response_items_inner(items))
+    }
+
+    async fn inject_response_items_inner(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
         let config = self.session.get_config().await;
         // Native mail can represent this shape without changing its payload. Keep
         // mixed history and multipart/encrypted items on the raw injection path.
