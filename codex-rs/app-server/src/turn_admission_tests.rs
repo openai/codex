@@ -27,9 +27,10 @@ fn drain_rejects_new_work_without_waiting_for_admitted_work() {
     assert_eq!(*active.borrow(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn workspace_pause_waits_for_admitted_work_and_preserves_shutdown_drain() {
     let admission = TurnAdmission::default();
+    let mut resumed = admission.admission_updates().unwrap();
     let in_flight = admission.admit().unwrap();
     let pending_pause = admission.pause();
     tokio::pin!(pending_pause);
@@ -43,9 +44,29 @@ async fn workspace_pause_waits_for_admitted_work_and_preserves_shutdown_drain() 
     drop(in_flight);
     let pause = pending_pause.await.unwrap();
     drop(pause);
+    resumed.changed().await.unwrap();
     drop(admission.admit().unwrap());
+
+    // A timed-out switch must reopen admission and wake work blocked by its pause.
+    let in_flight = admission.admit().unwrap();
+    let pending_pause = admission.pause();
+    tokio::pin!(pending_pause);
+    tokio::select! {
+        biased;
+        _ = &mut pending_pause => panic!("pause completed before the existing request"),
+        () = async {} => {}
+    }
+    assert!(admission.admit_turn_start().is_none());
+    tokio::time::advance(std::time::Duration::from_secs(/*secs*/ 10)).await;
+    assert!(pending_pause.await.is_err());
+    resumed.changed().await.unwrap();
+    drop(admission.admit_turn_start().unwrap());
+    drop(in_flight);
+
     let pause = admission.pause().await.unwrap();
     admission.begin_drain();
     drop(pause);
     assert!(admission.admit().is_err());
+    assert!(admission.admit_turn_start().is_none());
+    assert!(!resumed.has_changed().unwrap());
 }

@@ -8,7 +8,8 @@
 //! Persistent thread settings apply on Started and Steered. Turn start
 //! options only update turn context on Started; input provenance follows each request.
 //! Host shutdown admission is checked before reserving or starting a new turn.
-//! Parent-delegated subagent input bypasses drain; automatic starts remain gated.
+//! Parent-delegated input and native child results finish admitted work during drain.
+//! Other automatic starts remain gated.
 //! Realtime drain refusals are returned to the fanout for ordered session teardown.
 //! Sender evidence is read without the active-turn lock and bound to the accepted turn.
 
@@ -63,6 +64,13 @@ mod agent;
 #[cfg(test)]
 #[path = "turn_input_tests.rs"]
 mod tests;
+
+/// Keeps automatic wake admission alive until the reserved turn is registered.
+pub(crate) struct PendingWorkTurnReservation {
+    pub(crate) turn_state: Arc<tokio::sync::Mutex<TurnState>>,
+    pub(crate) previous_options: TurnStartOptions,
+    pub(crate) admission: Option<Box<dyn Send>>,
+}
 
 /// Why input is starting a turn; shared by admission and input delivery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -890,9 +898,7 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "The admission lock keeps the previous turn stable while capturing its attribution."
     )]
-    pub(crate) async fn reserve_pending_work_turn(
-        &self,
-    ) -> Option<(Arc<tokio::sync::Mutex<TurnState>>, TurnStartOptions)> {
+    pub(crate) async fn reserve_pending_work_turn(&self) -> Option<PendingWorkTurnReservation> {
         let mut active_turn = self.active_turn.lock().await;
         if active_turn.is_some() || self.turn_starts_closed() {
             return None;
@@ -910,13 +916,29 @@ impl Session {
             tracing::debug!(%error, "rollout budget stopped a pending-work wake");
             return None;
         }
+        // Explicit follow-ups and native child results finish already-admitted work.
+        // Injected mail has no terminal-result receipt and still respects drain.
+        let admission = if has_trigger_turn
+            || self
+                .input_queue
+                .has_mailbox_items_matching(crate::PendingAgentMessage::is_terminal_result)
+                .await
+        {
+            None
+        } else {
+            Some(self.services.extensions.admit_turn_start()?)
+        };
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
         let previous_options = if has_trigger_turn {
             Default::default()
         } else {
             self.agent_message_wake_options().await
         };
-        Some((Arc::clone(&active_turn.turn_state), previous_options))
+        Some(PendingWorkTurnReservation {
+            turn_state: Arc::clone(&active_turn.turn_state),
+            previous_options,
+            admission,
+        })
     }
 
     async fn agent_message_wake_options(&self) -> TurnStartOptions {

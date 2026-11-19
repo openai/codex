@@ -1,14 +1,12 @@
-/*
-This module implements the remote app-server client transport.
-
-It owns the remote connection lifecycle, including the initialize/initialized
-handshake, JSON-RPC request/response routing, server-request resolution, and
-notification streaming. Remote connections always carry WebSocket frames, over
-either TCP WebSocket URLs or local Unix sockets. The rest of the crate uses the
-same `AppServerEvent` surface for both in-process and remote transports, so
-callers such as the TUI can switch between them without changing their
-higher-level session logic.
-*/
+//! This module implements the remote app-server client transport.
+//!
+//! It owns the remote connection lifecycle, including the initialize/initialized
+//! handshake, JSON-RPC request/response routing, server-request resolution, and
+//! notification streaming. Remote connections always carry WebSocket frames, over
+//! either TCP WebSocket URLs or local Unix sockets. The rest of the crate uses the
+//! same `AppServerEvent` surface for both in-process and remote transports, so
+//! callers such as the TUI can switch between them without changing their
+//! higher-level session logic.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -21,6 +19,8 @@ use crate::AppServerEvent;
 use crate::RequestResult;
 use crate::SHUTDOWN_TIMEOUT;
 use crate::TypedRequestError;
+use crate::WEBSOCKET_COMPRESSION_HEADER;
+use crate::ZSTD_STREAM_PROTOCOL;
 use crate::decode_typed_response;
 use crate::remote_websocket::RemoteWebSocket;
 use crate::remote_websocket::WebSocketHandshake;
@@ -39,8 +39,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_transport::WEBSOCKET_COMPRESSION_HEADER;
-use codex_app_server_transport::ZSTD_STREAM_PROTOCOL;
 use codex_uds::UnixStream;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -95,7 +93,8 @@ pub struct RemoteAppServerConnectArgs {
     pub channel_capacity: usize,
 }
 impl RemoteAppServerConnectArgs {
-    pub(crate) fn initialize_params(&self) -> InitializeParams {
+    /// Builds the existing initialize handshake for this connection.
+    pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             required_human_approval: self.required_human_approval,
             explicit_gateway_oauth: false,
@@ -121,7 +120,8 @@ impl RemoteAppServerConnectArgs {
     }
 }
 
-pub(crate) fn websocket_url_supports_auth_token(url: &Url) -> bool {
+/// Whether the endpoint permits bearer authentication without exposing it remotely in plaintext.
+pub fn websocket_url_supports_auth_token(url: &Url) -> bool {
     match (url.scheme(), url.host()) {
         ("wss", Some(_)) => true,
         ("ws", Some(url::Host::Domain(domain))) => domain.eq_ignore_ascii_case("localhost"),
@@ -174,7 +174,8 @@ pub struct RemoteAppServerClient {
 #[derive(Clone)]
 pub struct RemoteAppServerRequestHandle {
     command_tx: mpsc::Sender<RemoteClientCommand>,
-    pub(crate) platform_os: Option<String>,
+    /// Operating system reported by the app-server that serves these requests.
+    pub platform_os: Option<String>,
 }
 
 enum SocketPeerPolicy {
@@ -633,7 +634,7 @@ impl RemoteAppServerClient {
 }
 
 impl RemoteAppServerRequestHandle {
-    pub(crate) async fn resolve_server_request(
+    pub async fn resolve_server_request(
         &self,
         request_id: RequestId,
         result: JsonRpcResult,
@@ -660,7 +661,7 @@ impl RemoteAppServerRequestHandle {
         })?
     }
 
-    pub(crate) async fn reject_server_request(
+    pub async fn reject_server_request(
         &self,
         request_id: RequestId,
         error: JSONRPCErrorError,

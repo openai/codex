@@ -13,10 +13,10 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-app-server-remote-client = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-app-server-transport = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-cloud-client = { path = "../cloud-client" }
@@ -28,21 +28,20 @@ codex-feedback = { workspace = true }
 codex-http-client = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
-codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-codex-utils-rustls-provider = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
-tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+codex-uds = { workspace = true }
+tokio-tungstenite = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

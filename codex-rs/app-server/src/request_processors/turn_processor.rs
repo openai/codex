@@ -1,3 +1,4 @@
+use super::thread_input::can_accept_direct_input;
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
@@ -7,7 +8,9 @@ use codex_app_server_protocol::ThreadGuardianReviewResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
 use codex_app_server_protocol::ThreadPrepareApprovedPlanResponse;
+use codex_protocol::AgentPath;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -19,6 +22,7 @@ use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::turn_input::AnnotatedResponseItem;
 use codex_protocol::turn_input::InjectedResponseItem;
+use codex_protocol::turn_input::ItemRetention;
 use codex_protocol::turn_input::ResponseItemAnnotations;
 use codex_utils_path_uri::PathUri;
 
@@ -1080,9 +1084,6 @@ impl TurnRequestProcessor {
         params: ThreadInjectItemsParams,
     ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
-        self.ensure_direct_input_allowed(request_id, thread.as_ref())
-            .await?;
-
         let items = params
             .items
             .into_iter()
@@ -1092,18 +1093,46 @@ impl TurnRequestProcessor {
                     .map_err(|err| format!("items[{index}] is not a valid response item: {err}"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(invalid_request)?;
+            .map_err(invalid_request);
+        // Only native children need the mailbox exception. Roots keep their existing
+        // history injection path, which persists idle input before acknowledging it.
+        let config_snapshot = thread.config_snapshot().await;
+        let agent_mail = !can_accept_direct_input(
+            thread.multi_agent_version(),
+            &config_snapshot.session_source,
+        ) && items.as_ref().is_ok_and(|items| {
+            !items.is_empty()
+                && items.iter().all(|item| {
+                    matches!(item.retention, ItemRetention::Unspecified)
+                        && matches!(
+                            &item.item,
+                            ResponseItem::AgentMessage { author, recipient, content, .. }
+                                if matches!(content.as_slice(), [AgentMessageInputContent::InputText { .. }])
+                                    && AgentPath::try_from(author.as_str()).is_ok()
+                                    && AgentPath::try_from(recipient.as_str()).is_ok()
+                        )
+                })
+        }) && !thread.config().await.multi_agent_v2.disable_native_tools;
+        if !agent_mail {
+            self.ensure_direct_input_allowed(request_id, thread.as_ref())
+                .await?;
+        }
+        let items = items?;
         for item in &items {
             validate_response_item_image_urls(std::slice::from_ref(&item.item))?;
         }
 
-        thread
-            .inject_response_items_with_retention(items)
-            .await
-            .map_err(|err| match err.details() {
-                CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
-                _ => internal_error(format!("failed to inject response items: {err}")),
-            })?;
+        let result = if agent_mail {
+            thread
+                .inject_response_items(items.into_iter().map(|item| item.item).collect())
+                .await
+        } else {
+            thread.inject_response_items_with_retention(items).await
+        };
+        result.map_err(|err| match err.details() {
+            CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+            _ => internal_error(format!("failed to inject response items: {err}")),
+        })?;
         Ok(ThreadInjectItemsResponse {})
     }
 

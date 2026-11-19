@@ -211,6 +211,11 @@ impl<C: Sync> ExtensionRegistry<C> {
         }
     }
 
+    /// Subscribes to host admission reopening so pending work can retry its normal gate.
+    pub fn turn_start_admission_updates(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.turn_start_admission.as_ref()?.admission_updates()
+    }
+
     /// Returns the host event sink retained by this registry.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)

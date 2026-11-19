@@ -81,7 +81,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
@@ -182,19 +181,7 @@ pub struct InProcessStartArgs {
     pub channel_capacity: usize,
 }
 
-/// Event emitted from the app-server to the in-process client.
-///
-/// [`Lagged`](Self::Lagged) is a transport health marker, not an application
-/// event — it signals that the consumer fell behind and some events were dropped.
-#[derive(Debug, Clone)]
-pub enum InProcessServerEvent {
-    /// Server request that requires client response/rejection.
-    ServerRequest(Box<ServerRequest>),
-    /// App-server notification directed to the embedded client.
-    ServerNotification(Box<ServerNotification>),
-    /// Indicates one or more events were dropped due to backpressure.
-    Lagged { skipped: usize },
-}
+pub use codex_app_server_remote_client::InProcessServerEvent;
 
 /// Internal message sent from [`InProcessClientHandle`] methods to the runtime task.
 ///

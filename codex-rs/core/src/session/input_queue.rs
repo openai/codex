@@ -259,11 +259,19 @@ impl InputQueue {
     }
 
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
+        self.has_mailbox_items_matching(|mail| mail.trigger_turn)
+            .await
+    }
+
+    pub(crate) async fn has_mailbox_items_matching(
+        &self,
+        predicate: impl Fn(&crate::PendingAgentMessage) -> bool,
+    ) -> bool {
         self.mailbox_pending_mails
             .lock()
             .await
             .iter()
-            .any(|mail| mail.communication.trigger_turn)
+            .any(|mail| predicate(&mail.communication))
     }
 
     pub(crate) async fn drain_mailbox(&self) -> Vec<PendingMailboxCommunication> {

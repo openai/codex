@@ -2,12 +2,12 @@
 
 use std::io;
 
-use codex_app_server_transport::CompressionConnection;
-use codex_app_server_transport::WEBSOCKET_COMPRESSION_HEADER;
-use codex_app_server_transport::WebSocketCompression;
-use codex_app_server_transport::ZstdDecoder;
-use codex_app_server_transport::ZstdEncoder;
-use codex_app_server_transport::zstd_codec_pair;
+use crate::CompressionConnection;
+use crate::WEBSOCKET_COMPRESSION_HEADER;
+use crate::WebSocketCompression;
+use crate::ZstdDecoder;
+use crate::ZstdEncoder;
+use crate::zstd_codec_pair;
 use futures::SinkExt;
 use futures::StreamExt;
 use tokio::io::AsyncRead;

@@ -592,9 +592,12 @@ impl Session {
             return;
         }
 
-        let Some((turn_state, previous_options)) = self.reserve_pending_work_turn().await else {
+        let Some(reservation) = self.reserve_pending_work_turn().await else {
             return;
         };
+        let _admission = reservation.admission;
+        let turn_state = reservation.turn_state;
+        let previous_options = reservation.previous_options;
 
         let helper_admission = HelperTurnAdmission::capture(self);
         self.services

@@ -26,9 +26,8 @@ pub use codex_cloud_client::EnvironmentSelection;
 pub use codex_cloud_client::ProjectEnvironment;
 pub use codex_cloud_client::SavedEnvironment;
 mod path;
-mod remote;
+use codex_app_server_remote_client as remote;
 mod remote_addr;
-mod remote_websocket;
 pub use cloud::CLOUD_RECOVERY_NETWORK_BLOCKED;
 pub use cloud::CloudClient;
 pub use cloud::CloudCommand;
@@ -40,8 +39,6 @@ pub use cloud_backend::CloudRecoverySignInChanged;
 mod server_request;
 pub use server_request::AppServerReplyHandle;
 
-use std::error::Error;
-use std::fmt;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -67,7 +64,6 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
-use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
@@ -114,118 +110,10 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 // Covers the embedded drain, its analytics flush, and final task join.
 const IN_PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// Raw app-server request result for typed in-process requests.
-///
-/// Even on the in-process path, successful responses still travel back through
-/// the same JSON-RPC result envelope used by socket/stdio transports because
-/// `MessageProcessor` continues to produce that shape internally.
-pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
-
-#[derive(Debug, Clone)]
-pub enum AppServerEvent {
-    Lagged {
-        skipped: usize,
-    },
-    ServerNotification(Box<ServerNotification>),
-    ServerRequest(Box<ServerRequest>),
-    /// A native Cloud reply stream ended. The underlying thread can still be running.
-    ThreadStreamDisconnected(Box<codex_app_server_protocol::ErrorNotification>),
-    /// The Cloud worker is listening again on the same conversation.
-    ThreadStreamReconnected(String),
-    Disconnected {
-        message: String,
-    },
-}
-
-impl From<InProcessServerEvent> for AppServerEvent {
-    fn from(value: InProcessServerEvent) -> Self {
-        match value {
-            InProcessServerEvent::Lagged { skipped } => Self::Lagged { skipped },
-            InProcessServerEvent::ServerNotification(notification) => {
-                Self::ServerNotification(notification)
-            }
-            InProcessServerEvent::ServerRequest(request) => Self::ServerRequest(request),
-        }
-    }
-}
-
-/// Layered error for [`InProcessAppServerClient::request_typed`].
-///
-/// This keeps transport failures, server-side JSON-RPC failures, and response
-/// decode failures distinct so callers can decide whether to retry, surface a
-/// server error, or treat the response as an internal request/response mismatch.
-#[derive(Debug)]
-pub enum TypedRequestError {
-    Transport {
-        method: String,
-        source: IoError,
-    },
-    Server {
-        method: String,
-        source: JSONRPCErrorError,
-    },
-    Deserialize {
-        method: String,
-        source: serde_json::Error,
-    },
-}
-
-impl fmt::Display for TypedRequestError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Transport { method, source } => {
-                write!(f, "{method} transport error: {source}")
-            }
-            Self::Server { method, source } => {
-                write!(
-                    f,
-                    "{method} failed: {} (code {})",
-                    source.message, source.code
-                )?;
-                if let Some(data) = source.data.as_ref() {
-                    write!(f, ", data: {data}")?;
-                }
-                Ok(())
-            }
-            Self::Deserialize { method, source } => {
-                write!(f, "{method} response decode error: {source}")
-            }
-        }
-    }
-}
-
-impl Error for TypedRequestError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Transport { source, .. } => Some(source),
-            Self::Server { .. } => None,
-            Self::Deserialize { source, .. } => Some(source),
-        }
-    }
-}
-
-// Await transport in a separate statement before calling this: dropping the
-// completed future must precede any caller-provided Deserialize implementation.
-fn decode_typed_response<T>(
-    method: &str,
-    response: IoResult<RequestResult>,
-) -> Result<T, TypedRequestError>
-where
-    T: DeserializeOwned,
-{
-    let response = response.map_err(|source| TypedRequestError::Transport {
-        method: method.to_string(),
-        source,
-    })?;
-    let result = response.map_err(|source| TypedRequestError::Server {
-        method: method.to_string(),
-        source,
-    })?;
-    serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
-        method: method.to_string(),
-        source,
-    })
-}
+pub use codex_app_server_remote_client::AppServerEvent;
+pub use codex_app_server_remote_client::RequestResult;
+pub use codex_app_server_remote_client::TypedRequestError;
+use codex_app_server_remote_client::decode_typed_response;
 
 #[derive(Clone)]
 pub struct InProcessClientStartArgs {

@@ -10,7 +10,7 @@ pub const DAEMON_SHUTDOWN_SOCKET_ENV: &str = "CODEX_DAEMON_SHUTDOWN_SOCKET";
 mod connection_auth;
 mod outgoing_message;
 mod transport;
-mod websocket_compression;
+use codex_app_server_remote_client as websocket_compression;
 
 pub use connection_auth::ConnectionAuth;
 pub use outgoing_message::ConnectionId;
