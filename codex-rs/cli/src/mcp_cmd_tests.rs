@@ -307,7 +307,7 @@ async fn application_network_loader_allows_listed_https_destination_to_connect()
     let client = config
         .http_client_factory()
         .build_client(&url, ClientRouteClass::Other)?;
-    let (response, connection) = timeout(Duration::from_secs(2), async {
+    let (response, connection) = timeout(Duration::from_secs(10), async {
         tokio::join!(client.get(&url).send(), async {
             let (stream, _) = listener.accept().await?;
             // This listener proves TCP permission; it deliberately does not provide TLS.

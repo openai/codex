@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -10,7 +11,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_code_mode_protocol::CodeModeSessionOptions;
+use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::TerminateRequest;
+use codex_code_mode_protocol::ToolDefinition;
 use codex_code_mode_protocol::host::BOUNDED_OUTPUT_CAPABILITY;
 use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
@@ -39,9 +42,13 @@ use codex_code_mode_protocol::host::WireResult;
 use codex_code_mode_protocol::host::WireRuntimeResponse;
 use codex_code_mode_protocol::host::WireWaitOutcome;
 use codex_code_mode_protocol::host::WireWaitRequest;
+use codex_code_mode_runtime::ToolPreload;
+use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::io::BufReader;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -127,7 +134,7 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 4096);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
 
@@ -202,6 +209,168 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
     host.await.expect("host task").expect("host connection");
 }
 
+const PRELOAD_STDIO_CHILD: &str = "CODE_MODE_HOST_PRELOAD_STDIO_CHILD";
+
+#[tokio::test]
+#[ignore = "stdio subprocess for preload_errors_preserve_other_sessions_on_the_connection"]
+async fn preload_stdio_child() {
+    if std::env::var_os(PRELOAD_STDIO_CHILD).is_none() {
+        return;
+    }
+    super::run_stdio_with_tool_preloads(&[
+        ToolPreload {
+            tool: "first",
+            tool_name: "first",
+            tool_namespace: None,
+            source: "const shared = 1;",
+        },
+        ToolPreload {
+            tool: "second",
+            tool_name: "second",
+            tool_namespace: None,
+            source: "const shared = 2;",
+        },
+    ])
+    .await
+    .expect("stdio host");
+}
+
+#[tokio::test]
+async fn preload_errors_preserve_other_sessions_on_the_connection() {
+    let mut command =
+        codex_utils_process::background_command(std::env::current_exe().expect("test executable"));
+    command
+        .args([
+            "--quiet",
+            "--exact",
+            "tests::preload_stdio_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(PRELOAD_STDIO_CHILD, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    let mut child = tokio::process::Command::from(command)
+        .kill_on_drop(/*kill_on_drop*/ true)
+        .spawn()
+        .expect("spawn stdio host");
+    let mut stdout = BufReader::new(child.stdout.take().expect("host stdout"));
+    // libtest emits its banner before entering the child; subsequent bytes must be frames.
+    let mut banner = String::new();
+    for _ in 0..2 {
+        banner.clear();
+        stdout.read_line(&mut banner).await.expect("libtest banner");
+        if banner.trim() == "running 1 test" {
+            break;
+        }
+    }
+    assert_eq!(banner.trim(), "running 1 test");
+    let mut reader = FramedReader::new(stdout);
+    let mut writer = FramedWriter::new(child.stdin.take().expect("host stdin"));
+    writer
+        .write(&client_hello([ProtocolVersion::V1], CapabilitySet::empty()))
+        .await
+        .expect("hello");
+    assert!(matches!(
+        reader.read::<HostToClient>().await.expect("host hello"),
+        Some(HostToClient::HostHello(_))
+    ));
+    for (id, name) in [(1, "broken"), (2, "healthy")] {
+        writer
+            .write(&ClientToHost::Request {
+                id: request_id(id),
+                request: HostRequest::OpenSession {
+                    session_id: session_id(name),
+                    cell_execution_limits: None,
+                    output_truncation: None,
+                },
+            })
+            .await
+            .expect("open session");
+        assert!(matches!(
+            next_response(&mut reader).await,
+            HostToClient::Response {
+                id: actual_id,
+                result: WireResult::Ok { value: HostResponse::SessionReady { .. } },
+            } if actual_id == request_id(id)
+        ));
+    }
+    let mut broken = execute_request("text('never runs')");
+    broken.enabled_tools = ["first", "second"]
+        .into_iter()
+        .map(|name| {
+            ToolDefinition {
+                name: name.to_string(),
+                tool_name: ToolName::plain(name),
+                description: String::new(),
+                kind: CodeModeToolKind::Function,
+                input_schema: None,
+                input_schema_max_bytes: None,
+                output_schema: None,
+            }
+            .into()
+        })
+        .collect();
+    for (id, name, request, expected_content, expected_error) in [
+        (
+            3,
+            "broken",
+            broken,
+            Vec::new(),
+            Some("failed to execute tool preload #2 for `second`".to_string()),
+        ),
+        (
+            4,
+            "healthy",
+            execute_request("text('still alive')"),
+            vec![WireContentItem::InputText {
+                text: "still alive".to_string(),
+            }],
+            None,
+        ),
+    ] {
+        writer
+            .write(&ClientToHost::Request {
+                id: request_id(id),
+                request: HostRequest::Execute {
+                    session_id: session_id(name),
+                    request,
+                },
+            })
+            .await
+            .expect("execute");
+        assert!(matches!(
+            next_response(&mut reader).await,
+            HostToClient::Response {
+                id: actual_id,
+                result: WireResult::Ok { value: HostResponse::ExecutionStarted { .. } },
+            } if actual_id == request_id(id)
+        ));
+        let HostToClient::InitialResponse {
+            id: actual_id,
+            result:
+                WireResult::Ok {
+                    value:
+                        WireRuntimeResponse::Result {
+                            content_items,
+                            error_text,
+                            ..
+                        },
+                },
+        } = next_response(&mut reader).await
+        else {
+            panic!("expected framed cell result");
+        };
+        assert_eq!(actual_id, request_id(id));
+        assert_eq!(
+            (content_items, error_text),
+            (expected_content, expected_error)
+        );
+    }
+    drop(writer);
+    assert!(child.wait().await.expect("host exit").success());
+}
+
 #[tokio::test]
 async fn disconnect_cancels_a_backpressured_host_writer() {
     let (host_reader, client_writer) = tokio::io::duplex(/*max_buf_size*/ 4096);
@@ -212,6 +381,7 @@ async fn disconnect_cancels_a_backpressured_host_writer() {
             blocked_tx: Some(blocked_tx),
             handshake_flushed: false,
         },
+        &[],
     ));
     let mut writer = FramedWriter::new(client_writer);
 
@@ -305,7 +475,7 @@ async fn supported_capabilities_are_negotiated_when_optional_or_required() {
             let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
             let (host_reader, host_writer) = tokio::io::split(host_stream);
             let (client_reader, client_writer) = tokio::io::split(client_stream);
-            let host = tokio::spawn(run(host_reader, host_writer));
+            let host = tokio::spawn(run(host_reader, host_writer, &[]));
             let mut reader = FramedReader::new(client_reader);
             let mut writer = FramedWriter::new(client_writer);
 
@@ -341,7 +511,7 @@ async fn output_selection_is_per_session() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 4096);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
     writer
@@ -494,7 +664,7 @@ async fn incompatible_or_invalid_handshake_is_rejected() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
     let version_two = ProtocolVersion::new(/*value*/ 2).expect("protocol version");
@@ -517,7 +687,7 @@ async fn incompatible_or_invalid_handshake_is_rejected() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
     writer
@@ -547,7 +717,7 @@ async fn unsupported_required_capability_is_rejected() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
     let capability = Capability::new("required").expect("capability");
@@ -573,7 +743,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 2048);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
     let (client_reader, client_writer) = tokio::io::split(client_stream);
-    let host = tokio::spawn(run(host_reader, host_writer));
+    let host = tokio::spawn(run(host_reader, host_writer, &[]));
     let mut reader = FramedReader::new(client_reader);
     let mut writer = FramedWriter::new(client_writer);
     writer
@@ -669,6 +839,7 @@ async fn request_task_panic_disconnects_host() {
     let peer = Arc::new(HostPeer::new(outgoing_tx, MAX_PENDING_DELEGATE_CALLS));
     let state = HostState {
         sessions: Mutex::new(HashMap::new()),
+        tool_preloads: &[],
         limits: Arc::new(HostLimits::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
@@ -697,6 +868,7 @@ async fn execute_request_id_remains_active_until_initial_response() {
     let peer = Arc::new(HostPeer::new(outgoing_tx, MAX_PENDING_DELEGATE_CALLS));
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
+        tool_preloads: &[],
         limits: Arc::new(HostLimits::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
@@ -758,6 +930,7 @@ async fn active_cell_limit_rejects_execute_without_disconnecting() {
     let peer = Arc::new(HostPeer::new(outgoing_tx, MAX_PENDING_DELEGATE_CALLS));
     let state = HostState {
         sessions: Mutex::new(HashMap::new()),
+        tool_preloads: &[],
         limits: Arc::new(HostLimits {
             request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
             active_cell_permits: Arc::new(Semaphore::new(/*permits*/ 0)),

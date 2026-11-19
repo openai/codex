@@ -17,7 +17,7 @@ enum ListenTransport {
 
 pub(crate) async fn run_transport(listen_url: &str, host: crate::GrpcCodeModeHost) -> Result<()> {
     match parse_listen_url(listen_url)? {
-        ListenTransport::Stdio => crate::run_stdio().await,
+        ListenTransport::Stdio => crate::run_stdio_with_tool_preloads(host.tool_preloads).await,
         ListenTransport::GrpcStdio => crate::grpc_stdio::run(host).await,
         ListenTransport::Grpc(bind_address) => {
             grpc_transport::run_tcp_listener(bind_address, host).await

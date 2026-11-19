@@ -106,7 +106,7 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (runtime_command_tx, _runtime_command_rx) = std_mpsc::channel();
         let tool_name = ToolName::plain("echo");
-        globals::install_globals(scope).expect("install globals");
+        globals::install_globals(scope, &[]).expect("install globals");
         scope.set_slot(RuntimeState {
             event_tx: event_tx.into(),
             pending_tool_calls: HashMap::new(),

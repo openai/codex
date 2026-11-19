@@ -13,9 +13,15 @@ use super::callbacks::store_callback;
 use super::callbacks::text_callback;
 use super::callbacks::tool_callback;
 use super::callbacks::yield_control_callback;
+use crate::ToolPreload;
 use codex_code_mode_protocol::EnabledToolMetadata;
 
-pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), String> {
+const MAX_PRELOAD_BINDING_CHARS: usize = 96;
+
+pub(super) fn install_globals(
+    scope: &mut v8::PinScope<'_, '_>,
+    tool_preloads: &[ToolPreload],
+) -> Result<(), String> {
     let global = scope.get_current_context().global(scope);
     delete_global(scope, global, "console")?;
     delete_global(scope, global, "Atomics")?;
@@ -56,11 +62,52 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     set_global(scope, global, "exit", exit.into())?;
 
     let helpers = concat!(include_str!("settled.js"), "\n", include_str!("content.js"));
-    let source = v8::String::new(scope, helpers)
-        .ok_or_else(|| "failed to allocate JavaScript helpers".to_string())?;
-    v8::Script::compile(scope, source, /*origin*/ None)
-        .and_then(|script| script.run(scope))
-        .ok_or_else(|| "failed to initialize JavaScript helpers".to_string())?;
+    run_helpers(scope, helpers, "built-in JavaScript helpers")?;
+    for (index, preload) in tool_preloads.iter().enumerate() {
+        let binding: String = preload
+            .tool
+            .chars()
+            .take(MAX_PRELOAD_BINDING_CHARS)
+            .collect();
+        let label = format!("tool preload #{} for `{binding}`", index + 1);
+        let enabled = {
+            let state = scope
+                .get_slot::<super::RuntimeState>()
+                .ok_or_else(|| "code-mode catalog is unavailable".to_string())?;
+            let mut matches = state
+                .enabled_tools
+                .iter()
+                .filter(|tool| tool.global_name == preload.tool);
+            let candidate = matches.next();
+            if matches.next().is_some() {
+                return Err(format!("ambiguous binding: {label}"));
+            }
+            candidate.is_some_and(|tool| {
+                tool.tool_name.name == preload.tool_name
+                    && tool.tool_name.namespace.as_deref() == preload.tool_namespace
+            })
+        };
+        if enabled {
+            run_helpers(scope, preload.source, &label)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_helpers(scope: &mut v8::PinScope<'_, '_>, helpers: &str, label: &str) -> Result<(), String> {
+    // Uncaught V8 diagnostics go to stdout, which may carry the host protocol.
+    // Keep the reported error bounded and avoid invoking a thrown value's getters.
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut tc = tc.init();
+    tc.set_verbose(/*value*/ false);
+    tc.set_capture_message(/*value*/ false);
+    let source =
+        v8::String::new(&tc, helpers).ok_or_else(|| format!("failed to allocate {label}"))?;
+    let script = v8::Script::compile(&tc, source, /*origin*/ None)
+        .ok_or_else(|| format!("failed to compile {label}"))?;
+    script
+        .run(&tc)
+        .ok_or_else(|| format!("failed to execute {label}"))?;
     Ok(())
 }
 

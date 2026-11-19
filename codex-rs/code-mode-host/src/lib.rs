@@ -40,6 +40,7 @@ use codex_code_mode_protocol::host::TOOL_CATALOG_CAPABILITY;
 use codex_code_mode_protocol::host::WireWaitOutcome;
 use codex_code_mode_protocol::host::YIELD_OBSERVATION_CAPABILITY;
 use codex_code_mode_runtime::InProcessCodeModeSession;
+use codex_code_mode_runtime::ToolPreload;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::OwnedSemaphorePermit;
@@ -104,14 +105,26 @@ impl HostLimits {
 }
 
 /// Runs the code-mode host on its configured stdio or gRPC transport.
+pub async fn run_main(listen_url: &str) -> Result<()> {
+    run_main_with_tool_preloads(listen_url, &[]).await
+}
+
+/// Opens each session on the configured transport with the supplied tool helpers.
 #[tracing::instrument(
     name = "code_mode_host.run_main",
     level = "info",
     skip_all,
     fields(otel.name = "code_mode_host.run_main")
 )]
-pub async fn run_main(listen_url: &str) -> Result<()> {
-    transport::run_transport(listen_url, GrpcCodeModeHost::new()).await
+pub async fn run_main_with_tool_preloads(
+    listen_url: &str,
+    tool_preloads: &'static [ToolPreload],
+) -> Result<()> {
+    transport::run_transport(
+        listen_url,
+        GrpcCodeModeHost::new().with_tool_preloads(tool_preloads),
+    )
+    .await
 }
 
 /// Runs with an optional gRPC metrics collector initialized before sandbox entry.
@@ -129,11 +142,15 @@ pub async fn run_main_with_process_metrics(
 
 /// Runs one code-mode host connection over the process standard streams.
 pub async fn run_stdio() -> Result<()> {
-    run(tokio::io::stdin(), tokio::io::stdout()).await
+    run_stdio_with_tool_preloads(&[]).await
+}
+
+async fn run_stdio_with_tool_preloads(tool_preloads: &'static [ToolPreload]) -> Result<()> {
+    run(tokio::io::stdin(), tokio::io::stdout(), tool_preloads).await
 }
 
 /// Runs one code-mode host connection over an ordered input/output pair.
-async fn run<R, W>(reader: R, writer: W) -> Result<()>
+async fn run<R, W>(reader: R, writer: W, tool_preloads: &'static [ToolPreload]) -> Result<()>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
@@ -150,6 +167,7 @@ where
     let peer = Arc::new(HostPeer::new(outgoing_tx, max_pending_delegate_calls));
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
+        tool_preloads,
         limits: Arc::new(HostLimits::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
@@ -340,6 +358,7 @@ async fn negotiate<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 
 struct HostState {
     sessions: Mutex<HashMap<SessionId, Arc<InProcessCodeModeSession>>>,
+    tool_preloads: &'static [ToolPreload],
     limits: Arc<HostLimits>,
     seen_session_ids: Mutex<SeenSessionIds>,
     requests: Mutex<RequestRegistry>,
@@ -609,9 +628,10 @@ impl HostState {
         });
         sessions.insert(
             session_id,
-            Arc::new(InProcessCodeModeSession::with_options(
+            Arc::new(InProcessCodeModeSession::with_options_and_tool_preloads(
                 options,
                 Some(task_failure_handler),
+                self.tool_preloads,
             )),
         );
         Ok(())

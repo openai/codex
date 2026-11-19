@@ -104,7 +104,7 @@ async fn stalled_handshake_unblocks_remote_executor(
             params,
             // Allow the request to reach the remote HTTP server on loaded CI
             // workers before testing cancellation of its stalled response.
-            Some(Duration::from_secs(5)),
+            Some(Duration::from_secs(15)),
             Box::new(|_, _| {
                 async {
                     Ok(ElicitationResponse {

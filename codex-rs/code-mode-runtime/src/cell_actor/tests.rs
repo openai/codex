@@ -135,6 +135,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
         CellRequest {
             tool_call_id: "call-1".to_string(),
             enabled_tools: Default::default(),
+            tool_preloads: &[],
             source: "await new Promise(() => {});".to_string(),
             output_truncation: CodeModeOutputTruncation::Client,
         },

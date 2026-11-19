@@ -90,6 +90,7 @@ pub(crate) struct CreateCellRequest {
     pub(crate) output_truncation: codex_code_mode_protocol::CodeModeOutputTruncation,
     pub(crate) tool_call_id: String,
     pub(crate) enabled_tools: ToolCatalog,
+    pub(crate) tool_preloads: &'static [crate::ToolPreload],
     pub(crate) source: String,
 }
 
