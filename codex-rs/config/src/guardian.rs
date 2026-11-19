@@ -85,13 +85,16 @@ impl GuardianPolicyLoader {
 }
 
 impl ConfigRequirements {
+    pub fn disables_all_guardian_scoring(&self) -> bool {
+        [ApprovalsReviewer::User, ApprovalsReviewer::AutoReview]
+            .iter()
+            .any(|reviewer| self.approvals_reviewer.can_set(reviewer).is_err())
+    }
+
     /// Applies the supplied administrator requirements to an already resolved model policy.
     /// The reviewer allowlist applies even when model metadata is unavailable.
     pub fn constrain_guardian_policy(&self, policy: &mut GuardianModelPolicy, model: Option<&str>) {
-        if [ApprovalsReviewer::User, ApprovalsReviewer::AutoReview]
-            .iter()
-            .any(|reviewer| self.approvals_reviewer.can_set(reviewer).is_err())
-        {
+        if self.disables_all_guardian_scoring() {
             policy.disable_scoring();
         } else if model.is_some_and(|model| self.auto_review_required_for_model(model)) {
             let computer_use = policy.computer_use;

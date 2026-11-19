@@ -2696,6 +2696,12 @@ impl AuthManager {
         }))
     }
 
+    /// Whether cached auth needs a proactive refresh.
+    pub fn needs_proactive_refresh(&self) -> bool {
+        self.auth_cached()
+            .is_some_and(|auth| Self::proactive_refresh_reason(&auth).is_some())
+    }
+
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
     /// For managed ChatGPT auth that needs a proactive refresh, first performs
     /// a guarded reload and then refreshes only if the on-disk auth is unchanged.

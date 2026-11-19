@@ -33,6 +33,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::turn_input::CyberAccessProgram;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -144,6 +145,7 @@ pub enum LunaSamplerError {
 pub struct LunaSampler {
     config: Arc<LunaSamplerConfig>,
     connections: Arc<ConnectionPool>,
+    catalog_initialization_lock: Arc<Mutex<()>>,
 }
 
 impl LunaSampler {
@@ -161,6 +163,7 @@ impl LunaSampler {
         Self {
             connections: ConnectionPool::new(Arc::clone(&config)),
             config,
+            catalog_initialization_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -170,6 +173,24 @@ impl LunaSampler {
                 .ensure_initialized(self.config.http_client_factory.clone())
                 .await;
         }
+    }
+
+    /// Retry catalog discovery without delaying tool dispatch or overlapping retries.
+    pub(super) fn retry_catalog_initialization_in_background(
+        self: &Arc<Self>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let catalog = self.config.guardian_catalog.as_ref()?;
+        if !catalog.needs_initialization() {
+            return None;
+        }
+        let guard = Arc::clone(&self.catalog_initialization_lock)
+            .try_lock_owned()
+            .ok()?;
+        let sampler = Arc::clone(self);
+        Some(tokio::spawn(async move {
+            let _guard = guard;
+            sampler.ensure_catalog_initialized().await;
+        }))
     }
 
     pub(super) fn max_input_tokens(&self) -> usize {

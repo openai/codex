@@ -6,6 +6,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use codex_analytics::AnalyticsEventsClient;
+use codex_core::GuardianInferenceContext;
 use codex_core::context::GuardianContextMode;
 use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
@@ -28,6 +29,7 @@ use super::authorization::ScoreAuthorization;
 use super::classification::Classification;
 use super::config::GuardianV2Config;
 use super::conversation::ConversationBackend;
+use super::coverage::background_scoring_allowed;
 use super::coverage::scores_tool;
 use super::extension::GuardianV2Extension;
 use super::metrics::record_classification;
@@ -99,6 +101,47 @@ impl GuardianV2Extension {
         let parent_model = input.thread_store.get::<ModelInfo>();
         let probe_comparison = Some(super::probe_shadow::ProbeComparison::capture(&input));
         let has_explicit_guardian_provider = config.guardian_model_provider.is_some();
+        let lookup_thread = || async {
+            let parsed_thread_id = ThreadId::from_string(input.thread_store.level_id())
+                .map_err(|error| error.to_string())?;
+            let manager = self
+                .thread_manager
+                .upgrade()
+                .ok_or_else(|| "thread manager is unavailable".to_string())?;
+            let thread = manager
+                .get_thread(parsed_thread_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>((manager, thread))
+        };
+        let needs_recovery = has_explicit_guardian_provider
+            && input
+                .thread_store
+                .get::<GuardianInferenceContext>()
+                .is_some_and(|context| context.models_manager.needs_initialization());
+        let mut early_scoring_allowed = None;
+        let early_thread_context = if needs_recovery {
+            let context = lookup_thread().await;
+            if let Ok((_, thread)) = &context {
+                let snapshot = thread.config_snapshot().await;
+                let reviewer = thread.approvals_reviewer_for_turn(input.turn_id).await;
+                let scoring_allowed = background_scoring_allowed(reviewer, || snapshot.full_access);
+                early_scoring_allowed = Some(scoring_allowed);
+                if scoring_allowed
+                    && !thread
+                        .config()
+                        .await
+                        .config_layer_stack
+                        .requirements()
+                        .disables_all_guardian_scoring()
+                {
+                    drop(sampler.retry_catalog_initialization_in_background());
+                }
+            }
+            Some(context)
+        } else {
+            None
+        };
         let guardian_classifier_model =
             match GuardianV2Config::explicit_guardian_classifier_model(&config, input.thread_store)
                 .await
@@ -223,20 +266,10 @@ impl GuardianV2Extension {
             .turn_store
             .get::<codex_api::ResponseId>()
             .map(|id| id.0.clone());
-        let thread_context: Result<_, String> = async {
-            let parsed_thread_id =
-                ThreadId::from_string(&thread_id).map_err(|error| error.to_string())?;
-            let manager = self
-                .thread_manager
-                .upgrade()
-                .ok_or_else(|| "thread manager is unavailable".to_string())?;
-            let thread = manager
-                .get_thread(parsed_thread_id)
-                .await
-                .map_err(|error| error.to_string())?;
-            Ok((manager, thread))
-        }
-        .await;
+        let thread_context = match early_thread_context {
+            Some(context) => context,
+            None => lookup_thread().await,
+        };
         let (manager, thread) = match thread_context {
             Ok(context) => context,
             Err(error) => {
@@ -259,10 +292,15 @@ impl GuardianV2Extension {
             }
         };
         // Use the live reviewer, not the startup config or per-app reviewer overrides.
-        let snapshot = thread.config_snapshot().await;
-        if snapshot.full_access
-            || thread.approvals_reviewer_for_turn(input.turn_id).await == ApprovalsReviewer::User
-        {
+        let skip_scoring = match early_scoring_allowed {
+            Some(allowed) => !allowed,
+            None => {
+                thread.config_snapshot().await.full_access
+                    || thread.approvals_reviewer_for_turn(input.turn_id).await
+                        == ApprovalsReviewer::User
+            }
+        };
+        if skip_scoring {
             // A skipped call invalidates older scores, including ones still in flight.
             score_progress.invalidate(tool_call_index);
             return;

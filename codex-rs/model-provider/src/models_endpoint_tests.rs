@@ -436,6 +436,7 @@ async fn command_auth_refresh_fetches_a_catalog_for_the_current_credentials() {
     );
     // The cached identity still matches here; resolving command auth must
     // detect the next token before deciding whether a refresh is needed.
+    assert!(manager.needs_initialization());
     manager
         .refresh_after_auth_change(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault))
         .await;
@@ -510,7 +511,13 @@ async fn explicit_catalog_reuses_auth_headers_and_query_parameters() {
             .expect(1)
             .mount(&server)
             .await;
+        let use_external_auth = auth.api_key() == Some("test-key");
         let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let auth_manager = if use_external_auth {
+            AuthManager::from_api_key("test-key", auth_manager.runtime_config())
+        } else {
+            auth_manager
+        };
         // The parallel residency test must not change this catalog's cache identity.
         let provider = ModelProviderInfo {
             model_catalog_url: Some(format!("{}/codex/models?deployment=one", server.uri()).into()),
@@ -553,6 +560,16 @@ async fn explicit_catalog_reuses_auth_headers_and_query_parameters() {
                     .await,
                 expected
             );
+        }
+        if use_external_auth {
+            assert!(!manager.needs_initialization());
+            auth_manager
+                .set_external_auth(Arc::new(RotatingAuth(std::sync::atomic::AtomicUsize::new(
+                    100,
+                ))))
+                .await
+                .unwrap();
+            assert!(manager.needs_initialization());
         }
     }
 }

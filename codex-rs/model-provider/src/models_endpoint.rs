@@ -342,6 +342,14 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         crate::models_identity::identity(&self.provider_info, auth.as_ref()).ok()
     }
 
+    fn auth_requires_resolution(&self) -> bool {
+        self.has_command_auth()
+            || self
+                .auth_manager
+                .as_ref()
+                .is_some_and(|auth| auth.needs_proactive_refresh())
+    }
+
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
     }

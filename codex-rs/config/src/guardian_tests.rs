@@ -69,6 +69,7 @@ fn legacy_scope_applies_only_to_models_without_catalog_policy() {
         loader.resolve(Some(&model), &ConfigRequirements::default()),
         catalog
     );
+    assert!(!ConfigRequirements::default().disables_all_guardian_scoring());
     for reviewer in [ApprovalsReviewer::AutoReview, ApprovalsReviewer::User] {
         let restricted: ConfigRequirements = crate::ConfigRequirementsWithSources {
             allowed_approvals_reviewers: Some(Sourced::new(
@@ -79,6 +80,7 @@ fn legacy_scope_applies_only_to_models_without_catalog_policy() {
         }
         .try_into()
         .unwrap();
+        assert!(restricted.disables_all_guardian_scoring());
         // Reuse the same cached base across tightening and relaxation, including
         // decisions without model metadata.
         for model in [None, Some(&model)] {

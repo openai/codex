@@ -9,6 +9,7 @@ use anyhow::Result;
 use codex_config::FeatureRequirementsToml;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -165,6 +166,187 @@ async fn compacted_cold_resume_respects_guardian_provider_override(
             .expect("record Guardian requests")
             .is_empty(),
         "compacted cold resume should not request Guardian /models"
+    );
+    Ok(())
+}
+
+#[test_case(AskForApproval::OnRequest, PermissionProfile::read_only(), None, true; "on_request_restricted")]
+#[test_case(AskForApproval::Never, PermissionProfile::read_only(), None, true; "never_restricted")]
+#[test_case(AskForApproval::Never, PermissionProfile::Disabled, None, false; "full_access")]
+#[test_case(AskForApproval::Never, PermissionProfile::read_only(), Some("allowed_approvals_reviewers = ['auto_review']"), false; "mandatory_review")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_guardian_recovers_without_delaying_tool_dispatch(
+    approval_policy: AskForApproval,
+    profile: PermissionProfile,
+    reviewer_requirements: Option<&str>,
+    should_recover: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(Ok(()), "exec_command requires a POSIX executor");
+    let actor = responses::start_mock_server().await;
+    let guardian = responses::start_mock_server().await;
+    let guardian_url = format!("{}/v1", guardian.uri());
+    let catalog = MockServer::start().await;
+    let catalog_url = format!("{}/v1/models", catalog.uri());
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .expect(u64::from(should_recover))
+        .mount(&catalog)
+        .await;
+    let mut classifier = codex_models_manager::model_info::model_info_from_slug(LUNA_MODEL);
+    classifier.supported_in_api = true;
+    classifier.use_responses_lite = false;
+    classifier.guardian = Some(GuardianModelPolicy {
+        shell: Some(GuardianReviewMode::Adaptive),
+        sandboxed_exec_commands: Some(true),
+        ..Default::default()
+    });
+    let response = ResponseTemplate::new(200).set_body_json(ModelsResponse {
+        models: vec![classifier],
+    });
+    let gate = tokio_util::sync::CancellationToken::new();
+    let pending = gate.clone();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&started);
+    let _retry = Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(move |_: &Request| {
+            notify.notify_one();
+            futures::executor::block_on(pending.cancelled());
+            response.clone()
+        })
+        .with_priority(6)
+        .expect(u64::from(should_recover))
+        .mount_as_scoped(&catalog)
+        .await;
+    let release = gate.drop_guard();
+    let scorer = responses::mount_sse_once(
+        &guardian,
+        sse(vec![
+            ev_response_created("score"),
+            ev_assistant_message("score", "low"),
+            ev_completed("score"),
+        ]),
+    )
+    .await;
+    let builder = test_codex()
+        .with_model(BYO_ACTOR_MODEL)
+        .with_config(move |config| {
+            configure_explicit_guardian_provider(config, &guardian_url);
+            let provider = Arc::make_mut(
+                config
+                    .guardian_model_provider
+                    .as_mut()
+                    .expect("Guardian provider"),
+            );
+            provider.info.model_catalog_url = Some(catalog_url.into());
+            provider.info.request_max_retries = Some(0);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::GuardianApproval)
+                .expect("enable Guardian approval");
+            config
+                .features
+                .enable(Feature::GuardianV2)
+                .expect("enable Guardian V2");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .permissions
+                .set_permission_profile(profile)
+                .expect("set permission profile");
+        });
+    let mut builder = if let Some(requirements) = reviewer_requirements {
+        builder.with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements.to_owned()),
+        )
+    } else {
+        builder
+    };
+    let test = builder.build_with_auto_env(&actor).await?;
+
+    // The first benign tool must finish while discovery's retry remains unanswered.
+    for body in [
+        sse(vec![
+            ev_function_call("first", "exec_command", r#"{"cmd":"printf first"}"#),
+            ev_completed("first"),
+        ]),
+        sse(vec![
+            ev_assistant_message("done-first", "Done."),
+            ev_completed("done-first"),
+        ]),
+    ] {
+        responses::mount_sse_once(&actor, body).await;
+    }
+    if !should_recover {
+        test.submit_text_turn("Print first.").await?;
+        drop(release);
+        test.codex.shutdown_and_wait().await?;
+        assert!(
+            catalog
+                .received_requests()
+                .await
+                .expect("catalog requests")
+                .is_empty()
+        );
+        assert!(scorer.requests().is_empty());
+        return Ok(());
+    }
+    let (turn, retry) = tokio::join!(
+        timeout(
+            Duration::from_secs(10),
+            test.submit_text_turn("Print first.")
+        ),
+        timeout(Duration::from_secs(10), started.notified()),
+    );
+    turn.context("tool dispatch waited for /models")??;
+    retry.context("Guardian never started recovery")?;
+    assert!(
+        scorer.requests().is_empty(),
+        "unavailable catalog must not start classification"
+    );
+    drop(release);
+    let inference = test
+        .codex
+        .thread_extension_data()
+        .get::<codex_core::GuardianInferenceContext>()
+        .expect("Guardian inference");
+    inference
+        .models_manager
+        .ensure_initialized(inference.http_client_factory.clone())
+        .await;
+
+    for body in [
+        sse(vec![
+            ev_function_call("second", "exec_command", r#"{"cmd":"printf second"}"#),
+            ev_completed("second"),
+        ]),
+        sse(vec![
+            ev_assistant_message("done-second", "Done."),
+            ev_completed("done-second"),
+        ]),
+    ] {
+        responses::mount_sse_once(&actor, body).await;
+    }
+    test.submit_text_turn("Print second.").await?;
+    timeout(Duration::from_secs(10), async {
+        while scorer.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(scorer.single_request().body_json()["model"], LUNA_MODEL);
+    test.codex.shutdown_and_wait().await?;
+    assert_eq!(
+        catalog
+            .received_requests()
+            .await
+            .expect("catalog requests")
+            .len(),
+        2,
+        "a ready catalog must not be retried"
     );
     Ok(())
 }
