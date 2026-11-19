@@ -1,7 +1,6 @@
 use codex_protocol::RequestCountry;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::io::ErrorKind;
 
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -11,12 +10,10 @@ use codex_analytics::CompactionTrigger;
 use codex_git_utils::SanitizedGitUrl;
 use codex_protocol::ContextWindowId;
 use codex_protocol::ThreadId;
-use codex_protocol::mcp::McpAttribution;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_utils_string::to_ascii_json_string;
-use codex_utils_string::to_json_string_bounded;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use serde::Serialize;
@@ -46,8 +43,6 @@ pub(crate) const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 pub(crate) const HISTORY_INGEST_REQUESTED_KEY: &str = "history_ingest_requested";
 pub(crate) const ANALYTICS_ENABLED_KEY: &str = "analytics_enabled";
 pub(crate) const HISTORY_INITIALIZATION_KEY: &str = "history_initialization";
-pub(crate) const MCP_ATTRIBUTION_CLIENT_METADATA_KEY: &str = "mcp_attribution";
-pub(crate) const MAX_MCP_ATTRIBUTION_BYTES: usize = 16 * 1024;
 // ResponsesAPI rejects a whole client_metadata value above this character limit.
 // Turn metadata is ASCII JSON, so its byte and character lengths are identical.
 const MAX_TURN_METADATA_BYTES: usize = 8096;
@@ -72,7 +67,6 @@ pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 const RESERVED_METADATA_KEYS: &[&str] = &[
     "guardian_credits_requested",
     "guardian_recorded_items",
-    MCP_ATTRIBUTION_CLIENT_METADATA_KEY,
     INSTALLATION_ID_KEY,
     X_CODEX_INSTALLATION_ID_HEADER,
     SESSION_ID_KEY,
@@ -278,8 +272,6 @@ pub struct CodexResponsesMetadata {
     /// Selected session analytics client's collection state, independent of event eligibility or delivery.
     /// Absent when the request has no initialized session analytics context.
     pub(crate) analytics_enabled: Option<bool>,
-    /// Cumulative MCP attribution for this logical request; body-only and model-invisible.
-    pub(crate) mcp_attribution: Option<McpAttribution>,
     pub(crate) extra: BTreeMap<String, String>,
 }
 
@@ -350,7 +342,6 @@ impl CodexResponsesMetadata {
             turn_started_at_unix_ms: None,
             history_ingest_requested: None,
             analytics_enabled: None,
-            mcp_attribution: None,
             extra: BTreeMap::new(),
         }
     }
@@ -402,19 +393,6 @@ impl CodexResponsesMetadata {
             && let Some(turn_metadata_json) = self.turn_metadata_json()
         {
             client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata_json);
-        }
-        if include_internal && let Some(attribution) = &self.mcp_attribution {
-            let serialized = to_json_string_bounded(attribution, MAX_MCP_ATTRIBUTION_BYTES)
-                .unwrap_or_else(|error| {
-                    if error.io_error_kind() == Some(ErrorKind::WriteZero) {
-                        r#"{"status":"attribution_error","error_reason":"payload_too_large"}"#
-                            .to_string()
-                    } else {
-                        r#"{"status":"attribution_error","error_reason":"serialization_failed"}"#
-                            .to_string()
-                    }
-                });
-            client_metadata.insert(MCP_ATTRIBUTION_CLIENT_METADATA_KEY.to_string(), serialized);
         }
         client_metadata
     }

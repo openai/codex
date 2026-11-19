@@ -4,7 +4,6 @@
 #[cfg(test)]
 #[path = "executed_tool_calls_direct_tests.rs"]
 mod direct_tests;
-mod mcp_attribution;
 mod request_metadata;
 
 use std::collections::HashMap;
@@ -26,8 +25,6 @@ use codex_model_provider::provider_uses_first_party_auth_path;
 use codex_protocol::ResponseItemId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::mcp::CallToolResult;
-use codex_protocol::mcp::McpAttribution;
-use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::models::ExecutedToolCall;
 use codex_protocol::models::ExecutedToolCallArguments;
 use codex_protocol::models::ResponseItem;
@@ -72,7 +69,6 @@ pub(crate) struct ExecutedToolCalls {
     captures_result_bodies: bool,
     retained_direct_metadata_bytes: Arc<AtomicUsize>,
     pending_direct_calls: Arc<AtomicUsize>,
-    mcp_attribution: mcp_attribution::McpAttributionRecorder,
 }
 
 /// Private bytes belong to one regular task. History keeps only the host-issued IDs.
@@ -453,7 +449,6 @@ impl ExecutedToolCalls {
             }))),
             retained_direct_metadata_bytes: Arc::new(AtomicUsize::new(0)),
             pending_direct_calls: Arc::new(AtomicUsize::new(0)),
-            mcp_attribution: mcp_attribution::McpAttributionRecorder::new(history),
         }
     }
 
@@ -561,23 +556,6 @@ impl ExecutedToolCalls {
             .filter(|capture| call.permits_result_body(capture.auth_mode))?
             .start_capture(nested_call_id)
     }
-
-    pub(crate) fn record_mcp_source(&self, source: McpAttributionSource) {
-        self.mcp_attribution.record(source);
-    }
-
-    pub(crate) fn mcp_attribution_snapshot(&self) -> McpAttribution {
-        self.mcp_attribution.snapshot()
-    }
-
-    pub(crate) fn mcp_attribution_checkpoint(&self, force: bool) -> Option<(McpAttribution, u64)> {
-        self.mcp_attribution.checkpoint(force)
-    }
-
-    pub(crate) fn mark_mcp_attribution_persisted(&self, revision: u64) {
-        self.mcp_attribution.mark_persisted(revision);
-    }
-
     /// Consult the inventory attached to this exact exec output during actor sampling.
     /// Pending cells can still produce other outputs and have no per-output inventory yet.
     pub(crate) fn exec_output_matches(

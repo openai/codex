@@ -527,7 +527,7 @@ fn tool_plugin_context_collects_app_and_mcp_sources() {
 }
 
 #[test]
-fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
+fn selected_plugin_attribution_does_not_join_an_unrelated_local_summary() {
     let key = McpServerKey::in_environment(DEFAULT_MCP_SERVER_ENVIRONMENT_ID, "github");
     let mut config = test_mcp_config(PathBuf::new());
     let mut catalog = ResolvedMcpCatalog::builder();

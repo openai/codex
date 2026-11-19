@@ -37,12 +37,6 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
     metadata.history_sequence = Some(1);
     metadata.sampled_through_sequence = Some(0);
     metadata.model_search_state = Some(codex_history::ModelSearchState::Unused);
-    metadata.mcp_attribution = Some(
-        session
-            .services
-            .executed_tool_calls
-            .mcp_attribution_snapshot(),
-    );
 
     let recorded = session.clone_history().await.into_annotated_items();
     assert_eq!(recorded, vec![expected.clone()]);

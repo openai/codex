@@ -181,7 +181,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
-use codex_rollout::should_persist_response_item;
 use codex_rollout::state_db;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -4153,40 +4152,13 @@ impl Session {
                     .get_or_insert_with(|| with_serialization_allowance(policy).token_budget());
             }
         }
-        // Last-N-turn forks retain a suffix starting at a user turn boundary. Repeat the
-        // cumulative checkpoint there so the suffix remains self-contained even when the fork
-        // happens mid-turn; dirty checkpoints preserve new sources between boundaries.
-        let force_mcp_checkpoint = items
+        let has_user_turn_boundary = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        let cached_retry = matches!(&realtime, Some(RealtimeRecord::Handoff(input)) if input.cached_envelope.is_some());
-        let mcp_revision = (!cached_retry)
-            .then(|| {
-                self.services
-                    .executed_tool_calls
-                    .mcp_attribution_checkpoint(force_mcp_checkpoint)
-            })
-            .flatten()
-            .and_then(|(attribution, revision)| {
-                let first_persisted = items
-                    .iter()
-                    .position(|envelope| should_persist_response_item(&envelope.item))?;
-                for (index, envelope) in items.iter_mut().enumerate() {
-                    // Rollout batches may be partially written. Checkpoint the first persisted
-                    // item, and repeat the checkpoint at turn boundaries retained by forks.
-                    if index == first_persisted
-                        || crate::context_manager::is_user_turn_boundary(&envelope.item)
-                    {
-                        envelope.metadata.get_or_insert_default().mcp_attribution =
-                            Some(attribution.clone());
-                    }
-                }
-                Some(revision)
-            });
         // Thread settings precede the first accepted input. Keep the persistence lock
         // through its seal, and clear the pending flag only after the seal succeeds.
         let realtime_settings_guard = if realtime.is_some()
-            && force_mcp_checkpoint
+            && has_user_turn_boundary
             && self.reference_context_item().await.is_none()
         {
             Some(thread_settings::acquire_persistence_lock(self).await)
@@ -4302,14 +4274,11 @@ impl Session {
                     metadata: image,
                 });
         }
-        let persisted = if let Some(RealtimeRecord::Handoff(prepared)) = &realtime {
+        if let Some(RealtimeRecord::Handoff(prepared)) = &realtime {
             self.finish_realtime_handoff(prepared, &items[0]).await;
-            true
-        } else if matches!(&realtime, Some(RealtimeRecord::Chunk)) {
-            true
-        } else {
+        } else if !matches!(&realtime, Some(RealtimeRecord::Chunk)) {
             let settings_guard =
-                if force_mcp_checkpoint && self.reference_context_item().await.is_none() {
+                if has_user_turn_boundary && self.reference_context_item().await.is_none() {
                     Some(thread_settings::acquire_persistence_lock(self).await)
                 } else {
                     None
@@ -4327,14 +4296,10 @@ impl Session {
                 .map(RolloutItem::EventMsg)
                 .chain(items.into_iter().map(RolloutItem::ResponseItem))
                 .collect::<Vec<_>>();
-            self.persist_rollout_items(&rollout_items).await
-        };
-        drop(realtime_settings_guard);
-        if persisted && let Some(revision) = mcp_revision {
-            self.services
-                .executed_tool_calls
-                .mark_mcp_attribution_persisted(revision);
+            self.persist_rollout_items(&rollout_items).await;
+            drop(settings_guard);
         }
+        drop(realtime_settings_guard);
         if turn_context.config.memories.disable_on_external_context
             && let Some(item) = response_items
                 .iter()
@@ -5001,16 +4966,6 @@ impl Session {
             &self.services.thread_extension_data,
             &mut items,
         );
-        let mcp_revision = self
-            .services
-            .executed_tool_calls
-            .mcp_attribution_checkpoint(/*force*/ true)
-            .and_then(|(attribution, revision)| {
-                items.last_mut().map(|envelope| {
-                    envelope.metadata.get_or_insert_default().mcp_attribution = Some(attribution);
-                    revision
-                })
-            });
         if let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
             matches!(
                 envelope.item,
@@ -5152,13 +5107,7 @@ impl Session {
             // The frozen turn context must not override current settings in persisted metadata.
             RolloutItem::EventMsg(thread_settings::applied_event(self).await),
         ];
-        if self.persist_rollout_items(&rollout_items).await
-            && let Some(revision) = mcp_revision
-        {
-            self.services
-                .executed_tool_calls
-                .mark_mcp_attribution_persisted(revision);
-        }
+        self.persist_rollout_items(&rollout_items).await;
         {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);

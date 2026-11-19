@@ -18,6 +18,8 @@ pub use compaction_checkpoint::CompactionCheckpoint;
 mod initialization;
 pub use initialization::HistoryInitialization;
 
+mod legacy_mcp_attribution;
+
 use std::borrow::Borrow;
 use std::borrow::Cow;
 use std::ops::Deref;
@@ -28,8 +30,6 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::mcp::McpAttribution;
-use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -193,13 +193,16 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_user_message: bool,
 
-    /// Cumulative MCP tools/call attribution checkpoint, never model-visible.
+    /// Whether an old `mcp_attribution` value indicates Search MCP may have been used.
     #[serde(
         default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_mcp_attribution_checkpoint"
+        rename = "mcp_attribution",
+        skip_serializing,
+        deserialize_with = "legacy_mcp_attribution::deserialize_search_mcp_use"
     )]
-    pub mcp_attribution: Option<McpAttribution>,
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub legacy_search_mcp_used: Option<bool>,
 
     /// Search provider already used by this thread, or confirmation that neither has run yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,22 +250,6 @@ impl std::fmt::Debug for ImageReplaySource {
             .field("original_data_url_len", &self.original_data_url.len())
             .finish_non_exhaustive()
     }
-}
-
-fn deserialize_mcp_attribution_checkpoint<'de, D>(
-    deserializer: D,
-) -> Result<Option<McpAttribution>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    Ok(Some(serde_json::from_value(value).unwrap_or_else(|_| {
-        McpAttribution {
-            status: McpAttributionStatus::AttributionError,
-            error_reason: None,
-            sources: Vec::new(),
-        }
-    })))
 }
 
 impl CodexHarnessMetadata {

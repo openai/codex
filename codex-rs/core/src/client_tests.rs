@@ -17,8 +17,6 @@ use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
 use crate::responses_metadata::CodexResponsesMetadata;
-use crate::responses_metadata::MAX_MCP_ATTRIBUTION_BYTES;
-use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use base64::Engine;
@@ -51,9 +49,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
-use codex_protocol::mcp::McpAttribution;
-use codex_protocol::mcp::McpAttributionSource;
-use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ExecutedToolCall;
@@ -645,29 +640,17 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
         "private": { "resource": "raw-result-metadata" },
     })));
     let without_raw_metadata = output_with_tool_result_metadata(ToolResultMetadata::default());
-    let attribution = McpAttribution {
-        status: McpAttributionStatus::Complete,
-        error_reason: None,
-        sources: vec![McpAttributionSource {
-            connector_id: Some("connector_example".to_string()),
-            plugin_id: Some("example@openai-bundled".to_string()),
-            server_name: "codex_apps".to_string(),
-            tool_name: "search".to_string(),
-            first_turn_id: "turn_123".to_string(),
-        }],
-    };
     let prompt = Prompt {
         input: vec![output.clone(), omitted_output.clone()],
         ..Default::default()
     };
-    let mut responses_metadata = test_responses_metadata_for_client(
+    let responses_metadata = test_responses_metadata_for_client(
         &client,
         /*turn_id*/ None,
         format!("{}:0", client.state.thread_id),
         /*parent_thread_id*/ None,
         TestCodexResponsesRequestKind::Turn,
     );
-    responses_metadata.mcp_attribution = Some(attribution.clone());
     for (provider_grant, base_url, allowed) in [
         (false, "https://api.openai.com/v1", true),
         (false, "https://chatgpt.com/backend-api/codex", true),
@@ -718,15 +701,6 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
                 serde_json::to_value(&request)?["input"],
                 expected_wire_input
             );
-            let expected_json = allowed
-                .then(|| serde_json::to_string(&attribution).map(serde_json::Value::String))
-                .transpose()?;
-            assert_eq!(
-                serde_json::to_value(&request)?
-                    .get("client_metadata")
-                    .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)),
-                expected_json.as_ref(),
-            );
             let ws_client_metadata = client.build_ws_client_metadata(
                 &responses_metadata,
                 include_internal,
@@ -738,70 +712,9 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
             };
             let ws_request = serde_json::to_value(ws_request)?;
             assert_eq!(ws_request["input"], expected_wire_input);
-            assert_eq!(
-                ws_request
-                    .get("client_metadata")
-                    .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)),
-                expected_json.as_ref(),
-            );
-            assert!(
-                serde_json::to_value(&request)?
-                    .get("mcp_attribution")
-                    .is_none()
-            );
             assert_eq!(prompt.input, vec![output.clone(), omitted_output.clone()]);
         }
     }
-    responses_metadata.mcp_attribution = Some(McpAttribution {
-        status: McpAttributionStatus::AttributionError,
-        error_reason: Some(
-            codex_protocol::mcp::McpAttributionErrorReason::HistoryMissingCheckpoint,
-        ),
-        sources: attribution.sources.clone(),
-    });
-    let request = client.build_responses_request(
-        &prompt,
-        &test_model_info(),
-        /*effort*/ None,
-        codex_protocol::config_types::ReasoningSummary::None,
-        /*service_tier*/ None,
-        &responses_metadata,
-        /*include_internal*/ true,
-    )?;
-    assert_eq!(
-        request
-            .client_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY))
-            .map(|value| serde_json::from_str::<serde_json::Value>(value))
-            .transpose()?,
-        Some(json!({
-            "status": "attribution_error",
-            "sources": attribution.sources,
-            "error_reason": "history_missing_checkpoint",
-        })),
-    );
-
-    let mut oversized_attribution = attribution;
-    oversized_attribution.sources[0].tool_name = "a".repeat(MAX_MCP_ATTRIBUTION_BYTES);
-    responses_metadata.mcp_attribution = Some(oversized_attribution);
-    let request = client.build_responses_request(
-        &prompt,
-        &test_model_info(),
-        /*effort*/ None,
-        codex_protocol::config_types::ReasoningSummary::None,
-        /*service_tier*/ None,
-        &responses_metadata,
-        /*include_internal*/ true,
-    )?;
-    assert_eq!(
-        request.client_metadata.as_ref().and_then(|metadata| {
-            metadata
-                .get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)
-                .map(String::as_str)
-        }),
-        Some(r#"{"status":"attribution_error","error_reason":"payload_too_large"}"#),
-    );
     Ok(())
 }
 

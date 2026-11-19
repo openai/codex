@@ -269,70 +269,31 @@ fn response_item_envelope_accessors_preserve_item() {
 }
 
 #[test]
-fn mcp_checkpoint_handles_missing_or_unknown_identity() -> Result<()> {
-    let metadata: CodexHarnessMetadata = serde_json::from_value(json!({}))?;
-    assert_eq!(metadata.mcp_attribution, None);
-
-    let restored: CodexHarnessMetadata = serde_json::from_value(json!({
+fn old_rollout_metadata_restores_search_mcp_use() -> Result<()> {
+    let metadata: CodexHarnessMetadata = serde_json::from_value(json!({
         "mcp_attribution": {
             "status": "complete",
             "sources": [{
+                "connector_id": "connector_openai_search_service",
                 "server_name": "example",
                 "tool_name": "search",
-                "first_turn_id": "turn_1",
-                "future_identity": "unknown to this reader"
+                "first_turn_id": "turn_1"
             }]
         }
     }))?;
-    assert_eq!(
-        restored.mcp_attribution,
-        Some(McpAttribution {
-            status: McpAttributionStatus::AttributionError,
-            error_reason: None,
-            sources: Vec::new(),
-        })
-    );
-    Ok(())
-}
 
-#[test]
-fn mcp_error_diagnostics_do_not_invalidate_checkpoints() -> Result<()> {
-    let metadata = CodexHarnessMetadata {
-        mcp_attribution: Some(McpAttribution {
-            status: McpAttributionStatus::AttributionError,
-            error_reason: Some(
-                codex_protocol::mcp::McpAttributionErrorReason::HistoryMissingCheckpoint,
-            ),
-            sources: Vec::new(),
-        }),
-        ..Default::default()
-    };
-    for (reason, expected_reason) in [
-        (None, None),
-        (
-            Some(json!("future_reason")),
-            Some(codex_protocol::mcp::McpAttributionErrorReason::Unknown),
-        ),
-        (Some(json!({"invalid": true})), None),
-    ] {
-        let mut serialized = serde_json::to_value(&metadata)?;
-        let attribution = serialized["mcp_attribution"]
-            .as_object_mut()
-            .expect("attribution object");
-        if let Some(reason) = reason {
-            attribution.insert("error_reason".to_string(), reason);
-        } else {
-            attribution.remove("error_reason");
+    assert_eq!(metadata.legacy_search_mcp_used, Some(true));
+
+    let clean: CodexHarnessMetadata = serde_json::from_value(json!({
+        "mcp_attribution": {
+            "status": "none",
+            "sources": []
         }
-        let restored: CodexHarnessMetadata = serde_json::from_value(serialized)?;
-        let mut expected = metadata.clone();
-        expected
-            .mcp_attribution
-            .as_mut()
-            .expect("attribution checkpoint")
-            .error_reason = expected_reason;
-        assert_eq!(restored, expected);
-    }
+    }))?;
+    assert_eq!(clean.legacy_search_mcp_used, Some(false));
+
+    let missing: CodexHarnessMetadata = serde_json::from_value(json!({}))?;
+    assert_eq!(missing.legacy_search_mcp_used, None);
     Ok(())
 }
 

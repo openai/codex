@@ -163,15 +163,11 @@ impl SearchOwner {
                 Some(ModelSearchState::Unused) | Some(ModelSearchState::Standalone) | None => {}
             }
             legacy_native |= metadata.native_search_fallback_used;
-            if let Some(attribution) = metadata.mcp_attribution.as_ref() {
-                legacy_search_mcp |= attribution.status
-                    == codex_protocol::mcp::McpAttributionStatus::AttributionError
-                    || attribution.sources.iter().any(|source| {
-                        source.connector_id.as_deref() == Some(codex_mcp::SEARCH_CONNECTOR)
-                    });
+            if let Some(search_mcp_used) = metadata.legacy_search_mcp_used {
+                legacy_search_mcp |= search_mcp_used;
             }
             has_checkpoint |=
-                metadata.model_search_state.is_some() || metadata.mcp_attribution.is_some();
+                metadata.model_search_state.is_some() || metadata.legacy_search_mcp_used.is_some();
         };
         for item in history.get_rollout_items() {
             match item {

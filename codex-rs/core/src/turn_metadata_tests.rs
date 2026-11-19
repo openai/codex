@@ -9,7 +9,6 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::FORKED_FROM_ORDINAL_EXCLUSIVE_KEY;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::LEGACY_CODE_MODE_TOOL_NAMES_KEY;
-use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::responses_metadata::NODE_REPL_AUTO_REVIEW_REQUIRED_KEY;
 use crate::responses_metadata::NODE_REPL_DISABLED_KEY;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
@@ -1364,7 +1363,6 @@ fn responses_api_metadata_rejects_reserved_keys() {
         TURN_TRIGGER_KEY,
         WINDOW_ID_KEY,
         CONTEXT_WINDOW_ID_KEY,
-        MCP_ATTRIBUTION_CLIENT_METADATA_KEY,
     ] {
         assert_eq!(
             validate_extra_metadata(
