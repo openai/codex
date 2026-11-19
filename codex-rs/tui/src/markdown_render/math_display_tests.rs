@@ -27,6 +27,14 @@ $$
 x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}
 $$
 
+$$
+I'=\frac{\widetilde{I}}{\rho}
+$$
+
+$$
+I'=\frac{\widetilde I}{\rho}
+$$
+
 $$\frac{1}{2}\frac{3}{4}$$
 
 $$
