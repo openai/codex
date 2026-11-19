@@ -402,6 +402,11 @@ jobs:
 
       - name: Build upstream rusty_v8 sandbox release pair
         env:
+          # Stage ICU data for mksnapshot. Code mode registers its own copy at runtime.
+          GN_ARGS: >-
+            icu_use_data_file=true
+            icu_copy_icudata_to_root_build_dir=true
+            v8_depend_on_icu_data_file=true
           SCCACHE_IDLE_TIMEOUT: 0
           TARGET: ${{ matrix.target }}
           V8_FROM_SOURCE: "1"
