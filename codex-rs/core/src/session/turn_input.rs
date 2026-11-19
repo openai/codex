@@ -16,6 +16,8 @@
 use super::TurnInput;
 use super::UserInputMetadata;
 use super::inject::validate_injected_response_item;
+use super::input_queue::InputQueueEntry;
+use super::input_queue::SubmittedAdditionalContext;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
@@ -322,7 +324,8 @@ async fn handle_inner(
         request
             .request
             .additional_context
-            .values()
+            .iter()
+            .flat_map(BTreeMap::values)
             .try_for_each(AdditionalContextEntry::validate)
             .map_err(|message| CodexErr::InvalidRequest(message.to_owned()))?;
     }
@@ -483,7 +486,7 @@ pub(super) async fn start_or_steer(
         mut input,
         thread_settings,
         start,
-        additional_context,
+        mut additional_context,
         responsesapi_client_metadata,
         ..
     } = request;
@@ -518,7 +521,7 @@ pub(super) async fn start_or_steer(
         .steer_input(
             &mut input,
             sender_messages.as_ref(),
-            additional_context.clone(),
+            &mut additional_context,
             /*expected_turn_id*/ None,
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata.clone(),
@@ -568,8 +571,12 @@ pub(super) async fn start_or_steer(
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
-            let mut task_input =
-                merge_additional_context_input(session, &turn_context, additional_context).await;
+            if let Some(context) = additional_context {
+                turn_context
+                    .extension_data
+                    .insert(SubmittedAdditionalContext(context));
+            }
+            let mut task_input = Vec::new();
             if has_explicit_input {
                 task_input.push(
                     pending_turn_input(
@@ -728,8 +735,8 @@ async fn start_if_idle(
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
 
-    let mut task_input =
-        merge_additional_context_input(session, &turn_context, additional_context).await;
+    let mut additional_context = additional_context.map(SubmittedAdditionalContext);
+    let mut task_input = Vec::new();
     let sender_messages = capture_sender_user_messages(session, &mut input).await;
     match kind {
         TurnStartKind::User => {
@@ -748,27 +755,30 @@ async fn start_if_idle(
         TurnStartKind::Automatic | TurnStartKind::Recovery => {
             // Empty automatic user input resumes sampling without a new message.
             if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
-                task_input.push(
-                    pending_turn_input(
-                        session,
-                        input,
-                        sender_messages.as_ref(),
-                        &turn_context.sub_id,
-                        input_metadata,
-                    )
-                    .await,
-                );
                 // Automatic turns drain their queued input before sampling. Keep the
                 // context and the input it describes together for the first request.
                 session
                     .input_queue
                     .extend_pending_input_for_turn_state(
                         turn_state.as_ref(),
-                        std::mem::take(&mut task_input),
+                        vec![InputQueueEntry {
+                            input: pending_turn_input(
+                                session,
+                                input,
+                                sender_messages.as_ref(),
+                                &turn_context.sub_id,
+                                input_metadata,
+                            )
+                            .await,
+                            additional_context: additional_context.take(),
+                        }],
                     )
                     .await;
             }
         }
+    }
+    if let Some(context) = additional_context {
+        turn_context.extension_data.insert(context);
     }
     Ok(session
         .start_task(turn_context, task_input, RegularTask::new())
@@ -791,7 +801,7 @@ async fn steer(
         mut input,
         thread_settings,
         start,
-        additional_context,
+        mut additional_context,
         responsesapi_client_metadata,
         ..
     } = request;
@@ -813,7 +823,7 @@ async fn steer(
         .steer_input(
             &mut input,
             /*sender_messages*/ None,
-            additional_context,
+            &mut additional_context,
             Some(expected_turn_id.as_str()),
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata,
@@ -873,7 +883,7 @@ impl Session {
         }
     }
 
-    fn additional_context_format(&self) -> AdditionalContextFormat {
+    pub(super) fn additional_context_format(&self) -> AdditionalContextFormat {
         if self.enabled(Feature::UntrustedAsToolOutput) {
             AdditionalContextFormat::ToolOutputs
         } else {
@@ -1027,7 +1037,7 @@ impl Session {
         &self,
         input: &mut SubmittedTurnInput,
         sender_messages: Option<&GuardianSenderMessages>,
-        additional_context: BTreeMap<String, AdditionalContextEntry>,
+        additional_context: &mut Option<BTreeMap<String, AdditionalContextEntry>>,
         expected_turn_id: Option<&str>,
         required_final_output_json_schema: Option<&Value>,
         responsesapi_client_metadata: ResponsesApiClientMetadataUpdate,
@@ -1096,10 +1106,6 @@ impl Session {
         {
             return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
         }
-        let mut pending_input =
-            merge_additional_context_input(self, &active_task.turn_context, additional_context)
-                .await;
-
         active_task
             .turn_context
             .turn_metadata_state
@@ -1125,13 +1131,15 @@ impl Session {
                 .await
             }
         };
-        pending_input.push(input);
-        self.bind_realtime_handoffs_to_turn(&pending_input, active_turn_id)
+        self.bind_realtime_handoffs_to_turn(std::slice::from_ref(&input), active_turn_id)
             .await;
         self.input_queue
             .extend_pending_input_and_notify_for_turn_state(
                 active_turn.turn_state.as_ref(),
-                pending_input,
+                vec![InputQueueEntry {
+                    input,
+                    additional_context: additional_context.take().map(SubmittedAdditionalContext),
+                }],
             )
             .await;
         Ok((
@@ -1139,28 +1147,6 @@ impl Session {
             active_task.turn_context.root_turn_id(),
         ))
     }
-}
-
-async fn merge_additional_context_input(
-    session: &Session,
-    turn_context: &TurnContext,
-    additional_context: BTreeMap<String, AdditionalContextEntry>,
-) -> Vec<TurnInput> {
-    let format = session.additional_context_format();
-    let additional_context_input = {
-        let mut state = session.state.lock().await;
-        state.additional_context.merge(
-            additional_context,
-            format,
-            &turn_context.session_telemetry,
-            &session.item_id_generator,
-        )
-    };
-    additional_context_input
-        .into_iter()
-        .map(|item| session.annotate_client_response_item(item))
-        .map(TurnInput::ResponseItem)
-        .collect()
 }
 
 async fn capture_sender_user_messages(

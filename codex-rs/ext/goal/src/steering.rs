@@ -62,11 +62,10 @@ pub(crate) fn continuation_request(
 ) -> TurnInputRequest {
     let steering = goal_context_input_item(continuation_prompt(goal, update_plan_enabled));
     TurnInputRequest::new(TurnInput::ResponseItem(steering)).with_additional_context(
-        [(
+        std::collections::BTreeMap::from([(
             GOAL_OBJECTIVE_CONTEXT.to_owned(),
             AdditionalContextEntry::new(goal.objective.clone(), AdditionalContextKind::Untrusted),
-        )]
-        .into(),
+        )]),
     )
 }
 

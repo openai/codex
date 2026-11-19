@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -29,6 +30,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
@@ -1463,6 +1466,93 @@ async fn session_start_hook_skips_persistence_for_non_local_thread_store() -> Re
 }
 
 #[tokio::test]
+async fn session_start_stop_does_not_deliver_submitted_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("resp-1")]),
+            sse(vec![ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let hook_gate = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = hook_gate.local_addr()?.port();
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            let script = home.join("stop_session_start.py");
+            fs::write(
+                &script,
+                format!(
+                    r#"import json, socket
+with socket.create_connection(("127.0.0.1", {port})) as gate:
+    gate.recv(1)
+print(json.dumps({{"continue": False}}))
+"#
+                ),
+            )
+            .expect("write hook script");
+            let hooks = json!({"hooks": {"SessionStart": [{"hooks": [{
+                "type": "command", "command": format!("python3 {}", script.display())
+            }]}]}});
+            fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hook config");
+        })
+        .with_config(trust_discovered_hooks)
+        // SessionStart must run the Python hook installed in the host test home.
+        .build(&server)
+        .await?;
+    let context = BTreeMap::from([(
+        "continuation".to_owned(),
+        AdditionalContextEntry::new(
+            "resume the task".to_owned(),
+            AdditionalContextKind::Application,
+        ),
+    )]);
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "stopped prompt".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_additional_context(context.clone()),
+        )
+        .await?;
+    let (held_hook, _) = timeout(Duration::from_secs(10), hook_gate.accept()).await??;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "queued steer".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    drop(held_hook);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .start_turn_if_idle(
+            TurnInputRequest::user_input(Vec::new()).with_additional_context(context),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let texts = requests[0].message_input_texts("user");
+    assert!(texts.iter().any(|text| text == "queued steer"));
+    assert!(!texts.iter().any(|text| text == "stopped prompt"));
+    assert!(!requests[0].has_content_kinds(&["additional_content.continuation"]));
+    assert!(requests[1].has_content_kinds(&["additional_content.continuation"]));
+    Ok(())
+}
+
+#[tokio::test]
 async fn session_end_flushes_transcript_and_ignores_control_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2892,12 +2982,24 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     // inside message completion instead, so both steers are in the same pending batch.
     timeout(Duration::from_secs(30), gate.entered.notified()).await?;
 
-    for text in ["accepted queued prompt", "blocked queued prompt"] {
+    for (text, context) in [
+        ("accepted queued prompt", "accepted-context-value"),
+        ("blocked queued prompt", "blocked-context-value"),
+    ] {
         test.codex
-            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-                text: text.to_string(),
-                text_elements: Vec::new(),
-            }]))
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }])
+                .with_additional_context(BTreeMap::from([(
+                    "source".to_string(),
+                    AdditionalContextEntry::new(
+                        context.to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
+                )])),
+            )
             .await?;
     }
 
@@ -2929,9 +3031,20 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     });
     let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
     assert!(!rollout.contains("blocked queued prompt"));
+    assert!(!rollout.contains("blocked-context-value"));
     assert!(rollout.contains("accepted queued prompt"));
 
     let second_user_texts = requests[1].message_input_texts("user");
+    let second_request = requests[1].body_json();
+    assert!(
+        second_request["input"]
+            .as_array()
+            .expect("request input")
+            .iter()
+            .any(|item| item["type"] == "function_call_output"
+                && item["name"] == "source"
+                && item["output"] == "accepted-context-value")
+    );
     assert!(
         second_user_texts.contains(&"accepted queued prompt".to_string()),
         "second request should include the accepted queued prompt",

@@ -34,11 +34,13 @@ use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::hook_runtime::run_turn_interrupt_hooks;
+use crate::session::InputQueueEntry;
 use crate::session::SamplingInterrupt;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn::McpStartupRequirements;
-use crate::session::turn::run_hooks_and_record_inputs;
+use crate::session::turn::merge_submitted_context;
+use crate::session::turn::run_hooks_and_record_input_entries;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -805,7 +807,7 @@ impl Session {
             && !self.work_budget().is_exhausted();
         let finishing = CancellationToken::new();
         let finish_recording = finishing.clone().drop_guard();
-        let (turn_state, unadmitted_task, mut pending_input, outcome_handoff, sampling_interrupted) = {
+        let (turn_state, unadmitted_task, initial_input, outcome_handoff, sampling_interrupted) = {
             let mut active = self.active_turn.lock().await;
             let active_turn = active.as_mut()?;
             if !Arc::ptr_eq(&active_turn.task.as_ref()?.turn_context, &turn_context) {
@@ -830,7 +832,7 @@ impl Session {
                 Arc::clone(&active_turn.turn_state),
                 (task._agent_execution_guard.is_none() && task.pending_initial_input.is_some())
                     .then_some(task.task),
-                task.pending_initial_input.unwrap_or_default(),
+                task.pending_initial_input,
                 task.outcome_handoff,
                 sampling_interrupted,
             )
@@ -839,11 +841,10 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
         let last_agent_message = regular_output.and_then(|output| output.last_agent_message);
-        pending_input.extend(
-            self.input_queue
-                .take_pending_input_for_turn_state(turn_state.as_ref())
-                .await,
-        );
+        let pending_input = self
+            .input_queue
+            .take_pending_input_for_turn_state(turn_state.as_ref())
+            .await;
         let (
             turn_had_memory_citation,
             turn_tool_calls,
@@ -858,11 +859,11 @@ impl Session {
                 std::mem::take(&mut ts.token_usage_by_model),
             )
         };
-        let model_info = turn_context.capture_current_model_info();
-        let record_result = run_hooks_and_record_inputs(
+        let record_result = run_hooks_and_record_input_entries(
             self,
             &turn_context,
-            &model_info,
+            &turn_context.capture_current_model_info(),
+            initial_input.as_deref(),
             &pending_input,
             PersistContext::Standard,
         )
@@ -1283,9 +1284,15 @@ impl Session {
                 .await
             {
                 match input {
-                    TurnInput::ResponseItem(item)
-                        if matches!(item.item, ResponseItem::AgentMessage { .. }) =>
-                    {
+                    InputQueueEntry {
+                        input: TurnInput::ResponseItem(item),
+                        additional_context,
+                    } if matches!(item.item, ResponseItem::AgentMessage { .. }) => {
+                        if let Some(context) = additional_context {
+                            pending_mail.extend(
+                                merge_submitted_context(self, &task.turn_context, &context).await,
+                            );
+                        }
                         pending_mail.push(item);
                     }
                     input => remaining_input.push(input),

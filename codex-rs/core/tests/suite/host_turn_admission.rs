@@ -1,5 +1,6 @@
 //! Host capacity is acquired by the ordinary task startup path, including on a root.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +27,8 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -482,6 +485,73 @@ async fn suspending_root_during_roster_read_preserves_the_recoverable_prompt() -
     assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
     tokio::time::timeout(Duration::from_secs(10), roster.0.notified()).await?;
     suspend_and_check_recoverable_prompt(&test, &server, turn_id, prompt).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repro_16086_context_only_host_handoff() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("enable multi-agent V2");
+    });
+    let roster = Arc::new(PendingRosterRead::default());
+    let (test, mut attempts) = root_with_admission(&server, builder, Some(roster.clone())).await?;
+    let context = BTreeMap::from([(
+        "handoff".to_owned(),
+        AdditionalContextEntry::new(
+            "roster case 16086".to_owned(),
+            AdditionalContextKind::Application,
+        ),
+    )]);
+    let submitted = test
+        .codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(Vec::new()).with_additional_context(context),
+        )
+        .await?;
+    let TurnInputSubmission::Started { turn_id, .. } = submitted else {
+        anyhow::bail!("expected a new turn, got {submitted:?}");
+    };
+    let (request, grant) = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+        .await?
+        .context("admission provider dropped")?;
+    assert_eq!(request.turn_id, turn_id);
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    tokio::time::timeout(Duration::from_secs(10), roster.0.notified()).await?;
+
+    assert_eq!(
+        test.codex.suspend_turn_and_shutdown().await?,
+        SuspendTurnOutcome::Suspended { turn_id }
+    );
+    let history = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let expected = vec![input_text("<handoff>roster case 16086</handoff>")];
+    let saved_context_items = history
+        .items
+        .iter()
+        .filter(|entry| {
+            let RolloutItem::ResponseItem(envelope) = entry else {
+                return false;
+            };
+            matches!(&envelope.item, ResponseItem::Message { role, content, .. }
+            if role == "developer" && content == &expected)
+        })
+        .count();
+    let requests = responses::received_responses_requests(&server).await;
+    assert!(requests.is_empty(), "expected suspension before inference");
+    assert_eq!(
+        saved_context_items, 1,
+        "context-only submission must survive host handoff"
+    );
+    Ok(())
 }
 
 async fn suspend_and_check_recoverable_prompt(

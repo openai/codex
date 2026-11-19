@@ -46,7 +46,9 @@ use crate::responses_retry::handle_response_stream_error;
 use crate::responses_retry::is_terminal_sampling_outcome;
 use crate::rollout_budget::ResponseWork;
 use crate::rollout_budget::TurnWork;
+use crate::session::InputQueueEntry;
 use crate::session::PreviousTurnSettings;
+use crate::session::SubmittedAdditionalContext;
 use crate::session::TurnInput;
 use crate::session::daemon_recovery::RecordedTurnInput;
 use crate::session::sampling_interrupt::SamplingInterrupt;
@@ -174,7 +176,14 @@ async fn preserve_initial_input_during<T>(
     input: &mut Vec<TurnInput>,
     prepare: impl Future<Output = T>,
 ) -> CodexResult<T> {
-    if input.is_empty() || sess.host_roster_reader(turn_context).is_none() {
+    // A context-only submission still needs Some([]) so suspension records its context.
+    if sess.host_roster_reader(turn_context).is_none()
+        || (input.is_empty()
+            && turn_context
+                .extension_data
+                .get::<SubmittedAdditionalContext>()
+                .is_none())
+    {
         return Ok(prepare.await);
     }
 
@@ -227,11 +236,12 @@ pub(crate) async fn run_turn(
     if !model_info.input_modalities.contains(&InputModality::Audio)
         && input.iter().any(turn_input_has_uploaded_audio_file)
     {
-        let result = run_hooks_and_record_inputs(
+        let result = run_hooks_and_record_input_entries(
             &sess,
             &turn_context,
             &model_info,
-            &input,
+            Some(&input),
+            /*pending_input*/ &[],
             PersistContext::TurnStart,
         )
         .await;
@@ -274,11 +284,12 @@ pub(crate) async fn run_turn(
         .await?
     {
         // Compaction runs before the new input is recorded, so preserve it on every failure.
-        let _ = run_hooks_and_record_inputs(
+        let _ = run_hooks_and_record_input_entries(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
-            &input,
+            Some(&input),
+            /*pending_input*/ &[],
             PersistContext::Standard,
         )
         .await;
@@ -323,11 +334,12 @@ pub(crate) async fn run_turn(
         {
             Ok(requirements) => requirements,
             Err(err) => {
-                let _ = run_hooks_and_record_inputs(
+                let _ = run_hooks_and_record_input_entries(
                     &sess,
                     &turn_context,
                     &turn_context.capture_current_model_info(),
-                    &input,
+                    Some(&input),
+                    /*pending_input*/ &[],
                     PersistContext::Standard,
                 )
                 .await;
@@ -351,11 +363,12 @@ pub(crate) async fn run_turn(
     {
         Ok(step_context) => step_context,
         Err(err) if crate::tasks::ends_turn_as_interrupted(&err) => {
-            let _ = run_hooks_and_record_inputs(
+            let _ = run_hooks_and_record_input_entries(
                 &sess,
                 &turn_context,
                 &turn_context.capture_current_model_info(),
-                &input,
+                Some(&input),
+                /*pending_input*/ &[],
                 PersistContext::Standard,
             )
             .await;
@@ -410,6 +423,10 @@ pub(crate) async fn run_turn(
     };
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
+        // A queued steer can reuse this turn context after the initial input is discarded.
+        turn_context
+            .extension_data
+            .remove::<SubmittedAdditionalContext>();
         return Ok(None);
     }
     if crate::guardian::is_basic_session_source(&turn_context.session_source)
@@ -455,11 +472,12 @@ pub(crate) async fn run_turn(
         .await?;
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(
+    if run_hooks_and_record_input_entries(
         &sess,
         &turn_context,
         &first_step_context.settings.model_info,
-        &input,
+        Some(&input),
+        /*pending_input*/ &[],
         PersistContext::TurnStart,
     )
     .await?
@@ -569,10 +587,11 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(
+        if run_hooks_and_record_input_entries(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
+            /*initial_input*/ None,
             &pending_input,
             PersistContext::SteeredUserInput,
         )
@@ -604,7 +623,8 @@ pub(crate) async fn run_turn(
                 .await?
             }
             Some(_) | None => {
-                let pending_user_input = input_for_extensions(&pending_input);
+                let pending_user_input =
+                    input_for_extensions(pending_input.iter().map(|entry| &entry.input));
                 if allow_plugin_mentions {
                     required_plugins.extend(crate::plugins::collect_explicit_plugin_ids(
                         &pending_user_input,
@@ -1151,19 +1171,39 @@ async fn turn_diff_display_roots(step_context: &StepContext) -> Vec<(String, Pat
     display_roots
 }
 
-#[instrument(level = "trace", skip_all)]
-pub(crate) async fn run_hooks_and_record_inputs(
+#[instrument(name = "run_hooks_and_record_inputs", level = "trace", skip_all)]
+pub(crate) async fn run_hooks_and_record_input_entries(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     model_info: &ModelInfo,
-    input: &[TurnInput],
+    initial_input: Option<&[TurnInput]>,
+    pending_input: &[InputQueueEntry],
     persist_context: PersistContext,
 ) -> CodexResult<bool> {
+    // A started turn owns one initial submission; consume its context exactly once.
+    let initial_context = turn_context
+        .extension_data
+        .remove::<SubmittedAdditionalContext>();
+    // An empty original submission can deliver context by itself; missing input
+    // means its original submission is no longer available for delivery.
+    if matches!(initial_input, Some([]))
+        && let Some(context) = initial_context.as_deref()
+        && can_record_input(sess)
+    {
+        record_delivered_additional_context(sess, turn_context, model_info, context).await;
+    }
+    let initial_input = initial_input.unwrap_or_default();
     let mut blocked_input = false;
     let mut accepted_user_input = false;
     let mut input_error = None;
-    for input_item in recordable_inputs(sess, model_info, input) {
-        let input_item = input_item?;
+    for input_item in recordable_inputs(
+        sess,
+        model_info,
+        initial_input,
+        pending_input,
+        initial_context.as_deref(),
+    ) {
+        let (input_item, additional_context) = input_item?;
         let hook_outcome = inspect_pending_input(sess, turn_context, &input_item).await;
         let realtime_handoff_id = match input_item.as_ref() {
             TurnInput::UserInput { metadata, .. } => metadata.realtime_handoff_id,
@@ -1176,6 +1216,9 @@ pub(crate) async fn run_hooks_and_record_inputs(
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
+            if let Some(context) = additional_context {
+                record_delivered_additional_context(sess, turn_context, model_info, context).await;
+            }
             // Tool outputs retain their durability barrier, including in mixed input batches.
             let input_persist_context = if persist_context == PersistContext::SteeredUserInput
                 && matches!(input_item.as_ref(), TurnInput::FunctionCallOutput(_))
@@ -1204,7 +1247,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
     }
     // The batch has left the input queue. Persist every accepted item before the
     // optional lookup can suspend this task long enough for an interrupt to abort it.
-    if !input.is_empty() {
+    if !initial_input.is_empty() || !pending_input.is_empty() {
         super::file_audio::resolve_pending(sess).await;
     }
     if let Some(error) = input_error {
@@ -1214,28 +1257,60 @@ pub(crate) async fn run_hooks_and_record_inputs(
     Ok(blocked_input && !accepted_user_input)
 }
 
-/// Yields usable input in order, then reports unsupported audio after valid siblings can be recorded.
+pub(crate) async fn record_delivered_additional_context(
+    sess: &Session,
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    context: &SubmittedAdditionalContext,
+) {
+    let items = merge_submitted_context(sess, turn_context, context).await;
+    if !items.is_empty() {
+        sess.record_annotated_conversation_items(turn_context, model_info, items)
+            .await;
+    }
+}
+
+pub(crate) async fn merge_submitted_context(
+    sess: &Session,
+    turn_context: &TurnContext,
+    context: &SubmittedAdditionalContext,
+) -> Vec<ResponseItemEnvelope> {
+    let items = sess.state.lock().await.additional_context.merge(
+        context.0.clone(),
+        sess.additional_context_format(),
+        &turn_context.session_telemetry,
+        &sess.item_id_generator,
+    );
+    items
+        .into_iter()
+        .map(|item| sess.annotate_client_response_item(item))
+        .collect()
+}
+
+/// Yields usable input with its context in order, then reports unsupported audio after valid siblings can be recorded.
 pub(crate) fn recordable_inputs<'a>(
     sess: &Session,
     model_info: &ModelInfo,
-    input: &'a [TurnInput],
-) -> impl Iterator<Item = CodexResult<Cow<'a, TurnInput>>> {
-    let rejected_audio = !model_info.input_modalities.contains(&InputModality::Audio)
-        && input.iter().any(turn_input_has_uploaded_audio_file);
-    // Only finalized evidence may enter reusable Guardian history.
-    let items: &[TurnInput] = if sess
-        .services
-        .thread_extension_data
-        .get::<crate::guardian::PendingReviewContext>()
-        .is_some()
-    {
-        &[]
-    } else {
-        input
-    };
-    items
+    initial_input: &'a [TurnInput],
+    pending_input: &'a [InputQueueEntry],
+    initial_context: Option<&'a SubmittedAdditionalContext>,
+) -> impl Iterator<Item = CodexResult<(Cow<'a, TurnInput>, Option<&'a SubmittedAdditionalContext>)>>
+{
+    let input = initial_input
         .iter()
-        .filter_map(move |item| {
+        .enumerate()
+        .map(move |(index, item)| (item, initial_context.filter(|_| index == 0)))
+        .chain(pending_input.iter().map(InputQueueEntry::input_and_context));
+    let rejected_audio = !model_info.input_modalities.contains(&InputModality::Audio)
+        && input
+            .clone()
+            .any(|(item, _)| turn_input_has_uploaded_audio_file(item));
+    let can_record = can_record_input(sess);
+    input
+        .filter_map(move |(item, context)| {
+            if !can_record {
+                return None;
+            }
             let mut item = Cow::Borrowed(item);
             if rejected_audio
                 && turn_input_has_uploaded_audio_file(&item)
@@ -1246,9 +1321,17 @@ pub(crate) fn recordable_inputs<'a>(
                     return None;
                 }
             }
-            Some(Ok(item))
+            Some(Ok((item, context)))
         })
         .chain(rejected_audio.then(|| Err(unsupported_uploaded_audio_error())))
+}
+
+fn can_record_input(sess: &Session) -> bool {
+    // Only finalized evidence may enter reusable Guardian history.
+    sess.services
+        .thread_extension_data
+        .get::<crate::guardian::PendingReviewContext>()
+        .is_none()
 }
 
 fn turn_input_has_uploaded_audio_file(input: &TurnInput) -> bool {
@@ -1262,9 +1345,9 @@ fn unsupported_uploaded_audio_error() -> CodexErr {
 }
 
 /// Extensions and telemetry consume the protocol view, including the original mention and path labels.
-fn input_for_extensions(input: &[TurnInput]) -> Vec<UserInput> {
+fn input_for_extensions<'a>(input: impl IntoIterator<Item = &'a TurnInput>) -> Vec<UserInput> {
     input
-        .iter()
+        .into_iter()
         .filter_map(|item| match item {
             TurnInput::UserInput { content, .. } => Some(content.as_slice()),
             TurnInput::ResponseItem(_)

@@ -13,10 +13,12 @@ use crate::agent::host::AgentTurnAdmission;
 use crate::agent::host::AgentTurnAdmissionRequest;
 use crate::hook_environment_executor::with_environment_hooks;
 use crate::hook_runtime::record_pending_input;
+use crate::session::SubmittedAdditionalContext;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::turn::record_delivered_additional_context;
 use crate::session::turn::recordable_inputs;
-use crate::session::turn::run_hooks_and_record_inputs;
+use crate::session::turn::run_hooks_and_record_input_entries;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::state::TurnState;
@@ -84,21 +86,21 @@ impl Session {
         input: Option<Vec<TurnInput>>,
         abort_reason: Option<&TurnAbortReason>,
     ) -> Result<()> {
-        let Some(mut input) = input else {
+        let Some(input) = input else {
             return Ok(());
         };
-        input.extend(
-            self.input_queue
-                .take_pending_input_for_turn_state(turn_state)
-                .await,
-        );
+        let pending_input = self
+            .input_queue
+            .take_pending_input_for_turn_state(turn_state)
+            .await;
         let model_info = context.capture_current_model_info();
         if abort_reason != Some(&TurnAbortReason::Interrupted) {
-            run_hooks_and_record_inputs(
+            run_hooks_and_record_input_entries(
                 self,
                 context,
                 &model_info,
-                &input,
+                Some(&input),
+                &pending_input,
                 PersistContext::Standard,
             )
             .await?;
@@ -106,8 +108,28 @@ impl Session {
         }
 
         let mut input_error = None;
-        for item in recordable_inputs(self, &model_info, &input) {
-            let item = item?;
+        if input.is_empty() {
+            run_hooks_and_record_input_entries(
+                self,
+                context,
+                &model_info,
+                Some(&[]),
+                /*pending_input*/ &[],
+                PersistContext::Standard,
+            )
+            .await?;
+        }
+        let initial_context = context
+            .extension_data
+            .remove::<SubmittedAdditionalContext>();
+        for item in recordable_inputs(
+            self,
+            &model_info,
+            &input,
+            &pending_input,
+            initial_context.as_deref(),
+        ) {
+            let (item, additional_context) = item?;
             // The user must resubmit a prompt that still needs a submit hook.
             if matches!(item.as_ref(), TurnInput::UserInput { .. })
                 && with_environment_hooks(
@@ -124,6 +146,10 @@ impl Session {
                     self.reject_realtime_handoff(uuid).await;
                 }
                 continue;
+            }
+            if let Some(additional_context) = additional_context {
+                record_delivered_additional_context(self, context, &model_info, additional_context)
+                    .await;
             }
             if let Err(error) = record_pending_input(
                 self,

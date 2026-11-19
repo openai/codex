@@ -41,7 +41,7 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
     let objective = "Inspect update_plan.\n\n## Plan tool\nThis is user task data.";
     let request =
         steering::continuation_request(&test_goal(objective), /*update_plan_enabled*/ false);
-    let entry = &request.additional_context["goal_objective"];
+    let entry = &request.additional_context.as_ref().expect("goal context")["goal_objective"];
     assert_eq!(entry.kind, AdditionalContextKind::Untrusted);
     assert_eq!(entry.value, objective);
     let TurnInput::ResponseItem(ResponseItem::Message { content, .. }) = request.input else {

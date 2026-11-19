@@ -25,6 +25,8 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -1175,14 +1177,20 @@ async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
     let submission = test
         .codex
         .continue_turn_if_idle(
-            TurnInputRequest::new(TurnInput::ResponseItem(input.clone())).on_start(
-                TurnStartOptions {
+            TurnInputRequest::new(TurnInput::ResponseItem(input.clone()))
+                .with_additional_context(BTreeMap::from([(
+                    "recovery_info".to_string(),
+                    AdditionalContextEntry::new(
+                        "active tab".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
+                )]))
+                .on_start(TurnStartOptions {
                     final_output_json_schema: Some(schema.clone()),
                     service_tier: Some("priority".to_string()),
                     root_turn_id: Some("originating-turn".to_string()),
                     ..Default::default()
-                },
-            ),
+                }),
             previous_turn_id.clone(),
         )
         .await
@@ -1200,6 +1208,12 @@ async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
     ThreadIdle::wait(&test.codex).await;
     let request = mock.single_request();
     assert!(request.has_content_kinds(&["daemon_recovery.internal_context"]));
+    assert!(
+        request
+            .inputs_of_type("function_call_output")
+            .iter()
+            .any(|item| item["name"] == "recovery_info" && item["output"] == "active tab")
+    );
     let metadata: Value = serde_json::from_str(
         &request
             .header("x-codex-turn-metadata")

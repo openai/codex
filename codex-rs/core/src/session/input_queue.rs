@@ -7,6 +7,7 @@ use codex_diagnostics::GaugeGuard;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_user_input::ResolvedUserInput;
 use serde::Deserialize;
@@ -57,6 +58,32 @@ pub enum TurnInput {
     // through the in-memory queue.
     ResponseItem(#[serde(with = "turn_input_response_item")] ResponseItemEnvelope),
     InterAgentCommunication(crate::PendingAgentMessage),
+}
+
+/// Client context attached to one submitted input.
+#[derive(Debug, PartialEq)]
+pub(crate) struct SubmittedAdditionalContext(pub(crate) BTreeMap<String, AdditionalContextEntry>);
+
+/// An existing input and the optional client context submitted with it.
+#[derive(Debug, PartialEq)]
+pub(crate) struct InputQueueEntry {
+    pub(crate) input: TurnInput,
+    pub(crate) additional_context: Option<SubmittedAdditionalContext>,
+}
+
+impl InputQueueEntry {
+    pub(crate) fn input_and_context(&self) -> (&TurnInput, Option<&SubmittedAdditionalContext>) {
+        (&self.input, self.additional_context.as_ref())
+    }
+}
+
+impl From<TurnInput> for InputQueueEntry {
+    fn from(input: TurnInput) -> Self {
+        Self {
+            input,
+            additional_context: None,
+        }
+    }
 }
 
 mod turn_input_response_item {
@@ -127,7 +154,7 @@ impl TurnInput {
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
-    items: Vec<TurnInput>,
+    items: Vec<InputQueueEntry>,
     /// Activity from notifying writes. Passive response items do not wake a wait.
     notified_activity: Option<InputQueueActivity>,
 }
@@ -250,9 +277,9 @@ impl InputQueue {
         let turn_state = turn_state.lock().await;
         turn_state.accepts_mailbox_delivery_for_current_turn()
             && (native_mail_pending
-                || turn_state.pending_input.items.iter().any(|input| {
+                || turn_state.pending_input.items.iter().any(|entry| {
                     matches!(
-                        input,
+                        &entry.input,
                         TurnInput::ResponseItem(ResponseItemEnvelope {
                             item: ResponseItem::AgentMessage { .. },
                             ..
@@ -385,7 +412,7 @@ impl InputQueue {
         let results: Vec<_> = pending_input
             .items
             .into_iter()
-            .filter_map(|input| match input {
+            .filter_map(|entry| match entry.input {
                 TurnInput::InterAgentCommunication(message) if message.is_terminal_result() => {
                     Some(message)
                 }
@@ -420,7 +447,7 @@ impl InputQueue {
             .pending_input
             .items
             .iter()
-            .any(|input| !input.is_queue_only_mail())
+            .any(|entry| !entry.input.is_queue_only_mail())
         {
             return;
         }
@@ -453,10 +480,12 @@ impl InputQueue {
     pub(super) async fn extend_pending_input_and_notify_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-        input: Vec<TurnInput>,
+        input: Vec<impl Into<InputQueueEntry>>,
     ) {
-        let activity = input.iter().map(TurnInput::wait_activity).max();
-        let queue_only_mail = !input.is_empty() && input.iter().all(TurnInput::is_queue_only_mail);
+        let input: Vec<InputQueueEntry> = input.into_iter().map(Into::into).collect();
+        let activity = input.iter().map(|entry| entry.input.wait_activity()).max();
+        let queue_only_mail =
+            !input.is_empty() && input.iter().all(|entry| entry.input.is_queue_only_mail());
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.pending_input.notified_activity =
@@ -473,15 +502,16 @@ impl InputQueue {
     pub(crate) async fn extend_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-        input: Vec<TurnInput>,
+        input: Vec<impl Into<InputQueueEntry>>,
     ) {
+        let input = input.into_iter().map(Into::into);
         turn_state.lock().await.pending_input.items.extend(input);
     }
 
     pub(crate) async fn take_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-    ) -> Vec<TurnInput> {
+    ) -> Vec<InputQueueEntry> {
         std::mem::take(&mut turn_state.lock().await.pending_input).items
     }
 
@@ -492,7 +522,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (Vec<TurnInput>, TurnStartOptions) {
+    ) -> (Vec<InputQueueEntry>, TurnStartOptions) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -514,13 +544,9 @@ impl InputQueue {
             return (pending_input, TurnStartOptions::default());
         }
         let (mailbox_items, start_options) = self.drain_mailbox_input_items().await;
-        if pending_input.is_empty() {
-            (mailbox_items, start_options)
-        } else {
-            let mut pending_input = pending_input;
-            pending_input.extend(mailbox_items);
-            (pending_input, start_options)
-        }
+        let mut pending_input = pending_input;
+        pending_input.extend(mailbox_items.into_iter().map(InputQueueEntry::from));
+        (pending_input, start_options)
     }
 
     #[expect(
@@ -555,7 +581,7 @@ impl TurnInputQueue {
     pub(crate) fn has_user_input(&self) -> bool {
         self.items
             .iter()
-            .any(|input| matches!(input, TurnInput::UserInput { .. }))
+            .any(|entry| matches!(entry.input, TurnInput::UserInput { .. }))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -568,8 +594,8 @@ impl TurnInputQueue {
         }
         self.items
             .iter()
-            .filter(|input| !matches!(input, TurnInput::ResponseItem(_)))
-            .map(TurnInput::wait_activity)
+            .filter(|entry| !matches!(entry.input, TurnInput::ResponseItem(_)))
+            .map(|entry| entry.input.wait_activity())
             .chain(self.notified_activity)
             .max()
     }

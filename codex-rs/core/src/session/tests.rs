@@ -12798,7 +12798,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         sess.input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
             .await,
-        vec![TurnInput::ResponseItem(pending_item.into())]
+        vec![TurnInput::ResponseItem(pending_item.into()).into()]
     );
 }
 
@@ -12855,7 +12855,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
     assert_eq!(
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
-        vec![TurnInput::InterAgentCommunication(communication.into())],
+        vec![TurnInput::InterAgentCommunication(communication.into()).into()],
     );
 }
 
@@ -12956,8 +12956,8 @@ async fn active_turn_keeps_first_root_when_mail_coalesces(inherited_root: Option
     assert_eq!(
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
         vec![
-            TurnInput::InterAgentCommunication(first.into()),
-            TurnInput::InterAgentCommunication(second.into()),
+            TurnInput::InterAgentCommunication(first.into()).into(),
+            TurnInput::InterAgentCommunication(second.into()).into(),
         ]
     );
     assert_eq!(
@@ -13013,8 +13013,9 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
                 },
                 content: vec![ResolvedUserInput::text("follow up".to_string())],
                 client_id: None,
-            },
-            TurnInput::InterAgentCommunication(communication.into()),
+            }
+            .into(),
+            TurnInput::InterAgentCommunication(communication.into()).into(),
         ],
     );
 }
@@ -13067,8 +13068,9 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
                 },
                 content: vec![ResolvedUserInput::text("follow up".to_string())],
                 client_id: None,
-            },
-            TurnInput::InterAgentCommunication(communication.into()),
+            }
+            .into(),
+            TurnInput::InterAgentCommunication(communication.into()).into(),
         ],
     );
 }
@@ -13129,7 +13131,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     assert!(output.tool_future.is_some());
     assert_eq!(
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
-        vec![TurnInput::InterAgentCommunication(communication.into())],
+        vec![TurnInput::InterAgentCommunication(communication.into()).into()],
     );
 }
 

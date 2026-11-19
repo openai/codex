@@ -278,7 +278,7 @@ impl SampleTask {
             .with_responses_metadata(params.responsesapi_client_metadata)
             .with_trace(trace);
             if source_in_progress {
-                input.additional_context.insert(
+                input.additional_context.get_or_insert_default().insert(
                     "thread_snapshot".to_string(),
                     AdditionalContextEntry::new(
                         THREAD_SNAPSHOT_NOTE.to_string(),

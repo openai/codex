@@ -102,10 +102,9 @@ pub(crate) struct TurnRequestProcessor {
 }
 
 fn map_additional_context(
-    additional_context: Option<HashMap<String, AdditionalContextEntry>>,
+    additional_context: HashMap<String, AdditionalContextEntry>,
 ) -> BTreeMap<String, CoreAdditionalContextEntry> {
     additional_context
-        .unwrap_or_default()
         .into_iter()
         .map(|(key, entry)| {
             let entry = CoreAdditionalContextEntry {
@@ -638,9 +637,10 @@ impl TurnRequestProcessor {
             return Err(error);
         }
         // Validate before changing the thread's live MCP policy.
-        let additional_context = map_additional_context(params.additional_context);
+        let additional_context = params.additional_context.map(map_additional_context);
         additional_context
-            .values()
+            .iter()
+            .flat_map(BTreeMap::values)
             .try_for_each(CoreAdditionalContextEntry::validate)
             .map_err(invalid_request)
             .inspect_err(|error| {
@@ -1185,7 +1185,7 @@ impl TurnRequestProcessor {
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
-        let additional_context = map_additional_context(params.additional_context);
+        let additional_context = params.additional_context.map(map_additional_context);
 
         let submission = thread
             .steer_turn(
