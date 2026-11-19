@@ -1,26 +1,24 @@
 use super::*;
+use crate::app::session_lifecycle::ThreadAttachPresentation;
+use crate::app::startup::statusline_enabled;
 use crate::app::tests::make_test_app_with_channels;
 use codex_app_server_client::AppServerClient;
 use pretty_assertions::assert_eq;
 
-#[tokio::test]
-async fn experimental_features_use_selected_server_profile_and_preserve_task_settings() -> Result<()>
-{
-    let home = tempfile::tempdir()?;
-    let selected = AbsolutePathBuf::from_absolute_path(home.path().join("work.config.toml"))?;
-    let managed = home.path().join("managed.toml");
-    std::fs::write(home.path().join("config.toml"), "# unselected\n")?;
-    std::fs::write(&selected, "[features]\nnetwork_proxy = true\n")?;
-    std::fs::write(&managed, "")?;
+async fn start_feature_server(
+    home: &Path,
+    selected: &AbsolutePathBuf,
+    managed: &Path,
+) -> Result<(AppServerSession, AppServerStartedThread)> {
     let loader = LoaderOverrides {
         user_config_path: Some(selected.clone()),
         user_config_profile: Some("work".parse()?),
-        managed_config_path: Some(managed.clone()),
+        managed_config_path: Some(managed.to_path_buf()),
         ignore_project_config: true,
         ..LoaderOverrides::without_managed_config_for_tests()
     };
     let config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
+        .codex_home(home.to_path_buf())
         .loader_overrides(loader.clone())
         .build()
         .await?;
@@ -43,7 +41,21 @@ async fn experimental_features_use_selected_server_profile_and_preserve_task_set
         AppServerClient::InProcess(client),
         crate::app_server_session::ThreadParamsMode::Remote,
     );
-    let thread = server.start_thread(&config).await?.session.thread_id;
+    let started = server.start_thread(&config).await?;
+    Ok((server, started))
+}
+
+#[tokio::test]
+async fn experimental_features_use_selected_server_profile_and_preserve_task_settings() -> Result<()>
+{
+    let home = tempfile::tempdir()?;
+    let selected = AbsolutePathBuf::from_absolute_path(home.path().join("work.config.toml"))?;
+    let managed = home.path().join("managed.toml");
+    std::fs::write(home.path().join("config.toml"), "# unselected\n")?;
+    std::fs::write(&selected, "[features]\nnetwork_proxy = true\n")?;
+    std::fs::write(&managed, "")?;
+    let (server, started) = start_feature_server(home.path(), &selected, &managed).await?;
+    let thread = started.session.thread_id;
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let before = (app.config.clone(), app.chat_widget.config_ref().clone());
     let updates = vec![
@@ -135,6 +147,72 @@ async fn experimental_features_use_selected_server_profile_and_preserve_task_set
         events.recv().await,
         Some(AppEvent::InsertHistoryCell(_))
     ));
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn statusline_uses_the_startup_flag_until_restart() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let selected = AbsolutePathBuf::from_absolute_path(home.path().join("work.config.toml"))?;
+    let managed = home.path().join("managed.toml");
+    std::fs::write(&selected, "[features]\ntui_extensions_statusline = true\n")?;
+    std::fs::write(&managed, "")?;
+    let (mut server, started) = start_feature_server(home.path(), &selected, &managed).await?;
+    let thread = started.session.thread_id;
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let cwd = app.config.cwd.display().to_string();
+    let read_flag = async |server: &AppServerSession| -> Result<bool> {
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            cwd.clone(),
+        )
+        .await?;
+        Ok(statusline_enabled(&defaults.config))
+    };
+    app.chat_widget.statusline_feature_enabled = read_flag(&server).await?;
+    assert!(app.chat_widget.statusline_feature_enabled);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    std::fs::write(
+        &app.local_settings.user_config_path,
+        "[tui]\nstatus_line_provider = { server = 'fixture', tool = 'line' }\n",
+    )?;
+    app.refresh_in_memory_config_from_disk().await?;
+    app.replace_chat_widget_with_app_server_thread(
+        &mut tui,
+        started,
+        ThreadAttachPresentation::Fresh,
+        /*initial_user_message*/ None,
+    )
+    .await?;
+    let provider = app
+        .chat_widget
+        .selected_statusline_provider()
+        .unwrap()
+        .clone();
+
+    let key = Feature::TuiExtensionsStatusLine.key();
+    let (tx, rx) = oneshot::channel();
+    app.save_experimental_features(&server, thread, vec![(key.into(), false)], tx);
+    assert!(rx.await?.expect("server save").warning.is_none());
+    assert_eq!(
+        app.chat_widget.selected_statusline_provider(),
+        Some(&provider)
+    );
+
+    let next = server.start_thread(&app.config).await?;
+    app.replace_chat_widget_with_app_server_thread(
+        &mut tui,
+        next,
+        ThreadAttachPresentation::Fresh,
+        /*initial_user_message*/ None,
+    )
+    .await?;
+    assert_eq!(
+        app.chat_widget.selected_statusline_provider(),
+        Some(&provider)
+    );
+    assert!(!read_flag(&server).await?);
     server.shutdown().await?;
     Ok(())
 }

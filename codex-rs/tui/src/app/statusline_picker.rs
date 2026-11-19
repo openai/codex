@@ -161,13 +161,8 @@ impl StatuslinePicker {
         }
     }
 
-    fn applies_to(
-        &mut self,
-        thread: Option<ThreadId>,
-        backend: BackendId,
-        config: &Config,
-    ) -> bool {
-        if self.backend != backend || !config.features.enabled(Feature::TuiExtensionsStatusLine) {
+    fn applies_to(&mut self, thread: Option<ThreadId>, backend: BackendId) -> bool {
+        if self.backend != backend {
             return false;
         }
         // The picker may open before the displayed thread receives its ID.
@@ -178,11 +173,7 @@ impl StatuslinePicker {
 
 impl App {
     pub(super) fn open_statusline_picker(&mut self, owner: &AppServerSession) {
-        if !self
-            .config
-            .features
-            .enabled(Feature::TuiExtensionsStatusLine)
-        {
+        if !self.chat_widget.custom_statusline_enabled() {
             return;
         }
         self.statusline_metrics
@@ -230,11 +221,8 @@ impl App {
             .chat_widget
             .selected_index_for_present_view(PICKER)
             .is_none()
-            || !picker.applies_to(
-                self.chat_widget.thread_id(),
-                owner.backend_id(),
-                &self.config,
-            )
+            || !self.chat_widget.custom_statusline_enabled()
+            || !picker.applies_to(self.chat_widget.thread_id(), owner.backend_id())
         {
             self.statusline_picker = None;
             return None;

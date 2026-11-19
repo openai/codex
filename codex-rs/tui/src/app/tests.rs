@@ -2244,8 +2244,7 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         (false, 900_000, "900K window · 8 used"),
     ] {
         let before = render_bottom_popup(&app.chat_widget, /*width*/ 60);
-        app.chat_widget
-            .set_feature_enabled(Feature::TuiExtensionsStatusLine, extensions);
+        app.chat_widget.statusline_feature_enabled = extensions;
         app.refresh_status_line();
         assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 60), before);
         app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(

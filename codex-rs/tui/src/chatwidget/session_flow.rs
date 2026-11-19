@@ -65,6 +65,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn custom_statusline_enabled(&self) -> bool {
+        self.statusline_feature_enabled
+    }
+
     fn on_session_configured_with_display_and_fork_parent_title(
         &mut self,
         session: ThreadSessionState,

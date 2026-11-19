@@ -142,7 +142,7 @@ async fn failed_write_preserves_the_file_and_the_live_selection() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn reloading_the_effective_feature_gate_and_reselecting_an_unchanged_preference() {
+async fn reloading_the_local_provider_preserves_the_server_feature_gate() {
     let mut app = make_test_app().await;
     let path = app.local_settings.user_config_path.clone();
     let configured = "[features]\ntui_extensions_statusline = true\n[tui]\nstatus_line = []\nstatus_line_provider = { tool='line', server='fixture' } # local formatting\n";
@@ -156,6 +156,9 @@ async fn reloading_the_effective_feature_gate_and_reselecting_an_unchanged_prefe
         .into(),
     )];
     app.refresh_in_memory_config_from_disk().await.unwrap();
+    assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
+    app.chat_widget.statusline_feature_enabled = true;
+    app.chat_widget.refresh_status_line();
     assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
 
     let selected = app
@@ -175,9 +178,6 @@ async fn reloading_the_effective_feature_gate_and_reselecting_an_unchanged_prefe
         Some("line")
     );
     std::fs::write(&path, configured.replace("= true", "= false")).unwrap();
-    app.refresh_in_memory_config_from_disk().await.unwrap();
-    assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
-    std::fs::write(&path, configured).unwrap();
     app.refresh_in_memory_config_from_disk().await.unwrap();
     assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Initializing…"));
 }

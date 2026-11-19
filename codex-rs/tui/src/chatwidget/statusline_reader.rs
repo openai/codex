@@ -23,7 +23,6 @@ use crate::ui_tree::UiNode;
 use crate::ui_tree::UiTree;
 use codex_config::types::StatusLineProviderId;
 use codex_config::types::StatusLineSelection;
-use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_utils_path_uri::LegacyAppPathString;
 use std::path::PathBuf;
@@ -81,10 +80,7 @@ impl ChatWidget {
                 .app_event_tx
                 .voice_only
                 .load(std::sync::atomic::Ordering::Relaxed)
-            || !self
-                .config
-                .features
-                .enabled(Feature::TuiExtensionsStatusLine)
+            || !self.custom_statusline_enabled()
         {
             return None;
         }

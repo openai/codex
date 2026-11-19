@@ -25,11 +25,7 @@ async fn picker() -> anyhow::Result<(
     mpsc::UnboundedReceiver<AppEvent>,
 )> {
     let (mut app, events, _) = make_test_app_with_channels().await;
-    app.config
-        .features
-        .enable(Feature::TuiExtensionsStatusLine)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
+    app.chat_widget.statusline_feature_enabled = true;
     app.chat_widget.thread_params_mode = ThreadParamsMode::Cloud;
     let (client, commands, _) = CloudClient::channel(/*capacity*/ 8);
     let owner = AppServerSession::new(
@@ -231,6 +227,7 @@ async fn discovery_only_starts_a_reader_on_explicit_selection() -> anyhow::Resul
     let cwd = app.config.cwd.to_path_buf();
     app.chat_widget
         .handle_thread_session(test_thread_session(thread, cwd));
+    app.chat_widget.statusline_feature_enabled = true;
     let provider = advertised("work", "calendar", "ui://work/day");
 
     for (uri, expected) in [

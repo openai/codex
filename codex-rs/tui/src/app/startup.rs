@@ -52,25 +52,36 @@ fn spawn_startup_thread_start(
     });
 }
 
-pub(super) async fn prepare_fresh_startup_config(
-    config: &mut Config,
-    app_server: &AppServerSession,
+pub(super) fn startup_config_cwd<'a>(
+    config: &'a Config,
+    app_server: &'a AppServerSession,
     app_server_target: &AppServerTarget,
-    cli_kv_overrides: &[(String, TomlValue)],
-    harness_overrides: &ConfigOverrides,
-    environments: &EnvironmentManager,
-) -> Result<crate::projectless::AppliedDefaults> {
-    let defaults_cwd = match app_server_target {
+) -> &'a Path {
+    match app_server_target {
         AppServerTarget::Embedded | AppServerTarget::LocalDaemon { .. } => config.cwd.as_path(),
         AppServerTarget::Remote { .. } | AppServerTarget::Cloud => {
             app_server.remote_cwd_override().unwrap_or(Path::new("."))
         }
-    };
-    let defaults = crate::config_update::read_effective_config_with_layers(
-        &app_server.request_handle(),
-        defaults_cwd.display().to_string(),
-    )
-    .await?;
+    }
+}
+
+pub(super) fn statusline_enabled(config: &codex_app_server_protocol::Config) -> bool {
+    config
+        .additional
+        .get("features")
+        .and_then(|features| features.get(Feature::TuiExtensionsStatusLine.key()))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub(super) fn prepare_fresh_startup_config(
+    config: &mut Config,
+    app_server: &AppServerSession,
+    defaults: &crate::config_update::EffectiveConfig,
+    cli_kv_overrides: &[(String, TomlValue)],
+    harness_overrides: &ConfigOverrides,
+    environments: &EnvironmentManager,
+) -> crate::projectless::AppliedDefaults {
     super::new_session::overlay_new_session_defaults(
         config,
         &defaults.config,
@@ -82,7 +93,7 @@ pub(super) async fn prepare_fresh_startup_config(
         harness_overrides,
         app_server,
         environments,
-        &defaults,
+        defaults,
     );
     apply_managed_new_thread_defaults(
         config,
@@ -90,7 +101,7 @@ pub(super) async fn prepare_fresh_startup_config(
         cli_kv_overrides,
         harness_overrides,
     );
-    Ok(projectless)
+    projectless
 }
 
 pub(super) fn startup_model(
@@ -384,31 +395,47 @@ impl App {
                 config.model_reasoning_effort = None;
             }
         }
-        let startup_defaults = if fresh_start {
-            match startup_draft
-                .run_until(
-                    tui,
-                    prepare_fresh_startup_config(
-                        &mut config,
-                        &app_server,
-                        &app_server_target,
-                        &cli_kv_overrides,
-                        &harness_overrides,
-                        &environment_manager,
-                    ),
-                )
-                .await
-            {
-                Ok(Ok(defaults)) => defaults,
-                Ok(Err(err)) => {
-                    return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
+        let cwd = startup_config_cwd(&config, &app_server, &app_server_target)
+            .display()
+            .to_string();
+        let startup_config = match startup_draft
+            .run_until(tui, async {
+                let request_handle = app_server.request_handle();
+                let read_config = crate::config_update::read_effective_config_with_optional_layers(
+                    &request_handle,
+                    cwd,
+                    /*include_layers*/ fresh_start,
+                );
+                if fresh_start {
+                    read_config.await
+                } else {
+                    tokio::time::timeout(Duration::from_secs(/*secs*/ 2), read_config).await?
                 }
-                Err(err) => {
-                    return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
-                }
+            })
+            .await
+        {
+            Ok(Ok(config)) => Some(config),
+            Ok(Err(_)) if !fresh_start => None,
+            Ok(Err(err)) => {
+                return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
             }
-        } else {
-            crate::projectless::AppliedDefaults::default()
+            Err(err) => {
+                return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
+            }
+        };
+        let statusline_feature_enabled = startup_config
+            .as_ref()
+            .is_some_and(|response| statusline_enabled(&response.config));
+        let startup_defaults = match startup_config.as_ref() {
+            Some(defaults) if fresh_start => prepare_fresh_startup_config(
+                &mut config,
+                &app_server,
+                defaults,
+                &cli_kv_overrides,
+                &harness_overrides,
+                &environment_manager,
+            ),
+            _ => crate::projectless::AppliedDefaults::default(),
         };
         let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
             &cli_kv_overrides,
@@ -937,6 +964,7 @@ impl App {
                 .borrow_mut()
                 .continue_from(&mut startup_draft.blossom.borrow_mut());
         }
+        chat_widget.statusline_feature_enabled = statusline_feature_enabled;
         chat_widget.remote_connection = remote_connection;
         chat_widget.snapshot_local_images = app_server_target.uses_remote_workspace();
         chat_widget.thread_params_mode = app_server.thread_params_mode();

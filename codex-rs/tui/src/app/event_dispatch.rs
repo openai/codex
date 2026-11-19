@@ -502,7 +502,7 @@ impl App {
             AppEvent::ChooseStatuslineProvider { scan, id, key } => self.choose_statusline_provider(scan, id, key, app_server).await,
             AppEvent::CreateCustomStatusline { backend, thread_id, key } => {
                 if app_server.thread_params_mode() != crate::ThreadParamsMode::Cloud
-                    && self.config.features.enabled(Feature::TuiExtensionsStatusLine)
+                    && self.chat_widget.custom_statusline_enabled()
                     && self.chat_widget.active_view_is(crate::bottom_pane::StatusLineSetupView::VIEW_ID)
                     && self.chat_widget.model_catalog().backend == backend
                     && backend.is_none_or(|id| id == app_server.backend_id())

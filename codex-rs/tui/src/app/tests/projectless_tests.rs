@@ -332,15 +332,19 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
             LoaderOverrides::without_managed_config_for_tests(),
         )
         .await?;
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            config.cwd.display().to_string(),
+        )
+        .await?;
         let startup = crate::app::startup::prepare_fresh_startup_config(
             &mut config,
             &server,
-            &AppServerTarget::Embedded,
+            &defaults,
             &[],
             &overrides,
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         if expected_approval.is_some() {
             assert_eq!(startup.approval_policy, None);
         }
