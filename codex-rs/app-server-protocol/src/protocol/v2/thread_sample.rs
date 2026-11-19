@@ -20,6 +20,10 @@ pub struct ThreadSampleParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_in_progress_turn: bool,
     pub prompt: String,
+    /// Override the model for this sample.
+    /// Omit or pass `null` to inherit the source thread's model.
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
     /// Applied only when the provider and model support cache-preserving reasoning-effort updates.
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,

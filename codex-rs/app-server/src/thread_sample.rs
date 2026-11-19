@@ -179,7 +179,11 @@ impl SampleTask {
         .map_err(|error| internal_error(error.to_string()))?;
         let model = parent
             .model_info(
-                options.config.model.as_deref().unwrap_or(&snapshot.model),
+                params
+                    .model
+                    .as_deref()
+                    .or(options.config.model.as_deref())
+                    .unwrap_or(&snapshot.model),
                 &options.config.to_models_manager_config(),
             )
             .await;
@@ -263,6 +267,7 @@ impl SampleTask {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
+                model: params.model,
                 effort: effort.map(Some),
                 ..Default::default()
             })
