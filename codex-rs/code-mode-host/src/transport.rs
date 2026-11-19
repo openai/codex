@@ -5,19 +5,16 @@ use anyhow::Result;
 
 use crate::grpc_transport;
 
-/// The default transport retains the standalone host's original stdio behavior.
-pub const DEFAULT_LISTEN_URL: &str = "stdio";
+pub const DEFAULT_LISTEN_URL: &str = "grpc+stdio://";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum ListenTransport {
-    Stdio,
     GrpcStdio,
     Grpc(SocketAddr),
 }
 
 pub(crate) async fn run_transport(listen_url: &str, host: crate::GrpcCodeModeHost) -> Result<()> {
     match parse_listen_url(listen_url)? {
-        ListenTransport::Stdio => crate::run_stdio_with_tool_preloads(host.tool_preloads).await,
         ListenTransport::GrpcStdio => crate::grpc_stdio::run(host).await,
         ListenTransport::Grpc(bind_address) => {
             grpc_transport::run_tcp_listener(bind_address, host).await
@@ -26,11 +23,8 @@ pub(crate) async fn run_transport(listen_url: &str, host: crate::GrpcCodeModeHos
 }
 
 fn parse_listen_url(listen_url: &str) -> Result<ListenTransport> {
-    if listen_url == "grpc+stdio://" {
+    if matches!(listen_url, "grpc+stdio://" | "stdio" | "stdio://") {
         return Ok(ListenTransport::GrpcStdio);
-    }
-    if matches!(listen_url, "stdio" | "stdio://") {
-        return Ok(ListenTransport::Stdio);
     }
 
     if let Some(socket_addr) = listen_url.strip_prefix("grpc://") {

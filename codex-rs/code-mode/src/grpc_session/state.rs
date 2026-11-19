@@ -9,6 +9,7 @@ use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::grpc;
 use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_protocol::ToolName;
+use codex_protocol::protocol::W3cTraceContext;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -22,13 +23,19 @@ struct ActiveCallback {
 pub(super) type ClosedCell = (CellId, Arc<dyn CodeModeSessionDelegate>);
 
 pub(super) enum CallbackAdmission {
-    Active(CancellationToken, Arc<dyn CodeModeSessionDelegate>),
+    Active(
+        CancellationToken,
+        Arc<dyn CodeModeSessionDelegate>,
+        Option<W3cTraceContext>,
+    ),
     Cancelled,
     Closed,
     Rejected(String),
 }
 
 struct ExecutionRecord {
+    // Keep the caller's context for callbacks without extending its span across a yield.
+    trace: Option<W3cTraceContext>,
     delegate: Arc<dyn CodeModeSessionDelegate>,
     cell_id: Option<CellId>,
     tool_call_id: String,
@@ -153,6 +160,7 @@ impl SessionState {
         self.executions.insert(
             request.execution_id.clone(),
             ExecutionRecord {
+                trace: codex_otel::current_span_w3c_trace_context(),
                 tool_call_id: request.tool_call_id.clone(),
                 enabled_tools,
                 delegate,
@@ -261,6 +269,7 @@ impl SessionState {
         Ok(CallbackAdmission::Active(
             cancellation,
             Arc::clone(&execution.delegate),
+            execution.trace.clone(),
         ))
     }
 
@@ -293,6 +302,7 @@ impl SessionState {
         Ok(CallbackAdmission::Active(
             execution.cancellation.child_token(),
             Arc::clone(&execution.delegate),
+            execution.trace.clone(),
         ))
     }
 

@@ -25,7 +25,7 @@ struct Cli {
     )]
     codex_ui_plugin_process: bool,
 
-    /// Transport endpoint: `stdio`, `stdio://`, `grpc+stdio://`, or `grpc://IP:PORT`.
+    /// gRPC endpoint: `grpc+stdio://` (aliases `stdio` and `stdio://`) or `grpc://IP:PORT`.
     #[arg(
         long,
         value_name = "URL",

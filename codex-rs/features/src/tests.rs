@@ -662,6 +662,28 @@ fn from_sources_applies_base_profile_and_overrides() {
 }
 
 #[test]
+fn code_mode_host_grpc_is_recognized_and_ignored() {
+    assert!(crate::is_known_feature_key("code_mode_host_grpc"));
+    for enabled in [false, true] {
+        let config: FeaturesToml = toml::from_str(&format!("code_mode_host_grpc = {enabled}"))
+            .expect("legacy transport setting should deserialize");
+        let mut features = Features::with_defaults();
+        features.apply_toml(&config);
+        assert_eq!(
+            features.enabled_features(),
+            Features::with_defaults().enabled_features()
+        );
+        assert_eq!(
+            features
+                .legacy_feature_usages()
+                .map(|usage| usage.feature)
+                .collect::<Vec<_>>(),
+            vec![Feature::CodeModeHostGrpc]
+        );
+    }
+}
+
+#[test]
 fn from_sources_ignores_removed_image_detail_original_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([(
         "image_detail_original".to_string(),

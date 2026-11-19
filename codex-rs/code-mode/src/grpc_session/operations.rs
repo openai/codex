@@ -14,7 +14,9 @@ use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::grpc;
+use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_protocol::protocol::W3cTraceContext;
+use prost::Message;
 use tokio::sync::OwnedMutexGuard;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -103,6 +105,14 @@ impl SessionInner {
             execution_id: execution_id.clone(),
             armed: true,
         };
+        // Check the actual request after catalog reuse. An encoder error in an
+        // HTTP/2 request body can otherwise surface as a transport reset.
+        let encoded_bytes = request.encoded_len();
+        if encoded_bytes > MAX_FRAME_BYTES {
+            return Err(format!(
+                "code-mode execute request of {encoded_bytes} encoded bytes exceeds the gRPC message limit of {MAX_FRAME_BYTES} bytes"
+            ));
+        }
         let (started_tx, started_rx) = oneshot::channel();
         let inner = Arc::clone(self);
         self.stream_tasks.spawn(async move {

@@ -15,16 +15,16 @@ workspace = true
 [dependencies]
 codex-code-mode-protocol = { workspace = true }
 codex-http-client = { workspace = true }
-codex-install-context = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 futures = { workspace = true }
 http-body-util = "0.1.3"
+opentelemetry = { workspace = true }
 prost = "0.14.3"
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tonic = { workspace = true, features = ["zstd"] }
 tower = { version = "0.5.3", features = ["util"] }

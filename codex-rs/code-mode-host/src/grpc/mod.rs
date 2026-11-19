@@ -71,7 +71,7 @@ fn trace_context_from_request<T>(request: &Request<T>) -> Option<W3cTraceContext
 #[derive(Clone)]
 pub struct GrpcCodeModeHost {
     state: Arc<GrpcHostState>,
-    pub(super) tool_preloads: &'static [ToolPreload],
+    tool_preloads: &'static [ToolPreload],
     process_metrics: Option<Arc<crate::process_metrics::ProcessMetrics>>,
 }
 

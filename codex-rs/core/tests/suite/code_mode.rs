@@ -4386,10 +4386,8 @@ text(JSON.stringify({{
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
-#[test_case(false; "legacy_stdio")]
-#[test_case(true; "default_grpc_stdio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_only_can_call_nested_tools(grpc_stdio: bool) -> Result<()> {
+async fn code_mode_only_can_call_nested_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     #[cfg(unix)]
@@ -4427,11 +4425,8 @@ text(output.output);
     )
     .await;
 
-    let mut builder = test_codex().with_config(move |config| {
+    let mut builder = test_codex().with_config(|config| {
         let _ = config.features.enable(Feature::CodeModeOnly);
-        if !grpc_stdio {
-            config.features.disable(Feature::CodeModeHostGrpc).unwrap();
-        }
     });
     #[cfg(unix)]
     {
@@ -4452,12 +4447,8 @@ text(output.output);
     #[cfg(unix)]
     assert_eq!(
         recorder.invocations()?,
-        vec![if grpc_stdio {
-            "--listen grpc+stdio://".to_string()
-        } else {
-            String::new()
-        }],
-        "the feature flag must select the expected host transport"
+        vec!["--listen grpc+stdio://".to_string()],
+        "local Codex must use gRPC over stdio"
     );
     assert!(
         request
@@ -5004,8 +4995,7 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 // limit `result.output` returned by the nested command.
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[test_case(&[]; "default_grpc")]
-#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
-#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
+#[test_case(&[Feature::CodeModeHostOutputTruncation]; "client_grpc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_outer_limit_truncates_emitted_output(
     disabled_features: &'static [Feature],
@@ -5082,7 +5072,6 @@ Error:\ boom\n
 // An overflow notice is outside the observation budget. This distinguishes
 // actual server formatting from Core silently repeating client truncation.
 #[test_case(None; "default")]
-#[test_case(Some(Feature::CodeModeHostGrpc); "server_stdio")]
 #[test_case(Some(Feature::CodeModeHostOutputTruncation); "client_grpc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_zero_budget_reports_host_truncation(
@@ -5169,135 +5158,6 @@ try {
         !output.contains("no-exception"),
         "nested tool error should not allow success path: {output}"
     );
-
-    Ok(())
-}
-
-/// The framed stdio host reconnects on the first exec after reporting a wait timeout.
-#[tokio::test(flavor = "current_thread")]
-async fn code_mode_stdio_wait_timeout_reconnects_on_next_exec() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
-            config.features.disable(Feature::CodeModeHostGrpc).unwrap();
-            config
-                .features
-                .enable(Feature::CodeMode)
-                .expect("code mode should be enabled");
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-
-    let first_turn = responses::mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_custom_tool_call(
-                    "call-1",
-                    "exec",
-                    "yield_control(); await new Promise(() => {});",
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-1", "waiting"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    test.submit_turn("start a stalled code-mode cell").await?;
-    let first_request = first_turn
-        .last_request()
-        .expect("initial exec should be returned to the model");
-    let first_items = custom_tool_output_items(&first_request, "call-1");
-    let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
-
-    let timeout_completion = responses::mount_function_call_agent_response(
-        &server,
-        "call-2",
-        &serde_json::to_string(&serde_json::json!({
-            "cell_id": cell_id,
-            "yield_time_ms": 60_000,
-        }))?,
-        "wait",
-    )
-    .await
-    .completion;
-
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "wait for the stalled cell".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
-    wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::RawResponseItem(raw) => match &raw.item {
-            ResponseItem::FunctionCall { call_id, .. } if call_id == "call-2" => Some(()),
-            _ => None,
-        },
-        _ => None,
-    })
-    .await;
-
-    tokio::time::pause();
-    for _ in 0..130 {
-        tokio::time::advance(Duration::from_secs(1)).await;
-        if timeout_completion
-            .function_call_output_text("call-2")
-            .is_some()
-        {
-            break;
-        }
-    }
-    tokio::time::resume();
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let timeout_output = timeout_completion
-        .function_call_output_text("call-2")
-        .expect("timed-out wait should be returned to the model");
-    assert!(
-        timeout_output.contains("code-mode host timed out waiting for wait response"),
-        "unexpected wait output: {timeout_output}"
-    );
-
-    let reconnect_turn = responses::mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-5"),
-                ev_custom_tool_call(
-                    "call-3",
-                    "exec",
-                    r#"text("reconnected"); yield_control(); await new Promise(() => {});"#,
-                ),
-                ev_completed("resp-5"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-3", "reconnected"),
-                ev_completed("resp-6"),
-            ]),
-        ],
-    )
-    .await;
-
-    test.submit_turn("run a cell after the timeout").await?;
-    let reconnect_request = reconnect_turn
-        .last_request()
-        .expect("replacement exec should be returned to the model");
-    let reconnect_items = custom_tool_output_items(&reconnect_request, "call-3");
-    assert_eq!(
-        extract_running_cell_id(text_item(&reconnect_items, /*index*/ 0)),
-        "g2:1"
-    );
-    assert_eq!(text_item(&reconnect_items, /*index*/ 1), "reconnected");
 
     Ok(())
 }
@@ -6053,8 +5913,7 @@ impl ToolLifecycleContributor for TerminationOutputReady {
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[test_case(&[]; "default_grpc")]
-#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
-#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
+#[test_case(&[Feature::CodeModeHostOutputTruncation]; "client_grpc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_wait_can_terminate_and_continue(
     disabled_features: &'static [Feature],
@@ -6784,8 +6643,7 @@ async fn code_mode_interrupt_terminates_active_cells_and_nested_tools() -> Resul
 }
 
 #[test_case(&[]; "default_grpc")]
-#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
-#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
+#[test_case(&[Feature::CodeModeHostOutputTruncation]; "client_grpc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_wait_uses_its_own_max_tokens_budget(
     disabled_features: &'static [Feature],
@@ -6796,7 +6654,7 @@ async fn code_mode_wait_uses_its_own_max_tokens_budget(
     let mut builder = code_mode_test_builder(disabled_features);
     let test = builder.build_with_auto_env(&server).await?;
 
-    // Both transports accept exec budgets above i32::MAX. The wait uses its own budget.
+    // Exec accepts budgets above i32::MAX. The wait uses its own budget.
     let code = r#"// @exec: {"max_output_tokens": 2147483648}
 text("phase 1");
 yield_control();

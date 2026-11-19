@@ -4,18 +4,12 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
-use super::MissingCodeModeHostDuration;
 use super::RuntimeResponse;
-use super::WaitOutcome;
 use crate::CellId;
 use crate::FunctionCallOutputContentItem;
-use crate::host::WireRuntimeResponse;
-use crate::host::WireWaitOutcome;
-
-/// Raw runtime serialization preserves absent timing; stdio always carries a
-/// measured duration, including zero, without changing the response payload.
+/// Runtime serialization distinguishes absent timing from a measured zero.
 #[test]
-fn code_mode_host_duration_survives_runtime_and_stdio_serialization() {
+fn code_mode_host_duration_survives_runtime_serialization() {
     let content_items = vec![FunctionCallOutputContentItem::InputText {
         text: "output".to_string(),
     }];
@@ -65,44 +59,6 @@ fn code_mode_host_duration_survives_runtime_and_stdio_serialization() {
                 serde_json::from_value::<RuntimeResponse>(payload).expect("deserialize response"),
                 expected
             );
-
-            if duration.is_some() {
-                let wire_payload = serde_json::to_value(
-                    WireRuntimeResponse::try_from(expected.clone()).expect("timed response"),
-                )
-                .expect("serialize response over stdio");
-                assert_eq!(
-                    RuntimeResponse::from(
-                        serde_json::from_value::<WireRuntimeResponse>(wire_payload)
-                            .expect("deserialize stdio response")
-                    ),
-                    expected
-                );
-            }
         }
-    }
-}
-
-/// Encoding must not turn a missing request measurement into measured zero,
-/// including when no live cell remains to supply output.
-#[test]
-fn stdio_encoding_rejects_untimed_runtime_output() {
-    let response = RuntimeResponse::Terminated {
-        cell_id: CellId::new("cell".to_string()),
-        content_items: Vec::new(),
-        code_mode_host_duration: None,
-    };
-    assert_eq!(
-        WireRuntimeResponse::try_from(response.clone()),
-        Err(MissingCodeModeHostDuration)
-    );
-    for outcome in [
-        WaitOutcome::LiveCell(response.clone()),
-        WaitOutcome::MissingCell(response),
-    ] {
-        assert_eq!(
-            WireWaitOutcome::try_from(outcome),
-            Err(MissingCodeModeHostDuration)
-        );
     }
 }

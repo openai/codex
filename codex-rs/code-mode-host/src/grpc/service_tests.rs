@@ -2,6 +2,7 @@ use super::GrpcCodeModeHost;
 use super::GrpcStream;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHost;
+use codex_code_mode_runtime::ToolPreload;
 use futures::FutureExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -154,6 +155,58 @@ fn only_text(items: &[proto::ContentItem]) -> &str {
         panic!("expected one text item, got {items:?}");
     };
     &text.text
+}
+
+#[tokio::test]
+async fn preload_errors_preserve_other_sessions_on_the_host() {
+    let host = GrpcCodeModeHost::new().with_tool_preloads(&[
+        ToolPreload {
+            tool: "first",
+            tool_name: "first",
+            tool_namespace: None,
+            source: "const shared = 1;",
+        },
+        ToolPreload {
+            tool: "second",
+            tool_name: "second",
+            tool_namespace: None,
+            source: "const shared = 2;",
+        },
+    ]);
+    let (broken, _broken_lease) = open_session(&host).await;
+    let (healthy, _healthy_lease) = open_session(&host).await;
+    let mut request = execute_request(&broken, "broken", "text('never runs')");
+    request.enabled_tools = vec![tool("first"), tool("second")];
+    for (mut request, expected_content, expected_error) in [
+        (
+            request,
+            Vec::new(),
+            Some("failed to execute tool preload #2 for `second`".to_string()),
+        ),
+        (
+            execute_request(&healthy, "healthy", "text('still alive')"),
+            vec![proto::ContentItem {
+                item: Some(proto::content_item::Item::Text(proto::TextContent {
+                    text: "still alive".to_string(),
+                })),
+            }],
+            None,
+        ),
+    ] {
+        request.yield_time_ms = Some(60_000);
+        let (_, mut events) = execute_events(&host, request).await;
+        let event = events.next().await.unwrap().unwrap();
+        let Some(proto::execute_event::Event::Outcome(outcome)) = event.event else {
+            panic!("expected cell outcome");
+        };
+        let Some(proto::execution_outcome::Outcome::Completed(completed)) = outcome.outcome else {
+            panic!("expected cell completion");
+        };
+        assert_eq!(
+            (outcome.content_items, completed.error_text),
+            (expected_content, expected_error)
+        );
+    }
 }
 
 #[tokio::test]

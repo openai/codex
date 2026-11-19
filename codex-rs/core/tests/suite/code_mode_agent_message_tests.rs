@@ -40,12 +40,7 @@ async fn yielded_code_mode_spawn_preserves_metadata_and_plaintext() -> Result<()
                 .push("test_sync_tool".to_string());
         })
         .with_config(|config| {
-            for feature in [
-                Feature::Collab,
-                Feature::MultiAgentV2,
-                Feature::CodeMode,
-                Feature::CodeModeHostGrpc,
-            ] {
+            for feature in [Feature::Collab, Feature::MultiAgentV2, Feature::CodeMode] {
                 config
                     .features
                     .enable(feature)

@@ -22,10 +22,10 @@ use super::GrpcCodeModeSession;
 use super::GrpcCodeModeSessionProvider;
 use super::GrpcSessionOpenError;
 use super::SHUTDOWN_ERROR;
+use super::ShutdownResultReceiver;
 use super::generation;
 use super::generation::GenerationDelegate;
-use crate::remote_session::ShutdownResultReceiver;
-use crate::remote_session::wait_for_watch;
+use super::wait_for_watch;
 
 pub(super) struct ReconnectableSession {
     inner: Arc<ReconnectInner>,

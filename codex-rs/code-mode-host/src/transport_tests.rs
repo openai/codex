@@ -35,11 +35,11 @@ async fn grpc_listener_disables_nagle() {
 fn parse_listen_url_accepts_stdio_transports() {
     assert_eq!(
         parse_listen_url("stdio").expect("stdio listen URL should parse"),
-        ListenTransport::Stdio
+        ListenTransport::GrpcStdio
     );
     assert_eq!(
         parse_listen_url("stdio://").expect("stdio URL should parse"),
-        ListenTransport::Stdio
+        ListenTransport::GrpcStdio
     );
     assert_eq!(
         parse_listen_url("grpc+stdio://").expect("gRPC stdio URL should parse"),

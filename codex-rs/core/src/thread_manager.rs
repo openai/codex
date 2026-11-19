@@ -21,6 +21,8 @@ use crate::agent::host::InheritedSessionId;
 use crate::agent::host::ServiceTierAcceptance;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
+use crate::code_mode_host::LocalServerOutputProvider;
+use crate::code_mode_host::ProcessOwnedGrpcCodeModeSessionProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::current_time::TimeProvider;
@@ -51,7 +53,6 @@ use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::InlineAttachmentStore;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::DisabledCodeModeSessionProvider;
-use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Policy;
@@ -808,23 +809,14 @@ impl ThreadManager {
         config: &Config,
         host_program: PathBuf,
     ) -> Arc<dyn CodeModeSessionProvider> {
-        let provider: Arc<dyn CodeModeSessionProvider> =
-            if config.features.enabled(Feature::CodeModeHostGrpc) {
-                Arc::new(
-                crate::code_mode_host::ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(
-                    host_program,
-                ),
-            )
-            } else {
-                Arc::new(ProcessOwnedCodeModeSessionProvider::with_host_program(
-                    host_program,
-                ))
-            };
+        let provider = Arc::new(ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(
+            host_program,
+        ));
         if config
             .features
             .enabled(Feature::CodeModeHostOutputTruncation)
         {
-            Arc::new(crate::code_mode_host::LocalServerOutputProvider { inner: provider })
+            Arc::new(LocalServerOutputProvider { inner: provider })
         } else {
             provider
         }

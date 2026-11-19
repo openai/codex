@@ -1,5 +1,6 @@
 //! Exercises the process-owned gRPC transport against the standalone host.
 
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,14 +11,19 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
+use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::NoopCodeModeSessionDelegate;
 use codex_code_mode::RuntimeResponse;
+use codex_utils_process::background_command;
 #[cfg(unix)]
 use core_test_support::code_mode_host::CodeModeHostRecorder;
+use hyper_util::rt::TokioIo;
 use pretty_assertions::assert_eq;
+use tokio::process::Command;
 use tokio::time::timeout;
+use tonic::transport::Endpoint;
+use tower::service_fn;
 
-use super::HostConnection;
 use super::ProcessOwnedGrpcCodeModeSessionProvider;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 20);
@@ -57,6 +63,23 @@ async fn execute(
             ..
         } => Ok(content_items),
         other => anyhow::bail!("unexpected code-mode response: {other:?}"),
+    }
+}
+
+#[test]
+fn unavailable_host_keeps_a_bounded_utf8_path_suffix() {
+    let executable = "codex-code-mode-host-does-not-exist";
+    for directory in ["missing-directory/", "🦀"] {
+        let path = format!("{}{executable}", directory.repeat(512));
+        let provider = ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(path.into());
+        let error = provider.availability().expect_err("missing host");
+        let displayed = error
+            .strip_prefix("failed to spawn code-mode host ")
+            .and_then(|message| message.strip_suffix(": host executable was not found"))
+            .expect("missing-host diagnostic includes its path");
+        assert!(displayed.starts_with("..."));
+        assert!(displayed.ends_with(executable));
+        assert!(displayed.len() <= 512);
     }
 }
 
@@ -134,11 +157,37 @@ async fn grpc_stdio_sessions_share_a_host_and_isolate_state() -> Result<()> {
 }
 
 #[tokio::test]
-async fn grpc_stdio_host_exits_when_stdin_closes() -> Result<()> {
-    let mut connection =
-        HostConnection::spawn(&codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)?;
-    let mut child = connection.child.take().context("host process")?;
-    drop(connection);
+async fn default_host_serves_grpc_and_exits_when_stdin_closes() -> Result<()> {
+    let program = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
+    let mut child = Command::from(background_command(program))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(/*kill_on_drop*/ true)
+        .spawn()?;
+    let stdout = child.stdout.take().context("host stdout")?;
+    let stdin = child.stdin.take().context("host stdin")?;
+    let mut pipes = Some(TokioIo::new(tokio::io::join(stdout, stdin)));
+    let channel = timeout(
+        TEST_TIMEOUT,
+        Endpoint::from_static("http://code-mode-host").connect_with_connector(service_fn(
+            move |_| {
+                std::future::ready(
+                    pipes
+                        .take()
+                        .ok_or_else(|| std::io::Error::other("host pipes already used")),
+                )
+            },
+        )),
+    )
+    .await??;
+    let provider = GrpcCodeModeSessionProvider::with_channel(channel);
+    let session = timeout(TEST_TIMEOUT, provider.create_session())
+        .await
+        .context("timed out opening a session on the default host")?
+        .map_err(anyhow::Error::msg)?;
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    drop(session);
+    drop(provider);
     let status = timeout(TEST_TIMEOUT, child.wait())
         .await
         .context("host did not exit on stdin EOF")??;

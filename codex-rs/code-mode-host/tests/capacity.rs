@@ -11,12 +11,12 @@ use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::NotificationFuture;
-use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_code_mode::RuntimeResponse;
 use codex_code_mode::ToolDefinition;
 use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode::WaitOutcome;
 use codex_code_mode::WaitRequest;
+use codex_core::ProcessOwnedGrpcCodeModeSessionProvider;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -187,7 +187,7 @@ async fn assert_shared_capacity(
 
 #[tokio::test]
 async fn stdio_shared_sessions_complete_thousands_of_callbacks() {
-    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
+    let provider = ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(
         codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary"),
     );
     assert_shared_capacity(&provider, /*cells*/ 256, /*calls_per_cell*/ 16).await;

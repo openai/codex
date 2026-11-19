@@ -44,7 +44,6 @@ async fn grpc_host_loss_reports_reset_without_replaying_side_effects() -> Result
         .with_code_mode_host_program(recorder.program())
         .with_config(|config| {
             config.features.enable(Feature::CodeModeOnly).unwrap();
-            config.features.enable(Feature::CodeModeHostGrpc).unwrap();
         });
     let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
     let test = harness.test();

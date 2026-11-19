@@ -25,7 +25,6 @@ use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeSessionProviderFuture;
 use codex_code_mode::CodeModeSessionResultFuture;
 use codex_code_mode::GrpcCodeModeSessionProvider;
-use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use codex_utils_process::background_command;
 use hyper_util::rt::TokioIo;
@@ -44,6 +43,8 @@ use tonic::transport::Channel;
 use tonic::transport::Endpoint;
 use tower::ServiceExt;
 use tower::service_fn;
+
+const MAX_DISPLAYED_HOST_PROGRAM_BYTES: usize = 512;
 
 /// Only wraps Core's built-in providers; injected providers own their session settings.
 pub(crate) struct LocalServerOutputProvider {
@@ -109,8 +110,21 @@ impl ProcessOwnedGrpcCodeModeSessionProvider {
 
 impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
     fn availability(&self) -> Result<(), String> {
-        ProcessOwnedCodeModeSessionProvider::with_host_program(self.host_program.clone())
-            .availability()
+        if self.host_program.is_file() {
+            return Ok(());
+        }
+        // Spawn errors reach tool output. Keep the executable-bearing suffix of long paths.
+        let path = self.host_program.to_string_lossy();
+        let path = if path.len() > MAX_DISPLAYED_HOST_PROGRAM_BYTES {
+            let suffix_bytes = MAX_DISPLAYED_HOST_PROGRAM_BYTES - "...".len();
+            let start = path.ceil_char_boundary(path.len() - suffix_bytes);
+            format!("...{}", &path[start..])
+        } else {
+            path.into_owned()
+        };
+        Err(format!(
+            "failed to spawn code-mode host {path}: host executable was not found"
+        ))
     }
 
     fn sample_process_metrics(
