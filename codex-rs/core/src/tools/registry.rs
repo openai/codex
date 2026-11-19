@@ -999,7 +999,7 @@ impl ToolRegistry {
 
         let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
 
-        let result = otel
+        let mut result = otel
             .log_tool_result_with_tags(
                 &tool_name,
                 &call_id_owned,
@@ -1029,9 +1029,9 @@ impl ToolRegistry {
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             result
-                .as_ref()
+                .as_mut()
                 .ok()
-                .and_then(|result| result.post_tool_use_payload.clone())
+                .and_then(|result| result.post_tool_use_payload.take())
         } else {
             None
         };
