@@ -975,10 +975,15 @@ impl Session {
         let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
         let state = self.state.lock().await;
         let configuration = &state.session_configuration;
-        if !has_trigger_turn
+        if (self.enabled(Feature::WakeOnAgentMessages)
+            && !has_trigger_turn
             && !self.has_outstanding_durable_sleep()
             && !TurnStartKind::Automatic
-                .permits_mode(configuration.step_settings.collaboration_mode.mode)
+                .permits_mode(configuration.step_settings.collaboration_mode.mode))
+            || configuration
+                .step_settings
+                .validate(&configuration.step_settings_constraints(&configuration.environments))
+                .is_err()
         {
             *active = None;
             return None;

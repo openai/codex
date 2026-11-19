@@ -2424,12 +2424,15 @@ impl Session {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
-        self.update_settings(SessionSettingsUpdate {
-            app_server_client_name,
-            app_server_client_version,
-            ..Default::default()
-        })
-        .await?;
+        // A new turn may supply a valid replacement for a model blocked by policy.
+        // Recording its client identity must not validate the old model first.
+        let configuration = &mut self.state.lock().await.session_configuration;
+        if let Some(name) = app_server_client_name {
+            configuration.app_server_client_name = Some(name);
+        }
+        if let Some(version) = app_server_client_version {
+            configuration.app_server_client_version = Some(version);
+        }
         Ok(())
     }
 

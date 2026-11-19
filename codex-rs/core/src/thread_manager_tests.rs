@@ -20,7 +20,14 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudConfigBundlePolicy;
+use codex_config::CloudConfigBundleSnapshot;
 use codex_config::ConfigLayerStack;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_exec_server::LOCAL_FS;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_extension_api::SessionIsolation;
@@ -1535,6 +1542,11 @@ async fn code_mode_session_provider_is_shared_across_threads() {
 
 #[tokio::test]
 async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
+    const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+    const POLICY: &str = "Use the refreshed startup policy.";
+    const LOCAL_POLICY: &str = "Use the latest local requirements.";
+    const REPLACEMENT_POLICY: &str = "Use the current managed bundle.";
+    const CHILD_MODEL: &str = "gpt-5.4";
     struct BlockingThreadStartup {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
@@ -1576,12 +1588,59 @@ async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     // Resolve the model locally before waiting for the MCP lifecycle hook.
+    config.model = Some("gpt-5.5".to_owned());
     config.model_catalog = Some(
         codex_models_manager::bundled_models_response().expect("bundled model catalog should load"),
     );
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let policy = CloudConfigBundlePolicy::default();
+    let mut cloud = CloudConfigBundleSnapshot {
+        bundle: Ok(Some(
+            CloudConfigBundleFixture::enterprise_requirement(format!(
+                "guardian_policy_config = {POLICY:?}\nallowed_approvals_reviewers = ['user']\n[auto_review]\nrequired_on_models = [{CHILD_MODEL:?}]"
+            ))
+            .into_bundle(),
+        )),
+        config_server: None,
+        binding: None,
+    };
+    policy.publish_snapshot(&mut cloud);
+    struct TestPolicyLoader {
+        home: AbsolutePathBuf,
+        overrides: LoaderOverrides,
+        cloud: tokio::sync::watch::Receiver<CloudConfigBundleSnapshot>,
+    }
+    impl GuardianPolicyLoader for TestPolicyLoader {
+        fn load_guardian_policy_snapshot(
+            &self,
+            revision: u64,
+        ) -> BoxFuture<'_, std::io::Result<codex_config::GuardianPolicySnapshot>> {
+            Box::pin(async move {
+                let cloud = CloudConfigBundleLoader::from_snapshot(self.cloud.borrow().clone());
+                load_guardian_policy_snapshot(
+                    LOCAL_FS.as_ref(),
+                    self.home.as_path(),
+                    &self.overrides,
+                    &cloud,
+                    revision,
+                )
+                .await
+            })
+        }
+    }
+    let (cloud_tx, cloud_rx) = tokio::sync::watch::channel(cloud);
+    let requirements = config.codex_home.join("requirements.toml").to_path_buf();
+    let loader = Arc::new(TestPolicyLoader {
+        home: config.codex_home.clone(),
+        overrides: LoaderOverrides {
+            system_requirements_path: Some(requirements.clone()),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        },
+        cloud: cloud_rx,
+    });
 
     let observer = Arc::new(BlockingThreadStartup {
         entered: tokio::sync::Notify::new(),
@@ -1593,7 +1652,7 @@ async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
     extensions.thread_lifecycle_contributor(observer.clone());
     extensions.mcp_server_contributor(observer.clone());
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-    let manager = Arc::new(ThreadManager::new(
+    let manager = ThreadManager::new(
         &config,
         crate::build_startup_models(
             &config,
@@ -1612,28 +1671,106 @@ async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
         /*agent_graph_store*/ None,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
-    ));
+    );
+    let manager = Arc::new(manager.with_guardian_policy_loader(loader));
     let starting = tokio::spawn({
         let manager = Arc::clone(&manager);
         async move { manager.start_thread(StartThreadOptions::new(config)).await }
     });
 
-    tokio::time::timeout(Duration::from_secs(5), observer.entered.notified())
+    tokio::time::timeout(STARTUP_TIMEOUT, observer.entered.notified())
         .await
         .expect("thread should enter its startup lifecycle");
     assert!(manager.list_thread_ids().await.is_empty());
+    std::fs::write(
+        &requirements,
+        format!("guardian_extra_policy = {LOCAL_POLICY:?}"),
+    )
+    .unwrap();
+    manager
+        .refresh_guardian_policy()
+        .await
+        .expect("publish Guardian policy while startup is paused");
     manager.invalidate_mcp_runtimes().await;
     observer.release.notify_one();
-    starting
+    let started = tokio::time::timeout(STARTUP_TIMEOUT, starting)
         .await
+        .expect("thread startup must terminate")
         .expect("thread startup task should finish")
         .expect("thread should start");
-    tokio::time::timeout(Duration::from_secs(5), observer.refreshed.notified())
+    let inherited = started.thread.config().await;
+    assert_eq!(
+        inherited.guardian_extra_policy.as_deref(),
+        Some(LOCAL_POLICY)
+    );
+    tokio::time::timeout(STARTUP_TIMEOUT, observer.refreshed.notified())
         .await
         .expect("invalidation during startup should refresh the newly published thread");
-    let shutdown = manager
-        .shutdown_all_threads_bounded(Duration::from_secs(5))
-        .await;
+
+    // A starting thread cannot register after its Guardian source changes.
+    let bundle = CloudConfigBundleFixture::enterprise_requirement(format!(
+        "guardian_policy_config = {REPLACEMENT_POLICY:?}\nallowed_sandbox_modes = ['read-only']"
+    ))
+    .into_bundle();
+    let startup_id = ThreadId::new();
+    let parent_id = started.thread_id;
+    let starting = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        let mut options = StartThreadOptions::new(inherited.as_ref().clone());
+        options.reserved_thread_id = Some(startup_id);
+        async move { manager.start_thread(options).await }
+    });
+    tokio::time::timeout(STARTUP_TIMEOUT, observer.entered.notified())
+        .await
+        .expect("thread should pause before registration");
+    policy.observe_remote_bundle(&bundle);
+    observer.release.notify_one();
+    let result = tokio::time::timeout(STARTUP_TIMEOUT, starting)
+        .await
+        .expect("rejected startup must terminate")
+        .expect("startup task should finish");
+    let Err(error) = result else {
+        panic!("startup should reject the changed Guardian source");
+    };
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message.contains("Guardian policy changed during startup")
+    ));
+    assert!(!manager.list_thread_ids().await.contains(&startup_id));
+
+    // The child model was blocked by the old policy. Only the background bundle changed.
+    cloud_tx.send_modify(|cloud| {
+        cloud.bundle = Ok(Some(bundle));
+        policy.publish_snapshot(cloud);
+    });
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent_id,
+        depth: 1,
+        agent_nickname: None,
+        agent_role: None,
+        agent_path: None,
+    });
+    for source in [None, Some(child_source)] {
+        let mut options = StartThreadOptions::new(inherited.as_ref().clone());
+        options.config.model = Some(CHILD_MODEL.to_owned());
+        options.session_source = source;
+        observer.release.notify_one();
+        let recovered = tokio::time::timeout(STARTUP_TIMEOUT, manager.start_thread(options))
+            .await
+            .expect("inherited startup must terminate")
+            .expect("start with current Guardian policy");
+        assert_eq!(
+            recovered
+                .thread
+                .config()
+                .await
+                .guardian_policy_config
+                .as_deref(),
+            Some(REPLACEMENT_POLICY),
+        );
+    }
+    let shutdown = manager.shutdown_all_threads_bounded(STARTUP_TIMEOUT).await;
     assert!(shutdown.timed_out.is_empty());
 }
 

@@ -811,7 +811,7 @@ async fn apps_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let (apps_server, startup) = AppsTestServer::mount_with_startup_control(&server).await?;
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/ps/mcp/?$"))
         .and(body_partial_json(json!({"method": "tools/list"})))
@@ -1010,6 +1010,7 @@ approvals_reviewer = "auto_review"
     );
 
     if !protected_model && !work_link_reviewer {
+        let initial_connections = startup.initialize_attempts();
         let after_policy_refresh = "calendar-after-policy-refresh";
         mount_sse_sequence(
             &server,
@@ -1075,6 +1076,7 @@ approvals_reviewer = "auto_review"
         })
         .await;
         recorded_apps_tool_call_by_call_id(&server, after_policy_refresh).await;
+        assert_eq!(startup.initialize_attempts(), initial_connections);
     }
 
     Ok(())

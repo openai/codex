@@ -273,9 +273,18 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     // Stop the old turn before the compact task picks up the next turn's environments.
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
-    let turn_context = sess
-        .new_turn_with_default_settings(sub_id, Default::default())
-        .await;
+    let turn_context = if sess.enabled(Feature::TokenBudget) {
+        sess.new_turn_with_default_settings(sub_id, Default::default())
+            .await
+    } else {
+        let Ok((turn_context, _)) = sess
+            .new_turn_with_sub_id(sub_id, Default::default(), Default::default())
+            .await
+        else {
+            return;
+        };
+        turn_context
+    };
 
     sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
@@ -588,6 +597,10 @@ pub(super) async fn submission_loop(
                 Ok(sub) => *sub,
                 Err(_) => break,
             },
+            _ = sess.input_queue.pending_work_wake.notified() => {
+                sess.maybe_start_turn_for_pending_work().await;
+                continue;
+            }
             update = async {
                 match &mut admission_updates {
                     Some(updates) => updates.changed().await,

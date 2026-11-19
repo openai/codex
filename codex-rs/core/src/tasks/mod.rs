@@ -610,23 +610,8 @@ impl Session {
             .models_manager
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
-        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages) {
-            let Some(configuration) = self.pending_work_turn_configuration(&turn_state).await
-            else {
-                return;
-            };
-            Some(configuration)
-        } else {
-            if self
-                .active_turn
-                .lock()
-                .await
-                .as_ref()
-                .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
-            {
-                return;
-            }
-            None
+        let Some(configuration) = self.pending_work_turn_configuration(&turn_state).await else {
+            return;
         };
         // Read the routing options now and leave the mail queued until task registration.
         let wake_options = self.input_queue.pending_wake_options().await;
@@ -639,13 +624,9 @@ impl Session {
             cyber_access_program: start_options.cyber_access_program,
             helper_admission: triggered.then_some(helper_admission).flatten(),
         };
-        let turn_context = match session_configuration {
-            Some(configuration) => {
-                self.new_turn_with_configuration(sub_id, configuration, options)
-                    .await
-            }
-            None => self.new_turn_with_default_settings(sub_id, options).await,
-        };
+        let turn_context = self
+            .new_turn_with_configuration(sub_id, configuration, options)
+            .await;
         if let Some(trigger) = start_options.turn_trigger {
             turn_context.turn_metadata_state.set_turn_trigger(trigger);
         }

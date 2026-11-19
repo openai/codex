@@ -202,7 +202,7 @@ pub enum ConfigRefreshOutcome {
     Published,
     /// The captured owner changed; the caller must reload before retrying.
     Stale,
-    /// Resolution failed and a configuration disabling enterprise MCP was published.
+    /// Resolution failed. The scope may still have published a fail-closed configuration.
     Rejected,
 }
 

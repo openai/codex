@@ -143,7 +143,9 @@ impl ThreadRegistry {
                 .as_ref()
                 .is_some_and(|guard| guard.status != CloudConfigBundleBindingStatus::Current)
             {
-                return Ok(());
+                return Err(std::io::Error::other(
+                    "Guardian policy source changed before publication",
+                ));
             }
             // A startup may have reserved a revision while the refresh was reading.
             snapshot.revision = state.reserve_guardian_policy_revision()?;

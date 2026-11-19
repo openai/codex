@@ -421,7 +421,8 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
                 None,
-            );
+            )
+            .with_guardian_policy_loader(Arc::new(config_manager.clone()));
             match code_mode_session_provider {
                 Some(provider) => manager.with_code_mode_session_provider(provider),
                 None => manager,

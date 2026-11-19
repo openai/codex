@@ -3,14 +3,19 @@
 use super::*;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
+use codex_config::CloudConfigBundlePolicy;
+use codex_config::CloudConfigBundleSnapshot;
 use codex_config::loader::load_guardian_policy_snapshot;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::LOCAL_FS;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> anyhow::Result<()> {
-    struct TestPolicyLoader(AbsolutePathBuf);
+async fn guardian_refresh_reports_a_suspended_live_update() -> anyhow::Result<()> {
+    struct TestPolicyLoader {
+        home: AbsolutePathBuf,
+        cloud: codex_config::CloudConfigBundleLoader,
+    }
     impl crate::GuardianPolicyLoader for TestPolicyLoader {
         fn load_guardian_policy_snapshot(
             &self,
@@ -19,9 +24,9 @@ async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> 
             Box::pin(async move {
                 load_guardian_policy_snapshot(
                     LOCAL_FS.as_ref(),
-                    self.0.as_path(),
+                    self.home.as_path(),
                     &LoaderOverrides::without_managed_config_for_tests(),
-                    &codex_config::CloudConfigBundleLoader::default(),
+                    &self.cloud,
                     revision,
                 )
                 .await
@@ -34,13 +39,23 @@ async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> 
     let mut config = crate::config::test_config().await;
     config.codex_home = home.path().abs();
     config.cwd = config.codex_home.clone();
+    let policy = CloudConfigBundlePolicy::default();
+    let mut cloud = CloudConfigBundleSnapshot {
+        bundle: Ok(None),
+        binding: None,
+        config_server: None,
+    };
+    policy.publish_snapshot(&mut cloud);
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     )
-    .with_guardian_policy_loader(Arc::new(TestPolicyLoader(config.codex_home.clone())));
+    .with_guardian_policy_loader(Arc::new(TestPolicyLoader {
+        home: config.codex_home.clone(),
+        cloud: codex_config::CloudConfigBundleLoader::from_snapshot(cloud),
+    }));
 
     manager
         .start_thread(StartThreadOptions::new(config.clone()))
@@ -50,10 +65,11 @@ async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> 
         .await?;
     // The manager lists threads in the registry's iteration order. Lock the first one.
     let threads = manager.list_thread_ids().await;
-    let [busy, idle] = threads.as_slice() else {
+    let [busy_id, idle] = threads.as_slice() else {
         panic!("expected two live threads");
     };
-    let busy = manager.get_thread(*busy).await?;
+    let busy = manager.get_thread(*busy_id).await?;
+    let busy_revision = busy.config().await.guardian_policy_revision;
     let idle = manager.get_thread(*idle).await?;
     let startup_revision = idle.config().await.guardian_policy_revision;
     let (locked, state_locked) = tokio::sync::oneshot::channel();
@@ -72,12 +88,34 @@ async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> 
             }
         })
         .await;
+        let changed = CloudConfigBundleFixture::enterprise_requirement(
+            "guardian_policy_config = 'next policy'",
+        )
+        .into_bundle();
+        policy
+            .observe_remote_bundle(&changed)
+            .expect("suspend the cloud binding");
         let _ = release_state.send(());
         result
     });
     held_state.await?;
     idle_update.expect("the idle thread should update while the first thread holds its lock");
-    refresh?;
+    assert_eq!(
+        refresh
+            .expect_err("the busy thread skipped the update")
+            .to_string(),
+        "Guardian policy refresh rejected by one or more live threads"
+    );
+    let busy = manager.get_thread(*busy_id).await?;
+    assert_eq!(busy.config().await.guardian_policy_revision, busy_revision);
+    assert_eq!(
+        manager
+            .refresh_guardian_policy()
+            .await
+            .expect_err("the source is still suspended")
+            .to_string(),
+        "Guardian policy source changed before publication"
+    );
     manager.shutdown_all_threads_bounded(UPDATE_TIMEOUT).await;
     Ok(())
 }

@@ -5,8 +5,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use codex_config::CloudConfigBundleLoader;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::ConfigRefreshOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
+use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::TurnLifecycleContributor;
@@ -23,8 +29,10 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -32,6 +40,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 use tokio::sync::TryLockError;
@@ -276,5 +285,90 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
     }
     requests.single_request();
     codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn guardian_policy_refresh_blocks_turns_and_resumes_queued_work() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let codex = &test.codex;
+    let model = &test.session_configured.model;
+    let conflict = CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+        "allowed_approvals_reviewers = ['user']\n[auto_review]\nrequired_on_models = [{model:?}]"
+    ));
+    let blocked = load_guardian_policy_snapshot(
+        LOCAL_FS.as_ref(),
+        test.config.codex_home.as_path(),
+        &LoaderOverrides::without_managed_config_for_tests(),
+        &conflict,
+        /*revision*/ 1,
+    )
+    .await?;
+    assert_eq!(
+        codex.refresh_guardian_policy(&blocked).await,
+        ConfigRefreshOutcome::Rejected
+    );
+
+    let requests =
+        responses::mount_sse_once(&server, responses::sse_completed("resumed-turn")).await;
+    codex
+        .set_app_server_client_info(
+            Some("test-app-server".to_owned()),
+            /*app_server_client_version*/ None,
+        )
+        .await?;
+    let error = test
+        .submit_turn_with_approval_and_permission_profile(
+            "Try a manual turn with the blocked model.",
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+        )
+        .await
+        .expect_err("a model that requires Guardian cannot run with a user-only reviewer");
+    assert!(error.to_string().contains("you need to use auto review"));
+
+    let queued_result = "Work queued under the blocked policy";
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("valid worker path"),
+                AgentPath::root(),
+                Vec::new(),
+                queued_result.to_owned(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    // This acknowledgement is processed after the blocked wake attempt.
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    assert!(!codex.has_active_turn().await);
+    assert!(requests.requests().is_empty());
+
+    let allowed = load_guardian_policy_snapshot(
+        LOCAL_FS.as_ref(),
+        test.config.codex_home.as_path(),
+        &LoaderOverrides::without_managed_config_for_tests(),
+        &CloudConfigBundleLoader::default(),
+        blocked.revision + 1,
+    )
+    .await?;
+    assert_eq!(
+        codex.refresh_guardian_policy(&allowed).await,
+        ConfigRefreshOutcome::Published
+    );
+    wait_for_successful_turn(codex).await;
+    assert!(
+        requests
+            .single_request()
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|item| item["content"][0]["text"] == queued_result)
+    );
     Ok(())
 }
