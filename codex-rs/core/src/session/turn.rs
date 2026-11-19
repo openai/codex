@@ -3159,6 +3159,7 @@ async fn try_run_sampling_request(
     let mut pending_assessment: Option<codex_api::GuardianAssessment> = None;
     let mut response_completed = false;
     let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
+    let accept_actor_assessments = turn_context.config.guardian_model_provider.is_none();
     let mut resampling = crate::guardian::ResponseResampling::new(&sess);
     let prompt = Arc::new(prompt);
     let interrupt_at_boundary = SamplingInterrupt::enabled(&turn_context);
@@ -3701,7 +3702,10 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::GuardianAssessment(assessment) => {
-                if response_id_for_assessment.as_deref() == Some(assessment.response_id.as_str()) {
+                if accept_actor_assessments
+                    && response_id_for_assessment.as_deref()
+                        == Some(assessment.response_id.as_str())
+                {
                     pending_assessment = Some(assessment);
                 }
             }

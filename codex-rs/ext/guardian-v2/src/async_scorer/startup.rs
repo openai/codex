@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use codex_core::GuardianInferenceContext;
 use codex_core::SharedModelsManager;
 use codex_core::config::Config;
 use codex_core::cyber_access_program::ApiKeyCyberAccessPrograms;
@@ -107,10 +108,38 @@ pub(super) fn valid_implicit_decisions_key(key: &str) -> bool {
     !key.is_empty() && key.trim() == key && !codex_login::auth::is_fedramp_api_key(key)
 }
 
-pub(super) async fn sampler_config(input: &ThreadStartInput<'_, Config>) -> LunaSamplerConfig {
+pub(super) async fn sampler_config(
+    input: &ThreadStartInput<'_, Config>,
+) -> anyhow::Result<LunaSamplerConfig> {
     let inherit_parent_cyber_access_program =
         codex_core::RequiredCyberAccessPrograms::for_thread(input.thread_store).is_none();
-    let luna_model = if let Some(catalog) = input.thread_store.get::<SharedModelsManager>() {
+    let inference = GuardianInferenceContext::for_config(input.config, input.thread_store)?;
+    let (provider_id, provider, http_client_factory, service_tier, guardian_catalog) =
+        if let Some(inference) = inference {
+            (
+                inference.provider_id.clone(),
+                Arc::clone(&inference.provider),
+                inference.http_client_factory.clone(),
+                inference.service_tier.clone(),
+                Some(Arc::clone(&inference.models_manager)),
+            )
+        } else {
+            #[expect(clippy::expect_used, reason = "Required thread startup invariant")]
+            let auth = input
+                .thread_store
+                .get::<ProviderAuthContext>()
+                .expect("Core installs provider auth before starting Guardian");
+            (
+                input.config.model_provider_id.clone(),
+                auth.model_provider(input.config.model_provider.clone()),
+                input.config.http_client_factory(),
+                input.config.service_tier.clone(),
+                None,
+            )
+        };
+    let luna_model = if guardian_catalog.is_none()
+        && let Some(catalog) = input.thread_store.get::<SharedModelsManager>()
+    {
         let mut model_config = input.config.to_models_manager_config();
         model_config.model_context_window = None;
         Some(catalog.get_model_info(MODEL, &model_config).await)
@@ -126,21 +155,20 @@ pub(super) async fn sampler_config(input: &ThreadStartInput<'_, Config>) -> Luna
                 )
             });
     let luna_compaction_hash = luna_model.and_then(|model| model.comp_hash.clone());
-    #[expect(clippy::expect_used, reason = "Required thread startup invariant")]
-    let auth = input
-        .thread_store
-        .get::<codex_model_provider::ProviderAuthContext>()
-        .expect("Core installs provider auth before starting Guardian");
-    LunaSamplerConfig {
-        api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::from_config(input.config),
+    Ok(LunaSamplerConfig {
+        api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::for_provider(
+            provider.info(),
+            &provider_id,
+            &input.config.features,
+        ),
         inherit_parent_cyber_access_program,
         workspace_routing: input
             .thread_store
             .get_or_init(|| input.config.workspace_routing_context())
             .as_ref()
             .clone(),
-        provider: auth.model_provider(input.config.model_provider.clone()),
-        http_client_factory: input.config.http_client_factory(),
+        provider,
+        http_client_factory,
         agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {
             AgentIdentityAuthPolicy::ChatGptAuth
         } else {
@@ -153,9 +181,10 @@ pub(super) async fn sampler_config(input: &ThreadStartInput<'_, Config>) -> Luna
             .thread_store
             .get::<ThreadOriginator>()
             .map(|originator| originator.0.clone()),
-        service_tier: input.config.service_tier.clone(),
+        service_tier,
+        guardian_catalog,
         luna_compaction_hash,
         max_input_tokens,
         metrics: input.extension_metrics.clone(),
-    }
+    })
 }

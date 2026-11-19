@@ -112,6 +112,7 @@ impl LunaSamplingRequest {
             section_costs,
             existing_context_tokens,
             input_tokens,
+            max_input_tokens,
         })
     }
 }
@@ -124,4 +125,5 @@ pub(super) struct PreparedRequest {
     pub(super) section_costs: Vec<(&'static str, codex_guardian_context::SectionCost)>,
     pub(super) existing_context_tokens: usize,
     pub(super) input_tokens: usize,
+    pub(super) max_input_tokens: usize,
 }

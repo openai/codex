@@ -73,31 +73,45 @@ impl GuardianApprovalReviewer {
         let model = input
             .thread_store
             .get::<codex_protocol::openai_models::ModelInfo>();
+        let has_explicit_guardian_provider = config.guardian_model_provider.is_some();
+        let guardian_classifier_result =
+            GuardianV2Config::explicit_guardian_classifier_model(config, input.thread_store).await;
         let guardian_config = input
             .thread_store
             .get::<GuardianV2Config>()
             .map(|config| (*config).clone())
             .map_or_else(|| GuardianV2Config::resolve(config), Ok)
+            .and_then(|config| match &guardian_classifier_result {
+                Ok(Some(model)) => config.with_classifier_defaults(Some(model)),
+                Ok(None) => Ok(config),
+                Err(error) => Err(error.clone()),
+            })
             .ok();
-        let requirements = config.config_layer_stack.requirements();
-        let mut policy = if config.guardian_model_provider.is_some() {
-            let mut policy = codex_config::GuardianPolicyLoader::new(Some(
-                &codex_features::FeatureToml::Enabled(true),
-            ))
-            .resolve(/*model*/ None, requirements);
-            policy.disable_scoring();
-            policy
+        let guardian_classifier_model = guardian_classifier_result.ok().flatten();
+        let review_scope_model = if has_explicit_guardian_provider {
+            guardian_classifier_model.as_deref()
         } else {
-            guardian_config.as_ref().map_or_else(
-                || {
-                    codex_config::GuardianPolicyLoader::new(Some(
-                        &codex_features::FeatureToml::Enabled(true),
-                    ))
-                    .resolve(model.as_deref(), requirements)
-                },
-                |config| config.policy_for_model(model.as_deref(), requirements),
-            )
+            model.as_deref()
         };
+        let requirements = config.config_layer_stack.requirements();
+        let mut policy = guardian_config.as_ref().map_or_else(
+            || {
+                codex_config::GuardianPolicyLoader::new(Some(
+                    &codex_features::FeatureToml::Enabled(true),
+                ))
+                .resolve(review_scope_model, requirements)
+            },
+            |config| config.policy_for_model(review_scope_model, requirements),
+        );
+        if has_explicit_guardian_provider {
+            if guardian_config.is_none() {
+                policy.disable_scoring();
+            }
+            requirements.constrain_guardian_policy(
+                &mut policy,
+                model.as_ref().map(|model| model.slug.as_str()),
+            );
+        }
         // Live mandatory restrictions may harden the turn's captured policy.
         thread
             .config()

@@ -23,12 +23,12 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
 use codex_login::AuthManager;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::has_full_access;
 
 use super::config::GuardianV2Config;
 use super::conversation::ConversationBackend;
+use super::coverage::background_scoring_allowed;
 use super::sampler::LunaSampler;
 use super::trusted_skills::TrustedSkillRoots;
 
@@ -45,13 +45,16 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if !input.config.features.enabled(Feature::GuardianApproval)
-                || input.config.guardian_model_provider.is_some()
-            {
+            if !input.config.features.enabled(Feature::GuardianApproval) {
                 return;
             }
 
-            let model = input.thread_store.get::<ModelInfo>();
+            let has_explicit_guardian_provider = input.config.guardian_model_provider.is_some();
+            let model = if has_explicit_guardian_provider {
+                None
+            } else {
+                input.thread_store.get::<ModelInfo>()
+            };
             let thread_id = input.thread_store.level_id().to_string();
             let guardian_config = match GuardianV2Config::resolve(input.config) {
                 Ok(config) => config,
@@ -69,7 +72,28 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 input.config.config_layer_stack.requirements(),
             );
             let scoring_enabled = policy.scoring_enabled();
-            let sampler_config = super::startup::sampler_config(&input).await;
+            let should_start_scoring = scoring_enabled
+                && background_scoring_allowed(input.config.approvals_reviewer, || {
+                    has_full_access(
+                        input.config.permissions.approval_policy.value(),
+                        &input.config.permissions.effective_permission_profile(),
+                        input
+                            .environments
+                            .iter()
+                            .map(|environment| &environment.config),
+                    )
+                });
+            let sampler_config = match super::startup::sampler_config(&input).await {
+                Ok(config) => config,
+                Err(error) => {
+                    self.event_sink.emit_warning(ExtensionWarning {
+                        thread_id,
+                        turn_id: None,
+                        message: format!("Guardian inference setup failed: {error}"),
+                    });
+                    return;
+                }
+            };
 
             if scoring_enabled && guardian_config.transcript.include_images {
                 input
@@ -81,6 +105,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             let sampler = input
                 .thread_store
                 .get_or_init(|| LunaSampler::new(sampler_config));
+            if should_start_scoring {
+                sampler.ensure_catalog_initialized().await;
+            }
             ConversationBackend::install(
                 input.thread_store,
                 ConversationBackend::new(
@@ -92,10 +119,11 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             input
                 .thread_store
                 .remove::<super::decisions::DecisionsSampler>();
-            if input
-                .config
-                .features
-                .enabled(Feature::GuardianV2DecisionsComparison)
+            if !has_explicit_guardian_provider
+                && input
+                    .config
+                    .features
+                    .enabled(Feature::GuardianV2DecisionsComparison)
                 && let Some(decisions_sampler) =
                     super::startup::decisions_sampler(&input, &self.auth_manager)
             {
@@ -116,17 +144,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
 
             // Keep the sampler available for later automatic review, but do not
             // prewarm while User approval mode or Full Access is selected.
-            if scoring_enabled
-                && input.config.approvals_reviewer == ApprovalsReviewer::AutoReview
-                && !has_full_access(
-                    input.config.permissions.approval_policy.value(),
-                    &input.config.permissions.effective_permission_profile(),
-                    input
-                        .environments
-                        .iter()
-                        .map(|environment| &environment.config),
-                )
-            {
+            if should_start_scoring {
                 tokio::spawn(async move {
                     sampler.prewarm().await;
                 });

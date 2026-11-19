@@ -2,9 +2,18 @@
 
 use codex_extension_api::ToolPayload;
 use codex_protocol::ToolName;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianReviewMode::Adaptive;
 use codex_protocol::openai_models::GuardianScope;
+
+/// Full Access can require inspecting selected environments; evaluate it only for Auto Review.
+pub(super) fn background_scoring_allowed(
+    reviewer: ApprovalsReviewer,
+    full_access: impl FnOnce() -> bool,
+) -> bool {
+    reviewer == ApprovalsReviewer::AutoReview && !full_access()
+}
 
 pub(super) fn scores_tool(
     policy: &GuardianModelPolicy,

@@ -19,6 +19,7 @@ use codex_api::Reasoning;
 use codex_api::ReasoningContext;
 use codex_api::ResponsesApiRequest;
 use codex_context_fragments::RenderedFragment;
+use codex_core::SharedModelsManager;
 use codex_core::cyber_access_program::ApiKeyCyberAccessPrograms;
 use codex_extension_api::ExtensionMetrics;
 use codex_history::ResponseItemEnvelope;
@@ -67,6 +68,8 @@ pub struct LunaSamplerConfig {
     pub originator: Option<String>,
     /// Optional inference service tier.
     pub service_tier: Option<String>,
+    /// Host-selected catalog, initialized when scoring needs Luna metadata.
+    pub(super) guardian_catalog: Option<SharedModelsManager>,
     /// Luna model's host-resolved encrypted-compaction compatibility hash.
     pub luna_compaction_hash: Option<String>,
     /// Complete input allowance resolved for the classifier model.
@@ -159,6 +162,18 @@ impl LunaSampler {
             connections: ConnectionPool::new(Arc::clone(&config)),
             config,
         }
+    }
+
+    pub(super) async fn ensure_catalog_initialized(&self) {
+        if let Some(catalog) = &self.config.guardian_catalog {
+            catalog
+                .ensure_initialized(self.config.http_client_factory.clone())
+                .await;
+        }
+    }
+
+    pub(super) fn max_input_tokens(&self) -> usize {
+        self.config.max_input_tokens
     }
 
     pub(super) async fn prewarm(&self) {
@@ -266,10 +281,6 @@ impl LunaSampler {
         }
     }
 
-    pub(super) fn max_input_tokens(&self) -> usize {
-        self.config.max_input_tokens
-    }
-
     /// Publishes the early score and returns only validated, completed history.
     pub(super) async fn sample_retained(
         &self,
@@ -285,8 +296,7 @@ impl LunaSampler {
             ready: Some(ready),
             output: Some(Vec::new()),
             early_score: None,
-            remaining_tokens: self
-                .config
+            remaining_tokens: review_request
                 .max_input_tokens
                 .saturating_sub(INPUT_TOKEN_MARGIN)
                 .saturating_sub(review_request.input_tokens),

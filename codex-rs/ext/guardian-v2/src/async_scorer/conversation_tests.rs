@@ -67,6 +67,11 @@ async fn pending_request(
     Ok((
         ConversationRequest {
             evidence,
+            max_input_tokens: thread
+                .thread_extension_data()
+                .get::<LunaSampler>()
+                .expect("test sampler")
+                .max_input_tokens(),
             reset_token_limit: config.async_classifier_conversation_token_limit,
             authorization,
             thread,

@@ -98,10 +98,35 @@ impl GuardianV2Extension {
         }
         let parent_model = input.thread_store.get::<ModelInfo>();
         let probe_comparison = Some(super::probe_shadow::ProbeComparison::capture(&input));
-        let policy = guardian_config.policy_for_model(
-            parent_model.as_deref(),
-            config.config_layer_stack.requirements(),
-        );
+        let has_explicit_guardian_provider = config.guardian_model_provider.is_some();
+        let guardian_classifier_model =
+            match GuardianV2Config::explicit_guardian_classifier_model(&config, input.thread_store)
+                .await
+            {
+                Ok(model) => model,
+                Err(error) => {
+                    score_progress.clear_score();
+                    self.event_sink.emit_warning(ExtensionWarning {
+                        thread_id: input.thread_store.level_id().to_owned(),
+                        turn_id: Some(input.turn_id.to_owned()),
+                        message: error,
+                    });
+                    return;
+                }
+            };
+        // Hosted Guardian always provides its own classifier metadata or fails;
+        // only ordinary Codex uses the parent model's Guardian V2 defaults.
+        let scoring_config_model = guardian_classifier_model
+            .as_deref()
+            .or(parent_model.as_deref());
+        let requirements = config.config_layer_stack.requirements();
+        let mut policy = guardian_config.policy_for_model(scoring_config_model, requirements);
+        if has_explicit_guardian_provider {
+            requirements.constrain_guardian_policy(
+                &mut policy,
+                parent_model.as_ref().map(|model| model.slug.as_str()),
+            );
+        }
         if !policy.scoring_enabled() {
             input.thread_store.remove::<GuardianV2Enabled>();
         }
@@ -124,8 +149,7 @@ impl GuardianV2Extension {
             .or_else(|| GuardianScope::for_tool(input.tool_name));
         // Mandatory review constraints must not turn transparent catalog wrappers into actions.
         // The legacy all-tools policy still scores wrappers through `other_tools`.
-        let wrapper_mode = parent_model
-            .as_ref()
+        let wrapper_mode = scoring_config_model
             .and_then(|model| model.guardian.as_ref())
             .map_or(policy.other_tools, |catalog| catalog.other_tools);
         if scope.is_none()
@@ -260,11 +284,7 @@ impl GuardianV2Extension {
             return;
         }
         input.thread_store.insert(GuardianV2Enabled);
-        let model_defaults = parent_model
-            .as_ref()
-            .and_then(|model| model.model_messages.as_ref())
-            .and_then(|messages| messages.guardian_v2.as_ref());
-        let guardian_config = match guardian_config.with_model_defaults(model_defaults) {
+        let guardian_config = match guardian_config.with_classifier_defaults(scoring_config_model) {
             Ok(config) => config,
             Err(error) => {
                 score_progress.fail_closed(sampled_at, tool_call_index);
@@ -291,10 +311,18 @@ impl GuardianV2Extension {
                 .get_or_init(NodeReplReviewEvidence::default)
                 .enable_image_capture();
         }
-        input.thread_store.insert(guardian_config.clone());
+        if !has_explicit_guardian_provider {
+            input.thread_store.insert(guardian_config.clone());
+        }
         let guardian_evidence = input
             .thread_store
             .get_or_init(GuardianReviewEvidence::default);
+        let max_input_tokens = match guardian_classifier_model.as_ref() {
+            Some(model) => codex_guardian_context::effective_input_token_limit(
+                model, /*configured_window*/ None,
+            ),
+            None => sampler.max_input_tokens(),
+        };
         let selected_compaction = match select_parent_compaction(
             context_mode,
             &guardian_config,
@@ -443,6 +471,7 @@ impl GuardianV2Extension {
             config,
             context_mode,
             parent_compaction,
+            max_input_tokens,
             call_id,
             mcp_tool,
             planned_action,

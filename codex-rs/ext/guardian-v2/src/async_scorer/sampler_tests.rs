@@ -78,6 +78,7 @@ impl LunaSampler {
             input: crate::async_scorer::request::PreparedRequest {
                 input,
                 input_tokens,
+                max_input_tokens: self.max_input_tokens(),
                 existing_context_tokens: 0,
                 cursor: codex_guardian_context::TranscriptCursor {
                     parent_history_version: 0,
@@ -261,6 +262,7 @@ pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerCo
         originator: Some("guardian-v2-test".to_owned()),
 
         service_tier: None,
+        guardian_catalog: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
         metrics: None,
@@ -674,6 +676,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
         originator: Some("guardian-v2-test".to_owned()),
 
         service_tier: None,
+        guardian_catalog: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
         metrics: None,
@@ -859,6 +862,7 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
         originator: None,
 
         service_tier: None,
+        guardian_catalog: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
         metrics: None,
@@ -880,6 +884,7 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
         input: crate::async_scorer::request::PreparedRequest {
             input,
             input_tokens,
+            max_input_tokens: sampler.max_input_tokens(),
             existing_context_tokens: 0,
             cursor: codex_guardian_context::TranscriptCursor {
                 parent_history_version: 0,

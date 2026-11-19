@@ -5,6 +5,8 @@ use super::proxy_websocket_servers;
 use super::sample_request;
 use super::sampler_config;
 use anyhow::Result;
+use codex_core::config::GuardianInferenceProvider;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
@@ -16,6 +18,7 @@ use codex_login::WorkspaceRoutingResolver;
 use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::turn_input::CyberAccessProgram;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -215,7 +218,7 @@ async fn idle_classifier_retains_the_owning_threads_workspace_binding() -> Resul
         .thread_store
         .get::<codex_model_provider::WorkspaceRoutingContext>()
         .expect("Core seeds the owning thread's routing context before extensions start");
-    let classifier = crate::async_scorer::startup::sampler_config(&input).await;
+    let classifier = crate::async_scorer::startup::sampler_config(&input).await?;
     classifier
         .provider
         .responses_api_provider(&owning_context)
@@ -224,6 +227,63 @@ async fn idle_classifier_retains_the_owning_threads_workspace_binding() -> Resul
     let error = sampler.sample(sample_request("turn-1")).await.unwrap_err();
     assert!(error.to_string().contains("start a new thread"), "{error}");
     assert!(server.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_guardian_classification_uses_its_own_access_program_policy() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let actor = responses::start_mock_server().await;
+    let guardian = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &guardian,
+        responses::sse(vec![
+            ev_assistant_message("score", "low"),
+            ev_completed("score"),
+        ]),
+    )
+    .await;
+    let guardian_url = format!("{}/v1", guardian.uri());
+    let test = core_test_support::test_codex::test_codex()
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
+        .with_config(move |config| {
+            config.model_provider_id = "actor".to_owned();
+            config
+                .features
+                .enable(Feature::ApiKeyCyberAccessPrograms)
+                .expect("enable API-key programs");
+            config.model_provider.capabilities = None;
+            let mut provider = ModelProviderInfo::create_openai_provider(Some(guardian_url));
+            provider.supports_websockets = false;
+            config.guardian_model_provider = Some(Arc::new(GuardianInferenceProvider {
+                id: "openai".to_owned(),
+                info: provider,
+            }));
+        })
+        .build_with_auto_env(&actor)
+        .await?;
+
+    let session_store = codex_extension_api::ExtensionData::new("session-1");
+    let input = codex_extension_api::ThreadStartInput {
+        config: &test.config,
+        session_source: &codex_protocol::protocol::SessionSource::Exec,
+        persistent_thread_state_available: false,
+        environments: &[],
+        mcp_resource_client: None,
+        extension_metrics: None,
+        session_store: &session_store,
+        thread_store: test.codex.thread_extension_data(),
+    };
+    let classifier = crate::async_scorer::startup::sampler_config(&input).await?;
+    let sampler = super::LunaSampler::new(classifier);
+    let mut request = sample_request("parent");
+    request.cyber_access_program = Some(CyberAccessProgram::DaybreakRed);
+
+    assert_eq!(sampler.sample(request).await?, "low");
+    assert_eq!(
+        response.single_request().body_json()["access_programs"],
+        serde_json::json!({"cyber": "daybreak_blue"}),
+    );
     Ok(())
 }
 

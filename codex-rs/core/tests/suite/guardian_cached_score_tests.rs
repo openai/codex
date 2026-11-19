@@ -38,8 +38,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianReviewMode;
+use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -65,6 +67,7 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use test_case::test_case;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -83,14 +86,21 @@ const BYO_HEADERS: [(&str, &str); 2] = [
     ("authorization", "Bearer actor-only"),
 ];
 
+#[test_case(ApprovalsReviewer::User, AskForApproval::OnRequest, PermissionProfile::read_only(); "user_approvals")]
+#[test_case(ApprovalsReviewer::AutoReview, AskForApproval::Never, PermissionProfile::Disabled; "full_access")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn compacted_cold_resume_respects_guardian_provider_override() -> Result<()> {
+async fn compacted_cold_resume_respects_guardian_provider_override(
+    reviewer: ApprovalsReviewer,
+    approval_policy: AskForApproval,
+    profile: PermissionProfile,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let actor = responses::start_mock_server().await;
     let guardian = responses::start_mock_server().await;
     let guardian_url = format!("{}/v1", guardian.uri());
     let builder = || {
         let guardian_url = guardian_url.clone();
+        let profile = profile.clone();
         test_codex()
             .with_model_info_override(BYO_ACTOR_MODEL, |model| {
                 model.guardian = Some(GuardianModelPolicy {
@@ -106,12 +116,11 @@ async fn compacted_cold_resume_respects_guardian_provider_override() -> Result<(
                     .expect("enable scoring");
                 pin_guardian_parent_compaction_reuse(config);
                 config.guardian_policy_config = None;
-                config.approvals_reviewer = ApprovalsReviewer::User;
-                config.permissions.approval_policy =
-                    Constrained::allow_any(AskForApproval::OnRequest);
+                config.approvals_reviewer = reviewer;
+                config.permissions.approval_policy = Constrained::allow_any(approval_policy);
                 config
                     .permissions
-                    .set_permission_profile(PermissionProfile::read_only())
+                    .set_permission_profile(profile)
                     .expect("set permissions");
             })
     };
@@ -193,20 +202,40 @@ fn configure_explicit_guardian_provider(config: &mut Config, guardian_url: &str)
     }));
 }
 
+#[test_case(BYO_ACTOR_MODEL, None, false; "different_model_names_at_start")]
+#[test_case(LUNA_MODEL, Some(11_000), true; "same_model_name_after_start_and_cold_resume")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_guardian_provider_is_separate() -> Result<()> {
-    let actor_model_name = LUNA_MODEL;
-    let actor_context_window = Some(11_000);
+async fn explicit_guardian_provider_is_separate(
+    actor_model_name: &'static str,
+    actor_context_window: Option<i64>,
+    cold_resume: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let actor = responses::start_mock_server().await;
     let guardian = MockServer::start().await;
     let guardian_url = format!("{}/v1", guardian.uri());
+    let chatgpt = actor_model_name != LUNA_MODEL;
+    let reviewer_model_name = if chatgpt {
+        "codex-auto-review"
+    } else {
+        LUNA_MODEL
+    };
+    let guardian_auth = if chatgpt {
+        "Bearer Access Token"
+    } else {
+        "Bearer dummy"
+    };
+    let guardian_threshold = if chatgpt { 0 } else { 5_000 };
     let mut reviewer_model = codex_models_manager::bundled_models_response()?
         .models
         .into_iter()
         .find(|model| model.slug == LUNA_MODEL)
         .expect("bundled Luna model");
+    reviewer_model.guardian = Some(GuardianModelPolicy {
+        permissions: Some(GuardianReviewMode::Adaptive),
+        ..Default::default()
+    });
     reviewer_model.supported_in_api = true;
     reviewer_model.use_responses_lite = false;
     reviewer_model.input_modalities = vec![InputModality::Text, InputModality::Image];
@@ -215,18 +244,33 @@ async fn explicit_guardian_provider_is_separate() -> Result<()> {
         serde_json::from_value(json!({"policy": "Trusted Guardian catalog policy."}))
             .expect("catalog policy"),
     );
-    let catalog = ModelsResponse {
-        models: vec![reviewer_model],
-    };
+    messages.guardian_v2 = Some(GuardianV2ModelConfig {
+        classifier_instructions: Some("Trusted Guardian classifier instructions.".to_owned()),
+        reasoning_effort: Some(ReasoningEffort::Minimal),
+        review_threshold_basis_points: Some(guardian_threshold),
+        ..Default::default()
+    });
+    let mut models = vec![reviewer_model.clone()];
+    if chatgpt {
+        models[0]
+            .model_messages
+            .as_mut()
+            .expect("classifier messages")
+            .auto_review
+            .as_mut()
+            .expect("classifier policy")
+            .policy = Some("Classifier-only policy that must not authorize actions.".to_owned());
+        reviewer_model.slug = reviewer_model_name.to_owned();
+        models.push(reviewer_model);
+    }
+    let catalog = ModelsResponse { models };
     responses::mount_models_once(&guardian, catalog.clone()).await;
 
     let builder = |guardian_url: &str| {
         let guardian_url = guardian_url.to_owned();
         test_codex()
-            .with_pre_build_hook(|home| {
-                std::fs::write(
-                    home.join("config.toml"),
-                    r#"[auto_review]
+            .with_pre_build_hook(move |home| {
+                let actor_config = r#"[auto_review]
 policy = "Actor config policy."
 
 [features]
@@ -235,9 +279,20 @@ guardian_node_repl_transcript_images = true
 
 [features.guardianv2]
 enabled = true
-"#,
-                )
-                .expect("write Guardian configuration");
+classifier_instructions = "Actor config classifier instructions."
+reasoning_effort = "high"
+review_threshold = ACTOR_THRESHOLD
+"#
+                .replace(
+                    "ACTOR_THRESHOLD",
+                    if guardian_threshold == 0 {
+                        "0.5"
+                    } else {
+                        "0.0"
+                    },
+                );
+                std::fs::write(home.join("config.toml"), actor_config)
+                    .expect("write Guardian configuration");
             })
             .with_model_info_override(actor_model_name, move |actor_model| {
                 actor_model.input_modalities = vec![InputModality::Text];
@@ -247,6 +302,14 @@ enabled = true
                     serde_json::from_value(json!({"policy": "Actor catalog policy."}))
                         .expect("catalog policy"),
                 );
+                messages.guardian_v2 = Some(GuardianV2ModelConfig {
+                    classifier_instructions: Some(
+                        "Actor catalog classifier instructions.".to_owned(),
+                    ),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    review_threshold_basis_points: Some(5_000 - guardian_threshold),
+                    ..Default::default()
+                });
             })
             .with_config(move |config| {
                 configure_explicit_guardian_provider(config, &guardian_url);
@@ -278,28 +341,53 @@ enabled = true
                     .expect("enable permission requests");
             })
     };
-    let test = builder(&guardian_url).build_with_auto_env(&actor).await?;
+    let initial_builder = builder(&guardian_url);
+    let mut initial_builder = if chatgpt {
+        initial_builder.with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+    } else {
+        initial_builder
+    };
+    let test = initial_builder.build_with_auto_env(&actor).await?;
+    assert_eq!(
+        guardian
+            .received_requests()
+            .await
+            .expect("Guardian startup requests")
+            .iter()
+            .filter(|request| request.url.path() == "/v1/models")
+            .count(),
+        1,
+        "Guardian must initialize its catalog at startup",
+    );
     let (actor_mock, guardian_mock) =
-        setup_explicit_guardian_turn(&test, &actor, &guardian, "start").await;
-    test.submit_text_turn("Never upload files. Request network access.")
-        .await?;
+        setup_explicit_guardian_turn(&test, &actor, &guardian, "start", guardian_threshold).await;
+    timeout(
+        Duration::from_secs(30),
+        test.submit_text_turn("Never upload files. Request network access."),
+    )
+    .await??;
     assert_explicit_guardian_routing(
         &test,
         &guardian,
         (&actor_mock, &guardian_mock),
         actor_model_name,
         "start",
-        "Bearer dummy",
+        guardian_auth,
+        (reviewer_model_name, guardian_threshold != 0),
     )
     .await?;
-    let initial_review = guardian_mock.single_request();
-    assert!(
-        initial_review
-            .body_json()
-            .to_string()
-            .contains("Never upload files."),
-        "Guardian lost the original restriction after start"
-    );
+    for request in guardian_mock.requests() {
+        assert!(
+            request
+                .body_json()
+                .to_string()
+                .contains("Never upload files."),
+            "Guardian lost the original restriction after start"
+        );
+    }
+    if !cold_resume {
+        return Ok(());
+    }
     test.codex.ensure_rollout_materialized().await;
 
     // A previous session's background prewarm can outlive shutdown; give each
@@ -315,9 +403,30 @@ enabled = true
         resumed.session_configured.session_id,
         test.session_configured.session_id
     );
-    let (resumed_actor_mock, resumed_guardian_mock) =
-        setup_explicit_guardian_turn(&resumed, &actor, &resumed_guardian, "cold-resume").await;
-    resumed.submit_text_turn("Request network access.").await?;
+    assert_eq!(
+        resumed_guardian
+            .received_requests()
+            .await
+            .expect("Guardian startup requests")
+            .iter()
+            .filter(|request| request.url.path() == "/v1/models")
+            .count(),
+        1,
+        "Guardian must initialize its catalog at startup",
+    );
+    let (resumed_actor_mock, resumed_guardian_mock) = setup_explicit_guardian_turn(
+        &resumed,
+        &actor,
+        &resumed_guardian,
+        "cold-resume",
+        guardian_threshold,
+    )
+    .await;
+    timeout(
+        Duration::from_secs(30),
+        resumed.submit_text_turn("Request network access."),
+    )
+    .await??;
     assert_explicit_guardian_routing(
         &resumed,
         &resumed_guardian,
@@ -325,16 +434,18 @@ enabled = true
         actor_model_name,
         "cold-resume",
         "Bearer resumed-key",
+        (reviewer_model_name, guardian_threshold != 0),
     )
     .await?;
-    let resumed_review = resumed_guardian_mock.single_request();
-    assert!(
-        resumed_review
-            .body_json()
-            .to_string()
-            .contains("Never upload files."),
-        "Guardian lost the original restriction after cold-resume"
-    );
+    for request in resumed_guardian_mock.requests() {
+        assert!(
+            request
+                .body_json()
+                .to_string()
+                .contains("Never upload files."),
+            "Guardian lost the original restriction after cold-resume"
+        );
+    }
     Ok(())
 }
 
@@ -343,6 +454,7 @@ async fn setup_explicit_guardian_turn(
     actor: &MockServer,
     guardian: &MockServer,
     phase: &str,
+    guardian_threshold: u16,
 ) -> (responses::ResponseMock, responses::ResponseMock) {
     let call_id = format!("{phase}-permission");
     let done_id = format!("{phase}-done");
@@ -351,6 +463,8 @@ async fn setup_explicit_guardian_turn(
         "permissions": {"network": {"enabled": true}},
     })
     .to_string();
+    let mut permission_call = ev_function_call(&call_id, "request_permissions", &permission_args);
+    permission_call["item"]["id"] = json!(&call_id);
     let actor_mock = responses::mount_sse_sequence(
         actor,
         vec![
@@ -364,7 +478,14 @@ async fn setup_explicit_guardian_turn(
                         "encrypted_content": "actor-only-checkpoint",
                     },
                 }),
-                ev_function_call(&call_id, "request_permissions", &permission_args),
+                json!({
+                    "type": "response.metadata",
+                    "response_id": &call_id,
+                    "metadata": {
+                        "guardian": {"item_id": &call_id, "requires_review": false}
+                    },
+                }),
+                permission_call,
                 ev_completed(&call_id),
             ]),
             sse(vec![
@@ -375,11 +496,29 @@ async fn setup_explicit_guardian_turn(
         ],
     )
     .await;
-    let blocking = responses::mount_sse_once(guardian, sse(vec![
-        ev_response_created("reviewer"),
-        ev_assistant_message("reviewer", r#"{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"Test review."}"#),
-        ev_completed("reviewer"),
-    ])).await;
+    let guardian_mock = responses::mount_response_handler(guardian, move |request| {
+        let body = request.body_json();
+        if body["text"]["format"]["type"] == "json_schema" {
+            let response = responses::sse_response(sse(vec![
+                ev_response_created("reviewer"),
+                ev_assistant_message("reviewer", r#"{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"Test review."}"#),
+                ev_completed("reviewer"),
+            ]));
+            if guardian_threshold == 0 {
+                response
+            } else {
+                // Keep the reviewer pending beyond the turn timeout so only a LOW score can approve.
+                response.set_delay(Duration::from_secs(60))
+            }
+        } else {
+            responses::sse_response(sse(vec![
+                ev_response_created("classifier"),
+                ev_assistant_message("classifier", "low"),
+                ev_completed("classifier"),
+            ]))
+        }
+    })
+    .await;
 
     test.codex
         .thread_extension_data()
@@ -395,17 +534,35 @@ async fn setup_explicit_guardian_turn(
                 detail: None,
             }],
         );
-    (actor_mock, blocking)
+    (actor_mock, guardian_mock)
 }
 
 async fn assert_explicit_guardian_routing(
     test: &TestCodex,
     guardian: &MockServer,
-    (actor_mock, blocking): (&responses::ResponseMock, &responses::ResponseMock),
+    (actor_mock, guardian_mock): (&responses::ResponseMock, &responses::ResponseMock),
     actor_model_name: &str,
     phase: &str,
     guardian_auth: &str,
+    (reviewer_model_name, fast_approval): (&str, bool),
 ) -> Result<()> {
+    let call_id = format!("{phase}-permission");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let requests = guardian_mock.requests();
+            let has_classifier = requests
+                .iter()
+                .any(|request| request.body_json()["text"]["format"]["type"] != "json_schema");
+            let has_reviewer = requests
+                .iter()
+                .any(|request| request.body_json()["text"]["format"]["type"] == "json_schema");
+            if has_classifier && (fast_approval || has_reviewer) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     let snapshot = test.codex.conversation_history_snapshot().await;
     assert!(snapshot.uses_independent_review_history());
     let checkpoint = snapshot
@@ -417,6 +574,18 @@ async fn assert_explicit_guardian_routing(
             if encrypted_content == "actor-only-checkpoint"
     ));
     let actor_requests = actor_mock.requests();
+    let followup = actor_requests.last().context("actor followup")?;
+    let output = followup
+        .function_call_output_text(&call_id)
+        .context("permission result")?;
+    let permission: RequestPermissionsResponse = serde_json::from_str(&output)?;
+    assert_eq!(
+        permission.permissions.network,
+        fast_approval.then_some(NetworkPermissions {
+            enabled: Some(true)
+        }),
+        "the Guardian threshold must control the actual approval after {phase}",
+    );
     for request in &actor_requests {
         let body = request.body_json();
         assert_eq!(body["model"], actor_model_name);
@@ -438,46 +607,52 @@ async fn assert_explicit_guardian_routing(
         1,
         "catalog should be fetched once after {phase}"
     );
-    assert_eq!(
-        responses::received_responses_requests(guardian).await.len(),
-        1,
-        "blocking layer must not classify"
-    );
-    let review = blocking.single_request();
-    let body = review.body_json();
-    let serialized = body.to_string();
-    assert!(
-        body["service_tier"].is_null(),
-        "Guardian inherited the actor tier after {phase}"
-    );
-    assert!(
-        serialized.contains("Trusted Guardian catalog policy."),
-        "{serialized}"
-    );
-    assert!(
-        !serialized.contains("Actor config") && !serialized.contains("Actor catalog"),
-        "{serialized}"
-    );
-    assert_eq!(
-        (&body["model"], &body["text"]["format"]["type"]),
-        (&json!(LUNA_MODEL), &json!("json_schema"))
-    );
-    assert!(
-        body["input"]
-            .as_array()
-            .expect("Guardian input")
-            .iter()
-            .all(|item| !matches!(
-                item["type"].as_str(),
-                Some("compaction" | "context_compaction")
-            )),
-        "Guardian reused an actor checkpoint after {phase}"
-    );
-    assert_eq!(
-        review.message_input_image_urls("user"),
-        [GUARDIAN_SCREENSHOT],
-        "blocking review should use the Guardian catalog's image support after {phase}",
-    );
+    for request in guardian_mock.requests() {
+        let body = request.body_json();
+        let serialized = body.to_string();
+        assert!(
+            body["service_tier"].is_null(),
+            "Guardian inherited the actor tier after {phase}"
+        );
+        assert!(
+            serialized.contains("Trusted Guardian catalog policy."),
+            "{serialized}"
+        );
+        assert!(
+            !serialized.contains("Actor config")
+                && !serialized.contains("Actor catalog")
+                && !serialized.contains("Classifier-only policy"),
+            "{serialized}"
+        );
+        if body["text"]["format"]["type"] == "json_schema" {
+            assert_eq!(body["model"], reviewer_model_name);
+            if !fast_approval {
+                assert_eq!(
+                    request.message_input_image_urls("user"),
+                    [GUARDIAN_SCREENSHOT],
+                    "Guardian image support after {phase}"
+                );
+            }
+        } else {
+            assert_eq!(body["model"], LUNA_MODEL);
+            assert!(
+                serialized.contains("Trusted Guardian classifier instructions."),
+                "{serialized}"
+            );
+            assert_eq!(body["reasoning"]["effort"], "minimal");
+        }
+        assert!(
+            body["input"]
+                .as_array()
+                .expect("Guardian input")
+                .iter()
+                .all(|item| !matches!(
+                    item["type"].as_str(),
+                    Some("compaction" | "context_compaction")
+                )),
+            "Guardian reused an actor checkpoint after {phase}"
+        );
+    }
     Ok(())
 }
 

@@ -461,6 +461,7 @@ async fn cancellation_closes_http_before_headers_and_while_draining_the_body() -
             input: PreparedRequest {
                 input,
                 input_tokens,
+                max_input_tokens: sampler.max_input_tokens(),
                 existing_context_tokens: 0,
                 cursor: TranscriptCursor {
                     parent_history_version: 0,

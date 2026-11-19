@@ -72,6 +72,7 @@ pub(super) struct Reservation {
 pub(super) struct ConversationRequest {
     pub(super) evidence: CollectedTranscript,
     pub(super) sampling: LunaSamplingRequest,
+    pub(super) max_input_tokens: usize,
     pub(super) reset_token_limit: usize,
     pub(super) authorization: ScoreAuthorization,
     pub(super) thread: Arc<CodexThread>,
@@ -256,11 +257,7 @@ impl Reservation {
         let had_history = state.snapshot().is_some();
         let review_request = request
             .sampling
-            .prepare_retained(
-                &request.evidence,
-                &mut state,
-                self.sampler.max_input_tokens(),
-            )
+            .prepare_retained(&request.evidence, &mut state, request.max_input_tokens)
             .filter(|review_request| {
                 review_request.existing_context_tokens == 0
                     || review_request.input_tokens <= request.reset_token_limit
@@ -273,7 +270,7 @@ impl Reservation {
                 request.sampling.prepare_retained(
                     &request.evidence,
                     &mut state,
-                    self.sampler.max_input_tokens(),
+                    request.max_input_tokens,
                 )
             });
         let Some(review_request) = review_request else {

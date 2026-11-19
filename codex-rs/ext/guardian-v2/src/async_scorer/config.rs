@@ -3,14 +3,19 @@ use std::borrow::Cow;
 use codex_config::GuardianPolicyLoader;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::RenderedFragment;
+use codex_core::GuardianInferenceContext;
 use codex_core::config::Config;
+use codex_extension_api::ExtensionData;
+use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
 use codex_prompts::GuardianClassifierInstructions;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 
 use super::transcript::MAX_MESSAGE_ENTRY_TOKENS;
@@ -54,6 +59,27 @@ pub(crate) struct GuardianV2Config {
 
 impl GuardianV2Config {
     pub(crate) fn resolve(config: &Config) -> Result<Self, String> {
+        if config.guardian_model_provider.is_some() {
+            let enabled = config
+                .config_layer_stack
+                .requirements_toml()
+                .feature_requirements
+                .as_ref()
+                .and_then(|requirements| requirements.entries.get(Feature::GuardianV2.key()))
+                .copied()
+                .unwrap_or(true);
+            let configured = GuardianV2ConfigToml {
+                enabled: Some(enabled),
+                reuse_parent_compaction: Some(false),
+                ..Default::default()
+            };
+            let mut resolved = Self::from_overrides(configured.clone())?;
+            resolved.policy = GuardianPolicyLoader::new(Some(&FeatureToml::Config(configured)));
+            resolved.review_multi_agent_calls =
+                config.guardian_native_multi_agent_history_enabled();
+            resolved.multi_agent_namespace = config.multi_agent_v2.tool_namespace.clone();
+            return Ok(resolved);
+        }
         let effective_config = config.config_layer_stack.effective_config();
         let mut configured = match effective_config
             .get("features")
@@ -84,6 +110,35 @@ impl GuardianV2Config {
         resolved.review_multi_agent_calls = config.guardian_native_multi_agent_history_enabled();
         resolved.multi_agent_namespace = config.multi_agent_v2.tool_namespace.clone();
         Ok(resolved)
+    }
+
+    /// Read the available classifier metadata without waiting for catalog discovery.
+    pub(super) async fn explicit_guardian_classifier_model(
+        config: &Config,
+        store: &ExtensionData,
+    ) -> Result<Option<CatalogModel>, String> {
+        let inference = GuardianInferenceContext::for_config(config, store)
+            .map_err(|error| error.to_string())?;
+        Ok(match inference {
+            Some(inference) => Some(
+                inference
+                    .models_manager
+                    .get_model_info(super::sampler::MODEL, &Default::default())
+                    .await,
+            ),
+            None => None,
+        })
+    }
+
+    pub(super) fn with_classifier_defaults(
+        &self,
+        model: Option<&ModelInfo>,
+    ) -> Result<Self, String> {
+        self.with_model_defaults(
+            model
+                .and_then(|model| model.model_messages.as_ref())
+                .and_then(|messages| messages.guardian_v2.as_ref()),
+        )
     }
 
     pub(super) fn policy_for_model(

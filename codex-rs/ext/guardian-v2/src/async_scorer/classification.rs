@@ -79,6 +79,7 @@ pub(super) struct Classification {
     pub(super) config: Arc<Config>,
     pub(super) context_mode: GuardianContextMode,
     pub(super) parent_compaction: Option<ResponseItem>,
+    pub(super) max_input_tokens: usize,
     pub(super) call_id: String,
     pub(super) mcp_tool: Option<McpToolContext>,
     pub(super) planned_action: String,
@@ -135,6 +136,7 @@ impl Classification {
             config,
             context_mode,
             parent_compaction,
+            max_input_tokens,
             call_id,
             mcp_tool,
             planned_action,
@@ -302,7 +304,8 @@ impl Classification {
         let mut classification_finished_at = None;
         let mut classifier_turn_id = None;
         let result: Result<ClassificationOutcome, String> = async {
-            let review_model = if config.guardian_policy_config.is_none()
+            let review_model = if (config.guardian_model_provider.is_some()
+                || config.guardian_policy_config.is_none())
                 && let Some(parent_model) = parent_model.as_ref()
             {
                 Some(codex_core::guardian_policy_model(&thread, &config, Arc::clone(parent_model)).await.map_err(|error| error.to_string())?)
@@ -336,6 +339,7 @@ impl Classification {
             let request = ConversationRequest {
                 evidence,
                 sampling,
+                max_input_tokens,
                 reset_token_limit: guardian_config.async_classifier_conversation_token_limit,
                 ready,
                 authorization: score_authorization.clone(),

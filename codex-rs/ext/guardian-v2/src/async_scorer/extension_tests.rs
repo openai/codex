@@ -4053,6 +4053,10 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
         index: wrapper - 1,
         max_lag: 2,
     };
+    // Changing classifier instructions does not invalidate an already-published LOW.
+    let mut config = store.get::<GuardianV2Config>().unwrap().as_ref().clone();
+    config.classifier_instructions = "Reject every read.".to_owned();
+    store.insert(config);
     for (call_id, expected) in [
         ("first", Some(ReviewDecision::Approved)),
         ("second", Some(ReviewDecision::Approved)),
