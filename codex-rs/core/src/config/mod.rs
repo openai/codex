@@ -1701,12 +1701,7 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
     match ConfigToml::try_from(layers.effective_config()) {
         Ok(config_toml) => Ok(config_toml),
         Err(err) => {
-            if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
-                layers,
-                codex_config::CONFIG_TOML_FILE,
-            )
-            .await
-            {
+            if let Some(config_error) = codex_config::first_layer_config_error(layers).await {
                 return Err(codex_config::io_error_from_config_error(
                     std::io::ErrorKind::InvalidData,
                     config_error,

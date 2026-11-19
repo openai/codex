@@ -28,15 +28,14 @@ use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
 use crate::config_toml::ConfigToml;
 use crate::config_toml::ProjectConfig;
-use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml;
-use crate::diagnostics::first_layer_config_error_from_entries as typed_first_layer_config_error_from_entries;
+use crate::diagnostics::first_layer_config_error_from_entries;
+use crate::diagnostics::first_layer_shell_environment_filter_error;
 use crate::diagnostics::io_error_from_config_error;
 use crate::merge::merge_toml_values;
 use crate::overrides::build_cli_overrides_layer;
 use crate::project_root_markers::default_project_root_markers;
 use crate::project_root_markers::project_root_markers_from_config;
-use crate::shell_environment_policy::ShellEnvironmentPolicyFilterConfigToml;
 use crate::state::ConfigLayerEntry;
 use crate::state::ConfigLayerStack;
 use crate::state::ConfigLoadOptions;
@@ -103,10 +102,6 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "experimental_realtime_ws_base_url",
     "otel",
 ];
-
-async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
-    typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
-}
 
 /// To build up the set of admin-enforced constraints, requirements layers are
 /// collected in ascending precedence order, matching config layers, and then
@@ -504,11 +499,7 @@ pub async fn load_config_layers_state(
     }
 
     if let Err(err) = validate_enabled_config_layers(&layers) {
-        if let Some(config_error) = typed_first_layer_config_error_from_entries::<
-            ShellEnvironmentPolicyFilterConfigToml,
-        >(&layers, CONFIG_TOML_FILE)
-        .await
-        {
+        if let Some(config_error) = first_layer_shell_environment_filter_error(&layers).await {
             return Err(io_error_from_config_error(
                 io::ErrorKind::InvalidData,
                 config_error,

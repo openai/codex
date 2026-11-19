@@ -362,8 +362,7 @@ async fn returns_config_error_for_schema_error_in_user_config() {
     let config_error = config_error_from_io(&err);
     let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
     let expected_config_error =
-        codex_config::config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
-            .expect("schema error");
+        codex_config::config_error_from_typed_toml(&config_path, contents).expect("schema error");
     assert_eq!(config_error, &expected_config_error);
 }
 
@@ -487,7 +486,7 @@ exclude = ["LEGACY_*"]
 
     assert_eq!(
         config_error_from_io(&err),
-        &config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
+        &config_error_from_typed_toml(&config_path, contents)
             .expect("mixed shell policy should produce a typed config error")
     );
 }
@@ -845,8 +844,8 @@ collaboration_modes = "true""#;
     std::fs::write(&config_path, contents).expect("write config");
 
     let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
-    let error = codex_config::config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
-        .expect("schema error");
+    let error =
+        codex_config::config_error_from_typed_toml(&config_path, contents).expect("schema error");
 
     let value_line = contents.lines().nth(1).expect("value line");
     let value_column = value_line.find("\"true\"").expect("value") + 1;
