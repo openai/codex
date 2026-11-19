@@ -10,6 +10,7 @@ import type {
 // each returned element is sent as resource text.
 export function render(state: StatuslineState): UiTree {
   const children: UiTree[] = [];
+  const text = (value: string): UiTree => ({ type: "text", children: [value] });
   const { account, config, thread } = state;
   if (config.statusline_items.includes("model")) {
     children.push({
@@ -26,19 +27,19 @@ export function render(state: StatuslineState): UiTree {
   const window = account.rate_limits[0]?.primary_limit;
   if (window && window.resets_at !== null) {
     children.push(
-      `${window.used_percent}% until ${new Date(window.resets_at * 1_000).toISOString()}`,
+      text(`${window.used_percent}% until ${new Date(window.resets_at * 1_000).toISOString()}`),
     );
   }
   if (thread.usage.total) {
-    children.push(String(thread.usage.total.output_tokens));
+    children.push(text(String(thread.usage.total.output_tokens)));
   }
   if (config.statusline_items.includes("current-dir")) {
-    children.push(thread.workspace.cwd);
+    children.push(text(thread.workspace.cwd));
   }
   if (children.length === 0) {
     return null;
   }
-  return { type: "row", props: { gap: 1, wrap: "wrap" }, children };
+  return { type: "row", props: { gap: 1, wrap: "wrap", justify: "between" }, children };
 }
 
 // @ts-expect-error The snapshot emits the canonical ID even when config used an alias.

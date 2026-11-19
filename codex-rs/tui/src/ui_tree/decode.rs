@@ -62,6 +62,13 @@ pub(super) fn token<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Res
     T::deserialize(String::deserialize(d)?.into_deserializer())
 }
 
+// A present token must be a string. Serde defaults an omitted property to `None`.
+pub(super) fn present_token<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    token(d).map(Some)
+}
+
 pub(super) fn gap<'de, D: Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
     let gap = u64::deserialize(de)?;
     if gap > MAX_GAP {

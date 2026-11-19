@@ -3,6 +3,7 @@
 use super::text::InlineText;
 use super::text::Paint;
 use super::text::PreparedText;
+use crate::ui_tree::RowProps;
 use crate::ui_tree::RowWrap;
 use crate::ui_tree::UiNode;
 
@@ -12,7 +13,7 @@ pub(super) struct PreparedNode {
     pub(super) widths: Widths,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(super) struct Widths {
     pub(super) minimum: u64,
     pub(super) preferred: u64,
@@ -23,10 +24,10 @@ pub(super) enum NodeKind {
     Text(PreparedText),
     Row {
         children: Vec<PreparedNode>,
-        gap: u64,
-        wrap: RowWrap,
+        props: RowProps,
         paint: Paint,
     },
+    Empty,
 }
 
 impl PreparedNode {
@@ -38,7 +39,7 @@ impl PreparedNode {
         if items.len() <= 1 {
             items.pop()
         } else {
-            Self::row(items, /*gap*/ 0, RowWrap::Nowrap, paint)
+            Self::row(items, RowProps::default(), paint)
         }
     }
 
@@ -47,10 +48,7 @@ impl PreparedNode {
         if text.lines.is_empty() {
             return None;
         }
-        let mut widths = Widths {
-            minimum: 0,
-            preferred: 0,
-        };
+        let mut widths = Widths::default();
         for line in &text.lines {
             let mut width = 0;
             for chunk in line {
@@ -66,20 +64,17 @@ impl PreparedNode {
         })
     }
 
-    fn row(mut children: Vec<Self>, gap: u64, wrap: RowWrap, paint: Paint) -> Option<Self> {
+    fn row(mut children: Vec<Self>, props: RowProps, paint: Paint) -> Option<Self> {
         children.retain(|child| {
-            child.widths.preferred > 0
-                || match &child.kind {
-                    NodeKind::Row { .. } => true,
-                    NodeKind::Text(text) => text.has_authored_break,
-                }
+            // An authored blank line occupies a row even when it paints no cells.
+            !child.is_empty()
         });
         if children.is_empty() {
             return None;
         }
-        let gaps = gap.saturating_mul(children.len() as u64 - 1);
+        let gaps = props.gap.saturating_mul(children.len() as u64 - 1);
         let widths = Widths {
-            minimum: match wrap {
+            minimum: match props.wrap {
                 RowWrap::Nowrap => children
                     .iter()
                     .fold(gaps, |w, c| w.saturating_add(c.widths.minimum)),
@@ -97,11 +92,33 @@ impl PreparedNode {
             widths,
             kind: NodeKind::Row {
                 children,
-                gap,
-                wrap,
+                props,
                 paint,
             },
         })
+    }
+
+    /// In flex layout, consecutive strings form one anonymous item.
+    fn flex_items(children: Vec<Option<UiNode>>, paint: &Paint) -> Vec<Self> {
+        let mut items = Vec::new();
+        let mut strings = InlineText::default();
+        for child in children.into_iter().flatten() {
+            match child {
+                UiNode::String(raw) => strings.push_leaf(raw, paint.clone()),
+                child => {
+                    items.extend(Self::text(std::mem::take(&mut strings)));
+                    // An explicit empty element still separates flex gaps.
+                    items.push(
+                        Self::from_node(child, paint.clone()).unwrap_or_else(|| Self {
+                            kind: NodeKind::Empty,
+                            widths: Widths::default(),
+                        }),
+                    );
+                }
+            }
+        }
+        items.extend(Self::text(strings));
+        items
     }
 
     fn collect_inline(
@@ -120,12 +137,17 @@ impl PreparedNode {
                 if let Some(color) = props.background {
                     paint.background = Some(color);
                 }
-                let children = children
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|node| Self::from_node(node, paint.clone()))
-                    .collect();
-                items.extend(Self::row(children, props.gap, props.wrap, paint));
+                let children = if props.justify.is_some() {
+                    Self::flex_items(children, &paint)
+                } else {
+                    // Existing providers apply the gap to each authored child.
+                    children
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|node| Self::from_node(node, paint.clone()))
+                        .collect()
+                };
+                items.extend(Self::row(children, props, paint));
                 return;
             }
             UiNode::Text { props, children } => {
@@ -153,6 +175,11 @@ impl PreparedNode {
         for node in children.into_iter().flatten() {
             Self::collect_inline(items, inline, node, paint.clone());
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.widths.preferred == 0
+            && matches!(&self.kind, NodeKind::Text(text) if !text.has_authored_break)
     }
 }
 
