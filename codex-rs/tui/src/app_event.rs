@@ -562,6 +562,7 @@ pub(crate) enum AppEvent {
     SidebarDocumentLoaded {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,
+        tab: uuid::Uuid,
         request: uuid::Uuid,
         result: color_eyre::Result<crate::sidebar_image::DocumentContent>,
     },

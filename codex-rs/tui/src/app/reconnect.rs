@@ -418,11 +418,17 @@ impl App {
         self.app_event_tx = AppEventSender::new(tx);
         self.app_server_backend_id = Some(session.backend_id());
         *app_event_rx = rx;
-        for pane in self.sidebars.values_mut() {
+        for (parent, pane) in &mut self.sidebars {
             pane.focus_document_request = None;
             pane.agents.pending_link = None;
-            for doc in pane.documents.values_mut() {
-                doc.connection_replaced();
+            for (tab, doc) in &mut pane.documents {
+                if let Some(parent) = parent
+                    && doc.backend == session.backend_id()
+                {
+                    doc.subscribe(*tab, *parent, &session, self.app_event_tx.clone());
+                } else {
+                    doc.connection_replaced();
+                }
             }
             if let Some(files) = &mut pane.files {
                 files.connection_replaced();

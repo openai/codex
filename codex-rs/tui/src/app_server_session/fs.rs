@@ -217,6 +217,35 @@ impl AppServerFileSystem {
         .map(drop)
     }
 
+    pub(crate) async fn watch_document(&self, path: &AppServerPath, id: Uuid) -> Result<()> {
+        // fs/changed notifications use client-native absolute paths. If we can't represent
+        // this directory, don't register a watch whose notifications we can't decode.
+        let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())?;
+        let _: codex_app_server_protocol::FsWatchResponse = self
+            .request_handle
+            .request_typed(ClientRequest::FsWatch {
+                request_id: RequestId::String(format!("tui-fs-{}", Uuid::new_v4())),
+                params: codex_app_server_protocol::FsWatchParams {
+                    watch_id: id.to_string(),
+                    path,
+                },
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn unwatch_document(&self, id: Uuid) {
+        let _: Result<codex_app_server_protocol::FsUnwatchResponse, _> = self
+            .request_handle
+            .request_typed(ClientRequest::FsUnwatch {
+                request_id: RequestId::String(format!("tui-fs-{}", Uuid::new_v4())),
+                params: codex_app_server_protocol::FsUnwatchParams {
+                    watch_id: id.to_string(),
+                },
+            })
+            .await;
+    }
+
     async fn request_fs_path<T: DeserializeOwned>(
         &self,
         method: &str,

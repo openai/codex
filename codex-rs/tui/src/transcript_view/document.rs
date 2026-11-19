@@ -7,7 +7,21 @@ use ratatui::widgets::Widget;
 
 use super::*;
 
+/// A document can be replaced on disk; retain the offset, not the old rendered cells.
+#[derive(Clone, Copy)]
+pub(crate) enum DocumentPosition {
+    Offset(usize),
+    Latest,
+}
+
 impl TranscriptView {
+    pub(crate) fn document_position(&self) -> DocumentPosition {
+        match self.position {
+            Position::Reading(anchor) => DocumentPosition::Offset(anchor.offset),
+            Position::Latest => DocumentPosition::Latest,
+        }
+    }
+
     pub(crate) fn render_document(
         &mut self,
         area: Rect,

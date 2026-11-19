@@ -3723,9 +3723,10 @@ impl App {
                     }
                 }
             }
-            AppEvent::SidebarDocumentLoaded { backend_id, parent, request, result } => {
-                if let Some(doc) = self.sidebars.get_mut(&Some(parent)).and_then(|pane| pane.documents.get_mut(&request))
+            AppEvent::SidebarDocumentLoaded { backend_id, parent, tab, request, result } => {
+                if let Some(doc) = self.sidebars.get_mut(&Some(parent)).and_then(|pane| pane.documents.get_mut(&tab))
                     && doc.backend == backend_id
+                    && doc.watch.as_ref().is_some_and(|(id, _)| *id == request)
                 {
                     doc.loaded(result);
                     tui.frame_requester().schedule_frame();

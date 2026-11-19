@@ -109,6 +109,17 @@ async fn remote_preview_requests_the_source_thread_and_validates_text() -> Resul
             .unwrap_err();
         assert!(format!("{error:#}").contains(expected), "{error:#}");
     }
+    // No fs/watch should reach the server for a path its client can't decode in fs/changed.
+    let foreign = if cfg!(windows) {
+        "/workspace"
+    } else {
+        r"C:\workspace"
+    };
+    let watch = session
+        .file_system()
+        .watch_document(&AppServerPath::from_app_server(foreign), Uuid::new_v4())
+        .await;
+    assert!(watch.is_err());
     session.shutdown().await?;
     server.await??;
     Ok(())

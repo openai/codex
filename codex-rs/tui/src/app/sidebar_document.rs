@@ -1,6 +1,7 @@
 //! Read-only Markdown previews use the focused thread's workspace and app-server.
 
 mod open_error;
+mod watch;
 
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
@@ -19,6 +20,7 @@ use crate::sidebar_tab_strip::SidebarTab;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::ReaderLink;
 use crate::terminal_hyperlinks::visible_lines;
+use crate::transcript_view::DocumentPosition;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
 use codex_app_server_client::AppServerPath;
@@ -79,6 +81,8 @@ pub(super) struct DocumentRenderOptions<'a> {
 pub(super) struct Document {
     source: ThreadId,
     pub(super) path: PathUri,
+    original_path: AppServerPath,
+    pub(super) watch: Option<(uuid::Uuid, tokio::sync::watch::Sender<()>)>,
     pub(super) backend: crate::backend_id::BackendId,
     link: Option<usize>,
     location: Option<SourceLocation>,
@@ -87,7 +91,10 @@ pub(super) struct Document {
 
 enum State {
     Loading(Instant),
-    Failed(color_eyre::Report),
+    Failed {
+        error: color_eyre::Report,
+        position: Option<DocumentPosition>,
+    },
     Image(Box<SidebarImage>),
     Ready {
         view: Box<TranscriptView>,
@@ -140,21 +147,39 @@ impl Document {
     }
 
     pub(super) fn connection_replaced(&mut self) {
+        self.watch = None;
         if matches!(self.state, State::Loading(_)) {
-            self.state = State::Failed(eyre!("Connection changed. Reopen this file to try again."));
+            self.state = State::Failed {
+                error: eyre!("Connection changed. Reopen this file to try again."),
+                position: None,
+            };
         }
     }
 
     pub(super) fn loaded(&mut self, result: Result<DocumentContent>) {
+        let position = match &self.state {
+            State::Ready { view, .. } => Some(view.document_position()),
+            State::Failed { position, .. } => *position,
+            State::Loading(_) | State::Image(_) => None,
+        };
         self.state = match result {
             Ok(DocumentContent::Image(image)) => State::Image(image),
             Ok(DocumentContent::Text(source)) => {
+                if let State::Ready { cells, .. } = &self.state
+                    && cells[0].copy_source() == Some(source.as_str())
+                {
+                    return;
+                }
+                self.link = None;
                 let title = self.title();
                 let code =
                     self.location.is_some() || !crate::markdown_render::is_markdown_file(&title);
                 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
                 if code && source.len() > MAX_SOURCE_BYTES {
-                    self.state = State::Failed(eyre!("Source preview limit is 1 MiB"));
+                    self.state = State::Failed {
+                        error: eyre!("Source preview limit is 1 MiB"),
+                        position,
+                    };
                     return;
                 }
                 // Like the transcript layout, count one LF per logical line, including CRLF input.
@@ -173,8 +198,10 @@ impl Document {
                 };
                 const MAX_SOURCE_LINES: usize = 10_000;
                 if line_starts.len() > MAX_SOURCE_LINES {
-                    self.state =
-                        State::Failed(eyre!("Source preview limit is {MAX_SOURCE_LINES} lines"));
+                    self.state = State::Failed {
+                        error: eyre!("Source preview limit is {MAX_SOURCE_LINES} lines"),
+                        position,
+                    };
                     return;
                 }
                 let language = code.then(|| {
@@ -190,7 +217,11 @@ impl Document {
                 let mut view = Box::<TranscriptView>::default();
                 view.document_links = true;
                 view.show_follow_control = false;
-                view.jump_to_offset(&cells, target.map_or(0, |(_, offset)| offset));
+                match position {
+                    Some(DocumentPosition::Latest) => view.jump_to_latest(),
+                    Some(DocumentPosition::Offset(offset)) => view.jump_to_offset(&cells, offset),
+                    None => view.jump_to_offset(&cells, target.map_or(0, |(_, offset)| offset)),
+                }
                 State::Ready {
                     view,
                     cells,
@@ -198,7 +229,7 @@ impl Document {
                     target,
                 }
             }
-            Err(error) => State::Failed(error),
+            Err(error) => State::Failed { error, position },
         };
     }
 
@@ -224,6 +255,7 @@ impl Document {
         if restore_markdown || (location.is_some() && line_starts.is_empty()) {
             // Coordinate links show source. Plain Markdown links restore rendering.
             let source = source.to_owned();
+            self.state = State::Loading(Instant::now());
             self.loaded(Ok(DocumentContent::Text(source)));
         } else {
             *target = location.and_then(|location| source_target(source, line_starts, location));
@@ -266,7 +298,7 @@ impl Document {
                 ])
                 .render(body, buf);
             }
-            State::Failed(error) => {
+            State::Failed { error, .. } => {
                 let mut lines = open_error::lines(&self.path, error, body.width);
                 // On short panes, keep the space for the filename and recovery message.
                 if lines.len() + 2 < usize::from(body.height) {
@@ -508,7 +540,7 @@ impl App {
         let existing = self.sidebar().and_then(|pane| {
             pane.documents.iter().find_map(|(&id, doc)| {
                 (doc.backend == backend_id && doc.path == path)
-                    .then_some((id, matches!(doc.state, State::Failed(_))))
+                    .then_some((id, matches!(doc.state, State::Failed { .. })))
             })
         });
         if let Some((id, failed)) = existing {
@@ -526,21 +558,23 @@ impl App {
             self.sidebar_mut().remove_document(id);
         }
         let request = uuid::Uuid::new_v4();
+        let tx = self.app_event_tx.clone();
         let pane = self.sidebar_mut();
         if !pane.opened_files.contains(&path) {
             pane.opened_files.push(path.clone());
         }
-        pane.documents.insert(
-            request,
-            Document {
-                source,
-                path: path.clone(),
-                backend: backend_id,
-                link: None,
-                location,
-                state: State::Loading(Instant::now()),
-            },
-        );
+        let mut doc = Document {
+            source,
+            path,
+            original_path,
+            watch: None,
+            backend: backend_id,
+            link: None,
+            location,
+            state: State::Loading(Instant::now()),
+        };
+        doc.subscribe(request, parent, server, tx);
+        pane.documents.insert(request, doc);
         pane.add_document_tab(request);
         if focus {
             self.activate_sidebar_tab(tui, server, SidebarTab::Document(request))
@@ -548,41 +582,6 @@ impl App {
         } else {
             tui.frame_requester().schedule_frame();
         }
-        let reader = server.request_view();
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = async {
-                if (FileLink {
-                    path: path.inferred_native_path_string(),
-                    location,
-                })
-                .is_image()
-                {
-                    let bytes = reader
-                        .read_preview_file(source, &original_path, &path)
-                        .await?;
-                    tokio::task::spawn_blocking(move || match SidebarImage::decode(&bytes) {
-                        Ok(image) => Ok(DocumentContent::Image(Box::new(image))),
-                        Err(image_error) => AppServerSession::preview_text(bytes)
-                            .map(DocumentContent::Text)
-                            .map_err(|_| image_error),
-                    })
-                    .await?
-                } else {
-                    reader
-                        .read_document(source, &original_path, &path)
-                        .await
-                        .map(DocumentContent::Text)
-                }
-            }
-            .await;
-            tx.send(AppEvent::SidebarDocumentLoaded {
-                backend_id,
-                parent,
-                request,
-                result,
-            });
-        });
         Ok(())
     }
 

@@ -11,6 +11,7 @@ mod composer_gap;
 mod copy_mode;
 mod disclosure;
 mod document;
+pub(crate) use document::DocumentPosition;
 mod follow_control;
 mod footer;
 mod input;
