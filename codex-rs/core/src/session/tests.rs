@@ -9562,10 +9562,12 @@ async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
         .mcp_runtime_for_step(
             &turn_context,
             &[],
+            /*captured_executor_discovery_v2*/ None,
             /*required_servers*/ &[],
             /*required_plugins*/ &HashSet::new(),
         )
-        .await;
+        .await
+        .expect("prepare latest MCP state");
 
     let configured_servers = codex_mcp::configured_mcp_servers(new_step.mcp.config());
     assert_eq!(

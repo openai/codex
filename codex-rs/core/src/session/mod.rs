@@ -259,6 +259,7 @@ mod config_refresh;
 pub(crate) mod context_window;
 mod daemon_recovery;
 mod environment;
+mod executor_discovery;
 mod extension_interruption;
 pub(crate) mod extension_metrics;
 mod guardian_checkpoint;
@@ -4544,7 +4545,7 @@ impl Session {
                     .await,
             );
             // Only skill discovery may use a turn's temporary file access. Plugin servers and
-            // hooks use the session inventory above because they can outlive the step.
+            // hooks use the session inventory because they can outlive the step.
             let turn_skill_discovery =
                 if let Some(grants) = turn_context.turn_skill_filesystem_grants(&environments) {
                     if turn_context
@@ -4604,12 +4605,14 @@ impl Session {
             {
                 required_servers.push(codex_mcp::CODEX_APPS_MCP_SERVER_NAME.to_owned());
             }
+            let captured_executor_discovery_v2 = executor_capability_discovery_v2.as_deref();
             let catalogs = self.lock_cloud_catalogs().await;
             let (mcp, prepared_recommendations) = tokio::join!(
                 // MCP refresh can be large; keep it off the sampling request's stack.
                 Box::pin(self.mcp_runtime_for_step(
                     turn_context.as_ref(),
                     &selected_capability_roots,
+                    captured_executor_discovery_v2,
                     &required_servers,
                     required_plugins,
                 )),
@@ -4621,6 +4624,11 @@ impl Session {
                     }
                 },
             );
+            let mcp = mcp?;
+            // Skill and hook admission must use the policy published with this binding.
+            let mut plugin_config = turn_context.config.as_ref().clone();
+            plugin_config.plugins = mcp.config().plugins.clone();
+            plugin_config.config_layer_stack = mcp.config().config_layer_stack.clone();
             let search = crate::model_search::resolve(
                 turn_context.as_ref(),
                 &settings,
@@ -4647,7 +4655,7 @@ impl Session {
             let select_plugins = |discovery, discovery_v2| {
                 self.services.mcp_manager.selected_plugins_for_step(
                     codex_extension_api::McpServerContributionContext::for_step(
-                        turn_context.config.as_ref(),
+                        &plugin_config,
                         &self.services.mcp_thread_init,
                         &self.services.thread_extension_data,
                         &turn_context.originator,

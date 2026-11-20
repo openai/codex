@@ -63,8 +63,15 @@ async fn step_discovery_reconciles_mcp_skips_prewarm_and_releases_lock_on_cancel
         .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
     session
-        .mcp_runtime_for_step(&prewarm, &[], &[], &HashSet::new())
-        .await;
+        .mcp_runtime_for_step(
+            &prewarm,
+            &[],
+            /*captured_executor_discovery_v2*/ None,
+            &[],
+            &HashSet::new(),
+        )
+        .await
+        .expect("prepare MCP without cloud callbacks");
     assert!(recorder.keys.lock().expect("recorded keys").is_empty());
     let initial_key = recorder.client.cache_key();
 
@@ -97,8 +104,15 @@ async fn step_discovery_reconciles_mcp_skips_prewarm_and_releases_lock_on_cancel
 
     // Prewarm also skips discovery while a regular turn is preparing a step.
     session
-        .mcp_runtime_for_step(&prewarm, &[], &[], &HashSet::new())
-        .await;
+        .mcp_runtime_for_step(
+            &prewarm,
+            &[],
+            /*captured_executor_discovery_v2*/ None,
+            &[],
+            &HashSet::new(),
+        )
+        .await
+        .expect("prepare MCP without cloud callbacks");
     assert_eq!(recorder.keys.lock().expect("recorded keys").len(), 1);
     cancellation.cancel();
     assert!(capture.await.is_err());

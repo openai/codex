@@ -1602,6 +1602,13 @@ impl CodexThread {
         .await
     }
 
+    /// Invalidates this thread's executor DiscoveryV2 inventory. The next discovery
+    /// consumer reloads it; unchanged turns and other reads share the cached inventory.
+    /// Environment/session, cwd, and sandbox changes also trigger discovery independently.
+    pub fn invalidate_executor_discovery(&self) {
+        self.session.invalidate_executor_discovery();
+    }
+
     /// Refreshes this thread's Apps tools before returning their runtime state.
     pub async fn refresh_codex_apps_tools(
         &self,

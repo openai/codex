@@ -242,13 +242,16 @@ impl McpManager {
         if let McpEnvironmentScope::Selected(environments) = &identity.environments {
             context = context.with_selected_environments(environments);
         }
-        self.runtime_config_with_context(
-            context,
-            Some(identity.originator),
-            identity.environments,
-            identity.disabled_plugin_ids,
-        )
-        .await
+        let mut projection = self
+            .runtime_config_with_context(
+                context,
+                Some(identity.originator),
+                identity.environments,
+                identity.disabled_plugin_ids,
+            )
+            .await;
+        projection.config.executor_discovery_v2 = executor_capability_discovery_v2.map(Arc::from);
+        projection
     }
 
     /// Resolves only plugins from this step's ready roots, independent of shared MCP refresh.

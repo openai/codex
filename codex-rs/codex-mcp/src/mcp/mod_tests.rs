@@ -254,6 +254,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         host_owned_apps_protocol_mode: McpProtocolMode::Legacy,
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
+        executor_discovery_v2: None,
     }
 }
 

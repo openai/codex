@@ -32,6 +32,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::connector_runtime_context_key;
+use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_login::CodexAuth;
 use codex_model_provider::CHATGPT_CODEX_BASE_URL;
@@ -226,6 +227,8 @@ pub struct McpConfig {
     /// Plugin declarations used to attribute connector tools to plugin display names.
     /// MCP registrations retain their own package attribution in the catalog.
     pub connector_snapshot: ConnectorSnapshot,
+    /// Executor inventory used to project this runtime, retained with its binding.
+    pub executor_discovery_v2: Option<Arc<[ExecutorCapabilityDiscoveryV2Snapshot]>>,
 }
 
 /// Default amount of time a tool catalog capture waits for optional MCP servers.

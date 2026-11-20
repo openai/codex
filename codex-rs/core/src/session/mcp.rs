@@ -5,14 +5,11 @@ use crate::environment_selection::combine_selected_capability_roots;
 use crate::mcp_tool_call::McpToolApprovalContext;
 use crate::mcp_tool_call::capture_environment_permissions;
 use anyhow::Context;
-use codex_exec_server::DiscoverV2CapabilitiesRequest;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::ExecutorCapabilityDiscoveryV2Cache;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
-use codex_exec_server::supports_capability_discovery_v2;
 use codex_guardian_reviewer::GuardianElicitationReview;
 use codex_guardian_reviewer::guardian_elicitation_review_request;
 use codex_guardian_reviewer::mcp_elicitation_decline_without_message;
@@ -225,17 +222,28 @@ impl Session {
     /// Publishes changed MCP state, waiting for any refresh already in progress.
     #[tracing::instrument(name = "mcp.runtime.refresh_if_dirty", skip_all)]
     pub(crate) async fn refresh_mcp_if_dirty(self: &Arc<Self>) {
+        self.refresh_mcp_if_dirty_with_discovery_v2(/*captured_executor_discovery_v2*/ None)
+            .await;
+    }
+
+    async fn refresh_mcp_if_dirty_with_discovery_v2(
+        self: &Arc<Self>,
+        captured_executor_discovery_v2: Option<&[ExecutorCapabilityDiscoveryV2Snapshot]>,
+    ) {
         let Ok(_refresh) = self.mcp_refresh.acquire().await else {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
-        self.reconcile_mcp_runtime().await;
+        self.reconcile_mcp_runtime(captured_executor_discovery_v2)
+            .await;
     }
 
     /// Reconcile pending state under the session permit.
-    async fn reconcile_mcp_runtime(self: &Arc<Self>) {
+    async fn reconcile_mcp_runtime(
+        self: &Arc<Self>,
+        captured_executor_discovery_v2: Option<&[ExecutorCapabilityDiscoveryV2Snapshot]>,
+    ) {
         loop {
-            // Compare and rebuild from current environments, not choices saved for a future turn.
             let environments = self.services.turn_environments.snapshot().await;
             let environment_selections = environments.all_selections();
             if !self.services.mcp_runtime.current_environments_match(
@@ -253,12 +261,28 @@ impl Session {
                 self.mark_mcp_runtime_dirty(McpRefreshReason::RuntimeAuthChanged);
             }
 
+            if let Some(captured) = captured_executor_discovery_v2 {
+                let current = self.services.mcp_runtime.current_config();
+                let published = current
+                    .as_ref()
+                    .and_then(|config| config.executor_discovery_v2.as_deref());
+                if published.is_none_or(|published| {
+                    published.len() != captured.len()
+                        || published
+                            .iter()
+                            .zip(captured)
+                            .any(|(a, b)| !a.same_discovery(b))
+                }) {
+                    self.mark_mcp_runtime_dirty(
+                        McpRefreshReason::ExecutorCapabilityInventoryChanged,
+                    );
+                }
+            }
             let Some(mut refresh_invalidation) = self.mcp_refresh.claim(self.thread_id) else {
                 return;
             };
             let auth = self.services.auth_manager.auth().await;
-            // Capture after claiming the refresh so a new invalidation cannot be consumed
-            // with the environment snapshot taken before its permissions changed.
+            // Keep current MCP authority even when reusing the step's executor inventory.
             let environments = self.services.turn_environments.snapshot().await;
             let environment_selections = environments.all_selections();
             let desired = self.latest_mcp_desired_state(auth, environments).await;
@@ -267,19 +291,26 @@ impl Session {
                 .await;
             let ready_selected_capability_roots =
                 Self::ready_selected_capability_roots(&selected_capability_roots);
-            let (executor_capability_discovery_v2, _) = self
-                .executor_capability_discovery_for_step_v2(
-                    &desired.config,
-                    &desired.environments,
-                    /*skill_turn*/ None,
-                )
-                .await;
+            let discovered_v2;
+            let executor_capability_discovery_v2 = match captured_executor_discovery_v2 {
+                Some(captured) => Some(captured),
+                None => {
+                    (discovered_v2, _) = self
+                        .executor_capability_discovery_for_step_v2(
+                            &desired.config,
+                            &desired.environments,
+                            /*skill_turn*/ None,
+                        )
+                        .await;
+                    discovered_v2.as_deref()
+                }
+            };
             let (executor_capability_discovery, _) = self
                 .executor_capability_discovery_for_step(
                     &desired.config,
                     &selected_capability_roots,
                     &desired.environments,
-                    executor_capability_discovery_v2.as_deref(),
+                    executor_capability_discovery_v2,
                     /*skill_turn*/ None,
                 )
                 .await;
@@ -302,7 +333,7 @@ impl Session {
                     },
                     &ready_selected_capability_roots,
                     executor_capability_discovery.as_deref(),
-                    executor_capability_discovery_v2.as_deref(),
+                    executor_capability_discovery_v2,
                 )
                 .await;
             self.publish_mcp_runtime(
@@ -347,7 +378,8 @@ impl Session {
         self: &Arc<Self>,
         permit: SemaphorePermit<'_>,
     ) -> anyhow::Result<Option<codex_mcp::CodexAppsToolSnapshot>> {
-        self.reconcile_mcp_runtime().await;
+        self.reconcile_mcp_runtime(/*captured_executor_discovery_v2*/ None)
+            .await;
         let refresh = self.services.mcp_runtime.capture_apps_tool_refresh();
         // An invalidation may arrive after reconciliation but before capture.
         if self.mcp_refresh.is_pending() {
@@ -463,13 +495,14 @@ impl Session {
         skip_all,
         fields(turn.id = %turn_context.sub_id)
     )]
-    pub(crate) async fn mcp_runtime_for_step(
+    pub(super) async fn mcp_runtime_for_step(
         self: &Arc<Self>,
         turn_context: &TurnContext,
         selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
+        captured_executor_discovery_v2: Option<&[ExecutorCapabilityDiscoveryV2Snapshot]>,
         required_servers: &[String],
         required_plugins: &HashSet<String>,
-    ) -> Arc<codex_mcp::McpBinding> {
+    ) -> CodexResult<Arc<codex_mcp::McpBinding>> {
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(selected_capability_roots);
         if self
@@ -499,7 +532,8 @@ impl Session {
         {
             self.mark_mcp_runtime_dirty(McpRefreshReason::OAuthCredentialsRecovered);
         }
-        self.refresh_mcp_if_dirty().await;
+        self.refresh_mcp_if_dirty_with_discovery_v2(captured_executor_discovery_v2)
+            .await;
         // Prewarm and other context-only captures must not start cloud discovery.
         let is_active_regular_turn = {
             let active_turn = self.active_turn.lock().await;
@@ -534,11 +568,19 @@ impl Session {
                     }),
             )
             .await;
-            self.refresh_mcp_if_dirty().await;
+            self.refresh_mcp_if_dirty_with_discovery_v2(captured_executor_discovery_v2)
+                .await;
         }
         self.wait_for_apps_tool_refresh().await;
-        if let Some(binding) = self
-            .services
+        // Keep the binding and its final executor inventory projection together.
+        let _refresh = self
+            .mcp_refresh
+            .acquire()
+            .await
+            .map_err(|_| CodexErr::TurnAborted)?;
+        self.reconcile_mcp_runtime(captured_executor_discovery_v2)
+            .await;
+        self.services
             .mcp_runtime
             .current_binding_with_requirements(
                 required_servers,
@@ -546,14 +588,10 @@ impl Session {
                 required_plugins,
             )
             .await
-        {
-            return binding;
-        }
-        let config = Arc::new(self.runtime_mcp_config(&turn_context.config).await);
-        Arc::new(codex_mcp::McpBinding::empty(config))
+            .ok_or(CodexErr::TurnAborted)
     }
 
-    fn discovery_sandbox(
+    pub(super) fn discovery_sandbox(
         &self,
         environment: &super::turn_context::TurnEnvironment,
         skill_turn: Option<&TurnContext>,
@@ -652,90 +690,6 @@ impl Session {
             Some(Arc::new(discovery)),
             skill_turn.is_none() && cache.take_recovered_discovery(),
         )
-    }
-
-    /// Acquires V2 inventories and reports changes without scheduling an MCP refresh.
-    pub(super) async fn executor_capability_discovery_for_step_v2(
-        &self,
-        config: &Config,
-        environments: &TurnEnvironmentSnapshot,
-        skill_turn: Option<&TurnContext>,
-    ) -> (Option<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>, bool) {
-        if !config
-            .features
-            .enabled(Feature::ExecutorCapabilityDiscoveryV2)
-        {
-            return (None, false);
-        }
-        // Retain this cache if a new turn replaces the thread's current cache.
-        let cache = self
-            .services
-            .thread_extension_data
-            .get_or_init(ExecutorCapabilityDiscoveryV2Cache::default);
-        let remote_environment_count = environments
-            .turn_environments()
-            .filter(|selected| selected.environment().is_remote())
-            .count();
-        cache.ensure_capacity(remote_environment_count);
-        let mut snapshots = Vec::new();
-        let mut skipped_incompatible_executor = false;
-        for selected in environments.turn_environments() {
-            if !selected.environment().is_remote() {
-                continue;
-            }
-            let environment_id = &selected.selection.environment_id;
-            let info = match selected.environment().info().await {
-                Ok(info) => info,
-                Err(_) => {
-                    tracing::warn!(
-                        environment_id,
-                        "could not read executor discovery V2 support"
-                    );
-                    continue;
-                }
-            };
-            if !supports_capability_discovery_v2(&info) {
-                skipped_incompatible_executor = true;
-                continue;
-            }
-            let request = DiscoverV2CapabilitiesRequest {
-                cwd: selected.cwd().clone(),
-                sandbox: Some(self.discovery_sandbox(selected, skill_turn)),
-            };
-            let result = cache
-                .discover(environment_id, selected.environment(), request)
-                .await;
-            snapshots.push(ExecutorCapabilityDiscoveryV2Snapshot {
-                environment_id: environment_id.clone(),
-                result,
-            });
-        }
-        let incompatible = snapshots.is_empty() && skipped_incompatible_executor;
-        if skill_turn.is_some() {
-            // Only session discovery updates the inventory used to invalidate MCP.
-            return ((!incompatible).then_some(snapshots), false);
-        }
-        if incompatible {
-            let changed = self
-                .services
-                .thread_extension_data
-                .remove::<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>()
-                .is_some();
-            return (None, changed);
-        }
-        let previous = self
-            .services
-            .thread_extension_data
-            .insert(snapshots.clone());
-        let inventory_changed = previous.as_ref().map_or(!snapshots.is_empty(), |previous| {
-            previous.len() != snapshots.len()
-                || previous
-                    .iter()
-                    .zip(&snapshots)
-                    .any(|(previous, current)| !previous.same_discovery(current))
-        });
-        let inventory_changed = cache.take_recovered_discovery() || inventory_changed;
-        (Some(snapshots), inventory_changed)
     }
 
     pub(crate) async fn resolve_selected_capability_roots_for_step(

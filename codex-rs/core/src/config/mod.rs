@@ -2079,6 +2079,7 @@ impl Config {
         }
 
         McpConfig {
+            executor_discovery_v2: None,
             client: McpClientConfig {
                 chatgpt_base_url: self.chatgpt_base_url.clone(),
                 requires_read_only_mcp_tools: false,
