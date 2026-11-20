@@ -569,6 +569,7 @@ pub(crate) struct App {
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Legacy bootstrap and server-setting inputs; local preferences live in `local_settings`.
     pub(crate) config: Config,
+    realtime_call_client: Arc<crate::realtime_call::Client>,
     pub(crate) local_settings: crate::local_settings::LocalSettings,
     backend_preference_context: backend_selection::BackendPreferenceContext,
     launch_cwd: PathBuf,

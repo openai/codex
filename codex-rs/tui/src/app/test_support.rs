@@ -65,6 +65,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         local_settings: crate::local_settings::LocalSettings::from(&config),
         config,
         state_db: None,
+        realtime_call_client: Arc::default(),
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),

@@ -130,13 +130,15 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     let thread = app_server
         .thread_read(thread_id, /*include_turns*/ false)
         .await?;
-    let call = crate::realtime_call::create(
-        &app.config,
-        &thread,
-        "v=offer\r\n".to_string(),
-        /*voice*/ None,
-    )
-    .await?;
+    let call = app
+        .realtime_call_client
+        .create(
+            &app.config,
+            &thread,
+            "v=offer\r\n".to_string(),
+            /*voice*/ None,
+        )
+        .await?;
     assert_eq!(String::from(call.answer_sdp), "v=answer\r\n");
     app_server
         .thread_realtime_start(thread_id, call.call_id, call.voice_session_id)

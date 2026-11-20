@@ -1035,6 +1035,7 @@ See the Codex keymap documentation for supported actions and examples."
             backend_preference_context,
             config,
             local_settings,
+            realtime_call_client: Arc::default(),
             launch_cwd,
             runtime_working_directory_override: None,
             state_db,
