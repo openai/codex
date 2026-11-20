@@ -692,7 +692,7 @@ async fn subagents_inherit_spawn_metadata_without_live_parent_updates(
         .with_provider_config("supports_websockets = true")
         .with_provider_config("supports_standalone_web_search = true")
         .enable_feature(Feature::StandaloneWebSearch)
-        .with_root_config("web_search = \"live\"\ntools.client_search_provider = \"standalone\"")
+        .with_root_config("web_search = \"live\"")
         .with_extra_config(&format!(
             "[agents]\nmax_depth = 3\n[features.multi_agent_v2]\nenabled = {multi_agent_v2}"
         ))

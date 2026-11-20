@@ -2186,11 +2186,6 @@ async fn run_sampling_request(
         if first_attempt && turn_context.config.notify.is_some() {
             notify_messages = legacy_notify_input_messages(&prompt.input);
         }
-        let _native_search = crate::model_search::SearchOwner::reserve_server_fallback(
-            &step_context.extension_data,
-            &sess.services.thread_extension_data,
-            &mut prompt.tools,
-        );
         let (submitted_audio, pending_audio) = {
             let model = &step_context.settings.model_info.slug;
             let provider = &turn_context.config.model_provider_id;

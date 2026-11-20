@@ -66,17 +66,6 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
     {
         Box::pin(async move {
             let step = &invocation.step_context;
-            let _native_search = if invocation.tool_name.namespace.as_deref() == Some("web")
-                && invocation.tool_name.name == "run"
-            {
-                crate::model_search::SearchOwner::reserve_native_fallback(
-                    &step.extension_data,
-                    &invocation.session.services.thread_extension_data,
-                )
-                .map_err(|err| codex_tools::FunctionCallError::RespondToModel(err.to_string()))?
-            } else {
-                None
-            };
             let selected: Vec<_> = match &invocation.environments {
                 ToolEnvironments::Arguments(environments) => {
                     environments.iter().map(|(_, env)| env.as_ref()).collect()

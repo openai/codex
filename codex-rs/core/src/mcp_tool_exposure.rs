@@ -245,7 +245,7 @@ fn filter_non_codex_apps_mcp_tools_only(
     })
 }
 
-pub(crate) fn filter_codex_apps_mcp_tools<'a>(
+fn filter_codex_apps_mcp_tools<'a>(
     mcp_tools: &'a [McpToolInfo],
     config: &'a Config,
 ) -> impl Iterator<Item = &'a McpToolInfo> + 'a {

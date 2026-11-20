@@ -1909,9 +1909,7 @@ impl RmcpClient {
             .await
             {
                 Ok(result) => return Ok(result),
-                Err(error)
-                    if label == "tools/list" && Self::is_retryable_transport_error(&error) =>
-                {
+                Err(error) if Self::is_retryable_tools_list_error(label, &error) => {
                     let Some(retry_delay_ms) = retry_delay_ms else {
                         return Err(error);
                     };
@@ -1962,7 +1960,10 @@ impl RmcpClient {
         }
     }
 
-    pub(crate) fn is_retryable_transport_error(error: &ClientOperationError) -> bool {
+    fn is_retryable_tools_list_error(label: &str, error: &ClientOperationError) -> bool {
+        if label != "tools/list" {
+            return false;
+        }
         let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
             error
         else {

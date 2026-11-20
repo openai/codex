@@ -269,35 +269,6 @@ fn response_item_envelope_accessors_preserve_item() {
 }
 
 #[test]
-fn old_rollout_metadata_restores_search_mcp_use() -> Result<()> {
-    let metadata: CodexHarnessMetadata = serde_json::from_value(json!({
-        "mcp_attribution": {
-            "status": "complete",
-            "sources": [{
-                "connector_id": "connector_openai_search_service",
-                "server_name": "example",
-                "tool_name": "search",
-                "first_turn_id": "turn_1"
-            }]
-        }
-    }))?;
-
-    assert_eq!(metadata.legacy_search_mcp_used, Some(true));
-
-    let clean: CodexHarnessMetadata = serde_json::from_value(json!({
-        "mcp_attribution": {
-            "status": "none",
-            "sources": []
-        }
-    }))?;
-    assert_eq!(clean.legacy_search_mcp_used, Some(false));
-
-    let missing: CodexHarnessMetadata = serde_json::from_value(json!({}))?;
-    assert_eq!(missing.legacy_search_mcp_used, None);
-    Ok(())
-}
-
-#[test]
 /// Keeps legacy response-item rollout lines readable and byte-shape compatible.
 fn response_item_rollout_line_preserves_shape() -> Result<()> {
     let legacy_line = json!({

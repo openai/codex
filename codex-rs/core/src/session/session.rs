@@ -1099,7 +1099,6 @@ impl Session {
             thread_extension_data.insert(crate::agent::helper_daybreak::Enrollment::Root);
         }
         thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
-        crate::model_search::SearchOwner::restore(&thread_extension_data, &initial_history);
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info

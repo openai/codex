@@ -6,14 +6,6 @@ use rmcp::service::ServiceError;
 use std::time::Duration;
 
 use crate::rmcp_client::ClientOperationError;
-use crate::rmcp_client::RmcpClient;
-
-/// Whether tools/list would retry this transport error before returning it to the caller.
-pub fn is_retryable_transport_error(error: &Error) -> bool {
-    error
-        .downcast_ref()
-        .is_some_and(RmcpClient::is_retryable_transport_error)
-}
 
 /// Returns the server's structured protocol error, including its original data.
 pub fn mcp_error(error: &Error) -> Option<&ErrorData> {
