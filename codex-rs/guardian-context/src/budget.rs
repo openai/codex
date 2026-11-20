@@ -199,7 +199,8 @@ impl ElasticBudgetConfig {
         Ok(())
     }
 
-    pub(crate) fn section_limits(&self, section: ElasticSection) -> ElasticSectionLimits {
+    /// Returns the configured limits or the default for an omitted section.
+    pub fn section_limits(&self, section: ElasticSection) -> ElasticSectionLimits {
         self.sections.get(&section).copied().unwrap_or_else(|| {
             let entries = crate::ContextProfile::synchronous().transcript.entry_limits;
             let tokens = match section {

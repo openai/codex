@@ -2598,6 +2598,18 @@ pub struct ThreadSettingsSnapshot {
     /// Thread-owned plugin selection, retained even when a plugin is unavailable.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
+    /// Effective Guardian recorder policy. Absent for Fixed and old snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub guardian_retention: Option<GuardianRetentionPolicy>,
+}
+
+/// Resolved limits for Guardian's retained evidence, in storage bytes.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianRetentionPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub assistant_record_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
