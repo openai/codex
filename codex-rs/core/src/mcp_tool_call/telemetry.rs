@@ -214,6 +214,12 @@ fn allowlisted_codex_telemetry_error_code(code: &str) -> Option<&str> {
 }
 
 pub(super) fn record_mcp_call_outcome_span_telemetry(span: &Span, outcome: &McpCallMetricOutcome) {
+    span.record("codex.mcp.call.outcome", outcome.status);
+    // A successful JSON-RPC exchange can still contain a failed tool result. Keep the
+    // exported span status consistent with the outcome used by MCP error metrics.
+    if outcome.status == "error" {
+        span.record("otel.status_code", "ERROR");
+    }
     let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code.as_deref())
     else {
         return;

@@ -508,6 +508,7 @@ async fn handle_approved_mcp_tool_call(
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
     let mut elicitation_type = None;
     let mut request_error_code = None;
+    let mut request_rpc_error_code = None;
     let mut admission_error = None;
     let admit = || {
         let reason = sess
@@ -525,6 +526,19 @@ async fn handle_approved_mcp_tool_call(
         &prepared_call,
         turn_context.config.mcp_servers.get().get(&server),
     );
+    let span = mcp_tool_call_span(
+        sess,
+        turn_context,
+        McpToolCallSpanFields {
+            server_name: &server,
+            tool_name: &tool_name,
+            call_id,
+            server_origin: server_origin.as_deref(),
+            connector_id,
+            connector_name,
+        },
+    );
+    let outcome_guard = McpCallSpanOutcomeGuard::new(span.clone());
     let result = async {
         let result = async {
             let result = prepared_call
@@ -667,6 +681,10 @@ async fn handle_approved_mcp_tool_call(
                     }
                     Err(error) => {
                         request_error_code = codex_rmcp_client::request_error_code(&error);
+                        // Preserve only the numeric protocol code, never the server's
+                        // message or arbitrary data (which may contain user content).
+                        request_rpc_error_code =
+                            codex_rmcp_client::mcp_error(&error).map(|error| error.code.0);
                         format!("tool call error: {error:?}")
                     }
                 });
@@ -714,21 +732,13 @@ async fn handle_approved_mcp_tool_call(
             .await)
         }
         .await;
-        record_mcp_result_span_telemetry(&Span::current(), &result, request_error_code);
+        outcome_guard.complete(&result, request_error_code);
+        if let Some(code) = request_rpc_error_code {
+            Span::current().record("rpc.jsonrpc.error_code", i64::from(code));
+        }
         result
     }
-    .instrument(mcp_tool_call_span(
-        sess,
-        turn_context,
-        McpToolCallSpanFields {
-            server_name: &server,
-            tool_name: &tool_name,
-            call_id,
-            server_origin: server_origin.as_deref(),
-            connector_id,
-            connector_name,
-        },
-    ))
+    .instrument(span)
     .await;
     if let Some(error) = admission_error {
         notify_mcp_tool_call_completed(
@@ -811,6 +821,9 @@ fn mcp_tool_call_span(
         codex.mcp.server_user_flow.triggered = Empty,
         error.type = Empty,
         codex.mcp.error.code = Empty,
+        codex.mcp.call.outcome = Empty,
+        rpc.jsonrpc.error_code = Empty,
+        otel.status_code = Empty,
     );
     record_server_fields(&span, fields.server_origin);
     span
@@ -837,6 +850,35 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
     }
     if let Some(port) = parsed.port_or_known_default() {
         span.record("server.port", port as i64);
+    }
+}
+
+/// Records one outcome, including when the instrumented call is dropped before its first poll.
+struct McpCallSpanOutcomeGuard {
+    span: Option<Span>,
+}
+
+impl McpCallSpanOutcomeGuard {
+    fn new(span: Span) -> Self {
+        Self { span: Some(span) }
+    }
+
+    fn complete(
+        mut self,
+        result: &Result<CallToolResult, String>,
+        request_error_code: Option<&str>,
+    ) {
+        if let Some(span) = self.span.take() {
+            record_mcp_result_span_telemetry(&span, result, request_error_code);
+        }
+    }
+}
+
+impl Drop for McpCallSpanOutcomeGuard {
+    fn drop(&mut self) {
+        if let Some(span) = &self.span {
+            span.record("codex.mcp.call.outcome", "interrupted");
+        }
     }
 }
 

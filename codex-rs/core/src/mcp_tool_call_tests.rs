@@ -30,6 +30,8 @@ use codex_features::Features;
 use codex_hooks::HooksConfig;
 use codex_mcp::McpServerKey;
 use codex_model_provider::create_model_provider;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -54,10 +56,13 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use ctor::ctor;
 use opentelemetry::trace::TracerProvider;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
@@ -566,10 +571,12 @@ async fn mcp_tool_call_span_records_expected_fields() {
 }
 
 #[test_case::test_case(Some("RATE_LIMITED"), None, None, "RATE_LIMITED"; "structured error")]
+#[test_case::test_case(Some("SITE_AUTH_REQUIRED"), None, None, "SITE_AUTH_REQUIRED"; "server defined site auth error is retained")]
+#[test_case::test_case(None, Some("execution_rejected"), None, "execution_rejected"; "runtime rejection is recorded as a failure")]
 #[test_case::test_case(None, Some("credential-sentinel"), None, "unknown"; "sensitive metadata")]
 #[test_case::test_case(None, None, Some("transport_closed"), "transport_closed"; "closed transport")]
 #[tokio::test]
-async fn mcp_tool_call_span_records_error_type_and_error_code(
+async fn mcp_tool_call_exports_intended_error_to_metrics_and_span(
     structured_code: Option<&str>,
     metadata_code: Option<&str>,
     request_error_code: Option<&str>,
@@ -584,9 +591,20 @@ async fn mcp_tool_call_span_records_error_type_and_error_code(
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let (session, turn_context) = make_session_and_context().await;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "mcp-error-test", "1", Default::default())
+            .with_runtime_reader(),
+    )
+    .expect("metrics client");
+    let telemetry = turn_context
+        .session_telemetry
+        .clone()
+        .with_metrics_without_metadata_tags(metrics.clone());
     let result = Ok(CallToolResult {
-        content: Vec::new(),
-        structured_content: structured_code.map(|code| serde_json::json!({"error_code": code})),
+        content: vec![serde_json::json!({"type": "text", "text": "private-message-sentinel"})],
+        structured_content: structured_code.map(
+            |code| serde_json::json!({"error_code": code, "message": "private-message-sentinel"}),
+        ),
         is_error: Some(true),
         meta: metadata_code.map(|code| {
             serde_json::json!({
@@ -603,20 +621,68 @@ async fn mcp_tool_call_span_records_error_type_and_error_code(
         &session,
         &turn_context,
         McpToolCallSpanFields {
-            server_name: CODEX_APPS_MCP_SERVER_NAME,
-            tool_name: "calendar_search",
+            server_name: "sites-test-server",
+            tool_name: "visit_site",
             call_id: "call-123",
-            server_origin: Some("https://chatgpt.com/api/codex/ps/mcp"),
-            connector_id: Some("calendar"),
-            connector_name: Some("Calendar"),
+            server_origin: None,
+            connector_id: None,
+            connector_name: None,
         },
     );
 
-    async {
-        record_mcp_result_span_telemetry(&Span::current(), &result, request_error_code);
+    let outcome_guard = McpCallSpanOutcomeGuard::new(span.clone());
+    async { outcome_guard.complete(&result, request_error_code) }
+        .instrument(span)
+        .await;
+
+    let outcome = mcp_call_metric_outcome(&result).with_request_error_code(request_error_code);
+    emit_mcp_call_metrics(
+        &telemetry,
+        &outcome,
+        "sites-test-server",
+        "visit_site",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+        /*duration*/ None,
+    );
+    let error_type = if request_error_code.is_some() {
+        "mcp_request"
+    } else {
+        "tool_result"
+    };
+    let snapshot = metrics.snapshot().expect("metric snapshot");
+    let mut error_counts = Vec::new();
+    for metric in snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .filter(|metric| metric.name() == "codex.mcp.call.error")
+    {
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+            panic!("MCP errors must be a counter");
+        };
+        for point in sum.data_points() {
+            error_counts.push((
+                point.value(),
+                point
+                    .attributes()
+                    .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                    .collect::<BTreeMap<_, _>>(),
+            ));
+        }
     }
-    .instrument(span)
-    .await;
+    assert_eq!(
+        error_counts,
+        vec![(
+            1,
+            BTreeMap::from([
+                ("status".into(), "error".into()),
+                ("server".into(), "sites-test-server".into()),
+                ("tool".into(), "visit_site".into()),
+                ("error_type".into(), error_type.into()),
+                ("error_code".into(), expected_code.into()),
+            ]),
+        )],
+    );
 
     provider.force_flush().expect("flush spans");
     let spans = exporter.get_finished_spans().expect("exported spans");
@@ -624,6 +690,14 @@ async fn mcp_tool_call_span_records_error_type_and_error_code(
         .iter()
         .find(|span| span.name == "mcp.tools.call")
         .expect("MCP tool span");
+    assert_eq!(span.status, opentelemetry::trace::Status::error(""));
+    let outcomes = span
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.key.as_str() == "codex.mcp.call.outcome")
+        .map(|attribute| attribute.value.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes, vec!["error".to_string()]);
     let error_codes = span
         .attributes
         .iter()
@@ -637,19 +711,96 @@ async fn mcp_tool_call_span_records_error_type_and_error_code(
         .filter(|attribute| attribute.key.as_str() == "error.type")
         .map(|attribute| attribute.value.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(
-        error_types,
-        vec![if request_error_code.is_some() {
-            "mcp_request".to_string()
-        } else {
-            "tool_result".to_string()
-        }]
-    );
+    assert_eq!(error_types, vec![error_type.to_string()]);
     assert!(
         span.attributes
             .iter()
             .all(|attribute| !attribute.value.to_string().contains("credential-sentinel"))
     );
+    assert!(span.attributes.iter().all(|attribute| {
+        !attribute
+            .value
+            .to_string()
+            .contains("private-message-sentinel")
+    }));
+}
+
+enum McpCallSpanCompletion {
+    Success,
+    CancelBeforePoll,
+    CancelWhilePending,
+}
+
+#[test_case::test_case(McpCallSpanCompletion::Success, "ok"; "successful call")]
+#[test_case::test_case(McpCallSpanCompletion::CancelBeforePoll, "interrupted"; "cancelled before first poll")]
+#[test_case::test_case(McpCallSpanCompletion::CancelWhilePending, "interrupted"; "cancelled while pending")]
+#[tokio::test]
+async fn mcp_tool_call_span_exports_one_completion_or_cancellation_outcome(
+    completion: McpCallSpanCompletion,
+    expected_outcome: &str,
+) {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("mcp-outcome-test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (session, turn_context) = make_session_and_context().await;
+    let span = mcp_tool_call_span(
+        &session,
+        &turn_context,
+        McpToolCallSpanFields {
+            server_name: "rmcp",
+            tool_name: "echo",
+            call_id: "call-123",
+            server_origin: None,
+            connector_id: None,
+            connector_name: None,
+        },
+    );
+    let outcome_guard = McpCallSpanOutcomeGuard::new(span.clone());
+    let (complete_tx, complete_rx) = tokio::sync::oneshot::channel();
+    let call = async {
+        complete_rx.await.expect("release call");
+        outcome_guard.complete(
+            &Ok(CallToolResult {
+                content: Vec::new(),
+                structured_content: None,
+                is_error: None,
+                meta: None,
+            }),
+            /*request_error_code*/ None,
+        );
+    }
+    .instrument(span);
+    match completion {
+        McpCallSpanCompletion::Success => {
+            complete_tx.send(()).expect("complete call");
+            call.await;
+        }
+        McpCallSpanCompletion::CancelBeforePoll => drop(call),
+        McpCallSpanCompletion::CancelWhilePending => {
+            let mut call = Box::pin(call);
+            assert!(futures::poll!(call.as_mut()).is_pending());
+            drop(call);
+        }
+    }
+
+    provider.force_flush().expect("flush spans");
+    let spans = exporter.get_finished_spans().expect("exported spans");
+    let span = spans
+        .iter()
+        .find(|span| span.name == "mcp.tools.call")
+        .expect("MCP tool span");
+    let outcomes = span
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.key.as_str() == "codex.mcp.call.outcome")
+        .map(|attribute| attribute.value.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes, vec![expected_outcome.to_string()]);
+    assert_eq!(span.status, opentelemetry::trace::Status::Unset);
 }
 
 async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> String {
@@ -686,12 +837,9 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
             },
         );
 
+        let outcome_guard = McpCallSpanOutcomeGuard::new(span.clone());
         async {
-            record_mcp_result_span_telemetry(
-                &Span::current(),
-                &result,
-                /*request_error_code*/ None,
-            );
+            outcome_guard.complete(&result, /*request_error_code*/ None)
         }
         .instrument(span)
         .await;
