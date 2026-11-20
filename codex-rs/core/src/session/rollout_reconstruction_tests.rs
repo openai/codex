@@ -132,6 +132,7 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
         /*reuse_parent_compaction*/ true,
         codex_guardian_context::ContextBudgeting::Fixed,
         thread_context_ids(),
+        /*retention*/ None,
     );
     let mut items = Vec::new();
     let mut snapshots = Vec::new();

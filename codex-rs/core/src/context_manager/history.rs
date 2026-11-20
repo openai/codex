@@ -44,6 +44,7 @@ use codex_guardian_context::SectionHistory;
 use codex_guardian_context::TranscriptHistory;
 use codex_history::CodexHarnessMetadata;
 use codex_history::GuardianHistoryCheckpoint;
+use codex_history::MessageRetention;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContext;
 use codex_history::RetainedContextEntry;
@@ -312,7 +313,10 @@ impl SharedConversationHistory {
 #[cfg(test)]
 impl Default for ContextManager {
     fn default() -> Self {
-        Self::new(codex_thread_context_ids_test_support::thread_context_ids())
+        Self::new(
+            codex_thread_context_ids_test_support::thread_context_ids(),
+            /*retention*/ None,
+        )
     }
 }
 
@@ -321,7 +325,7 @@ impl ContextManager {
         &self.context_ids
     }
 
-    pub(crate) fn new(context_ids: ThreadContextIds) -> Self {
+    pub(crate) fn new(context_ids: ThreadContextIds, retention: Option<MessageRetention>) -> Self {
         Self {
             context_ids,
             sampling: Default::default(),
@@ -329,7 +333,7 @@ impl ContextManager {
             items: Arc::new(Vec::new()),
             review_history: None,
             review_budgeting: ContextBudgeting::Fixed,
-            retained_context: Arc::default(),
+            retained_context: Arc::new(RetainedContext::new(retention)),
             rejected_audio_file_ids: Arc::default(),
             file_audio_durations: Arc::default(),
             guardian_review_mode: GuardianContextMode::ThreadOwned,
@@ -371,6 +375,7 @@ impl ContextManager {
         reuse_parent_compaction: bool,
         budgeting: ContextBudgeting,
         context_ids: ThreadContextIds,
+        retention: Option<MessageRetention>,
     ) -> Self {
         let independent = !reuse_parent_compaction;
         Self {
@@ -385,7 +390,7 @@ impl ContextManager {
             review_budgeting: budgeting,
             review_history: independent
                 .then(|| TranscriptHistory::new(/*generation*/ 0, budgeting)),
-            ..Self::new(context_ids)
+            ..Self::new(context_ids, retention)
         }
     }
 
@@ -478,6 +483,12 @@ impl ContextManager {
                                     })
                                     .collect::<Vec<_>>()
                                     .join("\n");
+                                if source_role == "assistant"
+                                    && message.complete
+                                    && text == message.text
+                                {
+                                    return true;
+                                }
                                 guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0
                                     == message.text
                             })
@@ -637,6 +648,18 @@ impl ContextManager {
     ) {
         for envelope in items {
             self.sampling.record(envelope);
+            if self
+                .retained_context
+                .elastic_assistant_record_bytes()
+                .is_some()
+                && let Some((message, _)) =
+                    self.retained_direct_delivery(&envelope.item, envelope.metadata.as_ref())
+                && !message.complete
+            {
+                let metadata = envelope.metadata.get_or_insert_default();
+                metadata.delivered_assistant_message = None;
+                metadata.delivered_assistant_message_incomplete = true;
+            }
             if let Some(source) =
                 self.record_item_with_metadata(&envelope.item, envelope.metadata.as_ref(), policy)
             {
@@ -940,7 +963,7 @@ impl ContextManager {
         self.restored_through_sequence = self
             .restored_through_sequence
             .min(self.sampling.last_sequence);
-        self.retained_context = Arc::default();
+        self.retained_context = Arc::new(self.retained_context.empty_with_same_limits());
         self.user_message_revision = self.user_message_revision.saturating_add(1);
         if let Some(review_history) = &mut self.review_history {
             review_history.reset(

@@ -126,10 +126,12 @@ impl LocalAgentRuntime {
                             )
                             .ok()?;
                         }
+                        let retention =
+                            codex_history::MessageRetention::saved(&history, source_thread_id);
                         let context = ContextManager::reconstruct_rollout(
                             &history,
                             history_mode,
-                            ContextManager::new,
+                            |ids| ContextManager::new(ids, retention),
                             // Tool bodies are not sender authorization evidence.
                             TruncationPolicy::Bytes(0),
                         )

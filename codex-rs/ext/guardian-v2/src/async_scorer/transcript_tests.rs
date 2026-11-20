@@ -29,6 +29,14 @@ use super::TranscriptSource;
 // Existing rendering tests exercise the same fresh-conversation preparation and
 // delivery filtering as the classifier, without retaining the snapshot formatter.
 impl super::TranscriptConfig {
+    pub(in crate::async_scorer) fn collect_context(
+        &self,
+        input: ContextInput<'_>,
+    ) -> Result<super::CollectedTranscript, codex_guardian_context::SectionError> {
+        let retained = input.history.retained_context();
+        self.collect_with_retained(input, retained)
+    }
+
     fn build_context(
         &self,
         input: ContextInput<'_>,

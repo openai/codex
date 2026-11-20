@@ -158,6 +158,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_assistant_message: Option<String>,
 
+    /// A confirmed delivery whose full text was unavailable within the retention limit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delivered_assistant_message_incomplete: bool,
+
     /// Whether a response configuration update was created by the Codex harness itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub harness_authored_configuration: bool,
@@ -225,6 +229,16 @@ impl std::fmt::Debug for ImageReplaySource {
 }
 
 impl CodexHarnessMetadata {
+    /// The captured delivery text and whether it is incomplete.
+    pub fn confirmed_delivery(&self) -> Option<(&str, bool)> {
+        if self.delivered_assistant_message_incomplete {
+            return Some(("", true));
+        }
+        self.delivered_assistant_message
+            .as_deref()
+            .map(|text| (text, text.is_empty()))
+    }
+
     /// Shortened messages no longer prove complete instruction or review delivery.
     pub fn mark_retained_sources_incomplete(&mut self) {
         self.guardian_review_ids.clear();
@@ -526,6 +540,7 @@ pub use sender_user_messages::SenderUserMessages;
 
 pub use reconciled_retained_context::ReconciledRetainedContext;
 pub use retained_context::AcceptedFileAudio;
+pub use retained_context::MessageRetention;
 pub use retained_context::RetainedContext;
 pub use retained_context::RetainedContextEntry;
 pub use retained_context::RetainedContextEvent;

@@ -5,6 +5,7 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::user_messaging::capture_delivery;
+use codex_guardian_context::ContextBudgeting;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -16,24 +17,40 @@ use test_case::test_case;
 #[test_case("mcp__codex_apps__user_messaging__send_message", json!({"text": " "}), true; "empty_text")]
 fn undelivered_or_unrelated_messages_have_no_evidence(name: &str, input: Value, success: bool) {
     let state = ToolCallState::default();
-    capture_delivery(&messaging_result(name, input, success), Some(&state));
+    capture_delivery(
+        &messaging_result(name, input, success),
+        Some(&state),
+        ContextBudgeting::Fixed,
+    );
     assert_eq!(state.delivered_assistant_message.get(), None);
 }
 
-#[test]
-fn capture_keeps_the_first_confirmed_rewritten_message() {
+const LONG_MESSAGE_BYTES: usize = 4_000;
+
+#[test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case(ContextBudgeting::Elastic; "elastic")]
+fn capture_keeps_the_first_confirmed_rewritten_message(budgeting: ContextBudgeting) {
     let state = ToolCallState::default();
     let name = "mcp__codex_apps__user_message__send_message";
-    for text in ["Staging only?", "Replace the question?"] {
+    let rewritten = "x".repeat(LONG_MESSAGE_BYTES);
+    for text in [rewritten.as_str(), "Replace the question?"] {
         capture_delivery(
             &messaging_result(name, json!({"text": text}), /*success*/ true),
             Some(&state),
+            budgeting,
         );
     }
-    assert_eq!(
-        state.delivered_assistant_message.get().map(String::as_str),
-        Some("Staging only?")
-    );
+    let expected = match budgeting {
+        ContextBudgeting::Fixed => {
+            crate::guardian::guardian_truncate_text(
+                &rewritten,
+                crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS,
+            )
+            .0
+        }
+        ContextBudgeting::Elastic => rewritten,
+    };
+    assert_eq!(state.delivered_assistant_message.get(), Some(&expected));
 }
 
 fn messaging_result(name: &str, input: Value, success: bool) -> AnyToolResult {

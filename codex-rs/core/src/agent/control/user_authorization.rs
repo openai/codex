@@ -54,6 +54,7 @@ impl RootConversationSource for CapturedRootConversation {
         let root_history = &self.history;
         // Join calls to host-confirmed outputs in this snapshot. Older outputs without
         // captured text cannot establish what was sent, including after a hook rewrite.
+        let mut missing_delivered_context = false;
         let delivered_candidates = root_history
             .annotated_items()
             .iter()
@@ -66,17 +67,14 @@ impl RootConversationSource for CapturedRootConversation {
                 else {
                     return None;
                 };
-                let text = envelope
-                    .metadata
-                    .as_ref()?
-                    .delivered_assistant_message
-                    .as_deref()?;
-                Some(RootDeliveredMessage { call_id, text })
+                let (text, incomplete) = envelope.metadata.as_ref()?.confirmed_delivery()?;
+                missing_delivered_context |= incomplete;
+                (!incomplete).then_some(RootDeliveredMessage { call_id, text })
             })
             .collect::<Vec<_>>();
-        let retained_context = root_history.retained_context();
+        let retained_context = budgeting.retained_assistant_view(root_history.retained_context());
         let reconciled = ReconciledRetainedContext::new(
-            Some(retained_context),
+            Some(&retained_context),
             root_history
                 .annotated_items()
                 .iter()
@@ -242,7 +240,8 @@ impl RootConversationSource for CapturedRootConversation {
             handoff_boundaries: self.handoff_boundaries.clone(),
             latest_user_turn_id: reconciled.latest_user_turn_id.clone(),
             missing_root_instructions: original_missing_root_instructions,
-            missing_assistant_context: retained_context.has_omitted_assistant_messages(),
+            missing_assistant_context: missing_delivered_context
+                || retained_context.has_omitted_assistant_messages(),
             missing_verified_answers: !retained_context.verified_answers_complete(),
         };
         codex_guardian_context::prepare_root_context(

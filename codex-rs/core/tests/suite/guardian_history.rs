@@ -1,5 +1,6 @@
 //! Exercises retained review history through compaction, resume, fork, and eviction.
 
+use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -755,8 +756,10 @@ async fn guardian_storage_policy_applies_before_capture_and_resume(
     budgeting: codex_guardian_context::ContextBudgeting,
 ) -> Result<()> {
     use codex_guardian_context as guardian_context;
+    use codex_history::RetainedContextEntry::AssistantMessage;
     const HISTORY_ENTRIES: usize = 140;
     const FIXED_ENTRY_LIMIT: usize = 128;
+    const FIXED_ASSISTANT_LIMIT: usize = 8;
     const ENTRY_TOKENS: usize = 900;
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
@@ -813,6 +816,18 @@ async fn guardian_storage_policy_applies_before_capture_and_resume(
             guardian_context::ContextBudgeting::Elastic => originals.as_slice(),
         };
         assert_eq!(retained, expected);
+        let assistant_count = history
+            .retained_context()
+            .context("retained context")?
+            .ordered_entries()
+            .filter(|(_, entry)| matches!(entry, AssistantMessage(_)))
+            .count();
+        let expected_count = if budgeting == guardian_context::ContextBudgeting::Elastic {
+            HISTORY_ENTRIES
+        } else {
+            FIXED_ASSISTANT_LIMIT
+        };
+        assert_eq!(assistant_count, expected_count);
     }
     test.codex.shutdown_and_wait().await?;
     Ok(())

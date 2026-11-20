@@ -129,10 +129,15 @@ fn thread_settings_snapshot(disabled_plugin_ids: Vec<String>) -> Result<ThreadSe
 }
 
 #[test]
-fn latest_disabled_plugin_ids_preserves_owned_updates_and_clears() -> Result<()> {
+fn latest_thread_settings_preserve_owned_updates_and_clears() -> Result<()> {
     let thread_id = ThreadId::new();
     let ancestor_id = ThreadId::new();
-    let selected = thread_settings_snapshot(vec!["example@marketplace".to_string()])?;
+    let mut selected = thread_settings_snapshot(vec!["example@marketplace".to_string()])?;
+    const RECORD_BYTES: usize = 4_096;
+    let policy = codex_protocol::protocol::GuardianRetentionPolicy {
+        assistant_record_bytes: Some(RECORD_BYTES),
+    };
+    selected.guardian_retention = Some(policy);
     let cleared = thread_settings_snapshot(Vec::new())?;
     let item = |thread_id, thread_settings| {
         RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
@@ -154,6 +159,10 @@ fn latest_disabled_plugin_ids_preserves_owned_updates_and_clears() -> Result<()>
         latest_disabled_plugin_ids(&history, thread_id),
         Some(selected.disabled_plugin_ids.as_slice())
     );
+    assert_eq!(
+        MessageRetention::saved(&history, thread_id),
+        Some(MessageRetention { thread_id, policy })
+    );
 
     history.push(item(Some(thread_id), cleared.clone()));
     history.extend(foreign_items);
@@ -164,6 +173,7 @@ fn latest_disabled_plugin_ids_preserves_owned_updates_and_clears() -> Result<()>
         latest_disabled_plugin_ids(&history, thread_id),
         Some(cleared.disabled_plugin_ids.as_slice())
     );
+    assert_eq!(MessageRetention::saved(&history, thread_id), None);
     Ok(())
 }
 

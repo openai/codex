@@ -164,6 +164,11 @@ impl RollbackPlanner {
             RolloutItem::DynamicToolsUpdated { .. } | RolloutItem::SessionMeta(_) => {
                 self.record_boundaries[index] = None
             }
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                if event.thread_id.is_some() =>
+            {
+                self.record_boundaries[index] = None;
+            }
             RolloutItem::ResponseItem(response) => {
                 if matches!(&response.item, ResponseItem::Message { role, .. } if role == "assistant")
                     || matches!(&response.item, ResponseItem::FunctionCall { .. })

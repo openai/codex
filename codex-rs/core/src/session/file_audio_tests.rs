@@ -12,7 +12,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn history_sums_measured_and_unknown_file_audio() {
-    let mut history = ContextManager::new(thread_context_ids());
+    let mut history = ContextManager::new(thread_context_ids(), /*retention*/ None);
     let item = ResponseInputItem::Message {
         role: "user".to_string(),
         content: ["short", "unknown"]
@@ -119,7 +119,7 @@ async fn producer_bounded_audio_keeps_the_same_parts_as_inline_history() {
         )
         .unwrap();
         codex_utils_audio::prepare_response_items(std::slice::from_mut(&mut inline));
-        let mut history = ContextManager::new(thread_context_ids());
+        let mut history = ContextManager::new(thread_context_ids(), /*retention*/ None);
         history.record_items([&inline], policy);
         let expected =
             serde_json::to_value(history.raw_items().last().unwrap()).unwrap()["output"].take();

@@ -1298,6 +1298,9 @@ impl Session {
                 error!("failed to initialize thread persistence: {e:#}");
                 e
             })?;
+        let retention = session_configuration
+            .guardian_retention
+            .map(|policy| codex_history::MessageRetention { thread_id, policy });
         // Keep the large initialization future out of callers' stack frames.
         let session_result: anyhow::Result<Arc<Self>> = Box::pin(async {
             if let InitialHistory::Resumed(resumed) = &mut initial_history {
@@ -1618,6 +1621,7 @@ impl Session {
                     config.guardian_reuses_parent_compaction(),
                     config.guardian_context_budgeting(),
                     context_ids.clone(),
+                    retention,
                 ),
             );
             if matches!(initial_history, InitialHistory::Resumed(_)) {

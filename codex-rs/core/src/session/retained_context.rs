@@ -196,7 +196,7 @@ impl Session {
     /// Starts recording confirmed delivery synchronously while the tool's admission is held.
     pub(crate) fn record_delivered_assistant_message(
         self: &Arc<Self>,
-        message: RetainedUserMessage,
+        mut message: RetainedUserMessage,
     ) -> (JoinHandle<()>, watch::Receiver<()>) {
         let session = Arc::clone(self);
         let persistence_session = Arc::clone(self);
@@ -208,6 +208,18 @@ impl Session {
                 .await
                 .unwrap_or_else(|_| unreachable!("communication boundary remains open"));
             let mut state = session.state.lock().await;
+            if !state
+                .history
+                .retained_context()
+                .retains_original_assistant_messages()
+            {
+                let (text, truncated) = crate::guardian::guardian_truncate_text(
+                    &message.text,
+                    crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS,
+                );
+                message.text = text;
+                message.complete &= !truncated;
+            }
             let mut event = RetainedContextEvent::DeliveredAssistantMessage {
                 message,
                 retained_source: None,

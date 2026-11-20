@@ -111,8 +111,15 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         .get_guardian_package(session.thread_id)
         .await
         .and_then(|snapshot| snapshot.request_candidates);
-    let trusted_user_inputs = history
+    let budgeting = parent_context.map_or_else(
+        || config.guardian_context_budgeting(),
+        |context| context.turn().config.guardian_context_budgeting(),
+    );
+    let retained_context = history
         .retained_context()
+        .map(|context| budgeting.retained_assistant_view(context));
+    let trusted_user_inputs = retained_context
+        .as_deref()
         .map(codex_guardian_context::collect_verified_answer_candidates)
         .unwrap_or_default();
     let planned_action = codex_guardian_reviewer::build_guardian_planned_action(
@@ -162,6 +169,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         target: profile.target,
         history: &GuardianReviewHistory {
             history,
+            retained_context: retained_context.as_deref(),
             use_parent_checkpoint,
         },
         transcript: &profile.transcript,
@@ -211,12 +219,13 @@ pub(super) fn collect_guardian_context(
 
 struct GuardianReviewHistory<'a> {
     history: &'a dyn ConversationHistorySnapshot,
+    retained_context: Option<&'a codex_history::RetainedContext>,
     use_parent_checkpoint: bool,
 }
 
 impl SectionHistory for GuardianReviewHistory<'_> {
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
-        self.history.retained_context()
+        self.retained_context
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {

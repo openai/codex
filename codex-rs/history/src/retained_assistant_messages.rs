@@ -8,7 +8,6 @@ use super::RetainedInputSource;
 use super::RetainedSource;
 use super::RetainedSourceRole;
 use super::RetainedUserMessage;
-use super::bound_family;
 use codex_thread_context_ids::ThreadContextIds;
 
 impl RetainedContext {
@@ -37,10 +36,11 @@ impl RetainedContext {
     /// Returns the captured source for the original envelope, independently of buffer eviction.
     pub fn record_assistant_message(
         &mut self,
-        message: RetainedUserMessage,
+        mut message: RetainedUserMessage,
         source: RetainedInputSource,
         context_ids: &ThreadContextIds,
     ) -> Option<RetainedSource> {
+        message.bound(self.assistant_record_bytes());
         self.record_assistant_message_with_revision(
             message,
             source,
@@ -51,7 +51,7 @@ impl RetainedContext {
 
     pub(super) fn record_assistant_message_with_revision(
         &mut self,
-        mut message: RetainedUserMessage,
+        message: RetainedUserMessage,
         source: RetainedInputSource,
         context_ids: &ThreadContextIds,
         revision: Option<&codex_protocol::ResponseItemId>,
@@ -61,7 +61,6 @@ impl RetainedContext {
             // ordering alone does not establish an omission from reviewer context.
             return None;
         }
-        message.bound();
         let empty = message.complete && message.text.is_empty();
         let inherited = source == RetainedInputSource::Inherited;
         // A confirmed delivery is a distinct rollout fact even when the bounded live
@@ -100,10 +99,7 @@ impl RetainedContext {
         };
         let source = entry.source(RetainedSourceRole::Assistant);
         self.assistant_messages.push_back(entry);
-        bound_family(
-            &mut self.assistant_messages,
-            &mut self.assistant_messages_incomplete,
-        );
+        self.bound_assistant_family();
         source
     }
 }

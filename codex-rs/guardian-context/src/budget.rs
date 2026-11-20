@@ -231,7 +231,7 @@ impl ElasticBudgetConfig {
 /// complete selected duplicates. Only the headroom between each minimum and
 /// maximum is scaled to the remaining budget.
 /// Actual request admission still accounts for history, framing and exact actions.
-/// These settings do not change storage bounds or activate elastic allocation.
+/// The shared recorder also uses the retained-instructions entry limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ElasticSectionLimits {
     min_total_section_tokens: usize,

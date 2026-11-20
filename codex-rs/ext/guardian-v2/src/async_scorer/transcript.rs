@@ -26,6 +26,7 @@ use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
 use codex_guardian_context::prepare_async_context;
+use codex_history::RetainedContext;
 
 const DEFAULT_PROFILE: &ContextProfile = &ContextProfile::asynchronous();
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize =
@@ -83,9 +84,10 @@ impl Default for TranscriptConfig {
 }
 
 impl TranscriptConfig {
-    pub(super) fn collect_context(
+    pub(super) fn collect_with_retained(
         &self,
         input: ContextInput<'_>,
+        retained_context: Option<&RetainedContext>,
     ) -> Result<CollectedTranscript, SectionError> {
         let ContextInput {
             target,
@@ -101,7 +103,7 @@ impl TranscriptConfig {
             node_repl_images,
         } = input;
         let history_version = history.review_history_version();
-        let history = SnapshotHistory(history);
+        let history = SnapshotHistory(history, retained_context);
         let profile = ContextProfile {
             target: ContextTarget::Async,
             transcript_format: self.format,
@@ -198,11 +200,14 @@ impl CollectedTranscript {
     }
 }
 
-struct SnapshotHistory<'a>(&'a dyn ConversationHistorySnapshot);
+struct SnapshotHistory<'a>(
+    &'a dyn ConversationHistorySnapshot,
+    Option<&'a RetainedContext>,
+);
 
 impl SectionHistory for SnapshotHistory<'_> {
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
-        self.0.retained_context()
+        self.1
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {

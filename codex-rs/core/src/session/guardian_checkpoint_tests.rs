@@ -41,6 +41,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
             /*reuse_parent_compaction*/ true,
             codex_guardian_context::ContextBudgeting::Fixed,
             thread_context_ids(),
+            /*retention*/ None,
         );
         state
             .history
@@ -115,6 +116,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
         /*reuse_parent_compaction*/ true,
         codex_guardian_context::ContextBudgeting::Fixed,
         thread_context_ids(),
+        /*retention*/ None,
     );
     fork.record_initial_history(InitialHistory::Forked(items))
         .await;

@@ -124,6 +124,68 @@ fn retained_evidence_preserves_order_through_recovery_checkpoint_and_rollback() 
 }
 
 #[test]
+fn assistant_record_limit_applies_on_capture_and_restore() {
+    const LARGE_RECORD_BYTES: usize = 24_000;
+    let context_ids = thread_context_ids();
+    let thread_id = ThreadId::new();
+    let recorder = |assistant_record_bytes| {
+        RetainedContext::new(Some(MessageRetention {
+            thread_id,
+            policy: GuardianRetentionPolicy {
+                assistant_record_bytes,
+            },
+        }))
+    };
+    let mut elastic = recorder(Some(LARGE_RECORD_BYTES));
+    let text = "x".repeat(MAX_RECORD_BYTES);
+    for index in 0..=MAX_FAMILY_BYTES / text.len() {
+        let order = elastic.reserve_order();
+        elastic.record_assistant_message(
+            RetainedUserMessage {
+                turn_id: "turn-1".to_owned(),
+                message_id: Some(index.to_string()),
+                text: text.clone(),
+                complete: true,
+                origin: crate::UserInputOrigin::User,
+                phase: None,
+            },
+            RetainedInputSource::Local(Some(order)),
+            &context_ids,
+        );
+    }
+    assert_eq!(elastic.assistant_messages[0].value.text, text);
+    assert!(elastic.has_omitted_assistant_messages());
+
+    let order = elastic.reserve_order();
+    let mut delivery = delivered_message("long-send", &text, order);
+    assert!(elastic.record_and_capture(&mut delivery, &context_ids));
+    let RetainedContextEvent::DeliveredAssistantMessage { message, .. } = delivery else {
+        unreachable!("recording preserves the event variant");
+    };
+    assert_eq!((message.text, message.complete), (text, true));
+
+    let checkpoint = serde_json::from_value(serde_json::json!({
+        "type": "compacted", "payload": {"message": "", "retained_context": &elastic}
+    }))
+    .unwrap();
+    let saved = MessageRetention::saved(&[checkpoint], thread_id);
+    assert_eq!(saved, elastic.message_retention);
+    let mut restored = recorder(/*assistant_record_bytes*/ None);
+    restored.restore(Some(&elastic), &[]);
+    assert_eq!(
+        restored.assistant_messages,
+        elastic.fixed_assistant_view().assistant_messages
+    );
+    let omitted = &restored.assistant_messages[0].value;
+    assert_eq!((omitted.complete, omitted.text.capacity()), (false, 0));
+    let mut restored = recorder(Some(1));
+    let order = restored.reserve_order();
+    let delivery = delivered_message("confirmed", "Deploy?", order);
+    assert!(restored.record(&delivery, &context_ids));
+    assert!(!restored.record(&delivery, &context_ids));
+}
+
+#[test]
 fn retained_families_enforce_storage_limits_without_changing_snapshots() {
     let mut context = RetainedContext::default();
     let first = publish_answer();

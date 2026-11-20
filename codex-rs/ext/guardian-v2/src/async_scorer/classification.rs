@@ -26,6 +26,7 @@ use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::McpToolContext;
 use codex_extension_api::ResponseItem;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextTarget;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::PlannedActionKind;
@@ -84,7 +85,6 @@ pub(super) struct Classification {
     pub(super) mcp_tool: Option<McpToolContext>,
     pub(super) planned_action: String,
     pub(super) sync_reviews: Vec<Arc<GuardianReviewEvidenceRecord>>,
-    pub(super) trusted_user_inputs: Vec<codex_guardian_context::TrustedUserAnswer>,
     pub(super) authorization_version: GuardianAuthorizationVersion,
     pub(super) history: Arc<dyn ConversationHistorySnapshot>,
     pub(super) local_trusted_skill_paths: Vec<String>,
@@ -141,7 +141,6 @@ impl Classification {
             mcp_tool,
             planned_action,
             sync_reviews,
-            trusted_user_inputs,
             authorization_version,
             history,
             local_trusted_skill_paths,
@@ -251,6 +250,18 @@ impl Classification {
             .collect::<Vec<_>>();
         let transcript =
             PreviousReviews::try_from_fragments(review_fragments).and_then(|reviews| {
+                let budgeting = if guardian_config.transcript.elastic.is_some() {
+                    ContextBudgeting::Elastic
+                } else {
+                    ContextBudgeting::Fixed
+                };
+                let retained = history
+                    .retained_context()
+                    .map(|context| budgeting.retained_assistant_view(context));
+                let answers = retained
+                    .as_deref()
+                    .map(codex_guardian_context::collect_verified_answer_candidates)
+                    .unwrap_or_default();
                 let context_input = ContextInput {
                     target: ContextTarget::Async,
                     history: history.as_ref(),
@@ -261,7 +272,7 @@ impl Classification {
                     root_conversation_candidates: root_snapshot
                         .as_ref()
                         .and_then(|snapshot| snapshot.request_candidates.as_ref()),
-                    trusted_user_answers: &trusted_user_inputs,
+                    trusted_user_answers: &answers,
                     planned_action: Some(&action_section),
                     permissions: Some(&score_authorization.permissions),
                     previous_reviews: Some(&reviews),
@@ -269,7 +280,9 @@ impl Classification {
                     trusted_skill_paths: &trusted_skill_paths,
                     node_repl_images: Some(&node_repl_images),
                 };
-                guardian_config.transcript.collect_context(context_input)
+                guardian_config
+                    .transcript
+                    .collect_with_retained(context_input, retained.as_deref())
             });
         let evidence = match transcript {
             Ok(transcript) => transcript,

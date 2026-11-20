@@ -40,7 +40,11 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
         .with_thread_store(store.clone())
         .with_history_mode(history_mode)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(super::configure_scenario_catalog)
+        .with_config(|config| {
+            super::configure_scenario_catalog(config);
+            config.guardian_sync_elastic_budget =
+                Some(core_test_support::guardian::elastic_budget_config());
+        })
         .build_with_auto_env(&server)
         .await?;
     // Separate managers share durable storage, as cloud workers do. Neither loads the other.
@@ -98,6 +102,15 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
             ThreadRolledBackEvent { num_turns: 1 },
         ))])
         .await?;
+    const FIXED_ASSISTANT_LIMIT: usize = 8;
+    let later = (0..FIXED_ASSISTANT_LIMIT)
+        .map(|index| {
+            serde_json::from_value(
+                ev_assistant_message(&format!("later-{index}"), "Waiting.")["item"].clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    sender.codex.inject_response_items(later).await?;
     sender.codex.flush_rollout().await?;
 
     let expected = [

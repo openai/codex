@@ -20,6 +20,7 @@ use codex_history::RetainedUserMessage;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::serialized_json_bytes;
 
 /// Checkpoint items may have been shortened while preserving their original metadata.
 pub(super) enum RetainedMessageSource {
@@ -83,7 +84,8 @@ impl ContextManager {
             envelope
                 .metadata
                 .as_ref()
-                .is_some_and(|metadata| metadata.delivered_assistant_message.is_some())
+                .and_then(CodexHarnessMetadata::confirmed_delivery)
+                .is_some()
         }) {
             let _ = self.record_retained_message(
                 &envelope.item,
@@ -112,38 +114,55 @@ impl ContextManager {
         }
     }
 
+    pub(super) fn retained_direct_delivery(
+        &self,
+        item: &ResponseItem,
+        metadata: Option<&CodexHarnessMetadata>,
+    ) -> Option<(RetainedUserMessage, RetainedInputSource)> {
+        let ResponseItem::FunctionCallOutput {
+            call_id: Some(call_id),
+            ..
+        } = item
+        else {
+            return None;
+        };
+        let (text, incomplete) = metadata?.confirmed_delivery()?;
+        let call = self.items.iter().rev().find(|envelope| {
+            matches!(&envelope.item, ResponseItem::FunctionCall { call_id: id, .. } if id == call_id)
+        })?;
+        let source = RetainedInputSource::from(call.metadata.as_ref());
+        if source == RetainedInputSource::Inherited && !self.retain_inherited_user_messages {
+            return None;
+        }
+        // The host captured the confirmed text before post-tool hooks. Use the
+        // original call's position even when its output is delayed or aborted.
+        let mut message = RetainedUserMessage {
+            phase: None,
+            origin: codex_history::UserInputOrigin::User,
+            turn_id: call.item.turn_id().unwrap_or_default().to_owned(),
+            message_id: call.item.id().map(|id| id.as_str().to_owned()),
+            text: text.to_owned(),
+            complete: !incomplete,
+        };
+        if message.complete
+            && let Some(limit) = self.retained_context.elastic_assistant_record_bytes()
+            && !serialized_json_bytes(&message).is_ok_and(|bytes| bytes <= limit)
+        {
+            message.text = String::new();
+            message.complete = false;
+        }
+        Some((message, source))
+    }
+
     pub(super) fn record_retained_message(
         &mut self,
         item: &ResponseItem,
         metadata: Option<&CodexHarnessMetadata>,
         source: RetainedMessageSource,
     ) -> Option<codex_history::RetainedSource> {
-        if let Some(text) =
-            metadata.and_then(|metadata| metadata.delivered_assistant_message.as_ref())
-            && let ResponseItem::FunctionCallOutput {
-                call_id: Some(call_id),
-                ..
-            } = item
-        {
-            let call = self.items.iter().rev().find(|envelope| {
-                matches!(&envelope.item, ResponseItem::FunctionCall { call_id: id, .. } if id == call_id)
-            })?;
-            let source = RetainedInputSource::from(call.metadata.as_ref());
-            if source == RetainedInputSource::Inherited && !self.retain_inherited_user_messages {
-                return None;
-            }
-            // The host captured this bounded text before post-tool hooks. The output
-            // may be rejected, aborted, or truncated; retain the confirmed text at
-            // the original call's position, not at its later completion position.
+        if let Some((message, source)) = self.retained_direct_delivery(item, metadata) {
             Arc::make_mut(&mut self.retained_context).record_assistant_message(
-                RetainedUserMessage {
-                    phase: None,
-                    origin: codex_history::UserInputOrigin::User,
-                    turn_id: call.item.turn_id().unwrap_or_default().to_owned(),
-                    message_id: call.item.id().map(|id| id.as_str().to_owned()),
-                    text: text.clone(),
-                    complete: true,
-                },
+                message,
                 source,
                 &self.context_ids,
             );
@@ -181,6 +200,8 @@ impl ContextManager {
             complete &= metadata
                 .and_then(|metadata| metadata.retained_source.as_ref())
                 .is_none_or(|source| source.complete);
+            let retain_assistant_original =
+                is_assistant && self.retained_context.retains_original_assistant_messages();
             let text = content
                 .iter()
                 .filter_map(|content| match content {
@@ -194,11 +215,15 @@ impl ContextManager {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            // Keep the same bounded text that child reviewers receive before
-            // compaction, instead of letting storage discard a large source.
-            // Local instruction sections still omit incomplete originals whole.
-            let (text, truncated) = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS);
-            complete &= !truncated;
+            let text = if retain_assistant_original {
+                // The recorder applies the configured byte limit to the source text.
+                text
+            } else {
+                let (text, truncated) =
+                    guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS);
+                complete &= !truncated;
+                text
+            };
             let message = RetainedUserMessage {
                 phase: phase.clone(),
                 origin: codex_history::UserInputOrigin::from_message(item),

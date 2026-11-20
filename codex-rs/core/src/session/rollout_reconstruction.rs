@@ -193,6 +193,16 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        let policy = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .guardian_retention;
+        let retention = policy.map(|policy| codex_history::MessageRetention {
+            thread_id: self.thread_id(),
+            policy,
+        });
         ContextManager::reconstruct_rollout(
             rollout_items,
             turn_context.history_mode,
@@ -203,6 +213,7 @@ impl Session {
                     turn_context.config.guardian_reuses_parent_compaction(),
                     turn_context.config.guardian_context_budgeting(),
                     ids,
+                    retention,
                 )
             },
             turn_context.model_info().truncation_policy.into(),

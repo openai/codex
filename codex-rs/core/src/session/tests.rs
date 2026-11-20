@@ -6636,6 +6636,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.guardian_reuses_parent_compaction(),
         config.guardian_context_budgeting(),
         context_ids.clone(),
+        /*retention*/ None,
     );
     let (environment_manager, resolved_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
@@ -9001,6 +9002,7 @@ where
         config.guardian_reuses_parent_compaction(),
         config.guardian_context_budgeting(),
         context_ids.clone(),
+        /*retention*/ None,
     );
     let (environment_manager, resolved_turn_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
