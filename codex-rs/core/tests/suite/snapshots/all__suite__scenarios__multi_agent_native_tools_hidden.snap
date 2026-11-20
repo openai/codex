@@ -2,7 +2,7 @@
 source: core/tests/suite/scenarios.rs
 expression: "context_snapshot::format_request_history_snapshot(description,\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
-Scenario: Native tools and native usage guidance are unavailable.
+Scenario: The root receives the session concurrency limit with native tools hidden.
 
 ## Window 1
 Settings:
@@ -48,12 +48,14 @@ Settings:
     Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
     </permissions instructions>
 03:message/developer:
+    <multi_agent_role>There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.</multi_agent_role>
+04:message/developer:
     <multi_agent_mode>
     Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-ag...k for sub-agents, delegation, or parallel agent work. [hash=6e1e1baf5a87faf5]
 
     Before calling any multi-agent tool, read the full multi-agent skill using its listed package locator. S...context. If the read fails, make note of the blocker. [hash=104096cdd6a881da]
     </multi_agent_mode>
-04:message/user:
+05:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
@@ -61,9 +63,9 @@ Settings:
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
     </environment_context>
-05:message/user:
+06:message/user:
     Check which agents are working under /root before delegating more work.
-06:configuration_update:reasoning={"effort":"low"}
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:function_call/collaboration.list_agents:{"path_prefix":"/root"}
-08:function_call_output:unsupported call: collaborationlist_agents
+08:function_call/collaboration.list_agents:{"path_prefix":"/root"}
+09:function_call_output:unsupported call: collaborationlist_agents

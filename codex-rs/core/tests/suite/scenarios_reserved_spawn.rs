@@ -186,6 +186,7 @@ async fn prepared_child_instructions_preserve_native_inheritance(
             config.developer_instructions = Some(PARENT_DEVELOPER.into());
             config.multi_agent_v2.subagent_developer_instructions =
                 subagent_developer.map(str::to_owned);
+            config.multi_agent_v2.root_agent_usage_hint_text = Some(String::new());
             config
                 .features
                 .enable(Feature::IncrementalTools)

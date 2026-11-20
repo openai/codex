@@ -55,7 +55,9 @@ pub(crate) fn resolve_usage_hints(
             return None;
         }
         if config.disable_native_tools {
-            return None;
+            return Some(MultiAgentRoleInstructions::concurrency_only(
+                config.max_concurrent_threads_per_session,
+            ));
         }
         Some(MultiAgentRoleInstructions::Composed {
             base: base.to_owned(),

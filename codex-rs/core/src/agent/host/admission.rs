@@ -22,6 +22,8 @@ pub struct AgentTurnAdmissionRequest {
 /// A submitted turn can be denied after its input was accepted. Core records that
 /// input and reports the error through the ordinary turn lifecycle.
 /// Hosts own remote retries, abandoned acquisitions and worker-loss recovery.
+/// Default hosted roles advertise `multi_agent_v2.max_concurrent_threads_per_session`.
+/// Hosts should set it to their admission limit or override the role text.
 pub trait AgentTurnAdmission: Send + Sync {
     fn admit_turn(
         &self,

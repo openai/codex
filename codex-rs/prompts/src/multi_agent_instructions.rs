@@ -21,7 +21,7 @@ All agents share the same directory. In detail:
 /// Multi-agent role text and the captured capabilities used to render its context segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiAgentRoleInstructions {
-    /// Complete configured role body.
+    /// Complete role body.
     Configured(String),
     /// Selected catalog or bundled text, composed with captured runtime guidance.
     Composed {
@@ -36,6 +36,10 @@ pub enum MultiAgentRoleInstructions {
 impl MultiAgentRoleInstructions {
     /// Content classification shared by role producers and inherited-history filtering.
     pub const KIND: &str = "multi_agent.role_instructions";
+
+    pub fn concurrency_only(max_concurrency: usize) -> Self {
+        Self::Configured(concurrency_guidance(max_concurrency))
+    }
 }
 
 impl ContextualUserFragment for MultiAgentRoleInstructions {
@@ -79,9 +83,8 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
                     String::new()
                 };
                 let shared = DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT;
-                let mut text = format!(
-                    "{base}\n{shared}\n{wait_agent_guidance}There are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
-                );
+                let concurrency = concurrency_guidance(*max_concurrency);
+                let mut text = format!("{base}\n{shared}\n{wait_agent_guidance}{concurrency}");
                 if *expose_model_overrides {
                     text.push_str("\n\n");
                     text.push_str(DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT);
@@ -90,6 +93,12 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
             }
         })
     }
+}
+
+fn concurrency_guidance(max_concurrency: usize) -> String {
+    format!(
+        "There are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
+    )
 }
 
 #[cfg(test)]

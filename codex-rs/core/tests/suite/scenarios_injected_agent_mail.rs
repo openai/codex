@@ -81,6 +81,7 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
                 .enable(Feature::MultiAgentV2)
                 .expect("use MAv2");
             config.multi_agent_v2.disable_native_tools = true;
+            config.multi_agent_v2.root_agent_usage_hint_text = Some(String::new());
             config.multi_agent_v2.multi_agent_mode_hint_text = Some(String::new());
             config
                 .features

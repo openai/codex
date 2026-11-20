@@ -2445,7 +2445,7 @@ async fn multi_agent_catalog_parameters(
     } else if disable_native_tools {
         (
             "multi_agent_native_tools_hidden",
-            "Native tools and native usage guidance are unavailable.",
+            "The root receives the session concurrency limit with native tools hidden.",
         )
     } else {
         (
