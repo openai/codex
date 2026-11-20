@@ -53,6 +53,7 @@ impl HistoryItemGroup<'_> {
 
 pub(crate) fn newest_history_item_groups(
     mut items: &[ResponseItemEnvelope],
+    is_pinned: fn(&ResponseItemEnvelope) -> bool,
 ) -> impl Iterator<Item = HistoryItemGroup<'_>> {
     std::iter::from_fn(move || {
         let (last, preceding) = items.split_last()?;
@@ -64,8 +65,8 @@ pub(crate) fn newest_history_item_groups(
         // Injection requires explicitly retained exchanges to be adjacent in the request.
         let (tool_call, rest) = match rest.split_last() {
             Some((call, rest))
-                if source.is_always_retained()
-                    && call.is_always_retained()
+                if is_pinned(source)
+                    && is_pinned(call)
                     && is_matching_tool_output(&call.item, &source.item) =>
             {
                 (Some(call), rest)
@@ -133,7 +134,9 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     }
     let mut rewritten_items = Vec::new();
     let mut retained_len = original_items.len();
-    for group in newest_history_item_groups(original_items) {
+    for group in
+        newest_history_item_groups(original_items, ResponseItemEnvelope::is_always_retained)
+    {
         if i64::try_from(estimated_tokens).unwrap_or(i64::MAX) <= context_window {
             break;
         }

@@ -5,6 +5,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::turn_input::InjectedResponseItem;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::environment_config_for_selection;
 use pretty_assertions::assert_eq;
@@ -196,6 +197,18 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
             .await?;
         configured[0].config = EnvironmentConfigState::Ready(config);
     }
+    let instruction = |text: &str, retention: &str| {
+        serde_json::from_value::<InjectedResponseItem>(json!({
+            "item": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": text}]},
+            "retention": retention,
+        }))
+    };
+    test.codex
+        .inject_response_items_with_retention(vec![
+            instruction("Send progress updates.", "alwaysInThread")?,
+            instruction("Read the worker log.", "alwaysInChildren")?,
+        ])
+        .await?;
     answer_paused_turn(&test.codex, &request.turn_id).await?;
 
     let child_thread_id = tokio::time::timeout(
@@ -215,6 +228,13 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
         .iter()
         .find(|request| request.header("thread-id") == Some(child_thread_id.to_string()))
         .expect("child should make a model request");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.body_contains_text("Send progress updates."))
+    );
+    assert!(!child_request.body_contains_text("Send progress updates."));
+    assert!(child_request.body_contains_text("Read the worker log."));
     assert_eq!(
         request_settings(child_request),
         json!({

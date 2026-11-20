@@ -579,6 +579,7 @@ fn build_v2_compacted_history(
             is_retained_for_remote_compaction_v2(item, features)
                 || pending_sequence.is_some_and(|first| is_retained_pending_mail(item, first))
         },
+        ResponseItemEnvelope::is_always_retained,
         RETAINED_MESSAGE_TOKEN_BUDGET,
         image_budget,
         audio_durations,
@@ -601,14 +602,20 @@ fn build_v2_compacted_history(
     (retained, retained_image_count)
 }
 
+/// Select pins for the destination, plus configured client items on a window reset.
 pub(crate) fn retained_client_items(
     items: &[ResponseItemEnvelope],
     audio_durations: &FileAudioDurations,
-    should_retain: impl Fn(&ResponseItemEnvelope) -> bool,
+    is_pinned: fn(&ResponseItemEnvelope) -> bool,
+    window_features: Option<&Features>,
 ) -> BTreeMap<usize, ResponseItemEnvelope> {
     select_retained_items(
         items,
-        should_retain,
+        |item| {
+            is_pinned(item)
+                || window_features.is_some_and(|features| should_retain_client_item(item, features))
+        },
+        is_pinned,
         RETAINED_MESSAGE_TOKEN_BUDGET,
         RetainedImageBudget::Disabled,
         audio_durations,
@@ -716,22 +723,30 @@ fn truncate_retained_messages(
     image_budget: RetainedImageBudget,
     audio_durations: &FileAudioDurations,
 ) -> Vec<ResponseItemEnvelope> {
-    select_retained_items(&items, |_| true, max_tokens, image_budget, audio_durations)
-        .into_values()
-        .collect()
+    select_retained_items(
+        &items,
+        |_| true,
+        ResponseItemEnvelope::is_always_retained,
+        max_tokens,
+        image_budget,
+        audio_durations,
+    )
+    .into_values()
+    .collect()
 }
 
 /// Select newest first, then return the items at their original positions.
 fn select_retained_items(
     items: &[ResponseItemEnvelope],
     should_retain: impl Fn(&ResponseItemEnvelope) -> bool,
+    is_pinned: fn(&ResponseItemEnvelope) -> bool,
     max_tokens: usize,
     image_budget: RetainedImageBudget,
     audio_durations: &FileAudioDurations,
 ) -> BTreeMap<usize, ResponseItemEnvelope> {
     let mut remaining = max_tokens;
     let mut selected = BTreeMap::new();
-    for group in newest_history_item_groups(items) {
+    for group in newest_history_item_groups(items, is_pinned) {
         if remaining == 0 {
             break;
         }
@@ -740,7 +755,7 @@ fn select_retained_items(
         }
 
         let charge_full_item =
-            group.source.is_always_retained() || is_client_authored_developer_message(group.source);
+            is_pinned(group.source) || is_client_authored_developer_message(group.source);
         let image_budget = if charge_full_item {
             RetainedImageBudget::Disabled
         } else {
@@ -784,7 +799,7 @@ fn select_retained_items(
             remaining = remaining.saturating_sub(token_count);
             group.source.clone()
         } else if is_retained_tool_output(group.source)
-            || (group.source.is_always_retained()
+            || (is_pinned(group.source)
                 && !matches!(group.source.item, ResponseItem::Message { .. }))
         {
             // Structured items such as tool results must stay whole.

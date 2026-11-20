@@ -68,7 +68,11 @@ fn sanitize_forked_rollout_item(
         return false;
     }
     let mut retain_envelope = |envelope: &mut ResponseItemEnvelope| {
-        let explicitly_retained = envelope.is_always_retained();
+        let child_retention = envelope.child_retention();
+        if child_retention == Some(false) {
+            return false;
+        }
+        let explicitly_retained = child_retention == Some(true);
         if preserve_fork_prefix
             || explicitly_retained
             || (version == MultiAgentVersion::V2
@@ -212,7 +216,8 @@ impl LocalAgentRuntime {
         let mut items: Vec<_> = retained_client_items(
             history.annotated_items(),
             &history.file_audio_durations,
-            ResponseItemEnvelope::is_always_retained,
+            |item| item.child_retention() == Some(true),
+            /*window_features*/ None,
         )
         .into_values()
         .collect();
@@ -221,6 +226,7 @@ impl LocalAgentRuntime {
             // Keep item metadata needed for retention and replay. Checkpoints belong to the child.
             item.metadata = Some(CodexHarnessMetadata {
                 retain_across_windows: parent_metadata.retain_across_windows,
+                retain_in_children: parent_metadata.retain_in_children,
                 retained_source: parent_metadata.retained_source,
                 history_truncation_token_limit: parent_metadata.history_truncation_token_limit,
                 image_replay_sources: parent_metadata.image_replay_sources,
@@ -234,7 +240,7 @@ impl LocalAgentRuntime {
 
 fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool) -> bool {
     match item {
-        RolloutItem::ResponseItem(envelope) if envelope.is_always_retained() => true,
+        RolloutItem::ResponseItem(envelope) if envelope.child_retention() == Some(true) => true,
         RolloutItem::ResponseItem(envelope) => match &envelope.item {
             ResponseItem::Message { role, phase, .. } => match role.as_str() {
                 "system" | "developer" | "user" => true,

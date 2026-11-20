@@ -225,8 +225,11 @@ async fn interrupt_during_remote_compaction_preserves_summary_on_resume() -> Res
     Ok(())
 }
 
+#[test_case::test_case("always"; "shared")]
+#[test_case::test_case("alwaysInThread"; "thread only")]
+#[test_case::test_case("alwaysInChildren"; "children only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
+async fn remote_slash_compact_preserves_context_across_windows(retention: &str) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -275,11 +278,11 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
     });
     let call: InjectedResponseItem = serde_json::from_value(json!({
         "item": {"type": "function_call", "call_id": "release-check", "name": "check_release", "arguments": "{}"},
-        "retention": "always"
+        "retention": retention
     }))?;
     let result: InjectedResponseItem = serde_json::from_value(json!({
         "item": {"type": "function_call_output", "call_id": "release-check", "output": "The release candidate passed."},
-        "retention": "always"
+        "retention": retention
     }))?;
     test.codex
         .inject_response_items_with_retention(vec![
@@ -325,6 +328,17 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
         json!([mail]),
     );
 
+    assert!(
+        requests[1]
+            .function_call_output_text("release-check")
+            .is_some()
+    );
+    if retention == "alwaysInChildren" {
+        for request in &requests[2..] {
+            assert!(request.function_call_output_text("release-check").is_none());
+        }
+        return Ok(());
+    }
     insta::assert_snapshot!(
         "remote_slash_compact",
         context_snapshot::format_context_snapshot(

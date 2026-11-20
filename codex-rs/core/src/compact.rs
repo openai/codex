@@ -754,6 +754,7 @@ fn build_compacted_history_with_limit(
         items,
         audio_durations,
         ResponseItemEnvelope::is_always_retained,
+        /*window_features*/ None,
     );
     if max_tokens > 0 {
         let mut remaining = max_tokens;

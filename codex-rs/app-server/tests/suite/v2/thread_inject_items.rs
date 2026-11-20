@@ -130,8 +130,8 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
             items: vec![
                 serde_json::to_value(&injected_item)?,
                 json!({"item": injected_developer_item, "retention": "default"}),
-                json!({"item": marker_shaped_developer_item, "retention": "always"}),
-                json!({"item": named_tool_output, "retention": "always"}),
+                json!({"item": marker_shaped_developer_item, "retention": "alwaysInThread"}),
+                json!({"item": named_tool_output, "retention": "alwaysInChildren"}),
             ],
         })
         .await?;
@@ -198,7 +198,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
             (injected_item.clone(), false, None),
             (injected_developer_item.clone(), false, Some(false)),
             (marker_shaped_developer_item.clone(), false, Some(true)),
-            (named_tool_item, false, Some(true)),
+            (named_tool_item, false, Some(false)),
             (agent_mail.clone(), false, None),
         ]
     );

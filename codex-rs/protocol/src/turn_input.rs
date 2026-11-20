@@ -91,6 +91,11 @@ pub enum ItemRetention {
     Default,
     /// Carry the item into later context windows and newly spawned children.
     Always,
+    /// Carry the item into later windows of this thread and exclude it from spawned agents.
+    AlwaysInThread,
+    /// Carry the item into spawned agents while it is in the parent's context.
+    /// Each thread applies ordinary retention when its own context window changes.
+    AlwaysInChildren,
 }
 
 impl From<ResponseItem> for InjectedResponseItem {

@@ -5615,12 +5615,8 @@ impl Session {
         let retained_client_items = crate::compact_remote_v2::retained_client_items(
             history.annotated_items(),
             &history.file_audio_durations,
-            |item| {
-                crate::compact_remote_v2::should_retain_client_item(
-                    item,
-                    &turn_context.config.features,
-                )
-            },
+            ResponseItemEnvelope::is_always_retained,
+            Some(&turn_context.config.features),
         );
         // Resolve the roster before allocating a new context window.
         let rendered = world_state.render_full_with_host_roster().await;
