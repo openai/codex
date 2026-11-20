@@ -107,7 +107,10 @@ impl Renderable for WarningsView {
                     .map(crate::key_hint::ShortcutHint::display_label),
                 "copy",
             ),
-            ((!navigation.is_empty()).then_some(navigation), "warning"),
+            (
+                (self.entries.len() > 1 && !navigation.is_empty()).then_some(navigation),
+                "warning",
+            ),
             (
                 crate::footer_hint::scroll_keys(
                     offset,
