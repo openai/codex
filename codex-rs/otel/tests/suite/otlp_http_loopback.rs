@@ -1,8 +1,6 @@
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_otel::EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
 use codex_otel::OtelExporter;
 use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
@@ -208,17 +206,30 @@ fn otlp_http_exporter_honors_cumulative_temporality_env() -> Result<()> {
         let _ = tx.send(captured);
     });
 
-    let metrics = MetricsClient::new(MetricsConfig::otlp(
-        "test",
-        "codex-cli",
-        env!("CARGO_PKG_VERSION"),
-        OtelExporter::OtlpHttp {
+    let provider = OtelProvider::try_new_http_metrics(&OtelSettings {
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: PathBuf::from("."),
+        headers_helper: None,
+        exporter: OtelExporter::None,
+        trace_exporter: OtelExporter::None,
+        metrics_exporter: OtelExporter::OtlpHttp {
             endpoint: format!("http://{addr}/v1/metrics"),
             headers: HashMap::new(),
             protocol: OtelHttpProtocol::Json,
             tls: None,
         },
-    ))?;
+        runtime_metrics: false,
+        span_attributes: HashMap::new(),
+        tracestate: BTreeMap::new(),
+    })
+    .expect("set up a metrics-only provider")
+    .expect("metrics enabled");
+    assert!(provider.logger.is_none());
+    assert!(provider.tracer_provider.is_none());
+    let metrics = provider.metrics().expect("metrics client");
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
     metrics.counter("codex.api_request", /*inc*/ 1, &[("status", "200")])?;
@@ -266,7 +277,7 @@ fn otlp_http_exporter_honors_cumulative_temporality_env() -> Result<()> {
         /*value*/ 1,
         &[("component", "test")],
     )?;
-    metrics.shutdown()?;
+    provider.shutdown();
 
     server.join().expect("server join");
     let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
@@ -878,7 +889,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
             .expect("current-thread runtime");
 
         let result = runtime.block_on(async move {
-            let otel = OtelProvider::try_new(&OtelSettings {
+            let otel = OtelProvider::try_new_http_traces(&OtelSettings {
                 headers_helper: None,
                 http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
                 environment: "test".to_string(),

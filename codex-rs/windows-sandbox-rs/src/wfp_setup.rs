@@ -47,7 +47,7 @@ fn build_wfp_metrics_provider(
     // depends on this crate, so the parent process passes only the resolved
     // Statsig environment in the elevation payload. Other exporters are
     // intentionally omitted from this helper path.
-    OtelProvider::try_new(&OtelSettings {
+    OtelProvider::try_new_http_metrics(&OtelSettings {
         headers_helper: None,
         http_client_factory: codex_http_client::HttpClientFactory::new(
             codex_http_client::OutboundProxyPolicy::ReqwestDefault,

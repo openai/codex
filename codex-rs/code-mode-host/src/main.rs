@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {
-    OtelProvider::try_new(&OtelSettings {
+    OtelProvider::try_new_http_traces(&OtelSettings {
         headers_helper: None,
         http_client_factory: codex_http_client::HttpClientFactory::new(
             codex_http_client::OutboundProxyPolicy::ReqwestDefault,

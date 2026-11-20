@@ -200,10 +200,47 @@ impl OtelProvider {
     }
 
     pub fn try_new(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
-        let log_enabled = !matches!(settings.exporter, OtelExporter::None);
-        let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
-        let metric_exporter = crate::config::resolve_exporter(&settings.metrics_exporter);
-        let metrics_enabled = !matches!(metric_exporter, OtelExporter::None);
+        Self::try_new_with_exporters::<true, false, false>(settings)
+    }
+
+    /// Builds a provider for traces over OTLP/HTTP.
+    /// Returns an error if any other signal or transport is configured.
+    pub fn try_new_http_traces(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
+        Self::try_new_with_exporters::<false, true, false>(settings)
+    }
+
+    /// Builds a provider for metrics over OTLP/HTTP, including Statsig.
+    /// Returns an error if any other signal or transport is configured.
+    pub fn try_new_http_metrics(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
+        Self::try_new_with_exporters::<false, false, true>(settings)
+    }
+
+    /// Selects the reachable exporter builders at compile time while sharing setup and shutdown.
+    fn try_new_with_exporters<
+        const ALL_EXPORTERS: bool,
+        const HTTP_TRACES: bool,
+        const HTTP_METRICS: bool,
+    >(
+        settings: &OtelSettings,
+    ) -> Result<Option<Self>, Box<dyn Error>> {
+        let supports_traces = ALL_EXPORTERS || HTTP_TRACES;
+        let supports_metrics = ALL_EXPORTERS || HTTP_METRICS;
+        let log_configured = !matches!(settings.exporter, OtelExporter::None);
+        let trace_configured = !matches!(settings.trace_exporter, OtelExporter::None);
+        if (!ALL_EXPORTERS && log_configured)
+            || (!supports_traces && trace_configured)
+            || (!supports_metrics && !matches!(settings.metrics_exporter, OtelExporter::None))
+        {
+            return Err("configured exporter is not supported by this provider".into());
+        }
+
+        let log_enabled = ALL_EXPORTERS && log_configured;
+        let trace_enabled = supports_traces && trace_configured;
+        let metrics_enabled = supports_metrics
+            && !matches!(
+                crate::config::resolve_exporter(&settings.metrics_exporter),
+                OtelExporter::None
+            );
 
         if !log_enabled && !trace_enabled && !metrics_enabled {
             // Tracestate propagation is process-global; clear it when these
@@ -251,9 +288,7 @@ impl OtelProvider {
             })
             .transpose()?;
 
-        let metrics = if matches!(metric_exporter, OtelExporter::None) {
-            None
-        } else {
+        let metrics = if metrics_enabled {
             let mut config = MetricsConfig::otlp(
                 settings.environment.clone(),
                 settings.service_name.clone(),
@@ -267,7 +302,9 @@ impl OtelProvider {
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
             }
-            Some(MetricsClient::new(config)?)
+            Some(MetricsClient::new_with_transport::<ALL_EXPORTERS>(config)?)
+        } else {
+            None
         };
 
         let log_resource = make_resource(settings, ResourceKind::Logs);
@@ -285,7 +322,7 @@ impl OtelProvider {
 
         let tracer_provider = trace_enabled
             .then(|| {
-                build_tracer_provider(
+                build_tracer_provider::<ALL_EXPORTERS>(
                     &trace_resource,
                     &settings.trace_exporter,
                     settings.span_attributes.clone(),
@@ -577,7 +614,7 @@ fn build_logger(
     Ok(builder.build())
 }
 
-fn build_tracer_provider(
+fn build_tracer_provider<const ALLOW_GRPC: bool>(
     resource: &Resource,
     exporter: &OtelExporter,
     span_attributes: HashMap<String, String>,
@@ -589,6 +626,9 @@ fn build_tracer_provider(
     let span_exporter = match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(tracer_provider_builder(resource, span_attributes).build()),
         OtelExporter::Statsig => unreachable!("statsig exporter should be resolved"),
+        OtelExporter::OtlpGrpc { .. } if !ALLOW_GRPC => {
+            return Err("this provider requires OTLP/HTTP for traces".into());
+        }
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -923,6 +963,33 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn restricted_providers_reject_unsupported_signals() {
+        let mut settings = test_otel_settings();
+        settings.metrics_exporter = OtelExporter::Statsig;
+        assert!(OtelProvider::try_new_http_traces(&settings).is_err());
+
+        settings = test_otel_settings();
+        settings.trace_exporter = OtelExporter::Statsig;
+        assert!(OtelProvider::try_new_http_metrics(&settings).is_err());
+    }
+
+    #[test]
+    fn http_providers_reject_grpc_for_their_supported_signal() {
+        let grpc = OtelExporter::OtlpGrpc {
+            endpoint: "http://127.0.0.1:4317".to_string(),
+            headers: HashMap::new(),
+            tls: None,
+        };
+        let mut settings = test_otel_settings();
+        settings.trace_exporter = grpc.clone();
+        assert!(OtelProvider::try_new_http_traces(&settings).is_err());
+
+        settings = test_otel_settings();
+        settings.metrics_exporter = grpc;
+        assert!(OtelProvider::try_new_http_metrics(&settings).is_err());
     }
 
     fn test_otel_settings() -> OtelSettings {
