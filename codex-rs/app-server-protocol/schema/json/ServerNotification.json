@@ -5748,6 +5748,11 @@
             "id": {
               "type": "string"
             },
+            "imageMetadata": {
+              "additionalProperties": true,
+              "description": "Per-image metadata selected by the backend for the receiving surface.",
+              "type": "object"
+            },
             "inputImages": {
               "description": "Observed local inputs for a completed generation, absent on older items.",
               "items": {

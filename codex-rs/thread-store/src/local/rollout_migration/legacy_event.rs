@@ -251,6 +251,7 @@ pub(super) fn completed_item(
                 input_images: event.input_images.clone(),
                 imagegen_request_id: None,
                 generation_id: event.generation_id.clone(),
+                image_metadata: event.image_metadata.clone(),
             })),
             None,
         )),

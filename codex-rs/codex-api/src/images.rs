@@ -2,6 +2,15 @@ use codex_protocol::models::ImageReference;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
+use serde_json::value::RawValue;
+
+const MAX_IMAGE_METADATA_BYTES: usize = 1024 * 1024;
+
+// Protobuf Struct objects consume three decode levels per nesting level.
+// Leave room for the enclosing CCA and app-server event and history messages.
+const MAX_IMAGE_METADATA_DEPTH: usize = 24;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
@@ -90,4 +99,40 @@ pub struct ImageData {
     pub b64_json: String,
     #[serde(default)]
     pub generation_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_image_metadata")]
+    pub image_metadata: Map<String, Value>,
+}
+
+fn deserialize_image_metadata<'de, D>(deserializer: D) -> Result<Map<String, Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Read the field independently so a depth error cannot invalidate the surrounding image.
+    let raw = <&RawValue>::deserialize(deserializer)?;
+    if raw.get().len() > MAX_IMAGE_METADATA_BYTES {
+        return Ok(Map::new());
+    }
+    Ok(serde_json::from_str::<Map<String, Value>>(raw.get())
+        .ok()
+        .filter(|metadata| {
+            metadata
+                .values()
+                .all(|value| fits_metadata_depth(value, /*depth*/ 1))
+        })
+        .unwrap_or_default())
+}
+
+fn fits_metadata_depth(value: &Value, depth: usize) -> bool {
+    if depth > MAX_IMAGE_METADATA_DEPTH {
+        return false;
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .all(|item| fits_metadata_depth(item, depth + 1)),
+        Value::Object(fields) => fields
+            .values()
+            .all(|item| fits_metadata_depth(item, depth + 1)),
+        _ => true,
+    }
 }

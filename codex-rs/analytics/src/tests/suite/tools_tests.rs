@@ -997,6 +997,7 @@ async fn image_generation_events_preserve_transparent_background_metadata() {
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         });
 
         reducer

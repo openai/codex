@@ -85,6 +85,14 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     } else {
         (RESULT, "png")
     };
+    let expected_metadata = if gif_enabled {
+        json!({})
+    } else {
+        json!({
+            "entries": [{"name": "first", "value": 1.5}],
+            "futureKey": {"nestedKey": [false, 0, null]}
+        })
+    };
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/api/codex/images/generations"))
@@ -95,7 +103,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
                     "created": 1,
                     "background": "opaque",
                     "data": [
-                        {"b64_json": result, "generation_id": "gen-image-123"},
+                        {"b64_json": result, "generation_id": "gen-image-123", "image_metadata": expected_metadata},
                         {"b64_json": "ignored", "generation_id": "gen-other"},
                     ],
                 })),
@@ -187,6 +195,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
         transparent_background,
         saved_path: Some(saved_path),
         generation_id,
+        image_metadata,
         ..
     }) = completed.item.payload
     else {
@@ -195,6 +204,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     assert_eq!(status, "completed");
     assert_eq!(revised_prompt.as_deref(), Some("paint a blue whale"));
     assert_eq!(generation_id.as_deref(), Some("gen-image-123"));
+    assert_eq!(Some(&image_metadata), expected_metadata.as_object());
     assert_eq!(
         image,
         GeneratedImageRef::Inline {
@@ -256,6 +266,10 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
+    assert!(
+        !requests[1].body_json().to_string().contains("futureKey"),
+        "surface metadata must stay out of the model request"
+    );
     let output = requests[1].function_call_output(call_id);
     if !gif_enabled {
         assert_eq!(
@@ -394,6 +408,7 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
         image,
         transparent_background,
         input_images,
+        image_metadata,
         ..
     }) = completed.item.payload
     else {
@@ -408,6 +423,10 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
     );
     assert_eq!(transparent_background, Some(true));
     assert_eq!(input_images, expected_inputs);
+    assert_eq!(
+        image_metadata.get("futureKey"),
+        Some(&json!({"nestedKey": [0, false, null]}))
+    );
 
     drop(mcp);
     let mut resumed = TestAppServer::builder()
@@ -438,6 +457,7 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
         Some("gen-transparent")
     );
     assert_eq!(persisted_image.input_images, expected_inputs);
+    assert_eq!(persisted_image.image_metadata, image_metadata);
 
     let resume_id = resumed
         .send_thread_resume_request(ThreadResumeParams {
@@ -462,6 +482,7 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
         Some("gen-transparent")
     );
     assert_eq!(resumed_image.input_images, expected_inputs);
+    assert_eq!(resumed_image.image_metadata, image_metadata);
 
     Ok(())
 }
@@ -688,6 +709,7 @@ async fn standalone_image_generation_failure_emits_terminal_item(
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         })
     );
 
@@ -1217,6 +1239,7 @@ generatedImage(result);
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         }
     );
     assert_eq!(
@@ -1472,7 +1495,11 @@ async fn mount_image_response_with_background(server: &MockServer, background: &
                 .set_body_json(json!({
                     "created": 1,
                     "background": background,
-                    "data": [{"b64_json": RESULT, "generation_id": "gen-transparent"}],
+                    "data": [{
+                        "b64_json": RESULT,
+                        "generation_id": "gen-transparent",
+                        "image_metadata": {"futureKey": {"nestedKey": [0, false, null]}}
+                    }],
                 })),
         )
         .expect(1)
@@ -1486,7 +1513,11 @@ async fn mount_image_edit_response(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "created": 1,
             "background": "transparent",
-            "data": [{"b64_json": RESULT, "generation_id": "gen-transparent"}],
+            "data": [{
+                "b64_json": RESULT,
+                "generation_id": "gen-transparent",
+                "image_metadata": {"futureKey": {"nestedKey": [0, false, null]}}
+            }],
         })))
         .expect(1)
         .mount(server)

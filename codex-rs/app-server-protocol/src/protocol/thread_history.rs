@@ -1102,6 +1102,7 @@ impl ThreadHistoryBuilder {
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -1118,6 +1119,7 @@ impl ThreadHistoryBuilder {
             input_images: payload.input_images.clone(),
             imagegen_request_id: None,
             generation_id: payload.generation_id.clone(),
+            image_metadata: payload.image_metadata.clone(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -2751,6 +2753,7 @@ mod tests {
                         input_images: input_images.clone(),
                         imagegen_request_id: None,
                         generation_id: None,
+                        image_metadata: Default::default(),
                     },
                 )),
                 started_at_ms: Some(0),
@@ -2793,6 +2796,7 @@ mod tests {
                 input_images,
                 imagegen_request_id: None,
                 generation_id: None,
+                image_metadata: Default::default(),
             })]
         );
     }
@@ -3058,6 +3062,16 @@ mod tests {
 
     #[test]
     fn replays_file_backed_image_generation_end_events_into_turn_history() {
+        let image_metadata = serde_json::Map::from_iter([
+            (
+                "entries".to_string(),
+                serde_json::json!([{"name": "first", "value": 1.5}]),
+            ),
+            (
+                "futureKey".to_string(),
+                serde_json::json!({"nestedKey": [0, false, null]}),
+            ),
+        ]);
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_attribution: None,
@@ -3096,6 +3110,7 @@ mod tests {
                     sha256: "ab".repeat(32),
                 }],
                 generation_id: None,
+                image_metadata: image_metadata.clone(),
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 root_turn_id: None,
@@ -3152,6 +3167,7 @@ mod tests {
                 }],
                         imagegen_request_id: None,
                         generation_id: None,
+                        image_metadata,
                     })),
                 ],
             }

@@ -3225,6 +3225,7 @@ pub struct ImageGenerationBeginEvent {
     pub call_id: String,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ImageGenerationEndEvent {
     pub call_id: String,
@@ -3249,6 +3250,10 @@ pub struct ImageGenerationEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub generation_id: Option<String>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    #[ts(as = "Option<_>", optional)]
+    pub image_metadata: Map<String, Value>,
 }
 
 // Conversation kept for backward compatibility.

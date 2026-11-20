@@ -6039,6 +6039,13 @@ class FileIdThreadItem(BaseModel):
         ),
     ] = None
     id: str
+    image_metadata: Annotated[
+        dict[str, Any] | None,
+        Field(
+            alias="imageMetadata",
+            description="Per-image metadata selected by the backend for the receiving surface.",
+        ),
+    ] = None
     input_images: Annotated[
         list[ImageGenerationInputImage] | None,
         Field(
@@ -6081,6 +6088,13 @@ class ResultThreadItem(BaseModel):
         ),
     ] = None
     id: str
+    image_metadata: Annotated[
+        dict[str, Any] | None,
+        Field(
+            alias="imageMetadata",
+            description="Per-image metadata selected by the backend for the receiving surface.",
+        ),
+    ] = None
     input_images: Annotated[
         list[ImageGenerationInputImage] | None,
         Field(

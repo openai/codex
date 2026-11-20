@@ -567,6 +567,7 @@ async fn migration_preserves_image_generation_failure_metadata() {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     };
     let image_completion =
         RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
@@ -579,6 +580,7 @@ async fn migration_preserves_image_generation_failure_metadata() {
             saved_path: expected_item.saved_path.clone(),
             input_images: Vec::new(),
             generation_id: expected_item.generation_id.clone(),
+            image_metadata: expected_item.image_metadata.clone(),
         }));
     let path = write_rollout(
         home.path(),
@@ -631,6 +633,10 @@ async fn migration_preserves_image_generation_input_observations() {
         }],
         imagegen_request_id: None,
         generation_id: Some("gen-image-123".to_string()),
+        image_metadata: serde_json::Map::from_iter([(
+            "futureKey".to_string(),
+            json!({"nestedKey": [0, false, null]}),
+        )]),
     };
     let image_completion =
         RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
@@ -643,6 +649,7 @@ async fn migration_preserves_image_generation_input_observations() {
             saved_path: expected_item.saved_path.clone(),
             input_images: expected_item.input_images.clone(),
             generation_id: expected_item.generation_id.clone(),
+            image_metadata: expected_item.image_metadata.clone(),
         }));
     let path = write_rollout(
         home.path(),

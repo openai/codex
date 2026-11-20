@@ -890,6 +890,7 @@ pub(super) fn handle_image_generation_end(
                 input_images: Vec::new(),
                 imagegen_request_id: None,
                 generation_id: None,
+                image_metadata: Default::default(),
             }),
             /*started_at_ms*/ None,
             /*completed_at_ms*/ 0,

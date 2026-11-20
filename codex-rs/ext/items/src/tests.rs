@@ -25,6 +25,7 @@ fn completed_image_generation_item() -> ExtensionItem {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     })
 }
 
@@ -75,6 +76,28 @@ fn image_generation_item_preserves_stable_wire_shape() {
     );
 }
 
+#[test]
+fn image_generation_metadata_survives_persistence() {
+    let base = serde_json::to_value(completed_image_generation_item()).expect("serialize item");
+    let mut value = base.clone();
+    value["imageMetadata"] = json!({
+        "entries": [{"name": "first", "value": 1.5}],
+        "futureKey": {"nestedKey": [null, false, 0]},
+    });
+    let item: ExtensionItem = serde_json::from_value(value.clone()).expect("read extended item");
+    assert_eq!(
+        serde_json::to_value(item).expect("persist extended item"),
+        value
+    );
+
+    for malformed in [json!({}), json!(null), json!("bad"), json!([])] {
+        value["imageMetadata"] = malformed;
+        let item: ExtensionItem =
+            serde_json::from_value(value.clone()).expect("read completed image");
+        assert_eq!(serde_json::to_value(item).expect("persist image"), base);
+    }
+}
+
 /// Transitional rollouts containing both fields must retain the durable file reference.
 #[test]
 fn image_generation_item_reads_transitional_file_wire_shape() {
@@ -91,6 +114,7 @@ fn image_generation_item_reads_transitional_file_wire_shape() {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     });
 
     assert_eq!(

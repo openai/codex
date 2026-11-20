@@ -487,6 +487,7 @@ impl ImageGenerationItem {
             saved_path: self.saved_path.clone(),
             input_images: Vec::new(),
             generation_id: None,
+            image_metadata: Default::default(),
         })
     }
 }

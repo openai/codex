@@ -122,6 +122,7 @@ mod tests {
                 input_images: Vec::new(),
                 imagegen_request_id: None,
                 generation_id: None,
+                image_metadata: Default::default(),
             }),
         ]);
         thread.turns[0].items[1].started_at_ms = Some(123);

@@ -1105,6 +1105,7 @@ impl From<CoreTurnItem> for ThreadItemPayload {
                 input_images: Vec::new(),
                 imagegen_request_id: None,
                 generation_id: None,
+                image_metadata: Default::default(),
             }),
             CoreTurnItem::EnteredReviewMode(review) => Self::EnteredReviewMode {
                 id: review.id,

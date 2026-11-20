@@ -622,6 +622,7 @@ mod tests {
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         });
         let expected_completed_item = ExtensionItem::ImageGeneration(ImageGenerationItem {
             id: "call-image".to_string(),
@@ -636,6 +637,7 @@ mod tests {
             input_images: Vec::new(),
             imagegen_request_id: None,
             generation_id: None,
+            image_metadata: Default::default(),
         });
         codex_tools::TurnItemEmitter::emit_started(
             &emitter,
@@ -663,6 +665,7 @@ mod tests {
                     saved_path: Some(expected_path.clone()),
                     input_images: Vec::new(),
                     generation_id: None,
+                    image_metadata: Default::default(),
                 })],
             },
         )

@@ -125,6 +125,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
         saved_path: item.saved_path.clone(),
         input_images: item.input_images.clone(),
         generation_id: item.generation_id.clone(),
+        image_metadata: item.image_metadata.clone(),
     })
 }
 
@@ -191,6 +192,7 @@ impl ImageGenerationTool {
                     input_images: Vec::new(),
                     imagegen_request_id: None,
                     generation_id: None,
+                    image_metadata: Default::default(),
                 },
                 EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
                     call_id: call.call_id.clone(),
@@ -223,12 +225,7 @@ impl ImageGenerationTool {
                 Some(ImageBackground::Auto) | None => None,
             };
             match response.data.into_iter().next() {
-                Some(data) => Ok((
-                    data.b64_json,
-                    transparent_background,
-                    imagegen_request_id,
-                    data.generation_id,
-                )),
+                Some(data) => Ok((data, transparent_background, imagegen_request_id)),
                 None => Err((
                     "image generation returned no image data".to_string(),
                     None,
@@ -236,7 +233,7 @@ impl ImageGenerationTool {
                 )),
             }
         });
-        let (result, transparent_background, imagegen_request_id, generation_id) = match result {
+        let (data, transparent_background, imagegen_request_id) = match result {
             Ok(result) => result,
             Err((message, failure, imagegen_request_id)) => {
                 let item = ImageGenerationItem {
@@ -252,6 +249,7 @@ impl ImageGenerationTool {
                     input_images: Vec::new(),
                     imagegen_request_id,
                     generation_id: None,
+                    image_metadata: Default::default(),
                 };
                 let legacy_event = legacy_end_event(&item);
                 call.turn_item_emitter
@@ -260,6 +258,7 @@ impl ImageGenerationTool {
                 return Err(FunctionCallError::RespondToModel(message));
             }
         };
+        let result = data.b64_json;
         // TODO(anp): Migrate image tool path arguments and saved-path events to PathUri so image
         // operations can use the primary environment even when its paths are foreign to the host.
         let saved_path = save_image_generation_result(
@@ -318,7 +317,8 @@ impl ImageGenerationTool {
             saved_path: saved_path.clone(),
             input_images,
             imagegen_request_id,
-            generation_id,
+            generation_id: data.generation_id,
+            image_metadata: data.image_metadata,
         };
         let legacy_event = legacy_end_event(&item);
         call.turn_item_emitter

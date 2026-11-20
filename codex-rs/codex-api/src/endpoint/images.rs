@@ -229,6 +229,7 @@ mod tests {
             data: vec![ImageData {
                 b64_json: "REDACT".to_string(),
                 generation_id: None,
+                image_metadata: Default::default(),
             }],
             quality: Some(ImageQuality::Medium),
             size: Some("1024x1536".to_string()),
@@ -296,13 +297,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preserves_distinct_generation_ids_on_image_data() {
+    async fn preserves_optional_metadata_on_each_image() {
+        let first = json!({"entries": [{"name": "first", "value": 1.5}]});
+        let second =
+            json!({"futureKey": {"zero": 0, "disabled": false, "nestedKeys": [null, "x"]}});
         let body = serde_json::to_vec(&json!({
             "created": 1,
             "data": [
-                {"b64_json": "first", "generation_id": "gen-first"},
-                {"b64_json": "second", "generation_id": "gen-second"},
-                {"b64_json": "legacy"}
+                {"b64_json": "first", "generation_id": "gen-first", "image_metadata": first},
+                {"b64_json": "second", "generation_id": "gen-second", "image_metadata": second},
+                {"b64_json": "legacy"},
+                {"b64_json": "empty", "image_metadata": {}},
+                {"b64_json": "null", "image_metadata": null},
+                {"b64_json": "list", "image_metadata": []},
+                {"b64_json": "scalar", "image_metadata": 0},
+                {"b64_json": "oversized", "image_metadata": {"value": "x".repeat(1024 * 1024)}}
             ]
         }))
         .expect("serialize response");
@@ -325,14 +334,47 @@ mod tests {
             .await
             .expect("image response should parse");
 
+        assert_eq!(response.data.len(), 8);
+        assert_eq!(response.data[0].generation_id.as_deref(), Some("gen-first"));
         assert_eq!(
-            response
-                .data
-                .iter()
-                .map(|image| image.generation_id.as_deref())
-                .collect::<Vec<_>>(),
-            vec![Some("gen-first"), Some("gen-second"), None]
+            response.data[1].generation_id.as_deref(),
+            Some("gen-second")
         );
+        assert_eq!(Some(&response.data[0].image_metadata), first.as_object());
+        assert_eq!(Some(&response.data[1].image_metadata), second.as_object());
+        for (image, label) in response.data[2..].iter().zip([
+            "legacy",
+            "empty",
+            "null",
+            "list",
+            "scalar",
+            "oversized",
+        ]) {
+            assert_eq!(image.b64_json, label);
+            assert!(image.image_metadata.is_empty());
+        }
+    }
+
+    #[test]
+    fn deeply_nested_metadata_does_not_drop_images() {
+        for (depth, keep_metadata) in [(23, true), (24, false), (120, false), (512, false)] {
+            let nested = format!("{}null{}", r#"{"child":"#.repeat(depth), "}".repeat(depth));
+            let body = format!(
+                r#"{{"created": 1, "data": [
+                    {{"image_metadata": {{"nested": {nested}}}, "b64_json": "first", "generation_id": "gen-first"}},
+                    {{"b64_json": "second", "image_metadata": {{"value": 1}}}}
+                ]}}"#
+            );
+            let response: ImageResponse = serde_json::from_str(&body).expect("decode images");
+            assert_eq!(response.data[0].b64_json, "first");
+            assert_eq!(response.data[0].generation_id.as_deref(), Some("gen-first"));
+            assert_eq!(
+                response.data[0].image_metadata.contains_key("nested"),
+                keep_metadata
+            );
+            assert_eq!(response.data[1].b64_json, "second");
+            assert_eq!(response.data[1].image_metadata["value"], json!(1));
+        }
     }
 
     #[tokio::test]
