@@ -919,8 +919,9 @@ prune_standalone_releases() (
         continue
       fi
     else
-      device="$(stat -f '%d' "$releases")" || return 1
-      if ! find "$candidate" -xdev -exec stat -f '%d' {} + > "$tmp_dir/devices"; then
+      # Use macOS stat even when GNU coreutils comes first on PATH.
+      device="$(/usr/bin/stat -f '%d' "$releases")" || return 1
+      if ! find "$candidate" -xdev -exec /usr/bin/stat -f '%d' {} + > "$tmp_dir/devices"; then
         continue
       fi
       grep -vxF "$device" "$tmp_dir/devices" >/dev/null && continue
