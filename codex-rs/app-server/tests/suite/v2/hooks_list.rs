@@ -66,6 +66,7 @@ fn command_hook_hash(
                 timeout_sec: Some(timeout_sec),
                 r#async,
                 status_message: status_message.map(ToOwned::to_owned),
+                on_failure: None,
                 additional_context_limit,
             }],
         },

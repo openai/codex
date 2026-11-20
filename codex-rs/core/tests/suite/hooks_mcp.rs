@@ -46,6 +46,7 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
@@ -56,6 +57,123 @@ const RMCP_UNPREFIXED_NAMESPACE: &str = "rmcp";
 const RMCP_ECHO_TOOL_NAME: &str = "mcp__rmcp__echo";
 const RMCP_HOOK_MATCHER: &str = RMCP_ECHO_TOOL_NAME;
 const RMCP_ECHO_MESSAGE: &str = "hook e2e ping";
+
+#[test_case("PreToolUse", "continue", RMCP_SERVER; "pre_tool_error_continues")]
+#[test_case("PreToolUse", "block", RMCP_SERVER; "pre_tool_error_blocks")]
+#[test_case("PreToolUse", "continue", "unavailable-scanner"; "pre_tool_unavailable_continues")]
+#[test_case("PermissionRequest", "continue", RMCP_SERVER; "permission_error_continues")]
+#[test_case("PermissionRequest", "block", RMCP_SERVER; "permission_error_blocks")]
+#[test_case("PermissionRequest", "block", "unavailable-scanner"; "permission_unavailable_blocks")]
+#[test_case("PostToolUse", "continue", RMCP_SERVER; "post_tool_error_continues")]
+#[test_case("PostToolUse", "block", RMCP_SERVER; "post_tool_error_blocks")]
+#[test_case("PostToolUse", "block", "unavailable-scanner"; "post_tool_unavailable_blocks")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_hook_failure_policy_controls_tool_execution(
+    event: &'static str,
+    policy: &'static str,
+    scanner: &'static str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    failed_mcp_hook_scenario(event, policy, scanner).await?;
+    Ok(())
+}
+
+pub(super) async fn failed_mcp_hook_scenario(
+    event: &'static str,
+    policy: &'static str,
+    scanner: &'static str,
+) -> Result<Vec<core_test_support::responses::ResponsesRequest>> {
+    let server = start_mock_server().await;
+    let call_id = "failed-mcp-hook-echo";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    RMCP_PREFIXED_NAMESPACE,
+                    "echo",
+                    &json!({ "message": RMCP_ECHO_MESSAGE }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            let hooks = json!({"hooks": {event: [{
+                "matcher": RMCP_HOOK_MATCHER,
+                "hooks": [{
+                    "type": "mcp_tool", "server": scanner, "tool": "js",
+                    "input": {"code": "nodeRepl.fail()"}, "onFailure": policy, "timeout": 5,
+                }, {
+                    "type": "mcp_tool", "server": RMCP_SERVER, "tool": "image_scenario",
+                    "input": {"scenario": "text_only", "caption": if event == "PermissionRequest" {
+                        r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+                    } else { "{}" }},
+                }],
+            }]}});
+            fs::write(home.join("hooks.json"), hooks.to_string()).expect("write failing MCP hook");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let approval = if event == "PermissionRequest" {
+                AppToolApproval::Prompt
+            } else {
+                AppToolApproval::Approve
+            };
+            insert_rmcp_test_server(
+                config,
+                rmcp_test_server_bin,
+                approval,
+                remote_aware_environment_id(),
+            );
+            let mut servers = config.mcp_servers.get().clone();
+            if let McpServerTransportConfig::Stdio { env, .. } =
+                &mut servers.get_mut(RMCP_SERVER).expect("test server").transport
+            {
+                *env = Some(HashMap::from([(
+                    "MCP_TEST_ENABLE_NODE_REPL_JS".to_string(),
+                    "1".to_string(),
+                )]));
+            }
+            config.mcp_servers.set(servers).expect("test MCP config");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "call the echo tool",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1].function_call_output(call_id)["output"].to_string();
+    assert_eq!(
+        output.contains("hook failed. This hook is configured to block continuation on failure."),
+        policy == "block"
+    );
+    assert_eq!(output.contains("ECHOING:"), policy == "continue");
+    assert!(requests.iter().all(|request| {
+        request.body_json()["client_metadata"]["x-openai-subagent"].as_str() != Some("guardian")
+    }));
+    Ok(requests)
+}
 
 #[derive(Clone, Copy)]
 enum PermissionRequestHookOutcome {
@@ -981,8 +1099,18 @@ async fn mcp_tool_hook_blocks_model_tool_without_recursive_hooks_or_approval() -
     Ok(())
 }
 
+#[test_case("UserPromptSubmit", None; "prompt_default_continues")]
+#[test_case("UserPromptSubmit", Some("continue"); "prompt_continues")]
+#[test_case("UserPromptSubmit", Some("block"); "prompt_blocks")]
+#[test_case("SessionStart", Some("continue"); "session_continues")]
+#[test_case("SessionStart", Some("block"); "session_blocks")]
+#[test_case("SubagentStart", Some("continue"); "subagent_continues")]
+#[test_case("SubagentStart", Some("block"); "subagent_blocks")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_tool_hook_fails_open_when_server_is_unavailable() -> Result<()> {
+async fn unavailable_mcp_hook_controls_sampling(
+    event: &'static str,
+    policy: Option<&'static str>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -995,31 +1123,46 @@ async fn mcp_tool_hook_fails_open_when_server_is_unavailable() -> Result<()> {
         ]),
     )
     .await;
-    let test = test_codex()
-        .with_pre_build_hook(|home| {
-            write_mcp_tool_hook(
-                home,
-                "UserPromptSubmit",
-                /*matcher*/ None,
-                "missing-server",
-                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"this must not appear"}}"#,
+    let mut test = test_codex()
+        .with_pre_build_hook(move |home| {
+            fs::write(
+                home.join("hooks.json"),
+                json!({"hooks": {event: [{"hooks": [{
+                    "type": "mcp_tool", "server": "missing-server", "tool": "check",
+                    "onFailure": policy,
+                }]}]}})
+                .to_string(),
             )
             .expect("write unavailable MCP server fixture");
         })
         .with_config(trust_discovered_hooks)
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
+    if event == "SubagentStart" {
+        let child = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: test.session_configured.thread_id,
+                    depth: 1,
+                    agent_path: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                ..test.start_thread_options().await
+            })
+            .await?;
+        test.codex = child.thread;
+        test.session_configured = child.session_configured;
+    }
 
     tokio::time::timeout(Duration::from_secs(5), test.submit_turn("continue"))
         .await
         .context("unavailable MCP hook server must fail immediately")??;
 
-    assert!(
-        !response
-            .single_request()
-            .message_input_texts("developer")
-            .iter()
-            .any(|message| message.contains("this must not appear"))
+    assert_eq!(
+        response.requests().len(),
+        usize::from(policy != Some("block"))
     );
 
     Ok(())

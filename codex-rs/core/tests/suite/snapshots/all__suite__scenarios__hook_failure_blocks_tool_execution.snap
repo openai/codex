@@ -1,0 +1,24 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(description, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A required PreToolUse check fails; onFailure:block rejects the tool call and reports the failure to the model.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - mcp__rmcp: Use these tools to exercise the rmcp test server.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    call the echo tool
+-- request 2 (turn) --
+04:function_call/mcp__rmcp.echo:{"message":"hook e2e ping"}
+05:function_call_output:Tool call blocked by PreToolUse hook: PreToolUse hook failed. This hook is configured to block continuation on failure. Tool: mcp__rmcp__echo

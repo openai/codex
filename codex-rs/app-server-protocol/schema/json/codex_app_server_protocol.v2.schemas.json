@@ -6785,6 +6785,13 @@
       ],
       "type": "object"
     },
+    "ConfiguredHookFailurePolicy": {
+      "enum": [
+        "continue",
+        "block"
+      ],
+      "type": "string"
+    },
     "ConfiguredHookHandler": {
       "oneOf": [
         {
@@ -6808,6 +6815,16 @@
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "onFailure": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfiguredHookFailurePolicy"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "statusMessage": {
@@ -6845,6 +6862,16 @@
             "input": {
               "additionalProperties": true,
               "type": "object"
+            },
+            "onFailure": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfiguredHookFailurePolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "server": {
               "type": "string"

@@ -7,3 +7,7 @@ expression: rendered
 
 • Hook failed
   └ hook exited with code 7
+
+• Blocked by hook
+  └ hook exited with code 7
+  └ PreToolUse hook failed. This hook is configured to block continuation on failure.

@@ -1417,6 +1417,7 @@ approval_policy = "never"
                                 timeout_sec: Some(10),
                                 r#async: false,
                                 status_message: Some("checking".to_string()),
+                                on_failure: None,
                                 additional_context_limit: None,
                             }],
                         }],

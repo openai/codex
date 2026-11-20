@@ -90,14 +90,16 @@ pub(crate) async fn run_pre(
     let input = match pre_command_input(&request) {
         Ok(input) => input,
         Err(error) => {
+            let hook_events = common::serialization_failure_hook_events(
+                matched,
+                Some(request.turn_id),
+                format!("failed to serialize pre compact hook input: {error}"),
+            );
+            let stop_reason = common::failure_block_reason(&hook_events);
             return PreCompactOutcome {
-                hook_events: common::serialization_failure_hook_events(
-                    matched,
-                    Some(request.turn_id),
-                    format!("failed to serialize pre compact hook input: {error}"),
-                ),
-                should_stop: false,
-                stop_reason: None,
+                hook_events,
+                should_stop: stop_reason.is_some(),
+                stop_reason,
             };
         }
     };
@@ -171,14 +173,16 @@ pub(crate) async fn run_post(
     let input = match post_command_input(&request) {
         Ok(input) => input,
         Err(error) => {
+            let hook_events = common::serialization_failure_hook_events(
+                matched,
+                Some(request.turn_id),
+                format!("failed to serialize post compact hook input: {error}"),
+            );
+            let stop_reason = common::failure_block_reason(&hook_events);
             return StatelessHookOutcome {
-                hook_events: common::serialization_failure_hook_events(
-                    matched,
-                    Some(request.turn_id),
-                    format!("failed to serialize post compact hook input: {error}"),
-                ),
-                should_stop: false,
-                stop_reason: None,
+                hook_events,
+                should_stop: stop_reason.is_some(),
+                stop_reason,
             };
         }
     };
@@ -327,6 +331,11 @@ fn parse_completed(
                 });
             }
         },
+    }
+
+    if let Some(reason) = common::apply_failure_policy(handler, &mut status, &mut entries) {
+        should_stop = true;
+        stop_reason = Some(reason);
     }
 
     dispatcher::ParsedHandler {
@@ -526,6 +535,7 @@ mod tests {
             matcher: None,
             timeout_sec: 5,
             status_message: Some("running compact hook".to_string()),
+            on_failure: Default::default(),
             additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs().into(),
             source: codex_protocol::protocol::HookSource::User,

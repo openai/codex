@@ -69,6 +69,7 @@ fn handler(matcher: Option<&str>) -> ConfiguredHandler {
             .map(|pattern| crate::engine::HookMatcher::new(pattern).expect("valid matcher")),
         timeout_sec: 2,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: test_path_buf("/tmp/hooks.json").abs().into(),
         source: HookSource::User,

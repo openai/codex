@@ -56,6 +56,9 @@ use crate::mcp::HookMcpCall;
 use crate::mcp::HookMcpExecutor;
 use crate::mcp::HookMcpOutput;
 
+#[path = "failure_policy_tests.rs"]
+mod failure_policy;
+
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
 }
@@ -100,6 +103,7 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
         matcher: None,
         timeout_sec: 5,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: cwd().join("hooks.json").into(),
         source: HookSource::User,
@@ -160,6 +164,7 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
                 timeout_sec: Some(10),
                 r#async: false,
                 status_message: Some("checking".to_string()),
+                on_failure: None,
                 additional_context_limit: None,
             }],
         }],
@@ -410,6 +415,7 @@ fn required_managed_mcp_hooks_reject_empty_targets() {
                 input: Default::default(),
                 timeout_sec: None,
                 status_message: None,
+                on_failure: None,
             }],
         }],
         ..Default::default()
@@ -450,6 +456,7 @@ fn required_managed_session_end_mcp_hooks_reject_startup() {
                 input: Default::default(),
                 timeout_sec: None,
                 status_message: None,
+                on_failure: None,
             }],
         }],
         ..Default::default()
@@ -588,6 +595,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -701,6 +709,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -783,6 +792,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -854,6 +864,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -1103,6 +1114,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -1885,6 +1897,7 @@ fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
             input: Default::default(),
             timeout_sec: None,
             status_message: None,
+            on_failure: None,
         },
         HookHandlerConfig::McpTool {
             server: "other_server".to_string(),
@@ -1892,6 +1905,7 @@ fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
             input: Default::default(),
             timeout_sec: None,
             status_message: None,
+            on_failure: None,
         },
         HookHandlerConfig::Command {
             command: "echo cleanup".to_string(),
@@ -1899,6 +1913,7 @@ fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
             timeout_sec: None,
             r#async: false,
             status_message: None,
+            on_failure: None,
             additional_context_limit: None,
         },
     ]);
@@ -1976,6 +1991,7 @@ fn local_hosted_app_cleanup_hooks_require_saved_trust() {
         input: Default::default(),
         timeout_sec: None,
         status_message: None,
+        on_failure: None,
     };
     let discovered = super::discovery::discover_handlers(
         /*config_layer_stack*/ None,
@@ -2074,6 +2090,7 @@ fn disabled_hooks_feature_keeps_builtin_cleanup_but_not_trusted_plugin_hooks() {
         timeout_sec: None,
         r#async: false,
         status_message: None,
+        on_failure: None,
         additional_context_limit: None,
     });
     let stack = trusted_plugin_hook_stack(cwd().join("config.toml"), &[source.clone()]);
@@ -2143,6 +2160,7 @@ print(json.dumps({
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -2270,6 +2288,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -2418,6 +2437,7 @@ fn executor_stop_hook_fixture() -> (
                     .expect("executor hook input"),
                     timeout_sec: None,
                     status_message: None,
+                    on_failure: None,
                 }],
             }],
             ..Default::default()
@@ -2433,6 +2453,7 @@ fn executor_stop_hook_fixture() -> (
             matcher: None,
             timeout_sec: 5,
             status_message: None,
+            on_failure: Default::default(),
             additional_context_limit: Default::default(),
             source_path: HandlerSourcePath::ExecutorScoped {
                 plugin_id: PluginId::parse("computer-use@openai-bundled").expect("valid plugin ID"),
@@ -2502,6 +2523,43 @@ async fn wait_for_mcp_calls(calls: &Arc<Mutex<Vec<HookMcpCall>>>, count: usize) 
     })
     .await
     .expect("executor hook should complete in the background");
+}
+
+#[tokio::test]
+async fn executor_stop_hooks_normalize_blocking_policy_without_dropping_cleanup() {
+    let (_, _, _, _, source) = executor_stop_hook_fixture();
+    let valid_group = source.hooks.stop[0].clone();
+    let mut blocking_group = valid_group.clone();
+    let HookHandlerConfig::McpTool { on_failure, .. } = &mut blocking_group.hooks[0] else {
+        panic!("expected an MCP tool hook");
+    };
+    *on_failure = Some(super::HookFailurePolicy::Block);
+    assert!(codex_plugin::is_allowlisted_bundled_cleanup_hook(
+        &source.plugin_id.as_key(),
+        HookEventName::Stop,
+        /*matcher*/ None,
+        &blocking_group.hooks[0],
+        /*app_connector_id*/ None,
+    ));
+
+    let mut mixed_group = blocking_group.clone();
+    mixed_group.hooks.extend(valid_group.hooks.clone());
+    for groups in [
+        vec![blocking_group.clone()],
+        vec![mixed_group],
+        vec![blocking_group, valid_group],
+    ] {
+        let (mut engine, calls, request, expected_call, mut source) = executor_stop_hook_fixture();
+        let expected_handlers = Arc::clone(&engine.handlers);
+        source.hooks.stop = groups;
+        engine.set_executor_hooks(vec![source]);
+        assert_eq!(engine.handlers, expected_handlers);
+
+        let outcome = engine.run_stop(request).await;
+        assert!(!outcome.should_block);
+        wait_for_mcp_calls(&calls, /*count*/ 1).await;
+        assert_eq!(*calls.lock().expect("lock MCP calls"), vec![expected_call]);
+    }
 }
 
 #[tokio::test]
@@ -2599,6 +2657,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         matcher: None,
         timeout_sec: 30,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: cwd().join("hooks.json").into(),
         source: HookSource::User,
@@ -2638,6 +2697,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         matcher: None,
         timeout_sec: 30,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: cwd().join("hooks.json").into(),
         source: HookSource::User,

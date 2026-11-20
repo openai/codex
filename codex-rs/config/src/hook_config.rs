@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub use codex_protocol::hooks::HookEventsToml;
+pub use codex_protocol::hooks::HookFailurePolicy;
 pub use codex_protocol::hooks::HookHandlerConfig;
 pub use codex_protocol::hooks::MatcherGroup;
 use schemars::JsonSchema;

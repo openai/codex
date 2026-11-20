@@ -102,6 +102,7 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
         matcher: None,
         timeout_sec: 30,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: test_path_buf("/tmp/hooks.json").abs().into(),
         source: HookSource::User,

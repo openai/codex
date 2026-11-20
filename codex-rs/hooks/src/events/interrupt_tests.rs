@@ -104,6 +104,7 @@ fn handler() -> ConfiguredHandler {
         matcher: None,
         timeout_sec: 600,
         status_message: None,
+        on_failure: Default::default(),
         additional_context_limit: Default::default(),
         source_path: test_path_buf("/tmp/hooks.json").abs().into(),
         source: codex_protocol::protocol::HookSource::User,

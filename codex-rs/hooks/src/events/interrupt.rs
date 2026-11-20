@@ -171,6 +171,9 @@ fn parse_completed(
         },
     }
 
+    // The turn is already interrupted; report the failure without resuming or undoing it.
+    common::apply_failure_policy(handler, &mut status, &mut entries);
+
     let completed = HookCompletedEvent {
         turn_id,
         run: dispatcher::completed_summary(handler, &run_result, status, entries),

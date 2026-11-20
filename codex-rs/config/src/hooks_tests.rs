@@ -47,6 +47,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
+                        on_failure: None,
                         additional_context_limit: Some(4096),
                     }],
                 }],
@@ -95,6 +96,7 @@ fn hooks_file_deserializes_mcp_tool_handler_with_json_inputs() {
             ]),
             timeout_sec: Some(30),
             status_message: Some("Scanning file".to_string()),
+            on_failure: None,
         }]
     );
 }
@@ -181,6 +183,7 @@ additionalContextLimit = 4096
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    on_failure: None,
                     additional_context_limit: Some(4096),
                 }],
             }],
@@ -219,6 +222,7 @@ command = "python3 /tmp/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        on_failure: None,
                         additional_context_limit: None,
                     }],
                 }],
@@ -248,6 +252,7 @@ matcher = "^Bash$"
 [[PreToolUse.hooks]]
 type = "command"
 command = "python3 /enterprise/place/pre.py"
+onFailure = "block"
 "#,
     )
     .expect("requirements hooks TOML should deserialize");
@@ -266,6 +271,7 @@ command = "python3 /enterprise/place/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        on_failure: Some(super::HookFailurePolicy::Block),
                         additional_context_limit: None,
                     }],
                 }],
@@ -303,6 +309,7 @@ command_windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -339,6 +346,7 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    on_failure: None,
                     additional_context_limit: None,
                 }],
             }],
@@ -348,17 +356,29 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
 }
 
 #[test]
-fn hook_handler_omits_unset_additional_context_limit() {
+fn hook_handler_omits_unset_optional_policies() {
     let handler = HookHandlerConfig::Command {
         command: "python3 /tmp/pre.py".to_string(),
         command_windows: None,
         timeout_sec: None,
         r#async: false,
         status_message: None,
+        on_failure: None,
         additional_context_limit: None,
     };
 
     let serialized = serde_json::to_value(handler).expect("hook handler should serialize");
 
     assert_eq!(serialized.get("additionalContextLimit"), None);
+    assert_eq!(serialized.get("onFailure"), None);
+}
+
+#[test]
+fn hook_failure_policy_rejects_unknown_values() {
+    for handler in [
+        serde_json::json!({"type": "command", "command": "echo hello", "onFailure": "deny"}),
+        serde_json::json!({"type": "mcp_tool", "server": "scanner", "tool": "check", "onFailure": "deny"}),
+    ] {
+        assert!(serde_json::from_value::<HookHandlerConfig>(handler).is_err());
+    }
 }

@@ -299,6 +299,11 @@ fn parse_completed(
         },
     }
 
+    if let Some(reason) = common::apply_failure_policy(handler, &mut status, &mut entries) {
+        should_block = true;
+        block_reason = Some(reason);
+    }
+
     let completed = HookCompletedEvent {
         turn_id,
         run: dispatcher::completed_summary(handler, &run_result, status, entries),
@@ -317,10 +322,11 @@ fn parse_completed(
 }
 
 fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToolUseOutcome {
+    let block_reason = common::failure_block_reason(&hook_events);
     PreToolUseOutcome {
         hook_events,
-        should_block: false,
-        block_reason: None,
+        should_block: block_reason.is_some(),
+        block_reason,
         additional_contexts: Vec::new(),
         updated_input: None,
     }
@@ -786,6 +792,25 @@ mod tests {
 
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].run.id, runs[0].id);
+
+        let mut handler = handler();
+        handler.on_failure = codex_config::HookFailurePolicy::Block;
+        let completed = common::serialization_failure_hook_events_for_tool_use(
+            vec![handler],
+            Some(request.turn_id.clone()),
+            "serialize failed".into(),
+            &request.tool_use_id,
+        );
+        let outcome = super::serialization_failure_outcome(completed);
+        assert!(outcome.should_block);
+        assert_eq!(
+            outcome.block_reason,
+            Some(
+                "PreToolUse hook failed. This hook is configured to block continuation on failure."
+                    .to_string()
+            )
+        );
+        assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Blocked);
     }
 
     fn handler() -> ConfiguredHandler {
@@ -800,6 +825,7 @@ mod tests {
             matcher: Some(crate::engine::HookMatcher::new("^Bash$").expect("valid matcher")),
             timeout_sec: 5,
             status_message: None,
+            on_failure: Default::default(),
             additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs().into(),
             source: codex_protocol::protocol::HookSource::User,

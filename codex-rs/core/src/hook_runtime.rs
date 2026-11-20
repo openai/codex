@@ -247,6 +247,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
         };
     };
 
+    let reason = reason.trim_end_matches('.');
+
     if (tool_name.name() == "Bash" || tool_name.name() == "apply_patch")
         && let Some(command) = tool_input.get("command").and_then(Value::as_str)
     {

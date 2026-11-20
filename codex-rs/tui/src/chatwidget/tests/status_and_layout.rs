@@ -5536,6 +5536,25 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
         ),
     );
 
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "pre-tool-use:2:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            codex_app_server_protocol::HookRunStatus::Blocked,
+            vec![
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Error,
+                    text: "hook exited with code 7".to_string(),
+                },
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Feedback,
+                    text: "PreToolUse hook failed. This hook is configured to block continuation on failure.".to_string(),
+                },
+            ],
+        ),
+    );
+
     let rendered = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))

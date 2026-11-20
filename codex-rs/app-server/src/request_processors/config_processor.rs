@@ -29,6 +29,7 @@ use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ConfiguredHookFailurePolicy;
 use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
@@ -865,6 +866,7 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             timeout_sec,
             r#async,
             status_message,
+            on_failure,
             additional_context_limit,
         } => ConfiguredHookHandler::Command {
             command,
@@ -872,6 +874,7 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             timeout_sec,
             r#async,
             status_message,
+            on_failure: on_failure.map(map_hook_failure_policy_to_api),
             additional_context_limit,
         },
         CoreHookHandlerConfig::McpTool {
@@ -880,15 +883,26 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             input,
             timeout_sec,
             status_message,
+            on_failure,
         } => ConfiguredHookHandler::McpTool {
             server,
             tool,
             input,
             timeout_sec,
             status_message,
+            on_failure: on_failure.map(map_hook_failure_policy_to_api),
         },
         CoreHookHandlerConfig::Prompt {} => ConfiguredHookHandler::Prompt {},
         CoreHookHandlerConfig::Agent {} => ConfiguredHookHandler::Agent {},
+    }
+}
+
+fn map_hook_failure_policy_to_api(
+    policy: codex_config::HookFailurePolicy,
+) -> ConfiguredHookFailurePolicy {
+    match policy {
+        codex_config::HookFailurePolicy::Continue => ConfiguredHookFailurePolicy::Continue,
+        codex_config::HookFailurePolicy::Block => ConfiguredHookFailurePolicy::Block,
     }
 }
 

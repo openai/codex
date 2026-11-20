@@ -738,6 +738,14 @@ pub struct ConfiguredHookMatcherGroup {
     pub hooks: Vec<ConfiguredHookHandler>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ConfiguredHookFailurePolicy {
+    Continue,
+    Block,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type")]
 #[ts(tag = "type", export_to = "v2/")]
@@ -756,6 +764,9 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "statusMessage")]
         #[ts(rename = "statusMessage")]
         status_message: Option<String>,
+        #[serde(rename = "onFailure")]
+        #[ts(rename = "onFailure")]
+        on_failure: Option<ConfiguredHookFailurePolicy>,
         /// Approximate token threshold for spilling this hook's `additionalContext` to disk.
         /// `null` uses 2,500 tokens; `0` disables spilling for this hook. The threshold is
         /// evaluated against the original context; a spilled preview also includes recovery
@@ -776,6 +787,9 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "statusMessage")]
         #[ts(rename = "statusMessage")]
         status_message: Option<String>,
+        #[serde(rename = "onFailure")]
+        #[ts(rename = "onFailure")]
+        on_failure: Option<ConfiguredHookFailurePolicy>,
     },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]

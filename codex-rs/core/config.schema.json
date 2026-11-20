@@ -2598,6 +2598,13 @@
         }
       ]
     },
+    "HookFailurePolicy": {
+      "enum": [
+        "continue",
+        "block"
+      ],
+      "type": "string"
+    },
     "HookHandlerConfig": {
       "oneOf": [
         {
@@ -2618,6 +2625,14 @@
             "commandWindows": {
               "default": null,
               "type": "string"
+            },
+            "onFailure": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookFailurePolicy"
+                }
+              ],
+              "description": "Failure policy for synchronous hooks that support blocking. Defaults to continue; block applies the event's blocking behavior on failure."
             },
             "statusMessage": {
               "default": null,
@@ -2648,6 +2663,14 @@
               "additionalProperties": true,
               "default": {},
               "type": "object"
+            },
+            "onFailure": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookFailurePolicy"
+                }
+              ],
+              "description": "Failure policy for MCP hooks that support blocking. Defaults to continue; block applies the event's blocking behavior on failure."
             },
             "server": {
               "type": "string"

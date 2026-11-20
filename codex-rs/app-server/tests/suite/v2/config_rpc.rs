@@ -261,20 +261,23 @@ async fn config_requirements_read_includes_remote_control_and_managed_hooks() ->
 
 [hooks]
 
-[[hooks.SessionStart]]
+[[hooks.PreToolUse]]
+matcher = "config-read-fixture"
 
-[[hooks.SessionStart.hooks]]
+[[hooks.PreToolUse.hooks]]
 type = "command"
 command = "echo managed"
 additionalContextLimit = 4096
+onFailure = "block"
 
-[[hooks.SessionStart.hooks]]
+[[hooks.PreToolUse.hooks]]
 type = "mcp_tool"
 server = "security"
 tool = "scan"
 input = { path = "${tool_input.file_path}", metadata = { enabled = true, retries = 2 } }
 timeout = 30
 statusMessage = "Scanning file"
+onFailure = "continue"
 "#,
     )?;
     let mut mcp = TestAppServer::builder()
@@ -294,7 +297,10 @@ statusMessage = "Scanning file"
         requirements
             .hooks
             .expect("managed hooks should be returned")
-            .session_start[0]
+            .pre_tool_use
+            .into_iter()
+            .find(|group| group.matcher.as_deref() == Some("config-read-fixture"))
+            .expect("fixture hook group should be returned")
             .hooks,
         vec![
             ConfiguredHookHandler::Command {
@@ -303,6 +309,7 @@ statusMessage = "Scanning file"
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                on_failure: Some(codex_app_server_protocol::ConfiguredHookFailurePolicy::Block),
                 additional_context_limit: Some(4_096),
             },
             ConfiguredHookHandler::McpTool {
@@ -314,6 +321,7 @@ statusMessage = "Scanning file"
                 }))?,
                 timeout_sec: Some(30),
                 status_message: Some("Scanning file".to_string()),
+                on_failure: Some(codex_app_server_protocol::ConfiguredHookFailurePolicy::Continue),
             },
         ]
     );

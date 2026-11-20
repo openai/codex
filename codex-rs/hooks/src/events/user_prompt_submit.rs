@@ -260,6 +260,11 @@ fn parse_completed(
         },
     }
 
+    if let Some(reason) = common::apply_failure_policy(handler, &mut status, &mut entries) {
+        should_stop = true;
+        stop_reason = Some(reason);
+    }
+
     let completed = HookCompletedEvent {
         turn_id,
         run: dispatcher::completed_summary(handler, &run_result, status, entries),
@@ -277,10 +282,11 @@ fn parse_completed(
 }
 
 fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPromptSubmitOutcome {
+    let stop_reason = common::failure_block_reason(&hook_events);
     UserPromptSubmitOutcome {
         hook_events,
-        should_stop: false,
-        stop_reason: None,
+        should_stop: stop_reason.is_some(),
+        stop_reason,
         additional_contexts: Vec::new(),
     }
 }
@@ -469,6 +475,7 @@ mod tests {
             matcher: None,
             timeout_sec: 5,
             status_message: None,
+            on_failure: Default::default(),
             additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs().into(),
             source: codex_protocol::protocol::HookSource::User,
