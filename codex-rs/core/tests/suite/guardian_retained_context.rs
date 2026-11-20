@@ -984,6 +984,7 @@ async fn standalone_fork_retains_inherited_user_instructions(
             .fork_prepared_thread(
                 codex_core::StartThreadOptions::new(test.config.clone()),
                 prepared,
+                codex_thread_store::InheritedHistoryVisibility::Full,
             )
             .await?
     } else {

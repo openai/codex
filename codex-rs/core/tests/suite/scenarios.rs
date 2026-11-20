@@ -3558,7 +3558,11 @@ async fn attached_side_chat_preserves_model_context_on_cold_resume() -> Result<(
     resume_options.environments = options.environments.clone();
     let child = test
         .thread_manager
-        .fork_prepared_thread(options, prepared)
+        .fork_prepared_thread(
+            options,
+            prepared,
+            codex_thread_store::InheritedHistoryVisibility::Full,
+        )
         .await?;
     child
         .thread

@@ -131,6 +131,7 @@ async fn guardian_history_survives_restart_and_user_fork(
             .fork_prepared_thread(
                 codex_core::StartThreadOptions::new(initial.config.clone()),
                 prepared,
+                codex_thread_store::InheritedHistoryVisibility::Full,
             )
             .await?
     } else {

@@ -8,6 +8,7 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
@@ -17,6 +18,8 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::InMemoryThreadStore;
+use codex_thread_store::InheritedHistoryVisibility;
+use codex_thread_store::PreparedFork;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
@@ -30,6 +33,38 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepared_fork_passes_inherited_history_visibility_to_store() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let prepared = PreparedFork::with_source_revalidation(
+        test.session_configured.thread_id,
+        /*history_base*/ None,
+        Arc::new(Vec::new()),
+    );
+
+    let result = test
+        .thread_manager
+        .fork_prepared_thread(
+            test.start_thread_options().await,
+            prepared,
+            InheritedHistoryVisibility::ModelContextOnly,
+        )
+        .await;
+
+    match result {
+        Err(error) => assert!(matches!(
+            error.details(),
+            CodexErrorDetails::UnsupportedOperation(message)
+                if message == "model_context_only_inherited_history is not supported yet"
+        )),
+        Ok(_) => anyhow::bail!("expected local thread store to reject hidden inherited history"),
+    }
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ephemeral_fork_skips_stored_title_lookup() -> anyhow::Result<()> {

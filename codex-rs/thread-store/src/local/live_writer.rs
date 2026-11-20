@@ -16,6 +16,7 @@ use super::LocalThreadStore;
 use super::create_thread;
 use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
+use crate::InheritedHistoryVisibility;
 use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -27,6 +28,11 @@ pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
 ) -> ThreadStoreResult<()> {
+    if params.inherited_history_visibility == InheritedHistoryVisibility::ModelContextOnly {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "model_context_only_inherited_history",
+        });
+    }
     let thread_id = params.thread_id;
     let inherited_cursor = if params.initial_window_id.allocation().is_some()
         && let (Some(parent), Some(base)) = (params.forked_from_id, params.history_base)

@@ -5906,7 +5906,11 @@ impl ThreadRequestProcessor {
         };
         let new_thread = if let Some(prepared_fork) = prepared_fork {
             self.thread_manager
-                .fork_prepared_thread(fork_options, prepared_fork)
+                .fork_prepared_thread(
+                    fork_options,
+                    prepared_fork,
+                    codex_thread_store::InheritedHistoryVisibility::Full,
+                )
                 .await
         } else {
             self.thread_manager

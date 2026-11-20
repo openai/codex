@@ -191,6 +191,7 @@ use codex_sandboxing::policy_transforms::intersect_permission_profiles_with_cont
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
+use codex_thread_store::InheritedHistoryVisibility;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
@@ -497,6 +498,7 @@ pub(crate) enum ForkPersistence {
     Referenced {
         history_base: Option<HistoryPosition>,
         inherited_item_count: usize,
+        inherited_history_visibility: InheritedHistoryVisibility,
     },
 }
 

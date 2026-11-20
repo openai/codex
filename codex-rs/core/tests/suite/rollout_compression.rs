@@ -90,6 +90,7 @@ async fn compressed_shared_fork_resume_preserves_checkpoint_and_frozen_history()
         .fork_prepared_thread(
             codex_core::StartThreadOptions::new(test.config.clone()),
             prepared,
+            codex_thread_store::InheritedHistoryVisibility::Full,
         )
         .await?;
     turn(

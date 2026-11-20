@@ -76,6 +76,7 @@ fn create_params(codex_home: &Path, thread_id: ThreadId) -> CreateThreadParams {
         multi_agent_version: None,
         history_mode: ThreadHistoryMode::Paginated,
         history_base: None,
+        inherited_history_visibility: Default::default(),
         subagent_history_start_ordinal: None,
         initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
         runtime_workspace_roots: None,

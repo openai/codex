@@ -723,7 +723,11 @@ async fn hosted_child_persists_inherited_session_id(
                 })
                 .await?;
             manager
-                .fork_prepared_thread(child_options, prepared)
+                .fork_prepared_thread(
+                    child_options,
+                    prepared,
+                    codex_thread_store::InheritedHistoryVisibility::Full,
+                )
                 .await?
         }
     };

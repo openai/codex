@@ -70,6 +70,17 @@ pub struct ThreadPersistenceMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraConfig {}
 
+/// Controls whether history inherited from a fork's source thread is returned by `list_turns`
+/// and `list_items`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum InheritedHistoryVisibility {
+    /// Include inherited history in `list_turns` and `list_items`.
+    #[default]
+    Full,
+    /// Omit inherited history from `list_turns` and `list_items`.
+    ModelContextOnly,
+}
+
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateThreadParams {
@@ -111,6 +122,9 @@ pub struct CreateThreadParams {
     pub history_mode: ThreadHistoryMode,
     /// Exclusive prefix of another paginated rollout inherited by this thread.
     pub history_base: Option<HistoryPosition>,
+    /// Visibility of the history inherited through `history_base`.
+    #[serde(default)]
+    pub inherited_history_visibility: InheritedHistoryVisibility,
     /// First rollout ordinal that belongs to this subagent's projected history.
     pub subagent_history_start_ordinal: Option<u64>,
     /// Initial context-window identity captured when the thread was created.

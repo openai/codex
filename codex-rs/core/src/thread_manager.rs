@@ -110,6 +110,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use codex_skills_extension::HostSkillsService;
+use codex_thread_store::InheritedHistoryVisibility;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
@@ -1919,6 +1920,7 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
         prepared: PreparedFork,
+        inherited_history_visibility: InheritedHistoryVisibility,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
@@ -1929,6 +1931,7 @@ impl ThreadManager {
         let fork_persistence = ForkPersistence::Referenced {
             history_base: prepared.history_base,
             inherited_item_count: prepared.model_context.len(),
+            inherited_history_visibility,
         };
         let result = self
             .fork_thread_with_initial_history(

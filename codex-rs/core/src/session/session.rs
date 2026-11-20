@@ -1148,6 +1148,15 @@ impl Session {
                                 ForkPersistence::Copied | ForkPersistence::CopiedDeferred => None,
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
+                            inherited_history_visibility: match &fork_persistence {
+                                ForkPersistence::Copied | ForkPersistence::CopiedDeferred => {
+                                    InheritedHistoryVisibility::Full
+                                }
+                                ForkPersistence::Referenced {
+                                    inherited_history_visibility,
+                                    ..
+                                } => *inherited_history_visibility,
+                            },
                             subagent_history_start_ordinal: None,
                             initial_window_id: ids.initial_window_id.clone(),
                             runtime_workspace_roots: Some(config.workspace_roots.clone()),

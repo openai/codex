@@ -248,7 +248,11 @@ async fn stored_fork_sender_evidence_matches_live_sender() -> Result<()> {
         .insert(RestrictRootCapabilities);
     let sender = root
         .thread_manager
-        .fork_prepared_thread(options, prepared)
+        .fork_prepared_thread(
+            options,
+            prepared,
+            codex_thread_store::InheritedHistoryVisibility::Full,
+        )
         .await?;
     responses::mount_sse_once(
         &server,
