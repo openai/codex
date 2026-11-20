@@ -8,6 +8,8 @@ use super::has_composition_keyword;
 use super::parse_local_definition_ref;
 use super::traversal::DefinitionTraversal;
 use super::traversal::for_each_schema_child_mut;
+use codex_utils_string::serialized_json_bytes;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
@@ -19,13 +21,19 @@ const MAX_COMPACT_TOOL_SCHEMA_DEPTH: usize = 3;
 /// surface. Compaction is best-effort rather than a hard cap: it runs only
 /// after schema sanitization/pruning and applies increasingly lossy passes
 /// while the schema remains over budget.
-pub(super) fn compact_large_tool_schema(value: &mut JsonValue, max_bytes: usize) {
+pub(super) fn compact_large_tool_schema(
+    mut value: JsonValue,
+    max_bytes: usize,
+) -> serde_json::Result<JsonSchema> {
     for pass in LARGE_SCHEMA_COMPACTION_PASSES {
-        if compact_schema_fits_budget(value, max_bytes) {
-            break;
+        let schema = JsonSchema::deserialize(&value)?;
+        if serialized_json_bytes(&schema).is_ok_and(|bytes| bytes > max_bytes) {
+            pass(&mut value);
+        } else {
+            return Ok(schema);
         }
-        pass(value);
     }
+    serde_json::from_value(value)
 }
 
 type LargeSchemaCompactionPass = fn(&mut JsonValue);
@@ -39,17 +47,6 @@ const LARGE_SCHEMA_COMPACTION_PASSES: &[LargeSchemaCompactionPass] = &[
 
 fn collapse_deep_schema_objects_from_root(value: &mut JsonValue) {
     collapse_deep_schema_objects(value, /*depth*/ 0);
-}
-
-fn compact_schema_fits_budget(value: &JsonValue, max_bytes: usize) -> bool {
-    compact_normalized_schema_len(value) <= max_bytes
-}
-
-fn compact_normalized_schema_len(value: &JsonValue) -> usize {
-    serde_json::from_value::<JsonSchema>(value.clone())
-        .and_then(|schema| serde_json::to_vec(&schema))
-        .map(|json| json.len())
-        .unwrap_or(0)
 }
 
 fn strip_schema_descriptions(value: &mut JsonValue) {

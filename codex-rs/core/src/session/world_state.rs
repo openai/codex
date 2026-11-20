@@ -205,12 +205,11 @@ impl Session {
             !new_window && self.preserve_parent_tool_declarations();
         if incremental_tools && !preserve_parent_tool_declarations {
             let specs = step_context.tool_router.model_visible_specs();
-            let specs = specs
-                .iter()
-                .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. }))
-                .cloned()
-                .collect::<Vec<_>>();
-            let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
+            let definitions = codex_tools::create_tools_json_for_responses_lite(
+                specs
+                    .iter()
+                    .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. })),
+            )?;
             let mut top_level = TopLevelToolsState::new(
                 model_messages.incremental_tools(),
                 definitions,

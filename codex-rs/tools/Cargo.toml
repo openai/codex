@@ -34,7 +34,12 @@ urlencoding = { workspace = true }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
+divan = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lib]
 doctest = false
+
+[[bench]]
+name = "tool_catalog"
+harness = false

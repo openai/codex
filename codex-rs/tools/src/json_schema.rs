@@ -43,16 +43,16 @@ pub(crate) fn parse_tool_input_schema_with_max_bytes(
     input_schema: &JsonValue,
     max_bytes: usize,
 ) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = prepare_tool_input_schema(input_schema);
-    compact_large_tool_schema(&mut input_schema, max_bytes);
-    deserialize_tool_input_schema(input_schema)
+    let schema = compact_large_tool_schema(prepare_tool_input_schema(input_schema), max_bytes)?;
+    validate_tool_input_schema(schema)
 }
 
 /// Parse a trusted tool `input_schema` without running large-schema compaction.
 pub fn parse_tool_input_schema_without_compaction(
     input_schema: &JsonValue,
 ) -> Result<JsonSchema, serde_json::Error> {
-    deserialize_tool_input_schema(prepare_tool_input_schema(input_schema))
+    let schema = serde_json::from_value(prepare_tool_input_schema(input_schema))?;
+    validate_tool_input_schema(schema)
 }
 
 fn prepare_tool_input_schema(input_schema: &JsonValue) -> JsonValue {
@@ -62,8 +62,7 @@ fn prepare_tool_input_schema(input_schema: &JsonValue) -> JsonValue {
     input_schema
 }
 
-fn deserialize_tool_input_schema(input_schema: JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let schema: JsonSchema = serde_json::from_value(input_schema)?;
+fn validate_tool_input_schema(schema: JsonSchema) -> Result<JsonSchema, serde_json::Error> {
     if matches!(
         schema.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Null))
