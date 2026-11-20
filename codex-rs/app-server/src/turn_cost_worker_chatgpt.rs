@@ -53,14 +53,13 @@ impl WorkerRuntime {
                     continue;
                 };
                 let (Some(micros), Some(settled_ids)) =
-                    (cost.estimated_usage_usd_micros, cost.settled_response_ids)
+                    (cost.visible_total_usd_micros(), cost.settled_response_ids)
                 else {
                     continue;
                 };
                 // Missing/hidden dollars are not zero. A projection can appear before
                 // all responses settle, so require every locally observed response.
-                if micros < 0
-                    || entry.expected_response_ids.is_empty()
+                if entry.expected_response_ids.is_empty()
                     || !entry
                         .expected_response_ids
                         .iter()

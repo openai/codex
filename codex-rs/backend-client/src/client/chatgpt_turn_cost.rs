@@ -1,5 +1,5 @@
 //! Queries SiWC per-turn estimates using the client's Codex or WHAM route and auth.
-//! Always request settled response IDs and retain thread/turn association and missing amounts.
+//! Always request settled response IDs and retain thread/turn association and unavailable amounts.
 
 use super::Client;
 use super::PathStyle;
@@ -15,7 +15,27 @@ pub struct ChatgptTurnCost {
     pub turn_id: String,
     pub model: Option<String>,
     pub estimated_usage_usd_micros: Option<i64>,
+    // Older backends report only converted credits. An explicit null means native USD is unavailable.
+    #[serde(default = "legacy_native_usd_micros")]
+    pub native_usage_usd_micros: Option<i64>,
     pub settled_response_ids: Option<Vec<String>>,
+}
+
+fn legacy_native_usd_micros() -> Option<i64> {
+    Some(0)
+}
+
+impl ChatgptTurnCost {
+    /// Returns the complete visible estimate, including credit conversion and native USD.
+    pub fn visible_total_usd_micros(&self) -> Option<i64> {
+        // The backend also uses a missing converted estimate to hide dollar amounts.
+        let converted = self.estimated_usage_usd_micros?;
+        let native = self.native_usage_usd_micros?;
+        if converted < 0 || native < 0 {
+            return None;
+        }
+        converted.checked_add(native)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

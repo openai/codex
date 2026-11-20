@@ -64,7 +64,8 @@ async fn chatgpt_turn_cost_reaches_otlp_on_success() -> Result<()> {
             assert_eq!(body["include_settled_response_ids"], true);
             let threads: Vec<_> = body["threads"].as_array().expect("threads").iter().map(|thread| {
                 let turns: Vec<_> = thread["turn_ids"].as_array().expect("turns").iter().map(|turn_id| json!({
-                    "turn_id": turn_id, "model": "mock-model", "estimated_usage_usd_micros": 1250001,
+                    "turn_id": turn_id, "model": "mock-model", "estimated_usage_usd_micros": 250001,
+                    "native_usage_usd_micros": 1000000,
                     "settled_response_ids": ["resp-cost"]
                 })).collect();
                 json!({"thread_id": thread["thread_id"], "turns": turns})

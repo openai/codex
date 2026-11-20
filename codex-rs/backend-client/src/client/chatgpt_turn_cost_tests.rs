@@ -45,11 +45,11 @@ async fn check_query(base_path: &str, endpoint: &str) {
             "threads": [
                 {"thread_id": "thread-a", "turns": [{
                     "turn_id": "turn-a", "model": "gpt-5.6",
-                    "estimated_usage_usd_micros": 1250001,
+                    "estimated_usage_usd_micros": 1250001, "native_usage_usd_micros": 750000,
                     "settled_response_ids": ["resp-a", "resp-b"]
                 }]},
                 {"thread_id": "thread-b", "turns": [
-                    {"turn_id": "turn-b", "estimated_usage_usd_micros": null,
+                    {"turn_id": "turn-b", "estimated_usage_usd_micros": null, "native_usage_usd_micros": null,
                      "settled_response_ids": null},
                     {"turn_id": "turn-c", "estimated_usage_usd_micros": 0}
                 ]}
@@ -82,6 +82,7 @@ async fn check_query(base_path: &str, endpoint: &str) {
                     turn_id: "turn-a".to_string(),
                     model: Some("gpt-5.6".to_string()),
                     estimated_usage_usd_micros: Some(1250001),
+                    native_usage_usd_micros: Some(750000),
                     settled_response_ids: Some(vec!["resp-a".to_string(), "resp-b".to_string()]),
                 }],
             },
@@ -92,12 +93,14 @@ async fn check_query(base_path: &str, endpoint: &str) {
                         turn_id: "turn-b".to_string(),
                         model: None,
                         estimated_usage_usd_micros: None,
+                        native_usage_usd_micros: None,
                         settled_response_ids: None,
                     },
                     ChatgptTurnCost {
                         turn_id: "turn-c".to_string(),
                         model: None,
                         estimated_usage_usd_micros: Some(0),
+                        native_usage_usd_micros: Some(0),
                         settled_response_ids: None,
                     },
                 ],
@@ -105,4 +108,46 @@ async fn check_query(base_path: &str, endpoint: &str) {
         ]
     );
     server.verify().await;
+}
+
+#[test]
+fn visible_turn_cost_requires_both_dollar_components() {
+    for (converted, native, expected) in [
+        (Some(0), Some(4_668), Some(4_668)),
+        (Some(120), Some(35), Some(155)),
+        (Some(120), Some(0), Some(120)),
+        (Some(0), Some(0), Some(0)),
+        (None, Some(35), None),
+        (Some(120), None, None),
+        (Some(-1), Some(35), None),
+        (Some(120), Some(-1), None),
+        (Some(i64::MAX), Some(1), None),
+    ] {
+        let cost: ChatgptTurnCost = serde_json::from_value(serde_json::json!({
+            "turn_id": "turn-a",
+            "estimated_usage_usd_micros": converted,
+            "native_usage_usd_micros": native,
+        }))
+        .expect("valid turn cost response");
+        assert_eq!(
+            cost.visible_total_usd_micros(),
+            expected,
+            "converted={converted:?}, native={native:?}"
+        );
+    }
+}
+
+#[test]
+fn settled_turn_cost_distinguishes_omitted_native_usd_from_null() {
+    let mut turn = serde_json::json!({
+        "turn_id": "turn-a",
+        "estimated_usage_usd_micros": 120,
+        "settled_response_ids": ["resp-a"],
+    });
+    let legacy: ChatgptTurnCost = serde_json::from_value(turn.clone()).unwrap();
+    turn["native_usage_usd_micros"] = serde_json::Value::Null;
+    let unavailable: ChatgptTurnCost = serde_json::from_value(turn).unwrap();
+
+    assert_eq!(legacy.visible_total_usd_micros(), Some(120));
+    assert_eq!(unavailable.visible_total_usd_micros(), None);
 }
