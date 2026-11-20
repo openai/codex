@@ -1620,11 +1620,57 @@ jobs:
             --package codex-responses-api-proxy \
             --package codex-sdk
 
-      - name: Upload staged npm packages
+      - name: Compress npm tarballs with libdeflate
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          shopt -s nullglob
+          tarballs=(dist/npm/*.tgz)
+          if (( ${#tarballs[@]} == 0 )); then
+            echo "::error::No npm tarballs found in dist/npm"
+            exit 1
+          fi
+
+          package="$RUNNER_TEMP/libdeflate-tools_1.19-1build1_amd64.deb"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://archive.ubuntu.com/ubuntu/pool/universe/libd/libdeflate/libdeflate-tools_1.19-1build1_amd64.deb \
+            --output "$package"
+          echo "437b0eb96745d394a7ec13d41f58b8eb80f815b460cc9239dd48ac1327363638  $package" | sha256sum --check
+          dpkg-deb --extract "$package" "$RUNNER_TEMP/libdeflate"
+
+          recompress() (
+            tarball="$1"
+            scratch="$(mktemp -d)"
+            trap 'rm -rf "$scratch"' EXIT
+            candidate="$scratch/candidate.tgz"
+
+            # npm pack always emits gzip. Preserve its exact tar stream.
+            gzip -dc "$tarball" | tee "$scratch/package.tar" |
+              "$RUNNER_TEMP/libdeflate/usr/bin/libdeflate-gzip" -12 -c > "$candidate"
+            gzip -dc "$candidate" | cmp "$scratch/package.tar" -
+
+            original_size="$(stat -c %s "$tarball")"
+            candidate_size="$(stat -c %s "$candidate")"
+            size="$original_size"
+            if (( candidate_size < size )); then
+              mv "$candidate" "$tarball"
+              size="$candidate_size"
+            fi
+            echo "${tarball##*/}: $original_size -> $size bytes"
+          )
+          export -f recompress
+
+          # Lead with the largest tarballs and share the runner's available CPUs.
+          # shellcheck disable=SC2016 # The worker shell expands $1.
+          stat --printf='%s\t%n\0' -- "${tarballs[@]}" | sort -znr | cut -zf2- |
+            xargs -0 -n 1 -P "$(nproc)" bash -eo pipefail -c 'recompress "$1"' _
+
+      - name: Upload npm packages
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: npm-packages
           path: dist/npm/*.tgz
+          compression-level: 0
           if-no-files-found: error
 
   release:
