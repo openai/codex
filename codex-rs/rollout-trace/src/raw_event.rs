@@ -112,6 +112,8 @@ pub enum RawTraceEventPayload {
     /// evidence of its rendered content, which may be truncated before sampling.
     HistoryItemAccepted {
         item_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_tool_call_id: Option<ToolCallId>,
         /// A delivery may never appear in a subsequent inference or compaction snapshot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_message_payload: Option<RawPayloadRef>,

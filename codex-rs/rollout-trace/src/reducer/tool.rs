@@ -25,6 +25,7 @@ mod terminal;
 #[path = "tool/mcp_tests.rs"]
 mod mcp_tests;
 
+pub(super) use agents::NativeToolDelivery;
 pub(super) use agents::ObservedAgentResultEdge;
 pub(super) use agents::PendingAgentInteractionEdge;
 pub(super) use agents::spawn_edge_id;

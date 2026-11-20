@@ -224,6 +224,7 @@ fn response_outputs_require_harness_acceptance() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
+            source_tool_call_id: None,
             item_id: "msg-accepted".into(),
             agent_message_payload: None,
             tool_output_payload: None,

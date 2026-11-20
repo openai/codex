@@ -41,6 +41,7 @@ fn identical_text_from_a_discarded_attempt_does_not_gain_acceptance() -> anyhow:
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
+            source_tool_call_id: None,
             item_id: "accepted".into(),
             agent_message_payload: None,
             tool_output_payload: None,
@@ -225,6 +226,7 @@ fn inherited_output_is_child_prefill_without_copying_parent_sampling_provenance(
         parent.request_item_ids
     );
     let accepted = RawTraceEventPayload::HistoryItemAccepted {
+        source_tool_call_id: None,
         item_id: "msg-parent".into(),
         agent_message_payload: None,
         tool_output_payload: None,
@@ -280,6 +282,7 @@ fn accept_output(writer: &crate::TraceWriter, item: &serde_json::Value) -> anyho
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
+            source_tool_call_id: None,
             item_id: item["id"].as_str().unwrap().into(),
             agent_message_payload: None,
             tool_output_payload: Some(payload),

@@ -68,6 +68,11 @@ pub(super) async fn handle_message_string_tool(
             input: AgentInput::Message {
                 message: agent_message_from_tool(message, &source),
                 mode,
+                source_tool_call_id: session
+                    .services
+                    .rollout_thread_trace
+                    .is_enabled()
+                    .then(|| call_id.clone()),
             },
             start_options: TurnStartOptions {
                 parent_turn_id: (mode == MessageDeliveryMode::TriggerTurn)

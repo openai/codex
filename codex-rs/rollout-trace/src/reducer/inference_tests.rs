@@ -30,6 +30,7 @@ fn cancelled_inference_retains_accepted_partial_output() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
+            source_tool_call_id: None,
             item_id: "msg-partial".into(),
             agent_message_payload: None,
             tool_output_payload: None,

@@ -1127,6 +1127,7 @@ async fn cancelled_v2_send_finishes_reload_registration() {
         input: AgentInput::Message {
             message: AgentMessage::Plaintext(message.to_string()),
             mode: MessageDeliveryMode::TriggerTurn,
+            source_tool_call_id: None,
         },
         start_options: Default::default(),
     };
@@ -1979,6 +1980,7 @@ async fn v2_reload_preserves_shared_instructions_after_root_unloads(
             input: crate::AgentInput::Message {
                 message: AgentMessage::Plaintext("wake the unloaded target".to_string()),
                 mode: MessageDeliveryMode::QueueOnly,
+                source_tool_call_id: None,
             },
             start_options: TurnStartOptions {
                 root_turn_id: sender_turn.turn_metadata_state.root_turn_id(),
@@ -2151,6 +2153,7 @@ async fn v2_spawn_resolves_reported_effort_without_changing_child_selection(
             input: AgentInput::Message {
                 message: AgentMessage::Plaintext("child task".to_string()),
                 mode: MessageDeliveryMode::TriggerTurn,
+                source_tool_call_id: None,
             },
             source,
             options: SpawnAgentOptions {
@@ -4498,7 +4501,15 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
 #[test]
 fn terminal_result_writes_require_confirmation_after_the_parent_claims_mail() {
     let count = Arc::new(std::sync::atomic::AtomicUsize::default());
-    let publish = || MessageDelivery::publish(ThreadId::new(), &[], Some(&count)).unwrap();
+    let publish = || {
+        MessageDelivery::publish(
+            ThreadId::new(),
+            /*source_tool_call_id*/ None,
+            &[],
+            Some(&count),
+        )
+        .unwrap()
+    };
     let parent = ThreadId::new();
     drop(publish().consumed(parent));
     let saved = publish();

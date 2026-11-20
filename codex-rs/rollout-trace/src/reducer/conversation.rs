@@ -62,7 +62,13 @@ impl TraceReducer {
         if is_delivery {
             self.resolve_pending_agent_edges_for_item(&id)?;
         }
-        self.receivable_ids.insert(key, Some(id));
+        self.receivable_ids.insert(
+            key,
+            super::ReceivableItem {
+                item_id: id,
+                awaiting_snapshot: true,
+            },
+        );
         Ok(())
     }
 
@@ -539,8 +545,10 @@ impl TraceReducer {
             && let Some(wire_id) = &item.responses_item_id
         {
             let key = (thread_id.to_owned(), wire_id.clone());
-            if let Some(Some(id)) = self.receivable_ids.get(&key) {
-                return id.clone();
+            if let Some(receipt) = self.receivable_ids.get(&key)
+                && receipt.awaiting_snapshot
+            {
+                return receipt.item_id.clone();
             }
         }
         let item_id = self.next_conversation_item_id();
@@ -592,9 +600,15 @@ impl TraceReducer {
             && let Some(wire_id) = &normalized.responses_item_id
         {
             let key = (item.thread_id.clone(), wire_id.clone());
-            let accepted_id = self.receivable_ids.entry(key).or_default();
-            if accepted_id.as_deref() == Some(item_id) {
-                *accepted_id = None;
+            let receipt = self
+                .receivable_ids
+                .entry(key)
+                .or_insert_with(|| super::ReceivableItem {
+                    item_id: item_id.to_owned(),
+                    awaiting_snapshot: false,
+                });
+            if receipt.awaiting_snapshot && receipt.item_id == item_id {
+                receipt.awaiting_snapshot = false;
                 item.body.clone_from(&normalized.body);
                 if let Some(hash) = normalized.structured_output_hash {
                     self.structured_output_hashes

@@ -240,49 +240,11 @@ impl ThreadTraceContext {
         );
     }
 
-    /// Records turn lifecycle and history acceptance from existing protocol events.
+    /// Records turn lifecycle from existing protocol events.
     pub fn record_codex_turn_event(&self, default_turn_id: &str, event: &EventMsg) {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        if let EventMsg::RawResponseItem(event) = event {
-            let Some(item_id) = event.item.id().map(ToString::to_string) else {
-                return;
-            };
-            let accepted = move |agent_message_payload, tool_output_payload| {
-                RawTraceEventPayload::HistoryItemAccepted {
-                    item_id,
-                    agent_message_payload,
-                    tool_output_payload,
-                }
-            };
-            let turn = RawTraceEventContext::turn(&context.thread_id, default_turn_id);
-            let is_delivery = matches!(event.item, ResponseItem::AgentMessage { .. });
-            if is_delivery
-                || matches!(
-                    event.item,
-                    ResponseItem::FunctionCallOutput { .. }
-                        | ResponseItem::CustomToolCallOutput { .. }
-                )
-            {
-                // Publish the receipt and its history event together, in worker order.
-                let _ = context.writer.event_with_payload(
-                    turn,
-                    RawPayloadKind::ProtocolEvent,
-                    &event.item,
-                    move |payload| {
-                        if is_delivery {
-                            accepted(Some(payload), None)
-                        } else {
-                            accepted(None, Some(payload))
-                        }
-                    },
-                );
-            } else {
-                let _ = context.writer.enqueue_event(turn, accepted(None, None));
-            }
-            return;
-        }
         let Some(trace_event) =
             codex_turn_trace_event(context.thread_id.clone(), default_turn_id, event)
         else {
@@ -376,6 +338,54 @@ impl ThreadTraceContext {
                 runtime_payload,
             },
         );
+    }
+
+    /// Records the accepted wire item and, for agent-tool deliveries, its originating call.
+    pub fn record_history_item_accepted(
+        &self,
+        default_turn_id: &str,
+        item: &ResponseItem,
+        source_tool_call_id: Option<&str>,
+    ) {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        let Some(item_id) = item.id().map(ToString::to_string) else {
+            return;
+        };
+        let source_tool_call_id = source_tool_call_id.map(str::to_owned);
+        let accepted = move |agent_message_payload, tool_output_payload| {
+            RawTraceEventPayload::HistoryItemAccepted {
+                item_id,
+                source_tool_call_id,
+                agent_message_payload,
+                tool_output_payload,
+            }
+        };
+        let turn = RawTraceEventContext::turn(&context.thread_id, default_turn_id);
+        let is_delivery = matches!(item, ResponseItem::AgentMessage { .. });
+        if is_delivery
+            || matches!(
+                item,
+                ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
+            )
+        {
+            // Publish the receipt and its history event together, in worker order.
+            let _ = context.writer.event_with_payload(
+                turn,
+                RawPayloadKind::ProtocolEvent,
+                item,
+                move |payload| {
+                    if is_delivery {
+                        accepted(Some(payload), None)
+                    } else {
+                        accepted(None, Some(payload))
+                    }
+                },
+            );
+        } else {
+            let _ = context.writer.enqueue_event(turn, accepted(None, None));
+        }
     }
 
     /// Records the exec actually selected by stdin, since its process handle can be reused.

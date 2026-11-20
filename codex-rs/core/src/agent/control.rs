@@ -271,6 +271,7 @@ impl LocalAgentControl {
         let publish = || {
             MessageDelivery::publish(
                 context.sender_thread_id,
+                context.source_tool_call_id.clone(),
                 state.extensions.message_lifecycle_contributors(),
                 terminal_result.then_some(&self.runtime.unconfirmed_results),
             )

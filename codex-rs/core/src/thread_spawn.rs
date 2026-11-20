@@ -110,6 +110,11 @@ pub(crate) async fn spawn(
         input: AgentInput::Message {
             message,
             mode: MessageDeliveryMode::TriggerTurn,
+            source_tool_call_id: session
+                .services
+                .rollout_thread_trace
+                .is_enabled()
+                .then(|| call_id.to_owned()),
         },
         source: settings.source,
         options: settings.options,

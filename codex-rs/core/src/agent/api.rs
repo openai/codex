@@ -210,6 +210,8 @@ pub enum AgentInput {
     Message {
         message: AgentMessage,
         mode: MessageDeliveryMode,
+        /// Native tool invocation to link when the recipient commits this message to history.
+        source_tool_call_id: Option<String>,
     },
 }
 

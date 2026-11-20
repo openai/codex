@@ -4866,6 +4866,17 @@ impl Session {
                 std::slice::from_mut(&mut response_item),
                 model_info.truncation_policy.into(),
             );
+            // Record the item and its sender at the history write, before shutdown can cancel persistence.
+            self.services
+                .rollout_thread_trace
+                .record_history_item_accepted(
+                    &turn_context.sub_id,
+                    &response_item.item,
+                    communication
+                        .delivery
+                        .as_ref()
+                        .and_then(|d| d.source_tool_call_id.as_deref()),
+                );
         }
         if let Some(delivery) = delivery.take() {
             result_write = delivery.consumed(self.thread_id);
@@ -4885,7 +4896,12 @@ impl Session {
             write.confirm();
         }
         drop(boundary);
-        self.send_raw_response_items(turn_context, &items).await;
+        let [item] = items;
+        self.send_event(
+            turn_context,
+            EventMsg::RawResponseItem(RawResponseItemEvent { item }),
+        )
+        .await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -5193,6 +5209,13 @@ impl Session {
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
+            self.services
+                .rollout_thread_trace
+                .record_history_item_accepted(
+                    &turn_context.sub_id,
+                    item,
+                    /*source_tool_call_id*/ None,
+                );
             self.send_event(
                 turn_context,
                 EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
