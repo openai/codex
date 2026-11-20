@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GatewayOAuthStatus": {
+      "enum": [
+        "notReady",
+        "started",
+        "succeeded",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "GatewayOAuthTarget": {
+      "description": "An explicit service to authorize instead of the selected model provider.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "configServer"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "ConfigServerGatewayOAuthTarget",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "Browser handoff on the dedicated `--startup-oauth` connection.",
+  "properties": {
+    "authUrl": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/GatewayOAuthStatus"
+    },
+    "target": {
+      "$ref": "#/definitions/GatewayOAuthTarget"
+    }
+  },
+  "required": [
+    "authUrl",
+    "status",
+    "target"
+  ],
+  "title": "StartupGatewayOAuthChangedNotification",
+  "type": "object"
+}

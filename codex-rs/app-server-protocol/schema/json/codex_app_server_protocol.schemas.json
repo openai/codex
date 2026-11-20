@@ -13614,7 +13614,7 @@
         "type": "object"
       },
       "GatewayOAuthLoginParams": {
-        "description": "Authorize a configured provider without changing the default or any thread's provider.",
+        "description": "Authorize a configured service without changing the selected model provider.",
         "properties": {
           "deviceAuth": {
             "description": "Select device authorization when the server advertises support for it.",
@@ -13626,6 +13626,17 @@
               "string",
               "null"
             ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GatewayOAuthTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Available only on `--startup-oauth`. Mutually exclusive with `modelProvider`."
           }
         },
         "type": "object"
@@ -13732,6 +13743,26 @@
           "failed"
         ],
         "type": "string"
+      },
+      "GatewayOAuthTarget": {
+        "description": "An explicit service to authorize instead of the selected model provider.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "configServer"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "ConfigServerGatewayOAuthTarget",
+            "type": "object"
+          }
+        ]
       },
       "GcpProviderId": {
         "enum": [
@@ -22634,6 +22665,28 @@
           "resetsAt",
           "used"
         ],
+        "type": "object"
+      },
+      "StartupGatewayOAuthChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Browser handoff on the dedicated `--startup-oauth` connection.",
+        "properties": {
+          "authUrl": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/GatewayOAuthStatus"
+          },
+          "target": {
+            "$ref": "#/definitions/v2/GatewayOAuthTarget"
+          }
+        },
+        "required": [
+          "authUrl",
+          "status",
+          "target"
+        ],
+        "title": "StartupGatewayOAuthChangedNotification",
         "type": "object"
       },
       "StrictReviewRequiredNotification": {

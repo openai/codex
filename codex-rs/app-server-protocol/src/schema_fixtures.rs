@@ -81,6 +81,9 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
     let mut files = BTreeMap::new();
     let mut seen = HashSet::new();
 
+    collect_typescript_fixture_file::<crate::StartupGatewayOAuthChangedNotification>(
+        &mut files, &mut seen,
+    )?;
     collect_typescript_fixture_file::<ClientRequest>(&mut files, &mut seen)?;
     visit_typescript_fixture_dependencies(&mut files, &mut seen, |visitor| {
         visit_client_response_types(visitor);

@@ -186,7 +186,7 @@ async fn resuming_a_running_thread_signs_in_to_its_saved_gateway() -> color_eyre
     );
     assert_eq!(
         requests[4].body_json()["params"],
-        json!({"modelProvider":"company","deviceAuth":true})
+        json!({"modelProvider":"company","target":null,"deviceAuth":true})
     );
     Ok(())
 }

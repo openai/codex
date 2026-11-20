@@ -10,7 +10,7 @@
   ],
   "definitions": {
     "GatewayOAuthLoginParams": {
-      "description": "Authorize a configured provider without changing the default or any thread's provider.",
+      "description": "Authorize a configured service without changing the selected model provider.",
       "properties": {
         "deviceAuth": {
           "description": "Select device authorization when the server advertises support for it.",
@@ -22,9 +22,40 @@
             "string",
             "null"
           ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GatewayOAuthTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Available only on `--startup-oauth`. Mutually exclusive with `modelProvider`."
         }
       },
       "type": "object"
+    },
+    "GatewayOAuthTarget": {
+      "description": "An explicit service to authorize instead of the selected model provider.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "configServer"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "ConfigServerGatewayOAuthTarget",
+          "type": "object"
+        }
+      ]
     }
   },
   "title": "Nullable_GatewayOAuthLoginParams"

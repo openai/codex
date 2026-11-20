@@ -141,6 +141,7 @@ pub(crate) async fn start_if_needed(
         .request_typed(ClientRequest::GatewayOAuthLogin {
             request_id: server.next_request_id(),
             params: Some(GatewayOAuthLoginParams {
+                target: None,
                 device_auth: true,
                 model_provider: Some(state.provider_id),
             }),

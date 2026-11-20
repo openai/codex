@@ -690,7 +690,34 @@ pub struct GatewayOAuthReadParams {
 
 pub type NullableGatewayOAuthReadParams = Option<GatewayOAuthReadParams>;
 
-/// Authorize a configured provider without changing the default or any thread's provider.
+/// An explicit service to authorize instead of the selected model provider.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(tag = "kind", rename_all = "camelCase", export_to = "v2/")]
+pub enum GatewayOAuthTarget {
+    ConfigServer,
+}
+
+/// Browser handoff on the dedicated `--startup-oauth` connection.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct StartupGatewayOAuthChangedNotification {
+    pub target: GatewayOAuthTarget,
+    pub status: GatewayOAuthStatus,
+    pub auth_url: String,
+}
+
+impl std::fmt::Debug for StartupGatewayOAuthChangedNotification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartupGatewayOAuthChangedNotification")
+            .field("target", &self.target)
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Authorize a configured service without changing the selected model provider.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -698,6 +725,9 @@ pub struct GatewayOAuthLoginParams {
     /// Defaults to the current provider when omitted.
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    /// Available only on `--startup-oauth`. Mutually exclusive with `modelProvider`.
+    #[ts(optional = nullable)]
+    pub target: Option<GatewayOAuthTarget>,
     /// Select device authorization when the server advertises support for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub device_auth: bool,
