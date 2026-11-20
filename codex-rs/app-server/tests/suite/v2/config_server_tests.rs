@@ -1,10 +1,12 @@
 //! Exercises required HTTPS policy through real app-server startup and session RPCs.
 
 use super::https_mock::tls_listener;
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -15,8 +17,10 @@ use codex_config::test_support::CloudConfigBundleFixture;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use tokio::net::TcpStream;
@@ -32,10 +36,7 @@ async fn config_server_settings_are_fetched_and_applied_at_startup() -> Result<(
     skip_if_no_network!(Ok(()));
     let setup = ConfigServerSetup::new().await?;
     let mut app = setup.start_app().await?;
-    assert_eq!(
-        setup.config_server.received_requests().await.unwrap().len(),
-        1
-    );
+    assert_eq!(setup.bundle_request_count().await?, 1);
     let started = app
         .start_thread(ThreadStartParams {
             model_provider: Some("openai".into()),
@@ -46,6 +47,43 @@ async fn config_server_settings_are_fetched_and_applied_at_startup() -> Result<(
     setup
         .assert_turn_uses_managed_instructions(&mut app, &started.thread.id)
         .await?;
+    app.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_server_settings_recover_after_discovery_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let setup = ConfigServerSetup::new().await?;
+    let failure = Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/team"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(/*r*/ 1..)
+        .mount_as_scoped(&setup.config_server)
+        .await;
+    let mut app = setup.start_app_with_args(&[]).await?;
+    let request = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let error = tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 30),
+        app.read_stream_until_error_message(RequestId::Integer(request)),
+    )
+    .await??;
+    assert_eq!(
+        error.error.data,
+        Some(json!({
+            "reason": "cloudConfigBundle",
+            "errorCode": "Internal",
+            "detail": "OAuth discovery failed",
+        }))
+    );
+    assert_eq!(setup.bundle_request_count().await?, 0);
+
+    // Missing metadata permits anonymous configuration retrieval.
+    drop(failure);
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+    assert_eq!(started.model_provider, "company");
     app.shutdown_gracefully().await?;
     Ok(())
 }
@@ -89,10 +127,7 @@ async fn config_server_settings_are_cached_across_restart_and_resume() -> Result
     setup
         .assert_turn_uses_managed_instructions(&mut app, &resumed.thread.id)
         .await?;
-    assert_eq!(
-        setup.config_server.received_requests().await.unwrap().len(),
-        1
-    );
+    assert_eq!(setup.bundle_request_count().await?, 1);
     app.shutdown_gracefully().await?;
     Ok(())
 }
@@ -152,7 +187,23 @@ wire_api = 'responses'
         })
     }
 
+    async fn bundle_request_count(&self) -> Result<usize> {
+        let requests = self
+            .config_server
+            .received_requests()
+            .await
+            .context("config server request recording is disabled")?;
+        Ok(requests
+            .iter()
+            .filter(|request| request.url.path() == "/team/codex/config/bundle")
+            .count())
+    }
+
     async fn start_app(&self) -> Result<TestAppServer> {
+        self.start_app_with_args(&["--strict-config"]).await
+    }
+
+    async fn start_app_with_args(&self, args: &[&str]) -> Result<TestAppServer> {
         let ca_path = self.ca_path.to_string_lossy();
         let env = [
             ("CODEX_CA_CERTIFICATE", Some(ca_path.as_ref())),
@@ -161,7 +212,7 @@ wire_api = 'responses'
         ];
         TestAppServer::builder()
             .with_codex_home(self.home.path())
-            .with_args(&["--strict-config"])
+            .with_args(args)
             .with_env_overrides(&env)
             .build_initialized()
             .await

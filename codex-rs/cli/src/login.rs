@@ -581,9 +581,13 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     }
 }
 
-async fn logout_config_server(config: &Config) -> std::io::Result<bool> {
+async fn logout_config_server(
+    config: &Config,
+    loader_overrides: &codex_config::LoaderOverrides,
+) -> std::io::Result<bool> {
+    let network = codex_app_server::in_process::EmbeddedNetworkPolicy::load(loader_overrides).await;
     match codex_cloud_config::managed_config_auth_manager(
-        config.auth_config(),
+        network.bind_bootstrap_auth(config.auth_config()),
         config.config_layer_stack.requirements_toml(),
     )
     .await?
@@ -601,7 +605,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
         .requirements_toml()
         .requires_remote_config()
     {
-        logout_config_server(&config).await
+        logout_config_server(&config, &Default::default()).await
     } else {
         Ok(false)
     };
@@ -743,16 +747,21 @@ mod storage_tests;
 
 #[cfg(test)]
 mod tests {
+    use codex_config::LoaderOverrides;
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_core::config::ConfigBuilder;
     use codex_login::AuthKeyringBackendKind;
     use codex_login::OAuthDeviceCodePrompt;
     use codex_login::load_auth_dot_json;
     use codex_login::login_with_api_key;
     use pretty_assertions::assert_eq;
+    use std::io::ErrorKind;
+    use std::net::TcpListener;
     use tempfile::tempdir;
 
     use super::clear_existing_auth_before_login;
     use super::config_server_device_code_message;
+    use super::logout_config_server;
     use super::safe_format_key;
 
     #[test]
@@ -764,6 +773,51 @@ mod tests {
             user_code: "ABCD-EFGH".into(),
         };
         insta::assert_snapshot!(config_server_device_code_message(&prompt), @"To sign in to the config server, open https://login.example/device and enter code ABCD-EFGH.");
+    }
+
+    #[tokio::test]
+    async fn logout_config_server_respects_local_network_policy() -> anyhow::Result<()> {
+        let home = tempdir()?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
+        let requirements_path = home.path().join("requirements.toml");
+        std::fs::write(
+            &requirements_path,
+            format!(
+                r#"
+[config_server]
+base_url = "https://{address}"
+
+[application.network.domains]
+"127.0.0.1" = "deny"
+"#,
+            ),
+        )?;
+        let overrides = LoaderOverrides {
+            system_requirements_path: Some(requirements_path),
+            ignore_project_config: true,
+            ..LoaderOverrides::without_managed_config_for_tests()
+        };
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(overrides.clone())
+            .build()
+            .await?;
+
+        let error = logout_config_server(&config, &overrides)
+            .await
+            .expect_err("logout discovery should fail for a denied destination");
+        assert_eq!(error.to_string(), "OAuth discovery failed");
+
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("logout discovery connected to a denied destination")
+                .kind(),
+            ErrorKind::WouldBlock
+        );
+        Ok(())
     }
 
     #[tokio::test]

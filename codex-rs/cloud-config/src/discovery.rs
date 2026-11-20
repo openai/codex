@@ -13,24 +13,14 @@ use std::time::Duration;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Controls OAuth discovery when the config server has no explicit OAuth settings.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ConfigServerDiscovery {
-    #[default]
-    Disabled,
-    Enabled,
-}
-
 pub(crate) async fn resolve_config_server(
     config: &ConfigServer,
     routes: &AuthRouteConfig,
-    discovery: ConfigServerDiscovery,
 ) -> io::Result<ConfigServer> {
     config.validated_base_url().map_err(io::Error::other)?;
     let mut resolved = config.clone();
 
-    if discovery == ConfigServerDiscovery::Enabled
-        && config.oauth.is_none()
+    if config.oauth.is_none()
         && let Some(oauth) = discover_oauth(&config.base_url, routes).await?
     {
         resolved.oauth = Some(Box::new(oauth));

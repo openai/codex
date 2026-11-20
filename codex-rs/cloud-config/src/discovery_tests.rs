@@ -2,7 +2,6 @@
 
 //! Tests config-server OAuth defaults, discovery activation, and routing.
 
-use super::ConfigServerDiscovery;
 use super::DISCOVERY_TIMEOUT;
 use super::discover_oauth;
 use super::resolve_config_server;
@@ -100,7 +99,7 @@ async fn bounds_company_discovery_duration() {
 }
 
 #[tokio::test]
-async fn preserves_explicit_oauth_and_flag_off_without_discovery() {
+async fn preserves_explicit_oauth_without_discovery() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -116,25 +115,18 @@ async fn preserves_explicit_oauth_and_flag_off_without_discovery() {
         credentials_store: Default::default(),
     };
 
-    for (discovery, oauth) in [
-        (ConfigServerDiscovery::Disabled, None),
-        (
-            ConfigServerDiscovery::Enabled,
-            Some(Box::new(explicit_oauth)),
-        ),
-    ] {
-        let config = ConfigServer {
-            base_url: format!("https://{address}"),
-            oauth,
-        };
-        assert_eq!(
-            resolve_config_server(&config, &routes, discovery)
-                .await
-                .unwrap(),
-            config,
-            "discovery: {discovery:?}"
-        );
-    }
+    let config = ConfigServer {
+        base_url: format!("https://{address}"),
+        oauth: Some(Box::new(explicit_oauth)),
+    };
+    assert_eq!(
+        resolve_config_server(&config, &routes).await.unwrap(),
+        config
+    );
+    let home = tempfile::tempdir().unwrap();
+    crate::anonymous_config_server_bundle_loader(&config, home.path().into(), &routes)
+        .await
+        .expect_err("Git must refuse explicit OAuth without fetching anonymous policy");
     assert_eq!(
         listener
             .accept()

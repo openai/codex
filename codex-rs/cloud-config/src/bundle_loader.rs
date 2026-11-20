@@ -2,7 +2,6 @@ use crate::backend::BackendBundleClient;
 use crate::chatgpt::ChatGptSource;
 use crate::chatgpt::plan_requires_managed_config;
 use crate::config_source::BundleSource;
-use crate::discovery::ConfigServerDiscovery;
 use crate::service::CLOUD_CONFIG_BUNDLE_TIMEOUT;
 use crate::service::CloudConfigBundleService;
 use codex_config::CloudConfigBundleLoader;
@@ -29,13 +28,8 @@ pub async fn managed_config_auth_manager(
     let Some(service_config) = requirements.config_server.as_ref() else {
         return Ok(None);
     };
-    crate::config_server_auth_manager(
-        service_config,
-        auth.codex_home,
-        &auth.auth_route_config,
-        ConfigServerDiscovery::Disabled,
-    )
-    .await
+    crate::config_server_auth_manager(service_config, auth.codex_home, &auth.auth_route_config)
+        .await
 }
 
 /// How to sign in when the config server has no saved OAuth grant.
@@ -94,7 +88,6 @@ pub async fn managed_config_bundle_loader(
             service_config.clone(),
             codex_home,
             &codex_login::AuthRouteConfig::from_http_client_factory(factory),
-            ConfigServerDiscovery::Disabled,
         )
         .await;
     }
@@ -122,7 +115,6 @@ pub async fn managed_config_bundle_loader_for_storage(
             service_config.clone(),
             auth_config.codex_home,
             &auth_config.auth_route_config,
-            ConfigServerDiscovery::Disabled,
         )
         .await);
     }

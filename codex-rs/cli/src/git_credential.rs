@@ -6,6 +6,7 @@ use chrono::Utc;
 use clap::Args;
 use clap::ValueEnum;
 use codex_app_server::in_process::EmbeddedNetworkPolicy;
+use codex_cloud_config::anonymous_config_server_bundle_loader;
 use codex_cloud_config::managed_config_bundle_loader_for_auth;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
@@ -133,23 +134,21 @@ async fn git_token_for_origin(
         return Ok(None);
     }
     let requirements = config.config_layer_stack.requirements_toml();
-    // Config-server OAuth uses the OS keyring, which Git must never open.
-    ensure!(
-        requirements
-            .config_server
-            .as_ref()
-            .is_none_or(|server| server.oauth.is_none()),
-        "Git cannot verify Codex workspace policy using a protected login"
-    );
     let login_changes = manager.auth_change_receiver();
     let network = EmbeddedNetworkPolicy::load(&Default::default()).await;
-    let bundle = managed_config_bundle_loader_for_auth(
-        network.bind_bootstrap_auth(config.auth_config()),
-        &auth,
-        requirements,
-    )
-    .await
-    .map_err(config_unavailable)?;
+    let bootstrap = network.bind_bootstrap_auth(config.auth_config());
+    let bundle = if let Some(server) = &requirements.config_server {
+        anonymous_config_server_bundle_loader(
+            server,
+            bootstrap.codex_home,
+            &bootstrap.auth_route_config,
+        )
+        .await?
+    } else {
+        managed_config_bundle_loader_for_auth(bootstrap, &auth, requirements)
+            .await
+            .map_err(config_unavailable)?
+    };
     let effective = builder
         .cloud_config_bundle(bundle)
         .build()
