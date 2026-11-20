@@ -81,6 +81,7 @@ async fn runtime_delivery_signs_each_batch_and_strips_cross_origin_auth() {
                     api_key_headers: Default::default(),
                 },
                 Some((Arc::new(std::sync::OnceLock::from(runtime.0)), runtime.1)),
+                /*event_transport*/ None,
             )),
         };
         emit(&client, "first").await;
@@ -209,6 +210,7 @@ async fn analytics_between_model_calls_keeps_the_selected_api_resources() {
                     Arc::new(std::sync::OnceLock::from(Arc::clone(&owner))),
                     mode,
                 )),
+                /*event_transport*/ None,
             )),
         };
         let provider = codex_model_provider::test_support::runtime_model_provider(

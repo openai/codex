@@ -165,6 +165,46 @@ pub(crate) fn codex_artifact_operation_event_request(
 }
 
 impl TrackEventRequest {
+    pub(crate) fn event_type(&self) -> &'static str {
+        match self {
+            Self::SkillInvocation(event) => event.event_type,
+            Self::ThreadInitialized(event) => event.event_type,
+            Self::ThreadArchive(event) => event.event_type,
+            Self::GuardianReview(event) => event.event_type,
+            Self::GuardianV2(event) => event.event_type,
+            Self::AppMentioned(event) => event.event_type,
+            Self::AppUsed(event) => event.event_type,
+            Self::HookRun(event) => event.event_type,
+            Self::Compaction(event) => event.event_type,
+            Self::Goal(event) => event.event_type,
+            Self::ThreadHintStatus(event) => event.event_type,
+            Self::TurnEvent(event) => event.event_type,
+            Self::TurnSteer(event) => event.event_type,
+            Self::ArtifactOperation(event) => event.event_type,
+            Self::CommandExecution(event) => event.event_type,
+            Self::PluginMeasurement(event) => event.event_type,
+            Self::FileChange(event) => event.event_type,
+            Self::CuaToolCallStarted(event) => event.event_type,
+            Self::McpToolCall(event) => event.event_type,
+            Self::DynamicToolCall(event) => event.event_type,
+            Self::ControlToolCall(event) => event.event_type,
+            Self::CollabAgentToolCall(event) => event.event_type,
+            Self::WebSearch(event) => event.event_type,
+            Self::ImageGeneration(event) => event.event_type,
+            Self::AcceptedLineFingerprints(event) => event.event_type,
+            Self::ReviewEvent(event) => event.event_type,
+            Self::PluginUsed(event) => event.event_type,
+            Self::PluginInstallRequested(event) => event.event_type,
+            Self::PluginInstalled(event)
+            | Self::PluginUninstalled(event)
+            | Self::PluginEnabled(event)
+            | Self::PluginDisabled(event) => event.event_type,
+            Self::PluginInstallFailed(event) => event.event_type,
+            Self::ExternalAgentConfigImportCompleted(event) => event.event_type,
+            Self::ExternalAgentConfigImportFailure(event) => event.event_type,
+        }
+    }
+
     pub(crate) fn should_send_in_isolated_request(&self) -> bool {
         matches!(self, Self::AcceptedLineFingerprints(_))
     }

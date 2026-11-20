@@ -1,3 +1,5 @@
+use crate::event_transport::AnalyticsEventTransport;
+use crate::event_transport::retain_http_events;
 use crate::events::AppServerRpcTransport;
 use crate::events::GuardianReviewAnalyticsResult;
 use crate::events::GuardianReviewTrackContext;
@@ -207,6 +209,7 @@ impl AnalyticsEventsQueue {
         auth_manager: Arc<AuthManager>,
         destination: AnalyticsEventsDestination,
         runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
+        event_transport: Option<Arc<dyn AnalyticsEventTransport>>,
     ) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
         let product_generation = Arc::new(AtomicU64::new(0));
@@ -250,6 +253,7 @@ impl AnalyticsEventsQueue {
                             events,
                             &thread_products,
                             runtime_auth.as_ref(),
+                            event_transport.as_ref(),
                         )
                         .await;
                         thread_products.register(thread_id, product_sku);
@@ -264,6 +268,7 @@ impl AnalyticsEventsQueue {
                             events,
                             &thread_products,
                             runtime_auth.as_ref(),
+                            event_transport.as_ref(),
                         )
                         .await;
                         let _ = done_tx.send(());
@@ -278,6 +283,7 @@ impl AnalyticsEventsQueue {
                     events,
                     &thread_products,
                     runtime_auth.as_ref(),
+                    event_transport.as_ref(),
                 )
                 .await;
             }
@@ -382,6 +388,31 @@ impl AnalyticsEventsClient {
         )
     }
 
+    /// Installs a host-owned transport for events selected by the host.
+    ///
+    /// The host owns envelope construction, policy, identity refresh, and bounded delivery.
+    /// Disabled analytics and local capture never invoke the transport. Rebinding through
+    /// `for_auth_context` resets it to HTTP so an old actor's transport cannot follow a new actor.
+    pub fn new_with_event_transport(
+        auth_manager: Arc<AuthManager>,
+        base_url: impl Into<ChatgptBaseUrl>,
+        analytics_enabled: Option<bool>,
+        event_transport: Arc<dyn AnalyticsEventTransport>,
+    ) -> Self {
+        let destination =
+            AnalyticsEventsDestination::from_base_url(base_url.into(), HeaderMap::new());
+        Self {
+            queue: (analytics_enabled != Some(false)).then(|| {
+                AnalyticsEventsQueue::new(
+                    auth_manager,
+                    destination,
+                    /*runtime_auth*/ None,
+                    Some(event_transport),
+                )
+            }),
+        }
+    }
+
     /// Share runtime identity for OpenAI delivery; file capture never authenticates.
     pub fn new_with_runtime(
         auth_manager: Arc<AuthManager>,
@@ -401,7 +432,12 @@ impl AnalyticsEventsClient {
         let destination = AnalyticsEventsDestination::from_base_url(base_url, api_key_headers);
         Self {
             queue: (analytics_enabled != Some(false)).then(|| {
-                AnalyticsEventsQueue::new(Arc::clone(&auth_manager), destination, runtime_auth)
+                AnalyticsEventsQueue::new(
+                    Arc::clone(&auth_manager),
+                    destination,
+                    runtime_auth,
+                    /*event_transport*/ None,
+                )
             }),
         }
     }
@@ -1079,6 +1115,7 @@ async fn send_track_events(
     mut events: Vec<TrackEventRequest>,
     thread_products: &ThreadProducts,
     runtime_auth: Option<&(RuntimeAuthSlot, RuntimeAuthMode)>,
+    event_transport: Option<&Arc<dyn AnalyticsEventTransport>>,
 ) {
     if events.is_empty() {
         return;
@@ -1108,8 +1145,15 @@ async fn send_track_events(
         );
         let product_sku = product_sku.map(str::to_string);
         let runtime_auth = runtime_auth.cloned();
+        let event_transport = event_transport.cloned();
         requests.spawn(async move {
             for events in track_event_request_batches(events) {
+                let events = match (&destination, event_transport.as_deref()) {
+                    (AnalyticsEventsDestination::Http { .. }, Some(transport)) => {
+                        retain_http_events(events, product_sku.as_deref(), transport).await
+                    }
+                    _ => events,
+                };
                 send_track_events_request(
                     &auth,
                     &destination,

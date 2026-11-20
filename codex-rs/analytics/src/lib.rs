@@ -2,6 +2,7 @@ mod accepted_lines;
 #[cfg(debug_assertions)]
 mod analytics_capture;
 mod client;
+mod event_transport;
 mod events;
 mod facts;
 mod guardian_v2;
@@ -15,6 +16,9 @@ use std::time::UNIX_EPOCH;
 
 pub use accepted_lines::fingerprint_hash;
 pub use client::AnalyticsEventsClient;
+pub use event_transport::AnalyticsEventDelivery;
+pub use event_transport::AnalyticsEventTransport;
+pub use event_transport::AnalyticsTransportEvent;
 pub use events::AppServerRpcTransport;
 pub use events::GuardianAdditionalPermissions;
 pub use events::GuardianApprovalRequestSource;

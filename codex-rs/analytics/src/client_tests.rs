@@ -115,6 +115,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 #[path = "client_product_tests.rs"]
 mod product_tests;
+#[path = "client_transport_tests.rs"]
+mod transport_tests;
 
 #[cfg(debug_assertions)]
 impl AnalyticsEventsClient {
@@ -124,6 +126,7 @@ impl AnalyticsEventsClient {
                 auth_manager,
                 AnalyticsEventsDestination::CaptureFile { path },
                 /*runtime_auth*/ None,
+                /*event_transport*/ None,
             )),
         }
     }
@@ -536,6 +539,7 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
         ],
         &ThreadProducts::default(),
         /*runtime_auth*/ None,
+        /*event_transport*/ None,
     )
     .await;
 
@@ -1267,6 +1271,7 @@ async fn account_switch_between_batches_does_not_send_old_credentials() {
         events,
         &ThreadProducts::default(),
         /*runtime_auth*/ None,
+        /*event_transport*/ None,
     )
     .await;
     server.abort();

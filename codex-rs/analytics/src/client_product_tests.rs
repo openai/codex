@@ -175,6 +175,7 @@ async fn product_streams_send_concurrently_and_preserve_event_order() {
             events,
             &products,
             /*runtime_auth*/ None,
+            /*event_transport*/ None,
         ),
     )
     .await
@@ -218,6 +219,7 @@ async fn buffered_tool_events_preserve_attribution_or_drop_it_on_queue_overflow(
                 manager,
                 destination,
                 /*runtime_auth*/ None,
+                /*event_transport*/ None,
             )),
         };
         let thread_id = ThreadId::new();
