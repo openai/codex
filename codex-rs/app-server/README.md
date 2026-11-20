@@ -780,6 +780,31 @@ HTTP, WebSocket, and code-mode gRPC requests use the shared destination checks.
 User-directed Git, SSH, shell, and other subprocess traffic retain their existing
 execution and sandbox policies.
 
+### Configuration server sign-in during startup
+
+`codex app-server --print-startup-config` reads requirements without starting
+the app server. If a required configuration server uses OAuth and needs a new
+grant, the command exits with an error whose `data` contains
+`"reason": "configServer"` and `"action": "configServerLogin"`.
+
+When the action is `configServerLogin`, start `codex app-server --startup-oauth`.
+This dedicated stdio connection accepts one JSON request per line without an
+initialize handshake. Each reply echoes the string or integer request ID.
+
+1. After the user chooses Sign in, send
+   `{"id":1,"method":"account/gatewayOAuth/login","params":{"target":{"kind":"configServer"}}}`.
+   The helper resolves the target from local managed requirements.
+2. On this pipe, `account/gatewayOAuth/changed` sends the browser handoff with
+   `{"target":{"kind":"configServer"},"status":"started","authUrl":"..."}`.
+   Open that URL on the user's desktop. Rust handles the callback, token exchange,
+   and credential storage.
+3. The original login request stays pending and returns `{"prompt":null}` on
+   success, or an error on failure. To cancel, send
+   `{"id":2,"method":"account/gatewayOAuth/cancel"}`. Closing stdin also ends the
+   pending attempt.
+4. On success, close the pipe and rerun `--print-startup-config`. Continue startup
+   only with the validated requirements.
+
 # Item history anchors
 
 Live notifications and turn history return the same `ThreadItem`. Each item has

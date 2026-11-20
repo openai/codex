@@ -369,9 +369,7 @@ fn auth_io_error(error: std::io::Error) -> CloudConfigBundleLoadError {
         .and_then(|source| source.downcast_ref::<OAuthSessionError>())
         == Some(&OAuthSessionError::LoginRequired)
     {
-        CloudConfigBundleLoadError::new(
-            CloudConfigBundleLoadErrorCode::Auth,
-            /*status_code*/ None,
+        CloudConfigBundleLoadError::login_required(
             "Sign in to the configuration server to load your organization's settings",
         )
     } else {

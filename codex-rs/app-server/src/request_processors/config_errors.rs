@@ -1,6 +1,8 @@
 use super::*;
 
-fn cloud_config_bundle_load_error(err: &std::io::Error) -> Option<&CloudConfigBundleLoadError> {
+pub(crate) fn cloud_config_bundle_load_error(
+    err: &std::io::Error,
+) -> Option<&CloudConfigBundleLoadError> {
     let mut current: Option<&(dyn std::error::Error + 'static)> = err
         .get_ref()
         .map(|source| source as &(dyn std::error::Error + 'static));
