@@ -8,6 +8,7 @@ use std::fs::File;
 use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 
 use chrono::TimeZone;
 use pretty_assertions::assert_eq;
@@ -619,7 +620,7 @@ fn write_session_file_with_delayed_user_event(
     ts_str: &str,
     uuid: Uuid,
     meta_lines_before_user: usize,
-) -> std::io::Result<()> {
+) -> std::io::Result<PathBuf> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let dt = PrimitiveDateTime::parse(ts_str, format)
@@ -634,7 +635,7 @@ fn write_session_file_with_delayed_user_event(
 
     let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
     let file_path = dir.join(filename);
-    let mut file = File::create(file_path)?;
+    let mut file = File::create(&file_path)?;
 
     for i in 0..meta_lines_before_user {
         let id = if i == 0 {
@@ -669,7 +670,7 @@ fn write_session_file_with_delayed_user_event(
 
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
-    Ok(())
+    Ok(file_path)
 }
 
 fn write_session_file_with_meta_payload(
@@ -1177,25 +1178,45 @@ async fn test_list_threads_scans_past_head_for_user_event() {
 
     let uuid = Uuid::from_u128(99);
     let ts = "2025-05-01T10-30-00";
-    write_session_file_with_delayed_user_event(home, ts, uuid, /*meta_lines_before_user*/ 12)
-        .unwrap();
-
-    let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_threads(
-        home,
-        /*page_size*/ 10,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES.as_slice(),
-        Some(provider_filter.as_slice()),
-        /*cwd_filters*/ None,
-        TEST_PROVIDER,
+    let path = write_session_file_with_delayed_user_event(
+        home, ts, uuid, /*meta_lines_before_user*/ 12,
     )
-    .await
     .unwrap();
 
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].thread_id, Some(thread_id_from_uuid(uuid)));
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let rollout = fs::read_to_string(&path).unwrap();
+    let (headers, user_event) = rollout.trim_end().rsplit_once('\n').unwrap();
+    let malformed_event = r#"{"type":"event_msg"}"#;
+    // Persisted events can use an escaped outer tag or a numeric inner tag.
+    for event in [
+        user_event.to_owned(),
+        user_event.replace(r#""event_msg""#, r#""event\u005fmsg""#),
+        user_event.replace(r#""user_message""#, "20"),
+    ] {
+        fs::write(
+            &path,
+            format!("{headers}\ninvalid json\n{malformed_event}\n{event}\n"),
+        )
+        .unwrap();
+        let page = get_threads(
+            home,
+            /*page_size*/ 10,
+            /*cursor*/ None,
+            ThreadSortKey::CreatedAt,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            Some(provider_filter.as_slice()),
+            /*cwd_filters*/ None,
+            TEST_PROVIDER,
+        )
+        .await
+        .unwrap();
+
+        let [item] = page.items.as_slice() else {
+            panic!("expected one thread, got {}", page.items.len());
+        };
+        assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
+        assert_eq!(item.first_user_message.as_deref(), Some("Hello from user"));
+    }
 }
 
 #[tokio::test]

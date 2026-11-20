@@ -1,6 +1,7 @@
 #![allow(warnings, clippy::all)]
 
 use codex_utils_path as path_utils;
+use memchr::memmem::Finder;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -10,6 +11,8 @@ use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::LazyLock;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -149,6 +152,10 @@ const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 const USER_EVENT_SCAN_LIMIT: usize = 200;
 
+// A Unicode escape can spell part of the event tag. Either marker requires a full decode.
+static EVENT_MSG_MARKERS: LazyLock<[Finder<'static>; 2]> =
+    LazyLock::new(|| [Finder::new(br#""event_msg""#), Finder::new(br"\u")]);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadSortKey {
     CreatedAt,
@@ -260,11 +267,10 @@ struct FilesByCreatedAtVisitor<'a> {
     page_size: usize,
     anchor_state: AnchorState,
     more_matches_available: bool,
-    config: ThreadListConfig<'a>,
-    provider_matcher: Option<&'a ProviderMatcher<'a>>,
+    filters: Arc<SummaryFilters>,
 }
 
-impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
+impl RolloutFileVisitor for FilesByCreatedAtVisitor<'_> {
     async fn visit(
         &mut self,
         ts: OffsetDateTime,
@@ -289,12 +295,9 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             .and_then(format_rfc3339);
         if let Some(item) = build_thread_item(
             path,
-            self.config.allowed_sources,
-            self.provider_matcher,
-            self.config.cwd_filters,
+            Arc::clone(&self.filters),
             updated_at,
             PreviewFilter::RequirePreview,
-            self.config.include_attached_threads,
         )
         .await
         {
@@ -391,32 +394,22 @@ pub async fn get_threads_in_root(
 
     let anchor = cursor.cloned();
 
-    let provider_matcher = config
-        .model_providers
-        .and_then(|filters| ProviderMatcher::new(filters, config.default_provider));
+    let filters = Arc::new(SummaryFilters {
+        allowed_sources: config.allowed_sources.to_vec(),
+        provider_matcher: config
+            .model_providers
+            .and_then(|providers| ProviderMatcher::new(providers, config.default_provider)),
+        cwd_filters: config.cwd_filters.map(<[PathBuf]>::to_vec),
+        include_attached_threads: config.include_attached_threads,
+    });
 
     let result = match config.layout {
         ThreadListLayout::NestedByDate => {
-            traverse_directories_for_paths(
-                root.clone(),
-                page_size,
-                anchor,
-                sort_key,
-                config,
-                provider_matcher.as_ref(),
-            )
-            .await?
+            traverse_directories_for_paths(root.clone(), page_size, anchor, sort_key, filters)
+                .await?
         }
         ThreadListLayout::Flat => {
-            traverse_flat_paths(
-                root.clone(),
-                page_size,
-                anchor,
-                sort_key,
-                config,
-                provider_matcher.as_ref(),
-            )
-            .await?
+            traverse_flat_paths(root.clone(), page_size, anchor, sort_key, filters).await?
         }
     };
     Ok(result)
@@ -431,29 +424,14 @@ async fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     sort_key: ThreadSortKey,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
-            traverse_directories_for_paths_created(
-                root,
-                page_size,
-                anchor,
-                config,
-                provider_matcher,
-            )
-            .await
+            traverse_directories_for_paths_created(root, page_size, anchor, filters).await
         }
         ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
-            traverse_directories_for_paths_updated(
-                root,
-                page_size,
-                anchor,
-                config,
-                provider_matcher,
-            )
-            .await
+            traverse_directories_for_paths_updated(root, page_size, anchor, filters).await
         }
     }
 }
@@ -463,15 +441,14 @@ async fn traverse_flat_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     sort_key: ThreadSortKey,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
-            traverse_flat_paths_created(root, page_size, anchor, config, provider_matcher).await
+            traverse_flat_paths_created(root, page_size, anchor, filters).await
         }
         ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
-            traverse_flat_paths_updated(root, page_size, anchor, config, provider_matcher).await
+            traverse_flat_paths_updated(root, page_size, anchor, filters).await
         }
     }
 }
@@ -486,8 +463,7 @@ async fn traverse_directories_for_paths_created(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -497,8 +473,7 @@ async fn traverse_directories_for_paths_created(
         page_size,
         anchor_state: AnchorState::new(anchor),
         more_matches_available,
-        config,
-        provider_matcher,
+        filters,
     };
     walk_rollout_files(&root, &mut scanned_files, &mut visitor).await?;
     more_matches_available = visitor.more_matches_available;
@@ -535,8 +510,7 @@ async fn traverse_directories_for_paths_updated(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -562,12 +536,9 @@ async fn traverse_directories_for_paths_updated(
         let updated_at_fallback = format_rfc3339(ts);
         if let Some(item) = build_thread_item(
             candidate.path,
-            config.allowed_sources,
-            provider_matcher,
-            config.cwd_filters,
+            Arc::clone(&filters),
             updated_at_fallback,
             PreviewFilter::RequirePreview,
-            config.include_attached_threads,
         )
         .await
         {
@@ -599,8 +570,7 @@ async fn traverse_flat_paths_created(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -622,12 +592,9 @@ async fn traverse_flat_paths_created(
             .and_then(format_rfc3339);
         if let Some(item) = build_thread_item(
             path,
-            config.allowed_sources,
-            provider_matcher,
-            config.cwd_filters,
+            Arc::clone(&filters),
             updated_at,
             PreviewFilter::IncludeEmpty,
-            config.include_attached_threads,
         )
         .await
         {
@@ -659,8 +626,7 @@ async fn traverse_flat_paths_updated(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
-    config: ThreadListConfig<'_>,
-    provider_matcher: Option<&ProviderMatcher<'_>>,
+    filters: Arc<SummaryFilters>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -686,12 +652,9 @@ async fn traverse_flat_paths_updated(
         let updated_at_fallback = format_rfc3339(ts);
         if let Some(item) = build_thread_item(
             candidate.path,
-            config.allowed_sources,
-            provider_matcher,
-            config.cwd_filters,
+            Arc::clone(&filters),
             updated_at_fallback,
             PreviewFilter::IncludeEmpty,
-            config.include_attached_threads,
         )
         .await
         {
@@ -781,24 +744,14 @@ enum PreviewFilter {
 
 async fn build_thread_item(
     path: PathBuf,
-    allowed_sources: &[SessionSource],
-    provider_matcher: Option<&ProviderMatcher<'_>>,
-    cwd_filters: Option<&[PathBuf]>,
+    filters: Arc<SummaryFilters>,
     updated_at: Option<String>,
     preview_filter: PreviewFilter,
-    include_attached_threads: bool,
 ) -> Option<ThreadItem> {
-    // Read head and detect preview-bearing events; goal previews can appear before
-    // the first normal user message.
-    let filters = SummaryFilters {
-        allowed_sources,
-        provider_matcher,
-        cwd_filters,
-        include_attached_threads,
-    };
-    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT, filters)
-        .await
-        .ok()??;
+    let summary =
+        compression::read_rollout_lines(&path, move |lines| read_head_summary(lines, &filters))
+            .await
+            .ok()??;
     if summary.saw_session_meta
         && (matches!(preview_filter, PreviewFilter::IncludeEmpty)
             || summary.preview.is_some()
@@ -867,12 +820,14 @@ async fn build_thread_item(
 pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
     build_thread_item(
         path,
-        &[],
-        /*provider_matcher*/ None,
-        /*cwd_filters*/ None,
+        Arc::new(SummaryFilters {
+            allowed_sources: Vec::new(),
+            provider_matcher: None,
+            cwd_filters: None,
+            include_attached_threads: true,
+        }),
         /*updated_at*/ None,
         PreviewFilter::RequirePreview,
-        /*include_attached_threads*/ true,
     )
     .await
 }
@@ -929,20 +884,20 @@ async fn walk_rollout_files(
     Ok(())
 }
 
-struct ProviderMatcher<'a> {
-    filters: &'a [String],
+struct ProviderMatcher {
+    filters: Vec<String>,
     matches_default_provider: bool,
 }
 
-impl<'a> ProviderMatcher<'a> {
-    fn new(filters: &'a [String], default_provider: &'a str) -> Option<Self> {
+impl ProviderMatcher {
+    fn new(filters: &[String], default_provider: &str) -> Option<Self> {
         if filters.is_empty() {
             return None;
         }
 
         let matches_default_provider = filters.iter().any(|provider| provider == default_provider);
         Some(Self {
-            filters,
+            filters: filters.to_vec(),
             matches_default_provider,
         })
     }
@@ -955,14 +910,14 @@ impl<'a> ProviderMatcher<'a> {
     }
 }
 
-struct SummaryFilters<'a> {
-    allowed_sources: &'a [SessionSource],
-    provider_matcher: Option<&'a ProviderMatcher<'a>>,
-    cwd_filters: Option<&'a [PathBuf]>,
+struct SummaryFilters {
+    allowed_sources: Vec<SessionSource>,
+    provider_matcher: Option<ProviderMatcher>,
+    cwd_filters: Option<Vec<PathBuf>>,
     include_attached_threads: bool,
 }
 
-impl SummaryFilters<'_> {
+impl SummaryFilters {
     /// Filters only the rollout's first session metadata; copied fork metadata cannot override it.
     fn matches(&self, summary: &HeadTailSummary) -> bool {
         (self.include_attached_threads || summary.attached_to_thread_id.is_none())
@@ -973,8 +928,9 @@ impl SummaryFilters<'_> {
                     .is_some_and(|source| self.allowed_sources.contains(source)))
             && self
                 .provider_matcher
+                .as_ref()
                 .is_none_or(|matcher| matcher.matches(summary.model_provider.as_deref()))
-            && self.cwd_filters.is_none_or(|filters| {
+            && self.cwd_filters.as_deref().is_none_or(|filters| {
                 summary.cwd.as_ref().is_some_and(|cwd| {
                     filters
                         .iter()
@@ -984,27 +940,36 @@ impl SummaryFilters<'_> {
     }
 }
 
-async fn read_head_summary(
-    path: &Path,
-    head_limit: usize,
-    filters: SummaryFilters<'_>,
+fn read_head_summary(
+    lines: &mut dyn Iterator<Item = io::Result<String>>,
+    filters: &SummaryFilters,
 ) -> io::Result<Option<HeadTailSummary>> {
-    let mut lines = compression::open_rollout_line_reader(path).await?;
     let mut summary = HeadTailSummary::default();
     let mut lines_scanned = 0usize;
+    let event_msg_markers = LazyLock::force(&EVENT_MSG_MARKERS);
 
-    while lines_scanned < head_limit
+    while lines_scanned < HEAD_RECORD_LIMIT
         || (summary.saw_session_meta
             && (summary.preview.is_none() || summary.first_user_message.is_none())
-            && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
+            && lines_scanned < HEAD_RECORD_LIMIT + USER_EVENT_SCAN_LIMIT)
     {
-        let line_opt = lines.next_line().await?;
-        let Some(line) = line_opt else { break };
+        let Some(line) = lines.next().transpose()? else {
+            break;
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         lines_scanned += 1;
+
+        // After the first session header, only events can change the summary.
+        if summary.saw_session_meta
+            && !event_msg_markers
+                .iter()
+                .any(|marker| marker.find(trimmed.as_bytes()).is_some())
+        {
+            continue;
+        }
 
         let parsed = crate::parse_rollout_line(trimmed);
         let rollout_line = match parsed {

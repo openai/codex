@@ -3234,17 +3234,28 @@ async fn thread_list_archived_filter() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, active_id);
 
-    let ThreadListResponse { data, .. } = list_threads(
-        &mut mcp,
-        /*cursor*/ None,
-        Some(10),
-        Some(vec!["mock_provider".to_string()]),
-        /*source_kinds*/ None,
-        Some(true),
-    )
-    .await?;
-    assert_eq!(data.len(), 1);
-    assert_eq!(data[0].id, archived_id);
+    for (sort_key, provider, expected_ids) in [
+        (None, "mock_provider", vec![archived_id.as_str()]),
+        (
+            Some(ThreadSortKey::UpdatedAt),
+            "mock_provider",
+            vec![archived_id.as_str()],
+        ),
+        (Some(ThreadSortKey::UpdatedAt), "other_provider", vec![]),
+    ] {
+        let page = list_threads_with_sort(
+            &mut mcp,
+            /*cursor*/ None,
+            Some(10),
+            Some(vec![provider.to_string()]),
+            /*source_kinds*/ None,
+            sort_key,
+            /*archived*/ Some(true),
+        )
+        .await?;
+        let ids: Vec<_> = page.data.iter().map(|thread| thread.id.as_str()).collect();
+        assert_eq!(ids, expected_ids);
+    }
 
     Ok(())
 }

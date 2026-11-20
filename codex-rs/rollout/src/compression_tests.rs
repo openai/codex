@@ -96,12 +96,12 @@ async fn full_history_load_preserves_records_and_errors_across_representations()
 }
 
 #[tokio::test]
-async fn read_session_meta_line_stops_before_invalid_utf8_tail() -> anyhow::Result<()> {
+async fn metadata_and_preview_reads_stop_before_invalid_utf8_tail() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(16);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
-    write_rollout(&rollout_path, thread_id, "ignored tail")?;
+    write_rollout(&rollout_path, thread_id, "first message")?;
     let mut contents = fs::read(&rollout_path)?;
     contents.resize(contents.len() + 64 * 1024, 0xff);
     fs::write(&rollout_path, contents)?;
@@ -109,16 +109,22 @@ async fn read_session_meta_line_stops_before_invalid_utf8_tail() -> anyhow::Resu
     let session_meta = read_session_meta_line(&rollout_path).await?;
 
     assert_eq!(session_meta.meta.id, thread_id);
+    let summary = crate::list::read_thread_item_from_rollout(rollout_path).await;
+    assert_eq!(
+        summary.and_then(|item| item.first_user_message),
+        Some("first message".to_string())
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn read_session_meta_line_stops_before_invalid_utf8_compressed_tail() -> anyhow::Result<()> {
+async fn metadata_and_preview_reads_stop_before_invalid_utf8_compressed_tail() -> anyhow::Result<()>
+{
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(17);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
-    write_rollout(&rollout_path, thread_id, "ignored compressed tail")?;
+    write_rollout(&rollout_path, thread_id, "first message")?;
     let mut contents = fs::read(&rollout_path)?;
     contents.resize(contents.len() + 64 * 1024, 0xff);
     fs::write(&rollout_path, contents)?;
@@ -129,6 +135,11 @@ async fn read_session_meta_line_stops_before_invalid_utf8_compressed_tail() -> a
     assert_eq!(session_meta.meta.id, thread_id);
     assert!(!rollout_path.exists());
     assert!(compressed_rollout_path(&rollout_path).exists());
+    let summary = crate::list::read_thread_item_from_rollout(rollout_path).await;
+    assert_eq!(
+        summary.and_then(|item| item.first_user_message),
+        Some("first message".to_string())
+    );
     Ok(())
 }
 
