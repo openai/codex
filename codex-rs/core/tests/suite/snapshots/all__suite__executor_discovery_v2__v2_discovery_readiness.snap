@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/executor_discovery_v2.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.\",\n&history, &ContextSnapshotOptions::default(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Readiness waits for prewarm; unchanged turns reuse inventory or errors, and failures recover after cooldown.\",\n&history, &ContextSnapshotOptions::default(),)"
 ---
-Scenario: Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.
+Scenario: Readiness waits for prewarm; unchanged turns reuse inventory or errors, and failures recover after cooldown.
 
 ## Window 1
 -- request 1 (turn) --

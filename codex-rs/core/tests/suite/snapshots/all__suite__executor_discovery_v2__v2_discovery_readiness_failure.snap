@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/executor_discovery_v2.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.\",\n&history, &ContextSnapshotOptions::default(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Readiness waits for prewarm; unchanged turns reuse inventory or errors, and failures recover after cooldown.\",\n&history, &ContextSnapshotOptions::default(),)"
 ---
-Scenario: Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.
+Scenario: Readiness waits for prewarm; unchanged turns reuse inventory or errors, and failures recover after cooldown.
 
 ## Window 1
 -- request 1 (turn) --
@@ -81,3 +81,24 @@ Scenario: Readiness waits for prewarm to finish; steps reuse successes and perma
 -- request 3 (turn) --
 07:message/user:
     Inspect the same environment again.
+-- request 4 (turn) --
+08:message/developer:
+    <skills_instructions>
+    ## Skills
+    A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...urce` locators use their provider's access mechanism. [hash=b6782e3abdba03b2]
+    Read a skill package directly with `skills.read({"package":"<package>"})` to read its `SKILL.md`; root a...ackage is not provided, use `skills.list` to find it. [hash=25bf84ea2123d647]
+    ### Available skills
+    - inert-sentinel: Executor skill used by the acquisition test (executor package: skill://codex-home-skills/inert-sentinel)
+    ### How to use skills
+    - Discovery: The list above is the skills available in this session (name + description + source locator...ource` entries use their provider's access mechanism. [hash=a9c099703b9c0121]
+    <OMITTED 9 LINES; ~479 TOKENS; hash=c5994539994fb066>
+      - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+      - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+    - Context hygiene:
+      - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruc...Do not load unrelated references, scripts, or assets. [hash=d6eeb13522175402]
+      - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+      - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+    - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+    </skills_instructions>
+09:message/user:
+    Inspect the environment after discovery's cooldown.

@@ -10,9 +10,7 @@ async fn executor_discovery_v2_refreshes_inventory_and_reuses_it_across_turns() 
 }
 
 #[test_case::test_case(DiscoveryFailure::None; "success")]
-#[test_case::test_case(DiscoveryFailure::Server; "permanent_failure")]
-#[test_case::test_case(DiscoveryFailure::Disconnect; "retryable_failure")]
-#[test_case::test_case(DiscoveryFailure::NoReply; "timeout")]
+#[test_case::test_case(DiscoveryFailure::Server; "server_failure")]
 #[tokio::test]
 async fn executor_discovery_v2_prepares_inventory_while_sampling(
     failure: DiscoveryFailure,

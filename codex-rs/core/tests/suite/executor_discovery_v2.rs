@@ -201,6 +201,15 @@ pub(super) enum DiscoveryFailure {
 }
 
 impl Executor {
+    async fn discovery_count(&self) -> usize {
+        self.requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| request["method"] == "capabilities/discoverV2")
+            .count()
+    }
+
     pub(super) async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
         Self::start_with_version(supports_v2, failure, "0.164.0").await
     }
@@ -616,37 +625,11 @@ async fn v2_refresh_during_discovery_applies_to_the_next_step() -> Result<()> {
         responses::sse(vec![responses::ev_completed("ready")]),
     )
     .await;
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Initialize both environments.".into(),
-            text_elements: Vec::new(),
-        }]))
+    test.submit_text_turn("Initialize both environments.")
         .await?;
-    core_test_support::wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     let _ = test.codex.current_mcp_config_and_runtime_context().await;
-    let second_calls = || async {
-        second_executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count()
-    };
-    let second_before = second_calls().await;
-    let calls = || async {
-        executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count()
-    };
-    let before = calls().await;
+    let second_before = second_executor.discovery_count().await;
+    let before = executor.discovery_count().await;
     let (started, captured) = oneshot::channel();
     let (resume, released) = oneshot::channel();
     *second_executor.discovery_pause.lock().await = Some(DiscoveryPause {
@@ -658,7 +641,7 @@ async fn v2_refresh_during_discovery_applies_to_the_next_step() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(/*secs*/ 10), captured).await??;
         // A has finished and B is still loading. Both readers may finish with their
         // captured inventories; repeated refreshes must survive until the next lookup.
-        assert_eq!(calls().await, before + 1);
+        assert_eq!(executor.discovery_count().await, before + 1);
         *executor.inventory.lock().await = Some(json!({"plugins":[],"skills":[],"warnings":[]}));
         *second_executor.inventory.lock().await =
             Some(json!({"plugins":[],"skills":[],"warnings":[]}));
@@ -689,62 +672,51 @@ async fn v2_refresh_during_discovery_applies_to_the_next_step() -> Result<()> {
         );
     }
     assert_eq!(
-        calls().await,
+        executor.discovery_count().await,
         before + 1,
         "refresh does not restart the current discovery"
     );
-    assert_eq!(second_calls().await, second_before + 1);
+    assert_eq!(second_executor.discovery_count().await, second_before + 1);
 
     let response = responses::mount_sse_once(
         &model,
         responses::sse(vec![responses::ev_completed("after-refresh")]),
     )
     .await;
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Use the refreshed inventories.".into(),
-            text_elements: Vec::new(),
-        }]))
+    test.submit_text_turn("Use the refreshed inventories.")
         .await?;
-    core_test_support::wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     response.single_request();
     let snapshots = test
         .codex
         .thread_extension_data()
         .get::<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>()
         .context("refreshed inventory")?;
-    let inventory = snapshots
-        .iter()
-        .find(|snapshot| snapshot.environment_id == original_selection.environment_id)
-        .context("executor inventory")?
-        .result
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    assert!(inventory.plugins.is_empty(), "the next step must refresh");
     let _ = test.codex.current_mcp_config_and_runtime_context().await;
-    assert_eq!(calls().await, before + 2);
-    assert_eq!(second_calls().await, second_before + 2);
+    assert_eq!(executor.discovery_count().await, before + 2);
+    assert_eq!(second_executor.discovery_count().await, second_before + 2);
     assert_eq!(snapshots.len(), 2);
-    let second = snapshots
-        .iter()
-        .find(|snapshot| snapshot.environment_id == "second")
-        .context("second inventory")?;
-    assert!(
-        second
+    for environment_id in [original_selection.environment_id.as_str(), "second"] {
+        let inventory = snapshots
+            .iter()
+            .find(|snapshot| snapshot.environment_id == environment_id)
+            .context("refreshed environment inventory")?
             .result
             .as_ref()
-            .map_err(|error| anyhow::anyhow!("{error}"))?
-            .plugins
-            .is_empty()
-    );
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert!(inventory.plugins.is_empty(), "the next step must refresh");
+    }
     Ok(())
 }
 
 pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    let prewarm_failed = match failure {
+        DiscoveryFailure::None => false,
+        DiscoveryFailure::Server => true,
+        DiscoveryFailure::Disconnect | DiscoveryFailure::NoReply | DiscoveryFailure::TurnGrant => {
+            unreachable!("transport recovery and cancellation have separate coverage")
+        }
+    };
     let executor = Executor::start(/*supports_v2*/ true, failure).await?;
     let (discovery_started, discovery_captured) = oneshot::channel();
     let (release_discovery, discovery_released) = oneshot::channel();
@@ -814,7 +786,7 @@ pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Resu
     selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(
         environment_config_for_selection(&test.config, &selection),
     );
-    // Freeze the prewarm deadline until sampling reaches the readiness barrier.
+    // Control the prewarm deadline and retry cooldown without wall-clock races.
     tokio::time::pause();
     let clock_guard = AbortOnDropHandle::new(tokio::spawn(async {
         // Keep paused time from automatically advancing while mock HTTP/socket I/O is pending.
@@ -881,8 +853,6 @@ pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Resu
     release_discovery
         .send(())
         .map_err(|_| anyhow::anyhow!("preparation stopped before release"))?;
-    tokio::time::resume();
-    drop(clock_guard);
     core_test_support::wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -901,26 +871,13 @@ pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Resu
             .message_input_texts("developer")
             .join("\n")
             .contains("inert-sentinel"),
-        !matches!(failure, DiscoveryFailure::Server),
-        "the next step retries transient failures and retains permanent errors"
+        !prewarm_failed,
+        "failed loads stay in cooldown"
     );
-    let expected_calls = match failure {
-        DiscoveryFailure::None | DiscoveryFailure::Server => 1,
-        DiscoveryFailure::NoReply => 2,
-        // The two failed transport attempts belong to prewarm; the next step recovers.
-        DiscoveryFailure::Disconnect => 3,
-        DiscoveryFailure::TurnGrant => unreachable!("readiness does not grant turn permissions"),
-    };
     assert_eq!(
-        executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count(),
-        expected_calls,
-        "only retryable prewarm failures should issue another discovery request"
+        executor.discovery_count().await,
+        1,
+        "failed prewarm must not retry before its cooldown expires"
     );
     let mut history = starting.requests();
     history.extend(ready.requests());
@@ -940,31 +897,52 @@ pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Resu
             .message_input_texts("developer")
             .join("\n")
             .contains("inert-sentinel"),
-        !matches!(failure, DiscoveryFailure::Server)
+        !prewarm_failed
     );
     assert_eq!(
-        executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count(),
-        expected_calls,
-        "unchanged turns reuse the successful inventory or cached permanent error"
+        executor.discovery_count().await,
+        1,
+        "unchanged turns reuse the inventory or the error during cooldown"
     );
     history.extend(reused.requests());
-    let snapshot_name = match failure {
-        DiscoveryFailure::None | DiscoveryFailure::Disconnect | DiscoveryFailure::NoReply => {
-            "v2_discovery_readiness"
-        }
-        DiscoveryFailure::Server => "v2_discovery_readiness_permanent_failure",
-        DiscoveryFailure::TurnGrant => unreachable!("readiness does not grant turn permissions"),
+    if prewarm_failed {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let recovered = responses::mount_sse_once(
+            &model,
+            responses::sse(vec![
+                responses::ev_response_created("recovered"),
+                responses::ev_completed("recovered"),
+            ]),
+        )
+        .await;
+        test.submit_text_turn("Inspect the environment after discovery's cooldown.")
+            .await?;
+        assert!(
+            recovered
+                .single_request()
+                .message_input_texts("developer")
+                .join("\n")
+                .contains("inert-sentinel"),
+            "the first turn after cooldown recovers discovery"
+        );
+        assert_eq!(
+            executor.discovery_count().await,
+            2,
+            "recovery needs one discovery request"
+        );
+        history.extend(recovered.requests());
+    }
+    tokio::time::resume();
+    drop(clock_guard);
+    let snapshot_name = if prewarm_failed {
+        "v2_discovery_readiness_failure"
+    } else {
+        "v2_discovery_readiness"
     };
     insta::assert_snapshot!(
         snapshot_name,
         context_snapshot::format_request_history_snapshot(
-            "Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.",
+            "Readiness waits for prewarm; unchanged turns reuse inventory or errors, and failures recover after cooldown.",
             &history,
             &ContextSnapshotOptions::default(),
         )
@@ -1021,13 +999,7 @@ async fn v2_prewarm_retains_all_selected_environments_until_the_first_step() -> 
             .await?;
         response.single_request();
         assert_eq!(
-            executor
-                .requests
-                .lock()
-                .await
-                .iter()
-                .filter(|request| request["method"] == "capabilities/discoverV2")
-                .count(),
+            executor.discovery_count().await,
             selections.len(),
             "the first step and later turns must reuse every prewarmed inventory"
         );
@@ -1108,8 +1080,10 @@ async fn v2_prewarm_timeout_does_not_block_session_configured() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<()> {
+#[test_case::test_case(false; "ordinary_load")]
+#[test_case::test_case(true; "forced_load")]
+#[tokio::test]
+async fn v2_discovery_caches_successes_and_retries_failed_loads(force_reload: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     for failure in [DiscoveryFailure::Server, DiscoveryFailure::Disconnect] {
         let executor = Executor::start(/*supports_v2*/ true, failure).await?;
@@ -1127,45 +1101,42 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
             cwd: codex_utils_path_uri::PathUri::parse("file:///repo")?,
             sandbox: None,
         };
-        assert!(
-            cache
-                .discover("executor", &environment, request.clone())
-                .await
-                .is_err()
-        );
-        assert!(!cache.take_recovered_discovery());
+        let error = cache
+            .discover(
+                "executor",
+                &environment,
+                codex_exec_server::DiscoverV2CapabilitiesRequest {
+                    force_reload,
+                    ..request.clone()
+                },
+            )
+            .await
+            .expect_err("initial discovery fails");
+        let suppressed = cache
+            .discover("executor", &environment, request.clone())
+            .await
+            .expect_err("cooldown suppresses an immediate retry");
+        assert!(Arc::ptr_eq(&error, &suppressed));
+        // Advance only the cooldown; keep the socket fixture on real time.
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::time::resume();
         let (first, concurrent) = tokio::join!(
             cache.discover("executor", &environment, request.clone()),
             cache.discover("executor", &environment, request.clone()),
         );
+        let first = first.map_err(anyhow::Error::msg)?;
+        let concurrent = concurrent.map_err(anyhow::Error::msg)?;
+        assert!(Arc::ptr_eq(&first, &concurrent));
+        let reused = cache
+            .discover("executor", &environment, request.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(Arc::ptr_eq(&first, &reused));
         let expected_calls = match failure {
-            DiscoveryFailure::Server => {
-                assert!(first.is_err());
-                assert!(concurrent.is_err());
-                let refreshed = codex_exec_server::ExecutorCapabilityDiscoveryV2Cache::default();
-                refreshed
-                    .discover("executor", &environment, request.clone())
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                assert!(!refreshed.take_recovered_discovery());
-                assert!(!cache.take_recovered_discovery());
-                2
-            }
-            DiscoveryFailure::Disconnect => {
-                let first = first.map_err(anyhow::Error::msg)?;
-                let concurrent = concurrent.map_err(anyhow::Error::msg)?;
-                assert!(Arc::ptr_eq(&first, &concurrent));
-                assert!(cache.take_recovered_discovery());
-                assert!(!cache.take_recovered_discovery());
-                let reused = cache
-                    .discover("executor", &environment, request.clone())
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                assert!(Arc::ptr_eq(&first, &reused));
-                assert!(!cache.take_recovered_discovery());
-                // Two disconnected attempts, then one shared successful retry in the same cache.
-                3
-            }
+            DiscoveryFailure::Server => 2,
+            // Two disconnected attempts, then one shared successful retry in the same cache.
+            DiscoveryFailure::Disconnect => 3,
             DiscoveryFailure::None | DiscoveryFailure::NoReply | DiscoveryFailure::TurnGrant => {
                 unreachable!("the test only exercises startup failures")
             }
@@ -1177,10 +1148,82 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
                 .await
                 .iter()
                 .filter(|request| request["method"] == "capabilities/discoverV2")
-                .count(),
-            expected_calls,
+                .map(|request| request["params"]["forceReload"].as_bool().unwrap_or(false))
+                .collect::<Vec<_>>(),
+            vec![force_reload; expected_calls],
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn v2_discovery_recovery_reprojects_mcp_without_explicit_invalidation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    // Keep discovery failing until the test repairs the executor's response.
+    *executor.inventory.lock().await = Some(Value::Null);
+    let model = responses::start_mock_server().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::new(DiscoveryRecorder {
+        mcp_projections: AtomicUsize::new(0),
+        snapshots: Arc::clone(&observed),
+        selected_plugins: Arc::new(Mutex::new(None)),
+    });
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(recorder.clone());
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_exec_server_url(executor.url.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                .expect("enable discovery V2");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let first = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![responses::ev_completed("failed-discovery")]),
+    )
+    .await;
+    test.submit_turn("Hello.").await?;
+    first.single_request();
+    assert!(
+        observed
+            .lock()
+            .await
+            .last()
+            .context("failed MCP inventory")?
+            .result
+            .is_err()
+    );
+    let before = recorder.mcp_projections.load(Ordering::Relaxed);
+
+    *executor.inventory.lock().await = None;
+    // Expire even the maximum cooldown without sleeping or changing executor bindings.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let second = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![responses::ev_completed("recovered-discovery")]),
+    )
+    .await;
+    test.submit_turn("Hello again.").await?;
+    second.single_request();
+    assert!(recorder.mcp_projections.load(Ordering::Relaxed) > before);
+    let observed = observed.lock().await;
+    let recovered = observed
+        .last()
+        .context("recovered MCP inventory")?
+        .result
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(
+        recovered.plugins.first().context("recovered plugin")?.id,
+        "inert-sentinel@market"
+    );
     Ok(())
 }
 
@@ -1247,18 +1290,9 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
         })
         .build_with_auto_env(&model)
         .await?;
-    let calls = || async {
-        executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count()
-    };
     if acquires_v2 {
         let _ = test.codex.current_mcp_config_and_runtime_context().await;
-        let before = calls().await;
+        let before = executor.discovery_count().await;
         assert!(before > 0);
         {
             let observed = observed.lock().await;
@@ -1274,9 +1308,13 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
 
         *executor.inventory.lock().await = None; // Serve the sentinel plugin and skill.
         test.codex.invalidate_executor_discovery();
-        assert_eq!(calls().await, before, "invalidation is lazy");
+        assert_eq!(
+            executor.discovery_count().await,
+            before,
+            "invalidation is lazy"
+        );
         let _ = test.codex.current_mcp_config_and_runtime_context().await;
-        assert_eq!(calls().await, before + 1);
+        assert_eq!(executor.discovery_count().await, before + 1);
         assert_eq!(
             executor
                 .requests
@@ -1303,7 +1341,7 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
             "inert-sentinel"
         );
     }
-    let initial_calls = calls().await;
+    let initial_calls = executor.discovery_count().await;
     let mut selection = test.executor_environment().selection().clone();
     selection.environment_id = codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string();
     let cwd = selection.cwd.clone();
@@ -1392,7 +1430,7 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
         "both discovery modes must render the skill catalog",
     );
     if acquires_v2 {
-        let discovery_calls = calls().await;
+        let discovery_calls = executor.discovery_count().await;
         let mcp_projections = recorder.mcp_projections.load(Ordering::Relaxed);
         let second_response = responses::mount_sse_once(
             &model,
@@ -1409,7 +1447,7 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
         .await?;
         second_response.single_request();
         assert_eq!(
-            calls().await,
+            executor.discovery_count().await,
             discovery_calls,
             "an unchanged turn must reuse the discovered inventory"
         );
@@ -1429,7 +1467,7 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
             )
         );
     } else {
-        assert_eq!(calls().await, 0);
+        assert_eq!(executor.discovery_count().await, 0);
         assert!(observed.lock().await.is_empty());
     }
     let requests = executor.requests.lock().await.clone();
@@ -1606,17 +1644,8 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         cwd: codex_utils_path_uri::PathUri::from_host_native_path(root.path())?,
         sandbox: None,
     };
-    let calls = || async {
-        executor
-            .requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["method"] == "capabilities/discoverV2")
-            .count()
-    };
     assert_eq!(
-        calls().await,
+        executor.discovery_count().await,
         0,
         "creating a cache must not request discovery"
     );
@@ -1629,7 +1658,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         &first,
         &concurrent.map_err(anyhow::Error::msg)?
     ));
-    assert_eq!(calls().await, 1);
+    assert_eq!(executor.discovery_count().await, 1);
     let restricted = codex_exec_server::DiscoverV2CapabilitiesRequest {
         sandbox: Some(
             codex_exec_server::FileSystemSandboxContext::from_permission_profile(
@@ -1648,7 +1677,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(Arc::ptr_eq(&first, &original));
-    assert_eq!(calls().await, 2);
+    assert_eq!(executor.discovery_count().await, 2);
     cache
         .discover(
             "executor",
@@ -1661,7 +1690,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .await
         .map_err(anyhow::Error::msg)?;
     assert_eq!(
-        calls().await,
+        executor.discovery_count().await,
         3,
         "another cwd must not reuse the same inventory"
     );
@@ -1670,7 +1699,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(Arc::ptr_eq(&first, &other));
-    assert_eq!(calls().await, 3);
+    assert_eq!(executor.discovery_count().await, 3);
     let replacement_manager = codex_exec_server::EnvironmentManager::create_for_tests(
         Some(executor.url.clone()),
         /*local_runtime_paths*/ None,
@@ -1683,14 +1712,14 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .discover("executor", &replacement, request.clone())
         .await
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(calls().await, 4);
+    assert_eq!(executor.discovery_count().await, 4);
     let other_reused = cache
         .discover("other-executor", &environment, request.clone())
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(Arc::ptr_eq(&other, &other_reused));
     assert_eq!(
-        calls().await,
+        executor.discovery_count().await,
         4,
         "a new environment instance must not invalidate the original instance"
     );
@@ -1715,7 +1744,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(Arc::ptr_eq(&other, &oldest));
-    assert_eq!(calls().await, 17);
+    assert_eq!(executor.discovery_count().await, 17);
 
     cache
         .discover(
@@ -1733,16 +1762,16 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .discover("other-executor", &environment, request.clone())
         .await
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(calls().await, 19);
+    assert_eq!(executor.discovery_count().await, 19);
     assert!(!Arc::ptr_eq(&other, &reloaded));
     assert_eq!(other.as_ref(), reloaded.as_ref());
 
-    // Explicit requests and dirty entries reload once; ordinary reads reuse the result.
+    // Explicit requests and invalidated entries reload once; ordinary reads reuse the result.
     let mut previous = reloaded;
     for (expected_calls, force_reload) in [(20, true), (21, false)] {
         if !force_reload {
             cache.invalidate();
-            assert_eq!(calls().await, expected_calls - 1);
+            assert_eq!(executor.discovery_count().await, expected_calls - 1);
         }
         let refreshed = cache
             .discover(
@@ -1761,7 +1790,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
             .await
             .map_err(anyhow::Error::msg)?;
         assert!(Arc::ptr_eq(&refreshed, &ordinary));
-        assert_eq!(calls().await, expected_calls);
+        assert_eq!(executor.discovery_count().await, expected_calls);
         assert_eq!(
             executor
                 .requests
@@ -1775,7 +1804,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         previous = refreshed;
     }
 
-    // Reloading one dirty entry leaves the others dirty; new contexts load normally.
+    // Reloading one invalidated entry preserves the others' reloads; new contexts load normally.
     for (cwd, force_reload) in [("overflow", true), ("new-context", false)] {
         cache
             .discover(

@@ -1,4 +1,4 @@
-//! Core owns a thread discovery cache shared across turns. Explicit refresh dirties every entry.
+//! Core owns a thread discovery cache shared across turns. Explicit refresh evicts every entry.
 //! In-flight readers may keep their inventories; invalidation applies to the next lookup.
 //! Prewarming bounds discovery before readiness without publishing MCP state or failing startup.
 
@@ -166,7 +166,6 @@ impl Session {
                     .zip(&snapshots)
                     .any(|(previous, current)| !previous.same_discovery(current))
         });
-        let inventory_changed = cache.take_recovered_discovery() || inventory_changed;
         (Some(snapshots), inventory_changed)
     }
 }
