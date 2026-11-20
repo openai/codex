@@ -424,7 +424,7 @@ pub(super) async fn prepare_forked_history(
             [parent_usage_hints.root, parent_usage_hints.subagent]
                 .into_iter()
                 .flatten()
-                .map(|instructions| instructions.render().into_text().unwrap_or_default())
+                .map(|instructions| instructions.body().into_text().unwrap_or_default())
                 .collect()
         } else {
             Vec::new()

@@ -21,12 +21,11 @@ All agents share the same directory. In detail:
 /// Multi-agent role text and the captured capabilities used to render its context segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiAgentRoleInstructions {
-    /// Complete configured instructions, emitted verbatim without catalog markers.
+    /// Complete configured role body.
     Configured(String),
     /// Selected catalog or bundled text, composed with captured runtime guidance.
     Composed {
         base: String,
-        marked: bool,
         omit_update_plan_instructions: bool,
         max_concurrency: usize,
         wait_agent_enabled: bool,
@@ -50,8 +49,8 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
 
     fn markers(&self) -> (&'static str, &'static str) {
         match self {
-            Self::Composed { marked: true, .. } => Self::type_markers(),
-            Self::Configured(_) | Self::Composed { marked: false, .. } => ("", ""),
+            Self::Configured(text) if Self::matches_text(text) => ("", ""),
+            Self::Configured(_) | Self::Composed { .. } => Self::type_markers(),
         }
     }
 
@@ -68,7 +67,6 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
                 max_concurrency,
                 wait_agent_enabled,
                 expose_model_overrides,
-                ..
             } => {
                 let base = if *omit_update_plan_instructions {
                     without_update_plan_instructions(base)

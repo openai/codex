@@ -58,7 +58,7 @@ fn spawn_agent_exposes_agent_type(body: &Value, namespace: &str) -> bool {
 
 fn resolved_root_usage_hint(config: &Config, request: &ResponsesRequest) -> String {
     if let Some(configured) = config.multi_agent_v2.root_agent_usage_hint_text.as_deref() {
-        return configured.to_string();
+        return format!("<multi_agent_role>{configured}</multi_agent_role>");
     }
 
     request
@@ -664,11 +664,12 @@ async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
     initial.submit_turn("before upgrading").await?;
 
     let initial_request = initial_response.single_request();
+    let tagged_legacy_hint = resolved_root_usage_hint(&initial.config, &initial_request);
     assert!(
         initial_request
             .message_input_text_groups("developer")
             .iter()
-            .any(|group| { group.len() == 1 && group[0] == legacy_root_agent_usage_hint_text }),
+            .any(|group| group.len() == 1 && group[0] == tagged_legacy_hint),
         "legacy usage hint should be its own developer message"
     );
     assert!(
@@ -690,6 +691,7 @@ async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
     let mut removed_recorded_usage_hint = false;
     let mut removed_usage_hint_presence = false;
     let legacy_rollout = std::fs::read_to_string(&rollout_path)?
+        .replace(&tagged_legacy_hint, legacy_root_agent_usage_hint_text)
         .lines()
         .map(codex_rollout::parse_rollout_line)
         .collect::<std::result::Result<Vec<_>, _>>()?

@@ -10854,6 +10854,17 @@ async fn build_initial_context_omits_prompt_fragments_without_extension_state() 
     );
 }
 
+fn multi_agent_role_messages(items: &[ResponseItem]) -> Vec<Vec<&str>> {
+    developer_message_texts(items)
+        .into_iter()
+        .filter(|message| {
+            message
+                .iter()
+                .any(|text| MultiAgentRoleInstructions::matches_text(text))
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_message() {
     let (session, turn_context) =
@@ -10861,18 +10872,9 @@ async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
-    let developer_messages = developer_message_texts(&initial_context);
-    assert!(
-        developer_messages
-            .iter()
-            .any(|message| message.as_slice() == ["Root guidance."]),
-        "expected standalone root usage hint developer message, got {developer_messages:?}"
-    );
-    assert!(
-        !developer_messages
-            .iter()
-            .any(|message| message.as_slice() == ["Subagent guidance."]),
-        "did not expect subagent usage hint for root thread, got {developer_messages:?}"
+    assert_eq!(
+        multi_agent_role_messages(&initial_context),
+        [["<multi_agent_role>Root guidance.</multi_agent_role>"]]
     );
 }
 
@@ -10912,17 +10914,9 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
             .contains("<context_window>\nAgent name: /root/worker\n")),
         "expected subagent context window to include its canonical name, got {developer_messages:?}"
     );
-    assert!(
-        developer_messages
-            .iter()
-            .any(|message| message.as_slice() == ["Subagent guidance."]),
-        "expected standalone subagent usage hint developer message, got {developer_messages:?}"
-    );
-    assert!(
-        !developer_messages
-            .iter()
-            .any(|message| message.as_slice() == ["Root guidance."]),
-        "did not expect root usage hint for subagent thread, got {developer_messages:?}"
+    assert_eq!(
+        multi_agent_role_messages(&initial_context),
+        [["<multi_agent_role>Subagent guidance.</multi_agent_role>"]]
     );
 }
 
@@ -10933,16 +10927,7 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
-    let developer_messages = developer_message_texts(&initial_context);
-    assert!(
-        !developer_messages.iter().any(|message| {
-            matches!(
-                message.as_slice(),
-                ["Root guidance."] | ["Subagent guidance."]
-            )
-        }),
-        "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
-    );
+    assert!(multi_agent_role_messages(&initial_context).is_empty());
 }
 
 #[tokio::test]
@@ -10960,19 +10945,7 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_hint_is_emp
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
-    let developer_messages = developer_message_texts(&initial_context);
-    assert!(
-        !developer_messages.iter().any(|message| {
-            matches!(
-                message.as_slice(),
-                ["Root guidance."] | ["Subagent guidance."]
-            ) || message.iter().any(|text| {
-                text.contains("You are `/root`, the primary agent")
-                    || text.contains("You are an agent in a team of agents")
-            })
-        }),
-        "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
-    );
+    assert!(multi_agent_role_messages(&initial_context).is_empty());
 }
 
 #[tokio::test]

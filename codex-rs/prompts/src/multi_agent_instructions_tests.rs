@@ -14,31 +14,22 @@ fn role_segment_filters_base_and_appends_bundled_guidance() {
     let expected_body = format!(
         "Role.\n## Work\nContinue.\n{shared}\n{wait}\n\nThere are 2 available concurrency slots, meaning that up to 2 agents can be active at once, including you.\n\n{model_override}"
     );
-    for marked in [false, true] {
-        let instructions = MultiAgentRoleInstructions::Composed {
-            base: "Role.\n## Plan tool\nOmit role checklist guidance.\n## Work\nContinue."
-                .to_string(),
-            marked,
-            omit_update_plan_instructions: true,
-            max_concurrency: 2,
-            wait_agent_enabled: true,
-            expose_model_overrides: true,
-        };
-        let expected_text = if marked {
-            format!("<multi_agent_role>{expected_body}</multi_agent_role>")
-        } else {
-            expected_body.clone()
-        };
-        assert_eq!(
-            instructions.render_fragment(),
-            RenderedFragment::new(
-                "developer",
-                AnnotatedContent::text(
-                    expected_text,
-                    ContentItemKind("multi_agent.role_instructions".to_string()),
-                    ContentItemMetadata::harness(),
-                ),
+    let instructions = MultiAgentRoleInstructions::Composed {
+        base: "Role.\n## Plan tool\nOmit role checklist guidance.\n## Work\nContinue.".to_string(),
+        omit_update_plan_instructions: true,
+        max_concurrency: 2,
+        wait_agent_enabled: true,
+        expose_model_overrides: true,
+    };
+    assert_eq!(
+        instructions.render_fragment(),
+        RenderedFragment::new(
+            "developer",
+            AnnotatedContent::text(
+                format!("<multi_agent_role>{expected_body}</multi_agent_role>"),
+                ContentItemKind("multi_agent.role_instructions".to_string()),
+                ContentItemMetadata::harness(),
             ),
-        );
-    }
+        ),
+    );
 }

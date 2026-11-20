@@ -26,7 +26,7 @@ Settings:
 01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 02:message/developer:
-    Coordinate sub-agents.
+    <MULTI_AGENT_ROLE>
 03:message/developer:
     <MULTI_AGENT_MODE>
 04:message/user:
@@ -57,7 +57,7 @@ Settings: relative to window 1
 01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 02:message/developer:
-    Coordinate sub-agents.
+    <MULTI_AGENT_ROLE>
 03:message/developer:
     <MULTI_AGENT_MODE>
 04:message/user:

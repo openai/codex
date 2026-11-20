@@ -38,7 +38,7 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
     First context window id: <UUID 1>
     Current context window id: <UUID 1>
 04:message/developer:
-    You are /root. Coordinate the investigation.
+    <MULTI_AGENT_ROLE>
 05:message/developer:
     <MULTI_AGENT_MODE>
 06:message/user:
@@ -92,7 +92,7 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
     First context window id: <UUID 1>
     Current context window id: <UUID 1>
 04:message/developer:
-    You are /root. Coordinate the investigation.
+    <MULTI_AGENT_ROLE>
 05:message/developer:
     <MULTI_AGENT_MODE>
 06:message/user:
@@ -114,7 +114,7 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
 15:message/developer:
     Check both results independently.
 16:message/developer:
-    You are a worker. Report to your parent.
+    <MULTI_AGENT_ROLE>
 17:function_call_output/agent.thread_hint:Agent name: /root/worker
     First context window id: <UUID 2>
     Current context window id: <UUID 2>

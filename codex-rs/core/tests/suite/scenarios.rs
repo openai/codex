@@ -3491,8 +3491,8 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
             "<ENVIRONMENTS_INSTRUCTIONS>",
         ),
         (
-            r"(?ms)(^\d+:message/developer:\n    You are (?:`/root`, the primary agent|an agent) in a team of agents[^\n]+)\n.*?(\n^\d+:message/developer:)",
-            "${1}\n    <STANDARD_MULTI_AGENT_INSTRUCTIONS>${2}",
+            r"(?s)<multi_agent_role>([^\n]+)\n.*?</multi_agent_role>[^\n]*",
+            "${1}\n    <STANDARD_MULTI_AGENT_INSTRUCTIONS>",
         ),
         (
             r#"(environment_id"\s*:\s*"|<environment id=")(?:local|remote)"#,
