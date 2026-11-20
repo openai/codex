@@ -195,6 +195,7 @@ pub(super) enum DiscoveryFailure {
     None,
     Server,
     Disconnect,
+    NoReply,
     #[cfg_attr(windows, expect(dead_code, reason = "executor hook tests run on Unix"))]
     TurnGrant,
 }
@@ -255,22 +256,7 @@ impl Executor {
                             }
                             continue;
                         }
-                        if request["method"] == "capabilities/discoverV2" {
-                            let attempt = discovery_attempts.fetch_add(1, Ordering::Relaxed);
-                            match failure {
-                                // Exhaust the environment's one transport replay so the cache sees Err.
-                                DiscoveryFailure::Disconnect if attempt < 2 => break,
-                                DiscoveryFailure::TurnGrant if request["params"]["sandbox"].to_string().contains("turn-only-skills") => {
-                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"turn discovery failed"}}).to_string().into())).await?;
-                                    continue;
-                                }
-                                DiscoveryFailure::Server if attempt == 0 => {
-                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32603,"message":"fixture discovery failure"}}).to_string().into())).await?;
-                                    continue;
-                                }
-                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect | DiscoveryFailure::TurnGrant => {}
-                            }
-                        }
+
                         let result = match request["method"].as_str() {
                             Some("initialize") => Some(json!({"sessionId":"acquisition-only", "environmentInfo": {
                                 "shell":{"name":"bash","path":"/bin/bash"},
@@ -320,6 +306,22 @@ impl Executor {
                             if let Some(pause) = pause {
                                 let _ = pause.started.send(());
                                 pause.resume.await?;
+                            }
+                            let attempt = discovery_attempts.fetch_add(1, Ordering::Relaxed);
+                            match failure {
+                                // Keep the transport usable while leaving startup discovery unanswered.
+                                DiscoveryFailure::NoReply if attempt == 0 => continue,
+                                // Exhaust the environment's one transport replay so the cache sees Err.
+                                DiscoveryFailure::Disconnect if attempt < 2 => break,
+                                DiscoveryFailure::TurnGrant if request["params"]["sandbox"].to_string().contains("turn-only-skills") => {
+                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"turn discovery failed"}}).to_string().into())).await?;
+                                    continue;
+                                }
+                                DiscoveryFailure::Server if attempt == 0 => {
+                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32603,"message":"fixture discovery failure"}}).to_string().into())).await?;
+                                    continue;
+                                }
+                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect | DiscoveryFailure::NoReply | DiscoveryFailure::TurnGrant => {}
                             }
                         }
                         let response = match result {
@@ -741,6 +743,371 @@ async fn v2_refresh_during_discovery_applies_to_the_next_step() -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, failure).await?;
+    let (discovery_started, discovery_captured) = oneshot::channel();
+    let (release_discovery, discovery_released) = oneshot::channel();
+    *executor.discovery_pause.lock().await = Some(DiscoveryPause {
+        started: discovery_started,
+        resume: discovery_released,
+    });
+    let (wait_started, wait_captured) = oneshot::channel();
+    struct WaitRecorder(Mutex<Option<oneshot::Sender<()>>>);
+    impl ToolLifecycleContributor for WaitRecorder {
+        fn on_tool_start<'a>(
+            &'a self,
+            input: codex_extension_api::ToolStartInput<'a>,
+        ) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                if input.tool_name.name == "wait_for_environment"
+                    && let Some(started) = self.0.lock().await.take()
+                {
+                    let _ = started.send(());
+                }
+            })
+        }
+    }
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.tool_lifecycle_contributor(Arc::new(WaitRecorder(Mutex::new(Some(wait_started)))));
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_executor_provider(Arc::new(
+            ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None),
+        )),
+        |_config: &Config| SkillsExtensionConfig {
+            include_instructions: true,
+            catalog_deltas_enabled: false,
+            omit_descriptions: false,
+            max_context_tokens: None,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    );
+    let model = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_exec_server_url("none")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            // Keep host-specific shell guidance out of this readiness snapshot.
+            assert!(config.features.disable(Feature::ShellTool).is_ok());
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                    .is_ok()
+            );
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    test.thread_manager
+        .environment_manager()
+        .upsert_environment(
+            "preparing-executor".to_string(),
+            executor.url.clone(),
+            /*connect_timeout*/ None,
+        )?;
+    let mut selection = test.executor_environment().selection().clone();
+    selection.environment_id = "preparing-executor".to_string();
+    selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(
+        environment_config_for_selection(&test.config, &selection),
+    );
+    // Freeze the prewarm deadline until sampling reaches the readiness barrier.
+    tokio::time::pause();
+    let clock_guard = AbortOnDropHandle::new(tokio::spawn(async {
+        // Keep paused time from automatically advancing while mock HTTP/socket I/O is pending.
+        loop {
+            tokio::task::yield_now().await;
+        }
+    }));
+    test.codex
+        .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
+            environments: Some(codex_protocol::protocol::TurnEnvironmentRequests::new(
+                test.config.cwd.clone(),
+                vec![selection.into_request()],
+            )),
+            ..Default::default()
+        })
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), discovery_captured)
+        .await
+        .context("environment preparation must start discovery")??;
+    let starting = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("starting"),
+            responses::ev_function_call(
+                "wait-for-inventory",
+                "wait_for_environment",
+                r#"{"environment_id":"preparing-executor"}"#,
+            ),
+            responses::ev_completed("starting"),
+        ]),
+    )
+    .await;
+    let ready = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("ready"),
+            responses::ev_completed("ready"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Inspect the environment's available skills once it is ready.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), wait_captured)
+        .await
+        .context("sampling must reach wait_for_environment while discovery is paused")??;
+    let request = starting.single_request();
+    assert!(
+        request
+            .message_input_texts("user")
+            .join("\n")
+            .contains("starting")
+    );
+    assert!(
+        !request
+            .message_input_texts("developer")
+            .join("\n")
+            .contains("inert-sentinel")
+    );
+    assert!(ready.requests().is_empty());
+    release_discovery
+        .send(())
+        .map_err(|_| anyhow::anyhow!("preparation stopped before release"))?;
+    tokio::time::resume();
+    drop(clock_guard);
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = ready.single_request();
+    let output = request
+        .function_call_output_text("wait-for-inventory")
+        .context("readiness result")?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)
+            .with_context(|| format!("unexpected readiness output: {output}"))?,
+        json!({"environment_id":"preparing-executor","status":"ready"})
+    );
+    assert_eq!(
+        request
+            .message_input_texts("developer")
+            .join("\n")
+            .contains("inert-sentinel"),
+        !matches!(failure, DiscoveryFailure::Server),
+        "the next step retries transient failures and retains permanent errors"
+    );
+    let expected_calls = match failure {
+        DiscoveryFailure::None | DiscoveryFailure::Server => 1,
+        DiscoveryFailure::NoReply => 2,
+        // The two failed transport attempts belong to prewarm; the next step recovers.
+        DiscoveryFailure::Disconnect => 3,
+        DiscoveryFailure::TurnGrant => unreachable!("readiness does not grant turn permissions"),
+    };
+    assert_eq!(
+        executor
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| request["method"] == "capabilities/discoverV2")
+            .count(),
+        expected_calls,
+        "only retryable prewarm failures should issue another discovery request"
+    );
+    let mut history = starting.requests();
+    history.extend(ready.requests());
+    let reused = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("reused"),
+            responses::ev_completed("reused"),
+        ]),
+    )
+    .await;
+    test.submit_text_turn("Inspect the same environment again.")
+        .await?;
+    let request = reused.single_request();
+    assert_eq!(
+        request
+            .message_input_texts("developer")
+            .join("\n")
+            .contains("inert-sentinel"),
+        !matches!(failure, DiscoveryFailure::Server)
+    );
+    assert_eq!(
+        executor
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| request["method"] == "capabilities/discoverV2")
+            .count(),
+        expected_calls,
+        "unchanged turns reuse the successful inventory or cached permanent error"
+    );
+    history.extend(reused.requests());
+    let snapshot_name = match failure {
+        DiscoveryFailure::None | DiscoveryFailure::Disconnect | DiscoveryFailure::NoReply => {
+            "v2_discovery_readiness"
+        }
+        DiscoveryFailure::Server => "v2_discovery_readiness_permanent_failure",
+        DiscoveryFailure::TurnGrant => unreachable!("readiness does not grant turn permissions"),
+    };
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_request_history_snapshot(
+            "Readiness waits for prewarm to finish; steps reuse successes and permanent errors or retry transient failures.",
+            &history,
+            &ContextSnapshotOptions::default(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_prewarm_retains_all_selected_environments_until_the_first_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    let model = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_exec_server_url("none")
+        .with_extensions(Arc::new(ExtensionRegistryBuilder::new().build()))
+        .with_config(|config| {
+            assert!(config.features.disable(Feature::DeferredExecutor).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                    .is_ok()
+            );
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let mut selections = Vec::new();
+    // Exceed the cache's initial capacity before any step can reserve more space.
+    for index in 0..17 {
+        let mut selection = test.executor_environment().selection().clone();
+        selection.environment_id = format!("prewarm-{index}");
+        test.thread_manager
+            .environment_manager()
+            .upsert_environment(
+                selection.environment_id.clone(),
+                executor.url.clone(),
+                /*connect_timeout*/ None,
+            )?;
+        selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(
+            environment_config_for_selection(&test.config, &selection),
+        );
+        selections.push(selection);
+    }
+    for response_id in ["first", "reused"] {
+        let response = responses::mount_sse_once(
+            &model,
+            responses::sse(vec![
+                responses::ev_response_created(response_id),
+                responses::ev_completed(response_id),
+            ]),
+        )
+        .await;
+        test.submit_turn_with_environments("Inspect the environments.", Some(selections.clone()))
+            .await?;
+        response.single_request();
+        assert_eq!(
+            executor
+                .requests
+                .lock()
+                .await
+                .iter()
+                .filter(|request| request["method"] == "capabilities/discoverV2")
+                .count(),
+            selections.len(),
+            "the first step and later turns must reuse every prewarmed inventory"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_prewarm_timeout_does_not_block_session_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::NoReply).await?;
+    let model = responses::start_mock_server().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(DiscoveryRecorder {
+        mcp_projections: AtomicUsize::new(0),
+        snapshots: Arc::clone(&observed),
+        selected_plugins: Arc::new(Mutex::new(None)),
+    }));
+    let mut builder = test_codex()
+        .with_exec_server_url(&executor.url)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            assert!(config.features.disable(Feature::DeferredExecutor).is_ok());
+            assert!(
+                config
+                    .features
+                    .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                    .is_ok()
+            );
+        });
+    // Building the fixture waits for SessionConfigured, including initial environment readiness.
+    let test = tokio::time::timeout(Duration::from_secs(15), builder.build_with_auto_env(&model))
+        .await
+        .context("unanswered discovery must not block SessionConfigured")??;
+
+    for response_id in ["recovered", "reused"] {
+        responses::mount_sse_once(
+            &model,
+            responses::sse(vec![
+                responses::ev_response_created(response_id),
+                responses::ev_completed(response_id),
+            ]),
+        )
+        .await;
+        test.submit_text_turn("Inspect the environment.").await?;
+    }
+    {
+        let observed = observed.lock().await;
+        let inventory = observed
+            .last()
+            .context("discovery should retry after prewarm times out")?
+            .result
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert_eq!(
+            inventory.skills.first().context("recovered skill")?.name,
+            "inert-sentinel"
+        );
+    }
+    let requests = executor.requests.lock().await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "capabilities/discoverV2")
+            .count(),
+        2,
+        "cancelled prewarm leaves discovery retryable; successful retries stay cached"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "initialize")
+            .count(),
+        1,
+        "timing out discovery must leave the otherwise usable executor connected"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -798,7 +1165,7 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
                 // Two disconnected attempts, then one shared successful retry in the same cache.
                 3
             }
-            DiscoveryFailure::None | DiscoveryFailure::TurnGrant => {
+            DiscoveryFailure::None | DiscoveryFailure::NoReply | DiscoveryFailure::TurnGrant => {
                 unreachable!("the test only exercises startup failures")
             }
         };

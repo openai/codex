@@ -399,6 +399,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         snapshot_builder.clone(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
+        /*executor_discovery*/ None,
     );
     environments.update_selections(&[TurnEnvironmentSelection {
         selected_capability_roots: Default::default(),
@@ -450,6 +451,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
                 snapshot_builder.clone(),
                 updated.clone(),
                 /*non_blocking_snapshots*/ false,
+                /*executor_discovery*/ None,
             );
             child.activate_configured(async_channel::unbounded().0);
             let child = child.snapshot().await;

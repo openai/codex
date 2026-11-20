@@ -1548,6 +1548,9 @@ impl Session {
                 shell_snapshot,
                 inherited_environments.clone(),
                 config.features.enabled(Feature::DeferredExecutor),
+                config.features.enabled(Feature::ExecutorCapabilityDiscoveryV2).then(|| {
+                    thread_extension_data.get_or_init(super::ExecutorDiscovery::default)
+                }),
             ));
             turn_environments.update_configured_selections(environment_selections);
             let configured_environments = turn_environments.configured_snapshot_now();

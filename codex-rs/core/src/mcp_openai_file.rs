@@ -416,6 +416,7 @@ mod tests {
             crate::shell_snapshot::ShellSnapshot::disabled(),
             Default::default(),
             /*non_blocking_snapshots*/ true,
+            /*executor_discovery*/ None,
         );
         environments.update_selections(std::slice::from_ref(&selection));
         turn_context.initial_environments = environments.snapshot().await;

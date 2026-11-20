@@ -9,12 +9,24 @@ async fn executor_discovery_v2_refreshes_inventory_and_reuses_it_across_turns() 
     super::executor_discovery_v2::check_acquisition(/*enabled*/ true, "0.164.0").await
 }
 
+#[test_case::test_case(DiscoveryFailure::None; "success")]
+#[test_case::test_case(DiscoveryFailure::Server; "permanent_failure")]
+#[test_case::test_case(DiscoveryFailure::Disconnect; "retryable_failure")]
+#[test_case::test_case(DiscoveryFailure::NoReply; "timeout")]
+#[tokio::test]
+async fn executor_discovery_v2_prepares_inventory_while_sampling(
+    failure: DiscoveryFailure,
+) -> anyhow::Result<()> {
+    super::executor_discovery_v2::check_discovery_readiness(failure).await
+}
+
 #[path = "scenarios_turn_input_agent_message.rs"]
 mod turn_input_agent_message;
 
 #[path = "scenarios_multi_environment_mcp.rs"]
 mod multi_environment_mcp;
 
+use super::executor_discovery_v2::DiscoveryFailure;
 use super::image_rollout::RecordingFileAttachmentStore;
 use super::permissions_messages::PermissionPathScenario;
 use codex_attachment_store::AttachmentStoreErrorKind;

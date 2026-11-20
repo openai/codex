@@ -5311,6 +5311,7 @@ async fn resolved_environments_for_configuration(
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
+        /*executor_discovery*/ None,
     );
     turn_environments.update_selections(environment_selections);
     (environment_manager, turn_environments.snapshot().await)
@@ -6771,6 +6772,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ShellSnapshot::disabled(),
         resolved_environments,
         /*non_blocking_snapshots*/ false,
+        /*executor_discovery*/ None,
     ));
     turn_environments.activate_configured(tx_event.clone());
     let environment = Arc::clone(
@@ -9131,6 +9133,7 @@ where
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
         /*non_blocking_snapshots*/ false,
+        /*executor_discovery*/ None,
     ));
     turn_environments.activate_configured(tx_event.clone());
     let environment = Arc::clone(

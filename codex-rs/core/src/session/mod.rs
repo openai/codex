@@ -261,6 +261,7 @@ pub(crate) mod context_window;
 mod daemon_recovery;
 mod environment;
 mod executor_discovery;
+pub(crate) use executor_discovery::ExecutorDiscovery;
 mod extension_interruption;
 pub(crate) mod extension_metrics;
 mod guardian_checkpoint;
