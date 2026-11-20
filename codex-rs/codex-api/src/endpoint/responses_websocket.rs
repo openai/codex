@@ -26,7 +26,9 @@ use codex_http_client::RetryAfter;
 use codex_websocket_client::WebSocketConnection;
 use codex_websocket_client::WebSocketConnector;
 use futures::FutureExt;
+use futures::Sink;
 use futures::SinkExt;
+use futures::Stream;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::StatusCode;
@@ -34,8 +36,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
 use std::future::Future;
+use std::future::poll_fn;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::task::Context;
+use std::task::Poll;
+use std::task::ready;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -76,30 +82,25 @@ struct WsRequestText {
     private: bool,
 }
 
-enum WsCommand {
-    Send {
-        request: WsRequestText,
-        tx_result: oneshot::Sender<Result<(), WsError>>,
-    },
+struct WsCommand {
+    request: WsRequestText,
+    tx_result: oneshot::Sender<Result<(), WsError>>,
 }
 
-/// Send large Responses turns as one text message with backpressure between frames.
-async fn send_message(
-    socket: &mut (impl futures::Sink<Message, Error = WsError> + Unpin),
-    message: Message,
-) -> Result<(), WsError> {
-    const FRAGMENT_SIZE: usize = 1024 * 1024;
+const FRAGMENT_SIZE: usize = 1024 * 1024;
+const RECEIVE_BATCH_SIZE: usize = 32;
 
-    let Message::Text(text) = message else {
-        return socket.send(message).await;
+fn request_frames(text: Utf8Bytes) -> impl Iterator<Item = Message> {
+    let (message, mut data) = if text.len() <= FRAGMENT_SIZE {
+        (Some(Message::Text(text)), Bytes::new())
+    } else {
+        (None, Bytes::from(text))
     };
-    if text.len() <= FRAGMENT_SIZE {
-        return socket.send(Message::Text(text)).await;
-    }
-
-    let mut data = Bytes::from(text);
     let mut opcode = Data::Text;
-    while !data.is_empty() {
+    message.into_iter().chain(std::iter::from_fn(move || {
+        if data.is_empty() {
+            return None;
+        }
         let payload = data.split_to(data.len().min(FRAGMENT_SIZE));
         let fragment = if data.is_empty() {
             Fragment::Final
@@ -107,76 +108,120 @@ async fn send_message(
             Fragment::More
         };
         let frame = Frame::message_fragment(payload, opcode, fragment);
-        socket.send(Message::Frame(frame)).await?;
         opcode = Data::Continue;
+        Some(Message::Frame(frame))
+    }))
+}
+
+/// Owns the socket and forwards incoming messages while waiting for a request.
+struct WsPump<S> {
+    socket: S,
+    messages: mpsc::UnboundedSender<Result<Message, WsError>>,
+    queued_pongs: usize,
+}
+
+impl<S> WsPump<S>
+where
+    S: Stream<Item = Result<Message, WsError>> + Sink<Message, Error = WsError> + Unpin,
+{
+    fn new(socket: S, messages: mpsc::UnboundedSender<Result<Message, WsError>>) -> Self {
+        Self {
+            socket,
+            messages,
+            queued_pongs: 0,
+        }
     }
-    Ok(())
+
+    fn poll_incoming(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), WsError>> {
+        if self.queued_pongs != 0 && self.socket.poll_flush_unpin(cx)?.is_ready() {
+            self.queued_pongs = 0;
+        }
+        for _ in 0..RECEIVE_BATCH_SIZE {
+            if self.queued_pongs >= RECEIVE_BATCH_SIZE {
+                return Poll::Pending;
+            }
+            let Some(message) = ready!(self.socket.poll_next_unpin(cx)).transpose()? else {
+                return Poll::Ready(Err(WsError::ConnectionClosed));
+            };
+            match message {
+                Message::Ping(_) => {
+                    // Queue the automatic Pong before starting the next data frame.
+                    match self.socket.poll_flush_unpin(cx) {
+                        Poll::Ready(Ok(())) => self.queued_pongs = 0,
+                        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                        Poll::Pending => self.queued_pongs += 1,
+                    }
+                }
+                Message::Pong(_) => {}
+                Message::Text(_) | Message::Binary(_) | Message::Close(_) | Message::Frame(_) => {
+                    let closed = matches!(message, Message::Close(_));
+                    if self.messages.send(Ok(message)).is_err() || closed {
+                        return Poll::Ready(Err(WsError::ConnectionClosed));
+                    }
+                }
+            }
+        }
+        // The last read was ready, so arrange another poll after the batch.
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+
+    async fn send_frames(&mut self, text: Utf8Bytes) -> Result<(), WsError> {
+        for frame in request_frames(text) {
+            self.socket.send(frame).await?;
+        }
+        Ok(())
+    }
+
+    async fn run(mut self, mut commands: mpsc::Receiver<WsCommand>) {
+        loop {
+            let command = tokio::select! {
+                command = commands.recv() => Ok(command),
+                incoming = poll_fn(|cx| self.poll_incoming(cx)) => incoming.map(|()| None),
+            };
+            let WsCommand { request, tx_result } = match command {
+                Ok(Some(command)) => command,
+                Ok(None) | Err(WsError::ConnectionClosed) => break,
+                Err(error) => {
+                    let _ = self.messages.send(Err(error));
+                    break;
+                }
+            };
+            let send = self.send_frames(request.text);
+            // Tungstenite traces frame payloads from inside this future.
+            let result = if request.private {
+                send.with_subscriber(tracing::Dispatch::none()).await
+            } else {
+                send.await
+            };
+            let should_break = result.is_err();
+            let _ = tx_result.send(result);
+            if should_break {
+                break;
+            }
+        }
+    }
 }
 
 impl WsStream {
     fn new(inner: WebSocketConnection, max_message_bytes: Option<usize>) -> Self {
         let routing_affinity = inner.routing_affinity().cloned();
-        let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
-        let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
+        Self::with_socket(inner, max_message_bytes, routing_affinity)
+    }
 
-        let pump_task = tokio::spawn(async move {
-            let mut inner = inner;
-            loop {
-                tokio::select! {
-                    command = rx_command.recv() => {
-                        let Some(command) = command else {
-                            break;
-                        };
-                        match command {
-                            WsCommand::Send { request, tx_result } => {
-                                let send = send_message(&mut inner, Message::Text(request.text));
-                                // Tungstenite traces frame payloads from inside this future.
-                                let result = if request.private {
-                                    send.with_subscriber(tracing::Dispatch::none()).await
-                                } else {
-                                    send.await
-                                };
-                                let should_break = result.is_err();
-                                let _ = tx_result.send(result);
-                                if should_break {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    message = inner.next() => {
-                        let Some(message) = message else {
-                            break;
-                        };
-                        match message {
-                            Ok(Message::Ping(payload)) => {
-                                if let Err(err) = inner.send(Message::Pong(payload)).await {
-                                    let _ = tx_message.send(Err(err));
-                                    break;
-                                }
-                            }
-                            Ok(Message::Pong(_)) => {}
-                            Ok(message @ (Message::Text(_)
-                            | Message::Binary(_)
-                            | Message::Close(_)
-                            | Message::Frame(_))) => {
-                                let is_close = matches!(message, Message::Close(_));
-                                if tx_message.send(Ok(message)).is_err() {
-                                    break;
-                                }
-                                if is_close {
-                                    break;
-                                }
-                            }
-                            Err(err) => {
-                                let _ = tx_message.send(Err(err));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
+    fn with_socket(
+        socket: impl Stream<Item = Result<Message, WsError>>
+        + Sink<Message, Error = WsError>
+        + Send
+        + Unpin
+        + 'static,
+        max_message_bytes: Option<usize>,
+        routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
+    ) -> Self {
+        let (tx_command, rx_command) = mpsc::channel::<WsCommand>(32);
+        let (tx_message, rx_message) = mpsc::unbounded_channel();
+
+        let pump_task = tokio::spawn(WsPump::new(socket, tx_message).run(rx_command));
 
         Self {
             max_message_bytes,
@@ -187,12 +232,13 @@ impl WsStream {
         }
     }
 
-    async fn request(
-        &mut self,
-        make_command: impl FnOnce(oneshot::Sender<Result<(), WsError>>) -> WsCommand,
-    ) -> Result<(), WsError> {
+    async fn send(&mut self, request: WsRequestText) -> Result<(), WsError> {
         let (tx_result, rx_result) = oneshot::channel();
-        if self.tx_command.send(make_command(tx_result)).await.is_ok()
+        if self
+            .tx_command
+            .send(WsCommand { request, tx_result })
+            .await
+            .is_ok()
             && let Ok(result) = rx_result.await
         {
             return result;
@@ -201,11 +247,6 @@ impl WsStream {
             message?;
         }
         Err(WsError::ConnectionClosed)
-    }
-
-    async fn send(&mut self, request: WsRequestText) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Send { request, tx_result })
-            .await
     }
 
     async fn next(&mut self) -> Option<Result<Message, WsError>> {
@@ -1175,6 +1216,10 @@ fn serialize_websocket_request(request: &ResponsesWsRequest<'_>) -> Result<Strin
 }
 
 #[cfg(test)]
+#[path = "responses_websocket_upload_tests.rs"]
+mod upload_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::ResponseCreateWsRequest;
@@ -1280,38 +1325,6 @@ mod tests {
             expected_country.as_ref()
         );
         assert_eq!(wire_payload, expected_payload);
-    }
-
-    #[tokio::test]
-    async fn large_turn_is_one_text_message_in_bounded_frames() {
-        const MIB: usize = 1024 * 1024;
-        let (tx, mut frames) = futures::channel::mpsc::unbounded();
-        let mut socket = tx.sink_map_err(|_| WsError::ConnectionClosed);
-
-        let at_limit = Message::text("a".repeat(MIB));
-        send_message(&mut socket, at_limit.clone()).await.unwrap();
-        assert_eq!(frames.next().await, Some(at_limit));
-
-        let mut text = "a".repeat(MIB - 1);
-        text.push('🌱');
-        text.push_str(&"b".repeat(MIB));
-        send_message(&mut socket, Message::text(text.clone()))
-            .await
-            .unwrap();
-        drop(socket);
-        for (i, expected) in text.as_bytes().chunks(MIB).enumerate() {
-            let Some(Message::Frame(frame)) = frames.next().await else {
-                panic!("expected a data frame");
-            };
-            let opcode = if i == 0 { Data::Text } else { Data::Continue };
-            assert_eq!(
-                frame.header().opcode,
-                tokio_tungstenite::tungstenite::protocol::frame::coding::OpCode::Data(opcode)
-            );
-            assert_eq!(frame.header().is_final, (i + 1) * MIB >= text.len());
-            assert_eq!(frame.payload(), expected);
-        }
-        assert!(frames.next().await.is_none());
     }
 
     #[test]
