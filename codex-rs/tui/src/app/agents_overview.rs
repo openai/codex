@@ -15,6 +15,7 @@ mod loading;
 #[path = "agents_overview_selection.rs"]
 mod selection;
 
+use super::agents_overview_discovery::AgentsOverviewDiscovery;
 use super::agents_overview_discovery::is_overview_root;
 use super::agents_overview_discovery::is_visible_in_agents_overview;
 use super::agents_overview_view::AgentsOverviewGroup;
@@ -59,10 +60,12 @@ pub(super) struct AgentsOverviewState {
     pub(super) usage_disabled: bool,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
     pub(super) initialized: HashSet<BackendId>,
-    pub(super) discovery:
-        HashMap<BackendId, super::agents_overview_discovery::AgentsOverviewDiscovery>,
+    pub(super) discovery: HashMap<BackendId, AgentsOverviewDiscovery>,
     pub(super) show_more_backends: HashSet<BackendId>,
     pub(super) refresh_show_more: bool,
+    pub(super) refresh_recent_backends: HashSet<BackendId>,
+    pub(super) cloud_inventory_dirty: HashSet<BackendId>,
+    pub(super) active_refresh_recent: bool,
     pub(super) refresh_failed_backends: HashSet<BackendId>,
     /// Vacancies left by lifecycle removals, tracked by the backend that owned the row.
     pub(super) refill_by_backend: HashMap<BackendId, usize>,
@@ -97,6 +100,14 @@ pub(super) struct AgentsOverviewState {
 }
 
 impl AgentsOverviewState {
+    pub(super) fn cloud_refresh_pending(&self, owner: BackendId) -> bool {
+        (self.active_refresh_recent && self.active_refresh.is_some_and(|(_, id)| id == owner))
+            || self
+                .discovery
+                .get(&owner)
+                .is_some_and(AgentsOverviewDiscovery::has_cloud_refresh_pending)
+    }
+
     pub(super) fn refill_count(&self, owner: BackendId) -> usize {
         self.refill_by_backend
             .get(&owner)
@@ -113,7 +124,7 @@ impl AgentsOverviewState {
             && self
                 .discovery
                 .get(&owner)
-                .is_some_and(super::agents_overview_discovery::AgentsOverviewDiscovery::has_more)
+                .is_some_and(AgentsOverviewDiscovery::has_more)
     }
 }
 
@@ -152,6 +163,17 @@ impl App {
                 "Reconnecting — agent list is stale"
             });
         }
+        if app_server.thread_params_mode() == crate::app_server_session::ThreadParamsMode::Cloud {
+            let owner = app_server.backend_id();
+            if self.agents_overview.cloud_refresh_pending(owner) {
+                self.cancel_agents_overview_refresh(owner);
+            }
+            if let Some(discovery) = self.agents_overview.discovery.get_mut(&owner) {
+                discovery.restart_cloud_refresh();
+            }
+            self.agents_overview.cloud_inventory_dirty.remove(&owner);
+            self.agents_overview.refresh_recent_backends.insert(owner);
+        }
         self.refresh_agents_overview_threads(app_server);
     }
 
@@ -174,6 +196,7 @@ impl App {
         let refill_succeeded = result
             .as_ref()
             .is_ok_and(|refresh| refresh.recent_seed_complete);
+        self.agents_overview.active_refresh_recent = false;
         if !refill_succeeded {
             self.agents_overview
                 .refresh_failed_backends
@@ -220,7 +243,18 @@ impl App {
                 if refresh.recent_seed_complete {
                     self.agents_overview.initialized.insert(refresh_backend_id);
                 }
-                if let Some(discovery) = refresh.discovery {
+                if let Some(mut discovery) = refresh.discovery {
+                    // Fresh Cloud list rows can recover from a missed unarchive.
+                    let overview = &mut self.agents_overview;
+                    for id in discovery.fresh_cloud_page_ids.drain(..) {
+                        if refill_succeeded
+                            && self.backend_registry.owner(id) == Some(refresh_backend_id)
+                            && !overview.pending_archives.contains_key(&id)
+                            && !overview.refresh_notifications.contains_key(&id)
+                        {
+                            overview.removed_threads.remove(&id);
+                        }
+                    }
                     if !discovery.has_more() {
                         self.agents_overview
                             .refill_by_backend
@@ -373,6 +407,7 @@ impl App {
         let overview = &mut self.agents_overview;
         overview.initialized.remove(&backend_id);
         overview.discovery.remove(&backend_id);
+        overview.cloud_inventory_dirty.remove(&backend_id);
         overview
             .removed_threads
             .retain(|thread_id| self.backend_registry.owner(*thread_id) != Some(backend_id));
@@ -404,6 +439,9 @@ impl App {
             if std::mem::take(&mut overview.refresh_show_more) {
                 overview.show_more_backends.insert(backend_id);
             }
+            if std::mem::take(&mut overview.active_refresh_recent) {
+                overview.refresh_recent_backends.insert(backend_id);
+            }
             let removed_threads = &overview.removed_threads;
             overview.refresh_thread_ids.extend(
                 overview
@@ -421,6 +459,8 @@ impl App {
             .pending_refresh_backends
             .retain(|id| *id != backend_id);
         if self.backend_registry.request_handle(backend_id).is_none() {
+            overview.refresh_recent_backends.remove(&backend_id);
+            overview.cloud_inventory_dirty.remove(&backend_id);
             overview.refresh_failed_backends.remove(&backend_id);
         }
         self.drain_agents_overview_refresh_queue();

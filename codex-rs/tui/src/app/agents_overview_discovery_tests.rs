@@ -25,47 +25,77 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
-async fn overview_cloud_discovery_uses_only_interactive_pages() {
+async fn overview_refresh_grows_visible_history_and_preserves_the_show_more_cursor() {
     let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
     let handle = AppServerClient::Cloud(client).request_handle();
-    let threads = ["First Cloud task", "Second Cloud task"].map(|name| {
-        overview_thread(
-            ThreadId::new(),
-            /*parent_thread_id*/ None,
-            name,
-            ThreadStatus::NotLoaded,
-        )
-    });
-
-    let serve_pages = async {
-        for (thread, (cursor, next_cursor)) in threads
-            .iter()
-            .zip([(None, Some("next")), (Some("next"), None)])
-        {
-            let command = commands.recv().await.unwrap();
-            let CloudOperation::Request(request) = command.operation else {
-                panic!("expected a Cloud request");
-            };
-            let ClientRequest::ThreadList { params, .. } = *request else {
-                panic!("expected thread/list");
-            };
-            assert_eq!(params.source_kinds, Some(Vec::new()));
-            assert_eq!(params.cursor.as_deref(), cursor);
-            command
+    let parent = None;
+    let threads: Vec<_> = (0..66)
+        .map(|rank| {
+            let mut thread = overview_thread(ThreadId::new(), parent, "Task", ThreadStatus::Idle);
+            thread.updated_at -= rank;
+            (thread, false)
+        })
+        .collect();
+    let (more, refill, refresh) = (Some(10), Some(2), None);
+    let pages = [
+        (more, None, Some((12..22, Some("h1")))),
+        (more, Some("h1"), Some((22..32, Some("h2")))),
+        (more, Some("h2"), Some((32..42, Some("h3")))),
+        (more, Some("h3"), Some((42..52, Some("h4")))),
+        (more, Some("h4"), Some((52..62, Some("h5")))),
+        (refresh, None, Some((0..10, Some("r1")))),
+        (refresh, Some("r1"), None),
+        (refresh, None, Some((0..10, Some("r1")))),
+        (refresh, Some("r1"), Some((10..20, Some("r2")))),
+        (refill, Some("h5"), Some((62..64, Some("h6")))),
+        (refresh, Some("r2"), Some((20..30, Some("r3")))),
+        (refresh, Some("r3"), Some((30..40, Some("r4")))),
+        (refresh, Some("r4"), Some((40..50, Some("r5")))),
+        (refresh, Some("r5"), Some((50..60, Some("r6")))),
+        (refresh, Some("r6"), Some((60..66, Some("r7")))),
+        (more, Some("h6"), Some((64..66, None))),
+    ];
+    let mut discovery = AgentsOverviewDiscovery::default();
+    let mut shown = HashSet::new();
+    for (history_limit, cursor, page) in pages {
+        let range = page.as_ref().map_or(0..0, |(range, _)| range.clone());
+        let clipped_end = if cursor == Some("r6") { 64 } else { range.end };
+        let expected = &threads[range.start..clipped_end];
+        let complete = page.is_some();
+        let response = page
+            .map(|(range, next)| {
+                let data: Vec<_> = threads[range].iter().map(|(thread, _)| thread).collect();
+                json!({"data": data, "nextCursor": next})
+            })
+            .ok_or_else(|| JSONRPCErrorError {
+                code: -32603,
+                message: "Temporary list failure".into(),
+                data: None,
+            });
+        let serve_page = async {
+            next_cloud_page(&mut commands, cursor)
+                .await
                 .response
-                .send(Ok(Ok(json!({"data": [thread], "nextCursor": next_cursor}))))
+                .send(Ok(response))
                 .unwrap();
+        };
+        let discover = discovery.next_overview_page(
+            &handle,
+            history_limit.unwrap_or(10),
+            history_limit.is_none(),
+        );
+        let ((rows, ok), ()) = tokio::join!(discover, serve_page);
+        assert_eq!((rows.as_slice(), ok), (expected, complete));
+        shown.extend(rows.into_iter().map(|(thread, _)| thread.id));
+        if cursor == Some("r1") && complete {
+            assert_eq!(shown.len(), 62);
         }
-    };
-    let discover = async {
-        let mut discovery = AgentsOverviewDiscovery::default();
-        for (thread, has_more) in threads.iter().zip([true, false]) {
-            let page = discovery.next_batch(&handle, /*limit*/ 10).await;
-            assert_eq!(page, (vec![(thread.clone(), false)], true));
-            assert_eq!(discovery.has_more(), has_more);
+        if !complete {
+            assert!(discovery.has_cloud_refresh_pending());
         }
-    };
-    tokio::join!(serve_pages, discover);
+    }
+    assert!(!discovery.has_cloud_refresh_pending());
+    assert!(!discovery.has_more());
 }
 
 #[tokio::test]
@@ -130,11 +160,21 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
         assert!(!app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
     }
 
+    // The previous archive was observed, but its unarchive notification was missed.
+    app.agents_overview.threads.remove(&thread_id);
+    app.agents_overview.removed_threads.insert(thread_id);
     app.open_agents_overview(&cloud);
     let reopened = tokio::time::timeout(timeout, next_list(&mut commands)).await?;
+    let mut listed = current.clone();
+    listed.name = Some("Renamed in Cloud".to_string());
+    listed.updated_at += 1;
+    listed.recency_at = Some(listed.updated_at);
+    let unread = json!({"revision": "1", "firstUnread": {"type": "threadStart"}});
     reopened
         .response
-        .send(Ok(Ok(json!({"data": [], "nextCursor": null}))))
+        .send(Ok(Ok(json!({
+            "data": [listed], "nextCursor": null, "readStates": {(thread_id.to_string()): unread}
+        }))))
         .unwrap();
     let read = tokio::time::timeout(timeout, commands.recv())
         .await?
@@ -166,6 +206,31 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
     finish_overview_refresh(&mut app, &cloud, &mut events).await;
     assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
     assert!(!app.agents_overview.refresh_failed_backends.contains(&owner));
+    assert_eq!(
+        app.agents_overview.threads[&thread_id],
+        Some(listed.clone())
+    );
+    assert!(app.agents_overview.unread.contains(&thread_id));
+
+    app.refresh_agents_overview_threads(&cloud);
+    reject_cloud_pinned_list(&mut commands).await;
+    current.status = ThreadStatus::NotLoaded;
+    for response in [
+        json!({"thread": current, "readState": null}),
+        json!({"data": [], "nextCursor": null, "backwardsCursor": null}),
+    ] {
+        commands
+            .recv()
+            .await
+            .unwrap()
+            .response
+            .send(Ok(Ok(response)))
+            .unwrap();
+    }
+    finish_overview_refresh(&mut app, &cloud, &mut events).await;
+    listed.status = current.status;
+    assert_eq!(app.agents_overview.threads[&thread_id], Some(listed));
+    assert!(app.agents_overview.unread.contains(&thread_id));
     Ok(())
 }
 
@@ -186,7 +251,9 @@ async fn resume_picker_cancels_a_held_cloud_show_more_page() -> Result<()> {
     );
     let mut discovery = AgentsOverviewDiscovery::default();
     let handle = cloud.request_handle();
-    let (page, ()) = tokio::join!(discovery.next_batch(&handle, /*limit*/ 10), async {
+    let page =
+        discovery.next_overview_page(&handle, /*limit*/ 10, /*refresh_recent*/ false);
+    let (page, ()) = tokio::join!(page, async {
         let command = next_cloud_page(&mut commands, /*cursor*/ None).await;
         command
             .response
@@ -375,7 +442,9 @@ async fn overview_local_enter_drops_the_displayed_cloud_list_before_detach() -> 
     let mut discovery = AgentsOverviewDiscovery::default();
     let handle = cloud.request_handle();
     let (first_page, ()) = tokio::time::timeout(timeout, async {
-        tokio::join!(discovery.next_batch(&handle, /*limit*/ 10), async {
+        let page =
+            discovery.next_overview_page(&handle, /*limit*/ 10, /*refresh_recent*/ false);
+        tokio::join!(page, async {
             let command = next_cloud_page(&mut commands, /*cursor*/ None).await;
             command
                 .response
@@ -773,6 +842,13 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     }
     assert_eq!(app.agents_overview.threads.len(), 10);
     assert!(app.agents_overview.threads.contains_key(&ids[10]));
+    let retained_id = ids[14];
+    let mut retained = expected[&retained_id].clone().unwrap();
+    retained.name = Some("Earlier task name".to_string());
+    assert!(app.backend_registry.observe(owner, retained_id));
+    app.agents_overview
+        .threads
+        .insert(retained_id, Some(retained));
     let other = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let other_owner = other.backend_id();
     if mixed_sources {
@@ -820,6 +896,10 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     );
     app.backend_registry.disconnect(other_owner);
     other.shutdown().await?;
+    assert_eq!(
+        app.agents_overview.threads[&retained_id],
+        expected[&retained_id]
+    );
     assert_eq!(
         app.agents_overview
             .threads

@@ -206,6 +206,7 @@ pub(crate) async fn handle_event_during_device_login(
             Ok(false)
         }
         AppServerEvent::ServerNotification(_)
+        | AppServerEvent::CloudInventoryChanged(_)
         | AppServerEvent::ThreadStreamDisconnected(_)
         | AppServerEvent::ThreadStreamReconnected(_) => Ok(false),
     }

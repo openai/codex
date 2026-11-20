@@ -1,4 +1,4 @@
-//! Typed live transcript updates for the attached thread.
+//! Live transcript updates for the attached thread and account notifications on its stream.
 use crate::Error;
 use crate::Event;
 use crate::ThreadStatus;
@@ -12,6 +12,13 @@ pub struct TranscriptEvent {
     pub thread_id: String,
     pub emitted_at_ms: Option<i64>,
     pub update: TranscriptUpdate,
+}
+
+/// Changes to the account's thread list reported over an attachment.
+pub enum InventoryChange {
+    Archived(String),
+    Unarchived(String),
+    Refresh,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -99,7 +106,11 @@ redacted_debug!(
 );
 
 // Field numbers in the ASB Notification.value oneof.
+const THREAD_STARTED: u32 = 2;
 const THREAD_STATUS_CHANGED: u32 = 3;
+const THREAD_ARCHIVED: u32 = 4;
+const THREAD_UNARCHIVED: u32 = 6;
+const THREAD_NAME_UPDATED: u32 = 10;
 const TURN_STARTED: u32 = 21;
 const TURN_COMPLETED: u32 = 23;
 pub(super) const ITEM_STARTED: u32 = 27;
@@ -124,6 +135,36 @@ pub(super) fn required<T>(value: Option<T>) -> Result<T, DecodeFailure> {
     value.ok_or(DecodeFailure::MissingField)
 }
 impl Event {
+    /// Recognizes account updates carried alongside the attached thread's transcript.
+    pub fn inventory_change(&self) -> Option<InventoryChange> {
+        let Self::Notification(bytes) = self else {
+            return None;
+        };
+        let (tag, values) = wire::notification(bytes).ok().flatten()?;
+        match tag {
+            THREAD_ARCHIVED | THREAD_UNARCHIVED => {
+                let envelope =
+                    wire::merge_messages::<wire::Envelope<crate::wire::ThreadIdRequest>>(values)
+                        .ok()?;
+                let id = envelope.params?.thread_id;
+                if id.is_empty() {
+                    return None;
+                }
+                Some(if tag == THREAD_ARCHIVED {
+                    InventoryChange::Archived(id)
+                } else {
+                    InventoryChange::Unarchived(id)
+                })
+            }
+            THREAD_STARTED
+            | THREAD_STATUS_CHANGED
+            | THREAD_NAME_UPDATED
+            | TURN_STARTED
+            | TURN_COMPLETED => Some(InventoryChange::Refresh),
+            _ => None,
+        }
+    }
+
     /// Returns a supported status update for this thread from an Attach notification.
     pub fn thread_status_for(&self, thread_id: &str) -> Option<ThreadStatus> {
         let Self::Notification(bytes) = self else {

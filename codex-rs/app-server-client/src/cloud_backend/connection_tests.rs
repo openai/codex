@@ -837,8 +837,12 @@ async fn prepared_resume_keeps_the_previous_stream_until_handoff() -> Result<()>
             if outcome == "burst" {
                 // One partial-history warning plus the entire live burst, including its unread tail.
                 for _ in 0..PREPARED_EVENT_LIMIT + 2 {
+                    let mut event = client.next_event().await;
+                    while matches!(event, Some(AppServerEvent::CloudInventoryChanged(Some(_)))) {
+                        event = client.next_event().await;
+                    }
                     assert!(
-                        matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(notification))
+                        matches!(event, Some(AppServerEvent::ServerNotification(notification))
                         if matches!(*notification, protocol::ServerNotification::Warning(_)))
                     );
                 }
@@ -982,12 +986,20 @@ async fn accepted_idle_reconnect_reports_changed_login() -> Result<()> {
 }
 
 #[tokio::test]
-async fn attachment_status_follows_its_server_notifications() -> Result<()> {
+async fn attachment_tracks_its_status_and_reports_account_inventory_changes() -> Result<()> {
     let (output, mut events) = mpsc::unbounded_channel();
-    let mut replies = Replies::default();
-    let notifications: [&[u8]; 3] = [
+    let (client, _commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let handle = client.request_handle();
+    let mut replies = Replies {
+        attached: handle.attached.clone(),
+        ..Default::default()
+    };
+    let notifications: [&[u8]; 6] = [
         b"\x1a\x0d\x12\x0b\x0a\x06\x22\x04\x0a\x02\x08\x01\x12\x01t", // t is waiting
+        b"\xaa\x01\x0c\x12\x0a\x0a\x01x\x12\x05\x22\x01u\x40\x04",    // x starts a turn
         b"\x1a\x09\x12\x07\x0a\x02\x12\x00\x12\x01x",                 // x is idle
+        b"\x22\x05\x12\x03\x0a\x01x",                                 // x is archived
+        b"\x32\x05\x12\x03\x0a\x01x",                                 // x is unarchived
         b"\x1a\x09\x12\x07\x0a\x02\x12\x00\x12\x01t",                 // t is idle
     ];
     let stream = stream::iter(
@@ -1007,13 +1019,27 @@ async fn attachment_status_follows_its_server_notifications() -> Result<()> {
     let waiting = cloud::ThreadStatus::Active {
         active_flags: vec![cloud::ThreadActiveFlag::WaitingOnApproval],
     };
-    assert_eq!(replies.thread_status("t"), Some(&waiting));
-    replies.forward_next(&output).await;
-    assert_eq!(replies.thread_status("t"), Some(&waiting));
+    let waiting = serde_json::json!(waiting);
+    let status_change = |status: &Value| serde_json::json!({"method": "thread/status/changed", "params": {"threadId": "t", "status": status}});
+    for expected in [
+        status_change(&waiting),
+        Value::Null,
+        Value::Null,
+        serde_json::json!({"method": "thread/archived", "params": {"threadId": "x"}}),
+        serde_json::json!({"method": "thread/unarchived", "params": {"threadId": "x"}}),
+        status_change(&serde_json::json!(cloud::ThreadStatus::Idle)),
+    ] {
+        let AppServerEvent::CloudInventoryChanged(lifecycle) = events.try_recv()? else {
+            panic!("expected inventory change");
+        };
+        assert_eq!(serde_json::to_value(lifecycle)?, expected);
+        let status = expected.pointer("/params/status").unwrap_or(&waiting);
+        assert_eq!(&serde_json::to_value(replies.thread_status("t"))?, status);
+        assert!(handle.has_attachment());
+        replies.forward_next(&output).await;
+    }
 
-    replies.forward_next(&output).await;
-    assert_eq!(replies.thread_status("t"), Some(&cloud::ThreadStatus::Idle));
-    replies.forward_next(&output).await;
+    assert!(!handle.has_attachment());
     assert_eq!(replies.thread_status("t"), Some(&cloud::ThreadStatus::Idle));
     let AppServerEvent::ThreadStreamDisconnected(error) = events.try_recv()? else {
         panic!("expected a Cloud stream loss");
@@ -1030,5 +1056,8 @@ async fn attachment_status_follows_its_server_notifications() -> Result<()> {
         .replace("t", async { Ok(stream::pending().boxed()) }, &output)
         .await?;
     assert_eq!(replies.thread_status("t"), None);
+    assert!(handle.has_attachment());
+    replies.detach("t");
+    assert!(!handle.has_attachment());
     Ok(())
 }

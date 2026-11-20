@@ -70,6 +70,9 @@ impl App {
         event: AppServerEvent,
     ) {
         match event {
+            AppServerEvent::CloudInventoryChanged(lifecycle) => {
+                self.invalidate_cloud_inventory(app_server_client, lifecycle.as_deref())
+            }
             AppServerEvent::Lagged { skipped } => {
                 tracing::warn!(
                     skipped,

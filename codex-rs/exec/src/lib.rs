@@ -1584,7 +1584,8 @@ async fn finish_turn(
             AppServerEvent::ThreadStreamDisconnected(error) => {
                 anyhow::bail!("app-server stream disconnected: {}", error.error.message)
             }
-            AppServerEvent::ThreadStreamReconnected(_) => {}
+            AppServerEvent::CloudInventoryChanged(_)
+            | AppServerEvent::ThreadStreamReconnected(_) => {}
             AppServerEvent::Lagged { skipped } => {
                 let message = lagged_event_warning_message(skipped);
                 warn!("{message}");

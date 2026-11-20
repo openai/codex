@@ -1,4 +1,5 @@
 //! Demand-driven history discovery. Each source retains its cursor and unshown rows.
+//! Cloud refresh walks the displayed history independently of Show more.
 //! Each new query scans the active backend from the start with its own paging cursor.
 
 use super::App;
@@ -15,6 +16,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
 use codex_state::PINNED_THREAD_SECTION_ID;
 use std::collections::VecDeque;
@@ -140,6 +142,10 @@ impl Default for SourcePage {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AgentsOverviewDiscovery {
     sources: [SourcePage; 2],
+    // Oldest row delivered by Cloud history discovery.
+    cloud_frontier: Option<(i64, String)>,
+    cloud_refresh: Option<SourcePage>,
+    pub(super) fresh_cloud_page_ids: Vec<ThreadId>,
 }
 
 impl AgentsOverviewDiscovery {
@@ -149,7 +155,7 @@ impl AgentsOverviewDiscovery {
             .any(|source| !source.exhausted || !source.rows.is_empty())
     }
 
-    pub(super) async fn next_batch(
+    async fn next_batch(
         &mut self,
         handle: &AppServerRequestHandle,
         limit: usize,
@@ -188,6 +194,77 @@ impl AgentsOverviewDiscovery {
             }
         }
         (rows, left && right)
+    }
+
+    pub(super) fn has_cloud_refresh_pending(&self) -> bool {
+        self.cloud_refresh.is_some()
+    }
+
+    pub(super) fn restart_cloud_refresh(&mut self) {
+        self.cloud_refresh = None;
+    }
+
+    pub(super) async fn next_overview_page(
+        &mut self,
+        handle: &AppServerRequestHandle,
+        limit: usize,
+        refresh_recent: bool,
+    ) -> (Vec<(Thread, bool)>, bool) {
+        if !matches!(handle, AppServerRequestHandle::Cloud(_)) {
+            return self.next_batch(handle, limit).await;
+        }
+        // Cloud has one source. Fetch only what we can show, even for a partial refill.
+        self.sources[1].exhausted = true;
+        let mut page = if refresh_recent {
+            self.cloud_refresh.take().unwrap_or_default()
+        } else {
+            self.sources[0].clone()
+        };
+        page.page_size = limit as u32;
+        page.sort_key = ThreadSortKey::UpdatedAt;
+        if !page.fill(handle, Vec::new()).await {
+            if refresh_recent {
+                self.cloud_refresh = Some(SourcePage::default());
+            }
+            return (Vec::new(), false);
+        }
+
+        let mut rows: Vec<_> = page.rows.drain(..).collect();
+        if refresh_recent && let Some((oldest, id)) = &self.cloud_frontier {
+            // Stop at the last row reached by Show more. Its timestamp also
+            // bounds the pass if that row has moved up or been archived.
+            if !self.sources[0].exhausted {
+                let boundary = rows.iter().enumerate().find_map(|(index, (thread, _))| {
+                    if thread.updated_at < *oldest {
+                        Some(index)
+                    } else if thread.updated_at == *oldest && thread.id == *id {
+                        Some(index + 1)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(end) = boundary {
+                    rows.truncate(end);
+                    page.exhausted = true;
+                }
+            }
+            if !page.exhausted {
+                self.cloud_refresh = Some(page);
+            }
+        } else if refresh_recent && rows.is_empty() && !page.exhausted {
+            self.cloud_refresh = Some(page);
+        } else {
+            // The first nonempty refresh of an empty list also seeds Show more.
+            if let Some((thread, _)) = rows.last() {
+                self.cloud_frontier = Some((thread.updated_at, thread.id.clone()));
+            }
+            self.sources[0] = page;
+        }
+        self.fresh_cloud_page_ids = rows
+            .iter()
+            .filter_map(|(thread, _)| ThreadId::from_string(&thread.id).ok())
+            .collect();
+        (rows, true)
     }
 }
 

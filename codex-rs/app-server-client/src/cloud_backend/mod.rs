@@ -25,6 +25,8 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -70,6 +72,7 @@ struct Attachment {
 struct Replies {
     idle: Option<idle::Recovery>,
     active: Option<Attachment>,
+    attached: Arc<AtomicBool>,
     generation: u64,
     stream_losses: CloudStreamLosses,
     // Keep the last observed status through EOF until this conversation is unloaded.
@@ -77,6 +80,12 @@ struct Replies {
 }
 
 impl Replies {
+    fn set_active(&mut self, active: Option<Attachment>) {
+        self.active = active;
+        self.attached
+            .store(self.active.is_some(), Ordering::Relaxed);
+    }
+
     async fn next_event(&mut self, output: &mpsc::UnboundedSender<AppServerEvent>) {
         if let Some(recovery) = &mut self.idle
             && let Some((root, _, open)) = &mut recovery.held
@@ -158,7 +167,7 @@ impl Replies {
             ended => {
                 let id = active.thread_id.clone();
                 let error = ended.and_then(Result::err);
-                self.active = None;
+                self.set_active(/*active*/ None);
                 if let Some(recovery) = &mut self.idle {
                     recovery
                         .state
@@ -259,10 +268,10 @@ impl Replies {
         output: &mpsc::UnboundedSender<AppServerEvent>,
     ) {
         self.generation = self.generation.wrapping_add(1);
-        self.active = Some(Attachment {
+        self.set_active(Some(Attachment {
             thread_id: id.to_owned(),
             stream,
-        });
+        }));
         if let Some(event) = first_event {
             forward(
                 id,
@@ -303,7 +312,7 @@ impl Replies {
             .as_ref()
             .is_some_and(|active| active.thread_id == id)
         {
-            self.active = None;
+            self.set_active(/*active*/ None);
         }
     }
 
@@ -350,12 +359,10 @@ fn start_worker(
         loaded: None,
         warned_partial_history: None,
     };
+    let handle = app_client.request_handle();
     let mut replies = Replies {
-        idle: Some(idle::Recovery::new(
-            app_client.request_handle().reconnect,
-            client,
-            login,
-        )),
+        attached: handle.attached,
+        idle: Some(idle::Recovery::new(handle.reconnect, client, login)),
         stream_losses: app_client.stream_losses.clone(),
         ..Default::default()
     };
@@ -917,6 +924,15 @@ fn forward(
                 recovery.observe_busy();
             }
         }
+        if let Ok(status) = serde_json::from_value(serde_json::json!(&status)) {
+            let change = protocol::ThreadStatusChangedNotification {
+                thread_id: id.to_owned(),
+                status,
+            };
+            let _ = output.send(AppServerEvent::CloudInventoryChanged(Some(Box::new(
+                protocol::ServerNotification::ThreadStatusChanged(change),
+            ))));
+        }
         *latest_status = Some((id.to_owned(), status));
         return;
     }
@@ -944,7 +960,24 @@ fn forward(
             thread_id: Some(id.to_owned()),
             message: "This cloud turn requested an unsupported interaction. Open it in another client to continue.".into(),
         }),
-        cloud::Event::Notification(_) => return,
+        event @ cloud::Event::Notification(_) => {
+            let lifecycle = match event.inventory_change() {
+                Some(cloud::InventoryChange::Archived(thread_id)) => Some(
+                    protocol::ServerNotification::ThreadArchived(
+                        protocol::ThreadArchivedNotification { thread_id },
+                    ),
+                ),
+                Some(cloud::InventoryChange::Unarchived(thread_id)) => Some(
+                    protocol::ServerNotification::ThreadUnarchived(
+                        protocol::ThreadUnarchivedNotification { thread_id },
+                    ),
+                ),
+                Some(cloud::InventoryChange::Refresh) => None,
+                None => return,
+            };
+            let _ = output.send(AppServerEvent::CloudInventoryChanged(lifecycle.map(Box::new)));
+            return;
+        }
     };
     send_notification(output, notification);
 }

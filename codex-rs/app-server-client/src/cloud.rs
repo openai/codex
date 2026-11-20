@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -121,6 +123,7 @@ pub(super) enum IdleReconnect {
 #[derive(Clone)]
 pub struct CloudRequestHandle {
     pub(super) reconnect: tokio::sync::watch::Sender<IdleReconnect>,
+    pub(super) attached: Arc<AtomicBool>,
     commands: mpsc::Sender<CloudCommand>,
     native: Option<Arc<codex_cloud_client::Client>>,
     title_client: Option<Arc<CloudTitleClient>>,
@@ -209,6 +212,7 @@ impl CloudClient {
                 handle: CloudRequestHandle {
                     commands,
                     reconnect: Default::default(),
+                    attached: Default::default(),
                     native: native.map(Arc::new),
                     title_client: title_client.map(Arc::new),
                 },
@@ -281,6 +285,11 @@ impl CloudClient {
 }
 
 impl CloudRequestHandle {
+    /// Whether the worker has an installed reply stream that can deliver inventory updates.
+    pub fn has_attachment(&self) -> bool {
+        self.attached.load(Ordering::Relaxed) && !self.commands.is_closed()
+    }
+
     /// Generate metadata with Cloud's own account, outside its conversation command queue.
     pub async fn generate_thread_title(
         &self,
@@ -462,6 +471,7 @@ impl CloudRequestHandle {
             Self {
                 commands,
                 reconnect: self.reconnect.clone(),
+                attached: self.attached.clone(),
                 native: None,
                 title_client: None,
             },

@@ -62,6 +62,7 @@ pub use items::ItemSummary;
 pub use prewarm::EnvironmentSelection;
 pub use prewarm::ProjectEnvironment;
 pub use transcript::FileUpdate;
+pub use transcript::InventoryChange;
 pub use transcript::ItemDelta;
 pub use transcript::PatchKind;
 pub use transcript::PatchUpdate;

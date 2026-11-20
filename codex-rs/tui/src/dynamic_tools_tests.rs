@@ -307,7 +307,8 @@ stream_max_retries = 0
                         return Ok::<_, color_eyre::eyre::Report>(());
                     }
                 }
-                codex_app_server_client::AppServerEvent::ThreadStreamReconnected(_)
+                codex_app_server_client::AppServerEvent::CloudInventoryChanged(_)
+                | codex_app_server_client::AppServerEvent::ThreadStreamReconnected(_)
                 | codex_app_server_client::AppServerEvent::ThreadStreamDisconnected(_) => {}
                 codex_app_server_client::AppServerEvent::Lagged { .. }
                 | codex_app_server_client::AppServerEvent::Disconnected { .. } => {

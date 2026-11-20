@@ -298,6 +298,7 @@ impl App {
                 }
                 self.agents_overview.active_refresh = None;
                 self.agents_overview.refresh_show_more = false;
+                self.agents_overview.active_refresh_recent = false;
                 self.agents_overview.active_refresh_thread_ids.clear();
                 self.agents_overview.pending_refresh_backends.clear();
                 self.agents_overview.refresh_notifications.clear();

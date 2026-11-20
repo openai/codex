@@ -69,6 +69,8 @@ pub enum AppServerEvent {
     },
     ServerNotification(Box<ServerNotification>),
     ServerRequest(Box<ServerRequest>),
+    /// The signed-in Cloud account may have changed its discoverable thread inventory.
+    CloudInventoryChanged(Option<Box<ServerNotification>>),
     /// A native Cloud reply stream ended. The underlying thread can still be running.
     ThreadStreamDisconnected(Box<codex_app_server_protocol::ErrorNotification>),
     /// The Cloud worker is listening again on the same conversation.
