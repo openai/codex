@@ -9,7 +9,7 @@ use codex_history::RetainedContextOrder;
 /// Recorded adjacency provides context, not a verified question/answer association.
 pub struct GuardianSenderExchange {
     pub user: Option<String>,
-    pub assistant: Option<GuardianRootMessage>,
+    pub assistant: Option<String>,
 }
 
 pub fn guardian_sender_exchanges(context: &RetainedContext) -> Vec<GuardianSenderExchange> {
@@ -27,21 +27,20 @@ pub fn guardian_sender_exchanges(context: &RetainedContext) -> Vec<GuardianSende
             | (_, RetainedContextEntry::VerifiedAnswer(_)) => {}
         }
     }
-    let mut messages = exchanges
+    exchanges
         .into_iter()
-        .rev()
-        .take(/*n*/ 3)
         .map(|(user, assistant)| GuardianSenderExchange {
-            user: user.complete.then(|| user.text.clone()),
+            user: user
+                .complete
+                .then(|| GuardianRootMessage::User(user.text.clone()).render()),
             assistant: assistant.map(|message| {
                 if message.complete {
                     GuardianRootMessage::Assistant(message.text.clone())
                 } else {
                     GuardianRootMessage::IncompleteAssistantContext
                 }
+                .render()
             }),
         })
-        .collect::<Vec<_>>();
-    messages.reverse();
-    messages
+        .collect()
 }

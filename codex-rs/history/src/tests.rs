@@ -136,6 +136,7 @@ fn latest_thread_settings_preserve_owned_updates_and_clears() -> Result<()> {
     const RECORD_BYTES: usize = 4_096;
     let policy = codex_protocol::protocol::GuardianRetentionPolicy {
         assistant_record_bytes: Some(RECORD_BYTES),
+        user_record_bytes: None,
     };
     selected.guardian_retention = Some(policy);
     let cleared = thread_settings_snapshot(Vec::new())?;
@@ -153,7 +154,8 @@ fn latest_thread_settings_preserve_owned_updates_and_clears() -> Result<()> {
     ];
     assert_eq!(latest_disabled_plugin_ids(&foreign_items, thread_id), None);
 
-    let mut history = vec![item(Some(thread_id), selected.clone())];
+    let saved_settings = serde_json::to_value(item(Some(thread_id), selected.clone()))?;
+    let mut history = vec![serde_json::from_value(saved_settings)?];
     history.extend(foreign_items.clone());
     assert_eq!(
         latest_disabled_plugin_ids(&history, thread_id),

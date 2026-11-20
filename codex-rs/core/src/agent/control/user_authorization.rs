@@ -72,7 +72,7 @@ impl RootConversationSource for CapturedRootConversation {
                 (!incomplete).then_some(RootDeliveredMessage { call_id, text })
             })
             .collect::<Vec<_>>();
-        let retained_context = budgeting.retained_assistant_view(root_history.retained_context());
+        let retained_context = budgeting.retained_message_view(root_history.retained_context());
         let reconciled = ReconciledRetainedContext::new(
             Some(&retained_context),
             root_history

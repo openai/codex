@@ -200,8 +200,6 @@ impl ContextManager {
             complete &= metadata
                 .and_then(|metadata| metadata.retained_source.as_ref())
                 .is_none_or(|source| source.complete);
-            let retain_assistant_original =
-                is_assistant && self.retained_context.retains_original_assistant_messages();
             let text = content
                 .iter()
                 .filter_map(|content| match content {
@@ -215,7 +213,12 @@ impl ContextManager {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let text = if retain_assistant_original {
+            let retain_original = if is_assistant {
+                self.retained_context.retains_original_assistant_messages()
+            } else {
+                self.retained_context.retains_original_user_messages()
+            };
+            let text = if retain_original {
                 // The recorder applies the configured byte limit to the source text.
                 text
             } else {

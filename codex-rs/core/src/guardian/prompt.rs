@@ -117,7 +117,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     );
     let retained_context = history
         .retained_context()
-        .map(|context| budgeting.retained_assistant_view(context));
+        .map(|context| budgeting.retained_message_view(context));
     let trusted_user_inputs = retained_context
         .as_deref()
         .map(codex_guardian_context::collect_verified_answer_candidates)

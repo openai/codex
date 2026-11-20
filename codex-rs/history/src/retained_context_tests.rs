@@ -6,6 +6,40 @@ use codex_thread_context_ids_test_support::thread_context_ids;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn large_elastic_sender_snapshots_survive_checkpoint_and_rollback() {
+    const ELASTIC_SNAPSHOT_BYTES: usize = 35_000;
+    let text = "s".repeat(ELASTIC_SNAPSHOT_BYTES);
+    let snapshot = |index| SenderUserMessages {
+        receiver_turn_id: format!("turn-{index}"),
+        receiver_message_id: format!("delivery-{index}"),
+        text: text.clone(),
+    };
+    let mut history = RetainedContext::default();
+    for index in 0..MAX_FAMILY_RECORDS {
+        assert!(history.record_sender_user_messages(&CodexHarnessMetadata {
+            sender_user_messages: Some(Box::new(snapshot(index))),
+            ..Default::default()
+        }));
+    }
+
+    let checkpoint = serde_json::from_slice(&serde_json::to_vec(&history).unwrap()).unwrap();
+    let mut restored = RetainedContext::default();
+    restored.restore(Some(&checkpoint), &[]);
+    let removed = (1..MAX_FAMILY_RECORDS)
+        .map(|index| format!("turn-{index}"))
+        .collect::<Vec<_>>();
+    restored.rollback(
+        &removed.iter().map(String::as_str).collect::<Vec<_>>(),
+        /*first_removed_message_id*/ None,
+        RetainedInputSource::Local(None),
+    );
+    assert_eq!(
+        restored.sender_user_messages(),
+        Some(&snapshot(/*index*/ 0))
+    );
+}
+
+#[test]
 fn accepted_audio_checkpoint_discards_oversized_and_rolled_back_evidence() {
     let mut retained = RetainedContext::default();
     let proof = |id: String| RetainedContextEvent::AcceptedFileAudio {
@@ -133,6 +167,7 @@ fn assistant_record_limit_applies_on_capture_and_restore() {
             thread_id,
             policy: GuardianRetentionPolicy {
                 assistant_record_bytes,
+                user_record_bytes: None,
             },
         }))
     };
@@ -174,7 +209,7 @@ fn assistant_record_limit_applies_on_capture_and_restore() {
     restored.restore(Some(&elastic), &[]);
     assert_eq!(
         restored.assistant_messages,
-        elastic.fixed_assistant_view().assistant_messages
+        elastic.fixed_message_view().assistant_messages
     );
     let omitted = &restored.assistant_messages[0].value;
     assert_eq!((omitted.complete, omitted.text.capacity()), (false, 0));

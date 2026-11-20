@@ -258,13 +258,14 @@ fn missing_message_history() -> bool {
 }
 
 fn bound_family<T: Serialize>(items: &mut VecDeque<Ordered<T>>, incomplete: &mut bool) {
-    bound_family_with_limit(items, incomplete, MAX_FAMILY_RECORDS);
+    bound_family_with_limit(items, incomplete, MAX_FAMILY_RECORDS, MAX_FAMILY_BYTES);
 }
 
 fn bound_family_with_limit<T: Serialize>(
     items: &mut VecDeque<Ordered<T>>,
     incomplete: &mut bool,
     max_records: usize,
+    max_bytes: usize,
 ) {
     // Queued instructions can be recorded after later-accepted answers. Evict by
     // acceptance order, not by the order in which persistence happened to finish.
@@ -272,7 +273,7 @@ fn bound_family_with_limit<T: Serialize>(
     let count_evicted = items.len().saturating_sub(max_records);
     *incomplete |= count_evicted != 0;
     items.drain(..count_evicted);
-    if serde_json::to_vec(items).is_ok_and(|bytes| bytes.len() <= MAX_FAMILY_BYTES) {
+    if serde_json::to_vec(items).is_ok_and(|bytes| bytes.len() <= max_bytes) {
         return;
     }
     // Count the newest fitting suffix once. Each element uses a separator or
@@ -284,7 +285,7 @@ fn bound_family_with_limit<T: Serialize>(
             break;
         };
         bytes += encoded.len() + 1;
-        if bytes > MAX_FAMILY_BYTES {
+        if bytes > max_bytes {
             break;
         }
         keep += 1;
@@ -349,6 +350,18 @@ impl RetainedContext {
         self.message_retention.is_some()
     }
 
+    /// Whether user instructions have a configured Elastic entry limit.
+    pub fn retains_original_user_messages(&self) -> bool {
+        self.message_retention
+            .is_some_and(|retention| retention.policy.user_record_bytes.is_some())
+    }
+
+    fn user_record_bytes(&self) -> usize {
+        self.message_retention
+            .and_then(|retention| retention.policy.user_record_bytes)
+            .unwrap_or(MAX_RECORD_BYTES)
+    }
+
     /// The configured Elastic per-record limit, if supplied by the session.
     pub fn elastic_assistant_record_bytes(&self) -> Option<usize> {
         self.message_retention
@@ -373,22 +386,44 @@ impl RetainedContext {
             &mut self.assistant_messages,
             &mut self.assistant_messages_incomplete,
             max_records,
+            MAX_FAMILY_BYTES,
         );
     }
 
-    /// Projects the assistant family for consumers using the Fixed retention window.
-    pub fn fixed_assistant_view(&self) -> Cow<'_, Self> {
+    fn bound_user_family(&mut self) {
+        let max_records = if self.retains_original_user_messages() {
+            usize::MAX
+        } else {
+            MAX_FAMILY_RECORDS
+        };
+        bound_family_with_limit(
+            &mut self.user_messages,
+            &mut self.user_messages_incomplete,
+            max_records,
+            MAX_FAMILY_BYTES,
+        );
+    }
+
+    /// Projects the message families for consumers using the Fixed retention window.
+    pub fn fixed_message_view(&self) -> Cow<'_, Self> {
         if self.assistant_messages.len() <= MAX_FAMILY_RECORDS
+            && self.user_messages.len() <= MAX_FAMILY_RECORDS
             && self.assistant_record_bytes() <= MAX_RECORD_BYTES
+            && self.user_record_bytes() <= MAX_RECORD_BYTES
         {
             return Cow::Borrowed(self);
         }
         let mut view = self.clone();
         view.message_retention = None;
-        for entry in &mut view.assistant_messages {
+        for entry in view
+            .assistant_messages
+            .iter_mut()
+            .chain(&mut view.user_messages)
+        {
             entry.value.bound(MAX_RECORD_BYTES);
         }
         view.bound_assistant_family();
+        view.bound_user_family();
         Cow::Owned(view)
     }
 
@@ -396,6 +431,16 @@ impl RetainedContext {
         self.accepted_file_audio
             .as_deref()
             .filter(|evidence| evidence.model == model && evidence.provider == provider)
+    }
+
+    fn bound_sender_deliveries(&mut self) {
+        // Each delivery may hold a full configured snapshot needed after rollback.
+        bound_family_with_limit(
+            &mut self.sender_deliveries,
+            /*incomplete*/ &mut false,
+            MAX_FAMILY_RECORDS,
+            MAX_FAMILY_BYTES * MAX_FAMILY_RECORDS,
+        );
     }
 
     /// Context for the latest delivery still present in this task's retained history.
@@ -424,7 +469,7 @@ impl RetainedContext {
             order,
             value: messages,
         });
-        bound_family(&mut self.sender_deliveries, /*incomplete*/ &mut false);
+        self.bound_sender_deliveries();
         true
     }
 
@@ -517,7 +562,7 @@ impl RetainedContext {
         source: RetainedInputSource,
         context_ids: &ThreadContextIds,
     ) -> Option<RetainedSource> {
-        message.bound(MAX_RECORD_BYTES);
+        message.bound(self.user_record_bytes());
         let inherited = source == RetainedInputSource::Inherited;
         // An unchanged invocation is not a new instruction. Keep the original
         // acceptance order; compare only the latest version of this automation,
@@ -576,7 +621,7 @@ impl RetainedContext {
         };
         let source = entry.source(RetainedSourceRole::User);
         self.user_messages.push_back(entry);
-        bound_family(&mut self.user_messages, &mut self.user_messages_incomplete);
+        self.bound_user_family();
         source
     }
 
@@ -586,6 +631,7 @@ impl RetainedContext {
         &mut self,
         mut excerpt_for_id: impl FnMut(&str) -> Option<String>,
     ) {
+        let max_record_bytes = self.user_record_bytes();
         for entry in &mut self.user_messages {
             let message = &mut entry.value;
             if message.text.is_empty()
@@ -593,10 +639,10 @@ impl RetainedContext {
                 && let Some(text) = message.message_id.as_deref().and_then(&mut excerpt_for_id)
             {
                 message.text = text;
-                message.bound(MAX_RECORD_BYTES);
+                message.bound(max_record_bytes);
             }
         }
-        bound_family(&mut self.user_messages, &mut self.user_messages_incomplete);
+        self.bound_user_family();
     }
 
     /// Same-event delivery is idempotent; changed contents replace that source's record.
@@ -707,10 +753,11 @@ impl RetainedContext {
             entry.value = answer;
             self.next_order = self.next_order.max(entry.order.saturating_add(1));
         }
+        let user_record_bytes = self.user_record_bytes();
         let user = self
             .user_messages
             .iter_mut()
-            .map(|entry| (entry, MAX_RECORD_BYTES));
+            .map(|entry| (entry, user_record_bytes));
         let assistant = self
             .assistant_messages
             .iter_mut()
@@ -727,7 +774,7 @@ impl RetainedContext {
             entry.value.bound();
             self.next_order = self.next_order.max(entry.order.saturating_add(1));
         }
-        bound_family(&mut self.sender_deliveries, /*incomplete*/ &mut false);
+        self.bound_sender_deliveries();
         for metadata in surviving_items
             .iter()
             .filter_map(|item| item.metadata.as_ref())
@@ -746,7 +793,7 @@ impl RetainedContext {
             &mut self.verified_answers,
             &mut self.verified_answers_incomplete,
         );
-        bound_family(&mut self.user_messages, &mut self.user_messages_incomplete);
+        self.bound_user_family();
         self.bound_assistant_family();
     }
 

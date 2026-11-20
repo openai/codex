@@ -93,6 +93,7 @@ pub use budget::SECTION_COST_BOUNDARIES;
 pub use budget::SECTION_COST_METRIC;
 pub use budget::SectionCost;
 pub use budget::effective_input_token_limit;
+pub use budget::elastic_sender_text_entry_bytes;
 pub use budget::estimate_input_tokens;
 pub use budget::estimate_input_tokens_from_serialized_len;
 pub use budget::request_token_bucket;

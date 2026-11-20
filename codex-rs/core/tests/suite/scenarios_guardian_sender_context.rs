@@ -29,21 +29,43 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-#[test_case::test_case(ThreadHistoryMode::Legacy; "legacy")]
-#[test_case::test_case(ThreadHistoryMode::Paginated; "paginated")]
+#[test_case::test_case(ThreadHistoryMode::Legacy, false; "legacy")]
+#[test_case::test_case(ThreadHistoryMode::Paginated, false; "paginated")]
+#[test_case::test_case(ThreadHistoryMode::Paginated, true; "elastic")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()> {
+async fn cross_host_sender_context(history_mode: ThreadHistoryMode, elastic: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let store = Arc::new(InMemoryThreadStore::default());
+    use codex_guardian_context::ElasticSection;
+    use codex_guardian_context::ElasticSectionLimits;
+    const ENTRY_TOKENS: usize = 1_500;
+    let mut budget = core_test_support::guardian::elastic_budget_config();
+    let transcript = budget.section_limits(ElasticSection::TranscriptMessages);
+    let mut transcript_minimum = transcript.min_total_section_tokens();
+    for section in [
+        ElasticSection::SenderUserMessages,
+        ElasticSection::RetainedUserInstructions,
+    ] {
+        transcript_minimum += budget.section_limits(section).min_total_section_tokens();
+        transcript_minimum -= ENTRY_TOKENS;
+        budget.sections.insert(
+            section,
+            ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS)?,
+        );
+    }
+    budget.sections.insert(
+        ElasticSection::TranscriptMessages,
+        ElasticSectionLimits::new(transcript_minimum, transcript.max_section_entry_tokens())?,
+    );
+    let sender_budget = budget.clone();
     let sender = test_codex()
         .with_thread_store(store.clone())
         .with_history_mode(history_mode)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
+        .with_config(move |config| {
             super::configure_scenario_catalog(config);
-            config.guardian_sync_elastic_budget =
-                Some(core_test_support::guardian::elastic_budget_config());
+            config.guardian_sync_elastic_budget = Some(sender_budget);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -51,8 +73,11 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
     let receiver = test_codex()
         .with_thread_store(store)
         .with_history_mode(history_mode)
-        .with_config(|config| {
+        .with_config(move |config| {
             super::configure_scenario_catalog(config);
+            if elastic {
+                config.guardian_sync_elastic_budget = Some(budget);
+            }
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         })
@@ -70,6 +95,16 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
             ev_completed("done"),
         ]),
     ];
+    const SHORT_FOLLOW_UPS: usize = 8;
+    let follow_ups = (0..SHORT_FOLLOW_UPS).map(|index| format!("Check job {index}."));
+    if elastic {
+        sender_responses.insert(/*index*/ 0, sse(vec![ev_completed("older")]));
+        sender_responses.extend(
+            follow_ups
+                .clone()
+                .map(|_| sse(vec![ev_completed("follow-up")])),
+        );
+    }
     if history_mode == ThreadHistoryMode::Paginated {
         sender_responses.push(sse(vec![
             json!({"type": "response.output_item.done", "item": {
@@ -80,12 +115,26 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
     }
     sender_responses.push(sse(vec![ev_completed("later")]));
     let sender_mock = responses::mount_sse_sequence(&server, sender_responses).await;
+    const OLDER_TEXT_BYTES: usize = 4_000;
+    let older = format!("Older sender input {}", "x".repeat(OLDER_TEXT_BYTES));
+    if elastic {
+        sender.submit_text_turn(&older).await?;
+    }
     sender.submit_text_turn("Inspect the staging job.").await?;
     sender
         .submit_text_turn("Yes. Staging only; never production.")
         .await?;
+    if elastic {
+        for text in follow_ups.clone() {
+            sender.submit_text_turn(&text).await?;
+        }
+    }
     if history_mode == ThreadHistoryMode::Paginated {
         sender.codex.submit(Op::Compact).await?;
+        wait_for_event(&sender.codex, |event| {
+            matches!(event, EventMsg::ContextCompacted(_))
+        })
+        .await;
         wait_for_event(&sender.codex, |event| {
             matches!(event, EventMsg::TurnComplete(_))
         })
@@ -113,11 +162,16 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
     sender.codex.inject_response_items(later).await?;
     sender.codex.flush_rollout().await?;
 
-    let expected = [
-        "user: Inspect the staging job.",
-        "assistant: Rerun only staging, preserving checkpoints?",
-        "user: Yes. Staging only; never production.",
+    let mut expected = vec![
+        "user: Inspect the staging job.".to_owned(),
+        "assistant: Rerun only staging, preserving checkpoints?".to_owned(),
+        "user: Yes. Staging only; never production.".to_owned(),
     ];
+    if elastic {
+        expected.insert(/*index*/ 0, format!("user: {older}"));
+        expected.push("assistant: I will ask the helper.".to_owned());
+        expected.extend(follow_ups.map(|text| format!("user: {text}")));
+    }
     let mock = responses::mount_sse_sequence(
         &server,
         vec![
@@ -158,12 +212,12 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
     let worker = captured[0].body_json().to_string();
     assert!(!worker.contains("never production"));
     let history = receiver.codex.conversation_history_snapshot().await;
-    let evidence = &history
+    let snapshot = history
         .retained_context()
         .expect("retained context")
         .sender_user_messages()
-        .expect("sender evidence")
-        .text;
+        .expect("sender evidence");
+    let evidence = &snapshot.text;
     assert_eq!(
         evidence
             .lines()
@@ -171,13 +225,12 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
             .collect::<Vec<_>>(),
         expected
     );
-    assert!(evidence.len() <= 3_600);
     let review = captured[1].message_input_texts("user").join("\n");
     assert!(review.contains(evidence));
     assert!(!review.contains("Production is also allowed."));
     requests.extend(captured);
     assert!(receiver.thread_manager.get_thread(sender_id).await.is_err());
-    if history_mode == ThreadHistoryMode::Paginated {
+    if history_mode == ThreadHistoryMode::Paginated && !elastic {
         let mut snapshot = context_snapshot::format_request_history_snapshot(
             "Two workers share a thread store. The receiver reads the sender's original instructions and preceding assistant question after compaction and rollback, without loading the sender. Only Guardian receives the evidence.",
             &requests,

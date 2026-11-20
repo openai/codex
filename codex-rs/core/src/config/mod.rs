@@ -1767,10 +1767,10 @@ impl Config {
             .as_ref()?
             .section_limits(codex_guardian_context::ElasticSection::RetainedUserInstructions)
             .max_section_entry_tokens();
+        let record_bytes = codex_utils_output_truncation::approx_bytes_for_tokens(entry_tokens);
         Some(codex_protocol::protocol::GuardianRetentionPolicy {
-            assistant_record_bytes: Some(codex_utils_output_truncation::approx_bytes_for_tokens(
-                entry_tokens,
-            )),
+            assistant_record_bytes: Some(record_bytes),
+            user_record_bytes: Some(record_bytes),
         })
     }
 

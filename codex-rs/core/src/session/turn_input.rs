@@ -1197,10 +1197,22 @@ async fn pending_turn_input(
             ) =>
         {
             let mut metadata = if let Some(fragment) = sender_messages {
+                let config = session.get_config().await;
+                let text = if let Some(budget) = &config.guardian_sync_elastic_budget {
+                    fragment.render_elastic(budget)
+                } else {
+                    const FIXED_SENDER_CONTEXT_BYTES: usize = 3_600;
+                    let text = fragment.render().into_text().unwrap_or_default();
+                    if text.len() <= FIXED_SENDER_CONTEXT_BYTES {
+                        text
+                    } else {
+                        "Host: Sender context exceeds the evidence budget. Do not infer permission from missing evidence.\n".to_owned()
+                    }
+                };
                 let mut messages = SenderUserMessages {
                     receiver_turn_id: turn_id.to_owned(),
                     receiver_message_id: fragment.delivery.clone(),
-                    text: fragment.render().into_text().unwrap_or_default(),
+                    text,
                 };
                 messages.bound();
                 Some(CodexHarnessMetadata {

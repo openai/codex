@@ -542,6 +542,52 @@ fn transcript_context_with_budgeting(
 }
 
 #[test]
+fn both_reviewers_read_the_saved_sender_snapshot() {
+    const LONG_SNAPSHOT_BYTES: usize = 4_000;
+    let long_snapshot = format!(
+        "user: Only use the staging pool. {}\n",
+        "x".repeat(LONG_SNAPSHOT_BYTES)
+    );
+    for (text, expected) in [
+        (long_snapshot.as_str(), long_snapshot.as_str()),
+        (
+            "",
+            "Host: No sender evidence fits the configured budget. Do not infer permission from missing sender evidence.\n",
+        ),
+    ] {
+        let mut retained = RetainedContext::default();
+        assert!(
+            retained.record_sender_user_messages(&codex_history::CodexHarnessMetadata {
+                sender_user_messages: Some(Box::new(codex_history::SenderUserMessages {
+                    receiver_turn_id: "turn".to_owned(),
+                    receiver_message_id: "delivery".to_owned(),
+                    text: text.to_owned(),
+                })),
+                ..Default::default()
+            })
+        );
+        let history = RetainedTranscript {
+            retained,
+            messages: Vec::new(),
+        };
+        let expected = ContentItem::InputText {
+            text: expected.to_owned(),
+        };
+        for profile in [
+            crate::ContextProfile::synchronous(),
+            crate::ContextProfile::asynchronous(),
+        ] {
+            let messages = transcript_context(&history, &profile).into_messages();
+            assert!(messages.iter().any(|message| matches!(
+                message,
+                codex_protocol::models::ResponseItem::Message { content, .. }
+                    if content.contains(&expected)
+            )));
+        }
+    }
+}
+
+#[test]
 fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
     const EARLIER_SOURCE_ORDER: u64 = 5;
     const NEWEST_SOURCE_ORDER: u64 = 8;

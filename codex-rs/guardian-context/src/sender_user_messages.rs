@@ -20,8 +20,13 @@ impl SectionContributor for SenderUserMessagesSection {
             .history
             .retained_context()
             .and_then(RetainedContext::sender_user_messages)
-            .map(|snapshot| ContextSection::SenderUserMessages {
-                items: vec![snapshot.text.clone()],
+            .map(|snapshot| {
+                let text = if snapshot.text.is_empty() {
+                    "Host: No sender evidence fits the configured budget. Do not infer permission from missing sender evidence.\n".to_owned()
+                } else {
+                    snapshot.text.clone()
+                };
+                ContextSection::SenderUserMessages { items: vec![text] }
             }))
     }
 }

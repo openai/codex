@@ -48,10 +48,10 @@ pub enum ContextBudgeting {
 }
 
 impl ContextBudgeting {
-    /// Use the retained assistant window for this reviewer.
-    pub fn retained_assistant_view(self, context: &RetainedContext) -> Cow<'_, RetainedContext> {
+    /// Use the retained message window for this reviewer.
+    pub fn retained_message_view(self, context: &RetainedContext) -> Cow<'_, RetainedContext> {
         if self == Self::Fixed {
-            context.fixed_assistant_view()
+            context.fixed_message_view()
         } else {
             Cow::Borrowed(context)
         }

@@ -483,10 +483,7 @@ impl ContextManager {
                                     })
                                     .collect::<Vec<_>>()
                                     .join("\n");
-                                if source_role == "assistant"
-                                    && message.complete
-                                    && text == message.text
-                                {
+                                if message.complete && text == message.text {
                                     return true;
                                 }
                                 guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0
@@ -507,6 +504,7 @@ impl ContextManager {
         // Older retained checkpoints cleared oversized instructions. Recover their
         // bounded root excerpts before discarding the legacy source transcript.
         let items = &self.items;
+        let retains_original_messages = self.retained_context.retains_original_user_messages();
         Arc::make_mut(&mut self.retained_context).recover_user_message_excerpts(|id| {
             // Prefer the backup over a compacted copy that retains the original ID.
             let original = checkpoint
@@ -517,7 +515,12 @@ impl ContextManager {
             let Some(TurnItem::UserMessage(original)) = original.and_then(parse_turn_item) else {
                 return None;
             };
-            Some(guardian_truncate_text(&original.message(), GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0)
+            let text = original.message();
+            Some(if retains_original_messages {
+                text
+            } else {
+                guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0
+            })
         });
         let retain_legacy_authorization = self.retain_inherited_user_messages
             && self.retained_context.has_missing_user_messages()

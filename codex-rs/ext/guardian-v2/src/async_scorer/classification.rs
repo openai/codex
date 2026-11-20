@@ -257,7 +257,7 @@ impl Classification {
                 };
                 let retained = history
                     .retained_context()
-                    .map(|context| budgeting.retained_assistant_view(context));
+                    .map(|context| budgeting.retained_message_view(context));
                 let answers = retained
                     .as_deref()
                     .map(codex_guardian_context::collect_verified_answer_candidates)
