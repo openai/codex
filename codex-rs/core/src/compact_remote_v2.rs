@@ -735,7 +735,7 @@ fn truncate_retained_messages(
     .collect()
 }
 
-/// Select newest first, then return the items at their original positions.
+/// Keep explicit pins whole, spend the carryover budget newest first, and restore source order.
 fn select_retained_items(
     items: &[ResponseItemEnvelope],
     should_retain: impl Fn(&ResponseItemEnvelope) -> bool,
@@ -747,10 +747,18 @@ fn select_retained_items(
     let mut remaining = max_tokens;
     let mut selected = BTreeMap::new();
     for group in newest_history_item_groups(items, is_pinned) {
+        if is_pinned(group.source)
+            && group.source.has_explicit_retention_pin()
+            && should_retain(group.source)
+        {
+            group.keep(&mut selected, group.source.clone());
+        }
+    }
+    for group in newest_history_item_groups(items, is_pinned) {
         if remaining == 0 {
             break;
         }
-        if !should_retain(group.source) {
+        if selected.contains_key(&group.source_position) || !should_retain(group.source) {
             continue;
         }
 
@@ -778,7 +786,7 @@ fn select_retained_items(
             )
             .max(1)
         });
-        // Explicitly retained items and client developer messages also pay for their media.
+        // Feature-retained client items pay for their media.
         let content_tokens =
             retained_message_token_count(&group.source.item, image_budget, audio_durations);
         let source_tokens = if charge_full_item {
@@ -1168,6 +1176,44 @@ mod tests {
                 );
             }
             assert_eq!(history, expected);
+        }
+    }
+
+    #[test]
+    fn explicit_pins_survive_an_exhausted_budget_only_in_their_destination() {
+        use codex_protocol::turn_input::InjectedResponseItem;
+        use codex_protocol::turn_input::ItemRetention;
+
+        let pin = |text, retention| {
+            ResponseItemEnvelope::from(InjectedResponseItem {
+                item: message("developer", text, /*phase*/ None),
+                retention,
+            })
+        };
+        let shared = pin("shared", ItemRetention::Always);
+        let thread = pin("thread", ItemRetention::AlwaysInThread);
+        let child = pin("child", ItemRetention::AlwaysInChildren);
+        let mut configured = pin("feature-retained developer log", ItemRetention::Unspecified);
+        configured
+            .metadata
+            .get_or_insert_default()
+            .retain_across_windows = Some(true);
+        let items = [shared.clone(), thread.clone(), child.clone(), configured];
+        let in_child: fn(&ResponseItemEnvelope) -> bool =
+            |item| item.child_retention() == Some(true);
+        for (destination, expected) in [
+            (in_child, [shared.clone(), child]),
+            (ResponseItemEnvelope::is_always_retained, [shared, thread]),
+        ] {
+            let selected = select_retained_items(
+                &items,
+                destination,
+                destination,
+                /*max_tokens*/ 0,
+                RetainedImageBudget::Disabled,
+                &FileAudioDurations::default(),
+            );
+            assert_eq!(selected.into_values().collect::<Vec<_>>(), expected);
         }
     }
 

@@ -662,6 +662,26 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages(
 }
 
 #[test]
+fn local_compaction_keeps_an_ordinary_user_beside_a_pinned_user() {
+    use codex_protocol::turn_input::InjectedResponseItem;
+    use codex_protocol::turn_input::ItemRetention;
+
+    let ordinary = ResponseItemEnvelope::new(user_message("abcd"));
+    let pin = ResponseItemEnvelope::from(InjectedResponseItem {
+        item: user_message("larger than the optional budget"),
+        retention: ItemRetention::AlwaysInThread,
+    });
+    let items = [ordinary.clone(), pin.clone()];
+    let compacted = build_compacted_history_with_limit(
+        &items,
+        "summary",
+        /*max_tokens*/ 1,
+        &FileAudioDurations::default(),
+    );
+    assert_eq!(&compacted[..2], &[ordinary, pin]);
+}
+
+#[test]
 fn build_token_limited_compacted_history_appends_summary_message() {
     let items = annotated(vec![user_message("first user message")]);
     let summary_text = "summary text";

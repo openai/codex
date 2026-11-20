@@ -358,6 +358,28 @@ impl ResponseItemEnvelope {
             .or_else(|| metadata.retain_across_windows.filter(|retain| *retain))
     }
 
+    /// An explicit injection policy exempts the item from the soft carryover budget
+    /// wherever its policy pins it. Older developer messages and named turn outputs
+    /// could also have been retained by a feature, so keep their historical pricing.
+    pub fn has_explicit_retention_pin(&self) -> bool {
+        let Some(metadata) = &self.metadata else {
+            return false;
+        };
+        if metadata.retain_in_children.is_some() {
+            return true;
+        }
+        self.is_always_retained()
+            && match &self.item {
+                ResponseItem::Message { role, .. } => role != "developer",
+                ResponseItem::FunctionCallOutput {
+                    name: Some(_),
+                    call_id: None,
+                    ..
+                } => false,
+                _ => true,
+            }
+    }
+
     /// Wraps a raw Responses API item for persisted history.
     pub fn new(item: ResponseItem) -> Self {
         Self {
@@ -384,7 +406,7 @@ impl From<InjectedResponseItem> for ResponseItemEnvelope {
         let (across_windows, in_children) = match injected.retention {
             ItemRetention::Unspecified => return envelope,
             ItemRetention::Default => (false, None),
-            ItemRetention::Always => (true, None),
+            ItemRetention::Always => (true, Some(true)),
             ItemRetention::AlwaysInThread => (true, Some(false)),
             ItemRetention::AlwaysInChildren => (false, Some(true)),
         };
