@@ -48,3 +48,5 @@ const alias: StatuslineItemId = "project-root";
 const missingGap: RowElement = { type: "row", props: {}, children: [] };
 // @ts-expect-error Color literals begin with a hash or match one of the named tokens.
 const invalidColor: Color = "ff00bb";
+
+const groupedPositions: RowElement["props"]["justify"][] = ["center", "end"];

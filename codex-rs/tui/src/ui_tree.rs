@@ -142,8 +142,8 @@ pub(crate) struct RowProps {
     )]
     #[cfg_attr(test, ts(as = "Option<RowWrap>", optional))]
     wrap: RowWrap,
-    /// `between` distributes spare columns between children on each line.
-    /// `start` positions items at the leading edge with the requested gap.
+    /// Position each line's items at the `start`, `center`, or `end`.
+    /// `between` distributes spare columns across the gaps between children.
     #[serde(
         default,
         deserialize_with = "decode::present_token",
@@ -168,6 +168,8 @@ enum RowWrap {
 enum RowJustify {
     #[default]
     Start,
+    Center,
+    End,
     Between,
 }
 

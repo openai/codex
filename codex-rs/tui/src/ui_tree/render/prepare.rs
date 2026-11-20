@@ -8,6 +8,12 @@ use crate::ui_tree::RowWrap;
 use crate::ui_tree::UiNode;
 
 #[derive(Debug, PartialEq)]
+pub(super) struct RowPaint {
+    pub(super) gap: Paint,
+    pub(super) leading: Paint,
+}
+
+#[derive(Debug, PartialEq)]
 pub(super) struct PreparedNode {
     pub(super) kind: NodeKind,
     pub(super) widths: Widths,
@@ -25,7 +31,7 @@ pub(super) enum NodeKind {
     Row {
         children: Vec<PreparedNode>,
         props: RowProps,
-        paint: Paint,
+        paint: RowPaint,
     },
     Empty,
 }
@@ -93,7 +99,13 @@ impl PreparedNode {
             kind: NodeKind::Row {
                 children,
                 props,
-                paint,
+                paint: RowPaint {
+                    leading: Paint {
+                        background: paint.background,
+                        ..Paint::default()
+                    },
+                    gap: paint,
+                },
             },
         })
     }
