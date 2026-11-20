@@ -144,7 +144,7 @@ fn request_frames(text: Utf8Bytes) -> impl Iterator<Item = Message> {
     }))
 }
 
-/// Owns the socket and recovers peer replies after a failed upload.
+/// Drives the socket while waiting for commands and while flushing their frames.
 struct WsPump<S> {
     socket: S,
     messages: mpsc::UnboundedSender<Result<Message, WsError>>,
@@ -221,6 +221,27 @@ where
         Poll::Pending
     }
 
+    async fn drive<T>(
+        &mut self,
+        mut operation: impl FnMut(&mut S, &mut Context<'_>) -> Poll<Result<T, WsError>>,
+    ) -> Result<T, WsError> {
+        let mut first = self.read_budget.is_some();
+        poll_fn(|cx| {
+            // Read before starting a frame. Once blocked, give the write the first
+            // use of the task's cooperative budget on each wake.
+            let read_first = std::mem::take(&mut first);
+            if read_first {
+                let _ = self.poll_incoming(cx, /*recovering*/ false)?;
+            }
+            let result = operation(&mut self.socket, cx);
+            if !read_first && result.is_pending() {
+                let _ = self.poll_incoming(cx, /*recovering*/ false)?;
+            }
+            result
+        })
+        .await
+    }
+
     async fn recover(&mut self, error: WsError, deadline: Instant) -> WsError {
         if matches!(error, WsError::ConnectionClosed)
             || codex_websocket_client::network_policy_denial(&error).is_some()
@@ -238,17 +259,12 @@ where
     }
 
     async fn send_frames(&mut self, text: Utf8Bytes, deadline: Instant) -> WsSendOutcome {
+        // Limit how far we read ahead of the response consumer during a send.
         self.read_budget = Some(UPLOAD_READ_AHEAD_BYTES);
-        let mut check_idle = true;
         let mut started = false;
         for frame in request_frames(text) {
             let mut frame = Some(frame);
-            let write = poll_fn(|cx| {
-                // A close already readable before the first frame belongs to the idle socket.
-                if std::mem::take(&mut check_idle) {
-                    let _ = self.poll_incoming(cx, /*recovering*/ false)?;
-                }
-                let socket = &mut self.socket;
+            let write = self.drive(|socket, cx| {
                 if frame.is_some() {
                     ready!(socket.poll_ready_unpin(cx))?;
                 }
@@ -280,14 +296,7 @@ where
 
     async fn run(mut self, mut commands: mpsc::Receiver<WsCommand>) {
         loop {
-            let command = poll_fn(|cx| {
-                let command = commands.poll_recv(cx);
-                if command.is_pending() {
-                    let _ = self.poll_incoming(cx, /*recovering*/ false)?;
-                }
-                command.map(Ok)
-            })
-            .await;
+            let command = self.drive(|_, cx| commands.poll_recv(cx).map(Ok)).await;
             let WsCommand {
                 request,
                 deadline,
