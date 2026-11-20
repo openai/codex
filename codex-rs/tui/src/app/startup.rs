@@ -1507,7 +1507,7 @@ See the Codex keymap documentation for supported actions and examples."
                         app.app_server_target.clone(),
                         app.config.clone(),
                         app.local_settings.clone(),
-                        app.current_displayed_thread_id(),
+                        app.reconnect_thread_id(),
                         backends
                             .session_at(displayed_session)
                             .remote_cwd_override()

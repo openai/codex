@@ -335,6 +335,13 @@ impl ChatWidget {
     /// remain consistent. Owned transcripts reserve their shared hint row above the composer.
     pub(crate) fn bottom_pane_renderable<'a>(
         &'a self,
+        options: crate::bottom_pane::ComposerRenderOptions<'a>,
+    ) -> RenderableItem<'a> {
+        self.composer_pane_renderable(options)
+    }
+
+    fn composer_pane_renderable<'a>(
+        &'a self,
         mut options: crate::bottom_pane::ComposerRenderOptions<'a>,
     ) -> RenderableItem<'a> {
         if self.fork_in_progress {

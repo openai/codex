@@ -48,7 +48,7 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
-    /// Use for input routing. Only the coding transcript should receive live thread history.
+    /// The transcript currently receiving input, if any.
     pub(crate) fn input_transcript(&self) -> Option<&TranscriptOverlay> {
         match self {
             Self::Transcript(view) => Some(view),

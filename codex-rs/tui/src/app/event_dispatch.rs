@@ -30,9 +30,17 @@ use codex_app_server_protocol::WindowsSandboxSetupMode;
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 impl App {
-    // Keep the existing dispatcher layout until it can be formatted separately.
+    pub(crate) fn handle_event<'a>(
+        &'a mut self,
+        tui: &'a mut tui::Tui,
+        app_server: &'a mut AppServerSession,
+        event: AppEvent,
+    ) -> futures::future::LocalBoxFuture<'a, Result<AppRunControl>> {
+        Box::pin(self.dispatch_event(tui, app_server, event))
+    }
+
     #[rustfmt::skip]
-    pub(crate) async fn handle_event(
+    async fn dispatch_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
