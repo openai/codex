@@ -174,6 +174,7 @@
 //! - Treats a leading `!` revealed only by paste expansion as literal model input, not shell input.
 //! - Prunes local attached images so only placeholders that survive expansion are sent.
 //! - Preserves remote image URLs as separate attachments even when text is empty.
+//! - Copies pasted image files into private temporary attachments before retaining their paths.
 //!
 //! When these paths clear the visible textarea after a successful submit or slash-command
 //! dispatch, they intentionally preserve the textarea kill buffer. That lets users `Ctrl+K` part
@@ -467,8 +468,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
-use crate::clipboard_paste::normalize_pasted_path;
-use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
@@ -1338,32 +1337,6 @@ impl ChatComposer {
 
     pub(crate) fn record_replayed_user_message_history(&mut self, entry: HistoryEntry) {
         self.history.record_replayed_submission(entry);
-    }
-
-    pub fn handle_paste_image_path(&mut self, pasted: &str) -> bool {
-        let Some(path_buf) = normalize_pasted_path(pasted) else {
-            return false;
-        };
-
-        // Opening a serial device or FIFO can block the input loop.
-        if !path_buf.is_file() {
-            return false;
-        }
-
-        match image::image_dimensions(&path_buf) {
-            Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
-                tracing::debug!("image dimensions={}x{}", width, height);
-                let format = pasted_image_format(&path_buf);
-                tracing::debug!("attached image format={}", format.label());
-                self.attach_image(path_buf);
-                true
-            }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
-                false
-            }
-        }
     }
 
     /// Replace the composer content with text from an external editor.
@@ -11886,32 +11859,6 @@ mod tests {
             "[Image #1]"
         );
         assert_eq!(composer.draft.textarea.text(), "[Image #1]");
-    }
-
-    #[test]
-    fn pasting_filepath_attaches_image() {
-        let tmp = tempdir().expect("create TempDir");
-        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
-        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
-        img.save(&tmp_path).expect("failed to write temp png");
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
-        assert!(needs_redraw);
-        assert!(composer.draft.textarea.text().starts_with("[Image #1] "));
-
-        let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path]);
     }
 
     #[test]

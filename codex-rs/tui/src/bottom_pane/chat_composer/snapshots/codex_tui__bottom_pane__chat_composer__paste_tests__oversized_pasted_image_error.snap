@@ -1,0 +1,5 @@
+---
+source: tui/src/bottom_pane/chat_composer/paste_tests.rs
+expression: message
+---
+■ Failed to paste image: image exceeds the 1 GiB input limit

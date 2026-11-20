@@ -738,7 +738,18 @@ fn vim_editing_modes_use_the_same_large_and_image_paste_handling() {
         let mut replace = vim_composer("next");
         keys(&mut replace, "R");
         replace.handle_paste(pasted);
-        assert_eq!(replace.draft_snapshot(), insert.draft_snapshot());
+        let insert = insert.draft_snapshot();
+        let mut replace = replace.draft_snapshot();
+        for (replace_image, insert_image) in
+            replace.local_images.iter_mut().zip(&insert.local_images)
+        {
+            std::fs::remove_file(&replace_image.path).expect("remove replacement image copy");
+            replace_image.path.clone_from(&insert_image.path);
+        }
+        assert_eq!(replace, insert);
+        for image in insert.local_images {
+            std::fs::remove_file(image.path).expect("remove inserted image copy");
+        }
     }
 }
 

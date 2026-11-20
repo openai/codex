@@ -3033,8 +3033,8 @@ async fn image_preparation_failure_restores_full_input_without_submitting() {
         let pixels = image::RgbImage::new(/*width*/ 2, /*height*/ 2);
         pixels.save(&path).unwrap();
         chat.set_remote_image_urls(vec!["https://example.com/remote.png".into()]);
-        chat.handle_paste(path.display().to_string());
-        chat.handle_paste("describe $file".into());
+        chat.bottom_pane.attach_image(path.clone());
+        chat.handle_paste(" describe $file".into());
         chat.bottom_pane.set_composer_text_with_mention_bindings(
             chat.bottom_pane.composer_text(),
             chat.bottom_pane.composer_text_elements(),

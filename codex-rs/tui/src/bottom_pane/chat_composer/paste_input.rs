@@ -6,12 +6,69 @@
 //! answer fields.
 //! Provisional startup input, search queries, and shell input remain literal.
 //! Paste classification and insertion share one textarea edit target, including selection replacement.
+//! Pasted image files are copied into private temporary attachments while the client can read them.
 
 use super::*;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::textarea::EditTarget;
+use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::pasted_image_format;
 
 impl ChatComposer {
+    fn copy_pasted_image_path(pasted: &str) -> std::io::Result<Option<PathBuf>> {
+        use std::io::Seek;
+        #[cfg(unix)]
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let Some(path_buf) = normalize_pasted_path(pasted) else {
+            return Ok(None);
+        };
+        // Opening a serial device or FIFO can block the input loop.
+        if !path_buf.is_file() {
+            return Ok(None);
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NONBLOCK);
+        let Ok(mut file) = options.open(&path_buf) else {
+            return Ok(None);
+        };
+        let Ok(metadata) = file.metadata() else {
+            return Ok(None);
+        };
+        if !metadata.is_file() {
+            return Ok(None);
+        }
+        let Ok(image_format) = image::ImageFormat::from_path(&path_buf) else {
+            return Ok(None);
+        };
+        let dimensions =
+            image::ImageReader::with_format(std::io::BufReader::new(&mut file), image_format)
+                .into_dimensions();
+        match dimensions {
+            Ok((width, height)) => {
+                tracing::info!("OK: {pasted}");
+                tracing::debug!("image dimensions={}x{}", width, height);
+                let format = pasted_image_format(&path_buf);
+                tracing::debug!("attached image format={}", format.label());
+                let suffix = path_buf
+                    .extension()
+                    .map(|extension| format!(".{}", extension.to_string_lossy()))
+                    .unwrap_or_default();
+                if metadata.len() > crate::clipboard_paste::MAX_PASTED_IMAGE_BYTES {
+                    return Err(std::io::Error::other("image exceeds the 1 GiB input limit"));
+                }
+                file.rewind()?;
+                crate::clipboard_paste::persist_pasted_image(file, &suffix).map(Some)
+            }
+            Err(err) => {
+                tracing::trace!("ERR: {err}");
+                Ok(None)
+            }
+        }
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.insert_str_at_target(
             self.draft.textarea.edit_target(),
@@ -220,22 +277,20 @@ impl ChatComposer {
         pasted: String,
         shell_prefix: ShellPrefixHandling,
     ) -> bool {
-        self.draft.skill_completion_space = None;
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
         if self.history_search.is_some() {
+            self.draft.skill_completion_space = None;
             if !pasted.is_empty() {
                 self.update_history_search_query(|query| query.push_str(&pasted));
             }
             return true;
         }
         if let Some(query) = self.draft.textarea.vim_query_mut() {
+            self.draft.skill_completion_space = None;
             query.editor.insert_str(&pasted);
             return true;
         }
-        self.draft.textarea_state.get_mut().follow_cursor();
-        let started_edit = self.begin_direct_edit();
-        let elements_before = self.draft.textarea.element_payloads();
         let target = self.draft.textarea.edit_target();
         let before_cursor = &self.draft.textarea.text()[..target.start()];
         let current_line = before_cursor.rsplit('\n').next().unwrap_or_default();
@@ -253,6 +308,26 @@ impl ChatComposer {
             pasted
         };
         let char_count = pasted.chars().count();
+        let image = if (2..=LARGE_PASTE_CHAR_THRESHOLD).contains(&char_count)
+            && self.image_paste_enabled()
+        {
+            match Self::copy_pasted_image_path(&pasted) {
+                Ok(image) => image,
+                Err(error) => {
+                    self.draft.paste_burst.clear_after_explicit_paste();
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!("Failed to paste image: {error}")),
+                    )));
+                    return true;
+                }
+            }
+        } else {
+            None
+        };
+        self.draft.skill_completion_space = None;
+        self.draft.textarea_state.get_mut().follow_cursor();
+        let started_edit = self.begin_direct_edit();
+        let elements_before = self.draft.textarea.element_payloads();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.draft
@@ -261,10 +336,8 @@ impl ChatComposer {
             self.draft
                 .pending_pastes
                 .push((placeholder, pasted.into_owned()));
-        } else if char_count > 1
-            && self.image_paste_enabled()
-            && self.handle_paste_image_path(&pasted)
-        {
+        } else if let Some(image) = image {
+            self.attach_image(image);
             let cursor = self.draft.textarea.cursor();
             self.draft.textarea.insert_str_at(cursor, " ");
         } else {

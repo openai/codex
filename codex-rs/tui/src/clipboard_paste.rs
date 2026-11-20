@@ -1,4 +1,4 @@
-//! Read clipboard images and text on the TUI host. Text reads run on the clipboard worker.
+//! Read and persist pasted images on the TUI host. Text reads run on the clipboard worker.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -7,6 +7,25 @@ pub(crate) mod text;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
+
+pub(crate) const MAX_PASTED_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
+
+pub(crate) fn persist_pasted_image(
+    source: impl std::io::Read,
+    suffix: &str,
+) -> std::io::Result<PathBuf> {
+    let mut tmp = Builder::new()
+        .prefix("codex-clipboard-")
+        .suffix(suffix)
+        .tempfile()?;
+    if std::io::copy(&mut source.take(MAX_PASTED_IMAGE_BYTES + 1), &mut tmp)?
+        > MAX_PASTED_IMAGE_BYTES
+    {
+        return Err(std::io::Error::other("image exceeds the 1 GiB input limit"));
+    }
+    let (_, path) = tmp.keep().map_err(|error| error.error)?;
+    Ok(path)
+}
 
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
@@ -128,18 +147,8 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     // First attempt: read image from system clipboard via arboard (native paths or image data).
     match paste_image_as_png() {
         Ok((png, info)) => {
-            // Create a unique temporary file with a .png suffix to avoid collisions.
-            let tmp = Builder::new()
-                .prefix("codex-clipboard-")
-                .suffix(".png")
-                .tempfile()
+            let path = persist_pasted_image(png.as_slice(), ".png")
                 .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-            std::fs::write(tmp.path(), &png)
-                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-            // Persist the file (so it remains after the handle is dropped) and return its PathBuf.
-            let (_file, path) = tmp
-                .keep()
-                .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
             Ok((path, info))
         }
         Err(e) => {
