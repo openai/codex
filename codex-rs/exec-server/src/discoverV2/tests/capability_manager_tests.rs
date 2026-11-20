@@ -1,6 +1,7 @@
 //! Covers bounded context caching, shared initialization, cancellation retry, and cached warnings.
 
 use super::*;
+use crate::DiscoverV2CapabilitiesRequest;
 use crate::discover_v2::capability_locations::tests::request;
 use crate::discover_v2::capability_locations::tests::write;
 use codex_protocol::models::PermissionProfile;
@@ -8,6 +9,13 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 impl CapabilityManager {
+    pub(in crate::discover_v2) async fn get_or_refresh_discovery(
+        self: &Arc<Self>,
+        request: DiscoverV2CapabilitiesRequest,
+    ) -> io::Result<Arc<DiscoverV2CapabilitiesResponse>> {
+        self.discover(request.sandbox, request.force_reload).await
+    }
+
     // Supply fixture paths through the existing cell, without production override state.
     pub(crate) async fn seed_prewarmed_locations(
         self: &Arc<Self>,
@@ -47,6 +55,7 @@ async fn discovery_responses_are_cached_by_sandbox_context() -> anyhow::Result<(
     let cwd = PathUri::from_host_native_path(directory.path().join("project"))?;
     let other_cwd = PathUri::from_host_native_path(directory.path().join("other"))?;
     let params = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: cwd.clone(),
         sandbox: None,
     };
@@ -99,6 +108,39 @@ async fn discovery_responses_are_cached_by_sandbox_context() -> anyhow::Result<(
     Ok(())
 }
 
+#[tokio::test]
+async fn forced_discovery_reads_new_skills_before_the_watcher_runs() -> anyhow::Result<()> {
+    let (directory, manager) = setup().await?;
+    let params = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
+        cwd: PathUri::from_host_native_path(directory.path())?,
+        sandbox: None,
+    };
+    let original = manager.get_or_refresh_discovery(params.clone()).await?;
+    write(
+        directory.path(),
+        "codex/skills/added/SKILL.md",
+        "---\nname: added\ndescription: new skill\n---\n",
+    )?;
+    assert!(Arc::ptr_eq(
+        &original,
+        &manager.get_or_refresh_discovery(params.clone()).await?,
+    ));
+
+    let refreshed = manager
+        .get_or_refresh_discovery(DiscoverV2CapabilitiesRequest {
+            force_reload: true,
+            ..params.clone()
+        })
+        .await?;
+    assert!(refreshed.skills.iter().any(|skill| skill.name == "added"));
+    assert!(Arc::ptr_eq(
+        &refreshed,
+        &manager.get_or_refresh_discovery(params).await?,
+    ));
+    Ok(())
+}
+
 #[test]
 fn cancelled_initialization_retries_and_warning_responses_are_cached() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_current_thread()
@@ -108,6 +150,7 @@ fn cancelled_initialization_retries_and_warning_responses_are_cached() -> anyhow
         .block_on(async {
             let (directory, manager) = setup().await?;
             let params = DiscoverV2CapabilitiesRequest {
+                force_reload: false,
                 cwd: PathUri::from_host_native_path(directory.path().join("project"))?,
                 sandbox: None,
             };

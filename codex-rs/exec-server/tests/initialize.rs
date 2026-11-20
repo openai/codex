@@ -196,6 +196,7 @@ async fn discovery_prewarms_before_initialize_and_recovers_without_client_opt_in
         .send_request(
             CAPABILITIES_DISCOVER_V2_METHOD,
             serde_json::to_value(DiscoverV2CapabilitiesRequest {
+                force_reload: false,
                 cwd: info.cwd.context("startup cwd")?,
                 sandbox: None,
             })?,

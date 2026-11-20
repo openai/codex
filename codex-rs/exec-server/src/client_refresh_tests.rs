@@ -349,6 +349,7 @@ async fn refresh_retires_a_still_connected_old_executor() -> Result<()> {
     ));
     let cache = crate::ExecutorCapabilityDiscoveryV2Cache::default();
     let request = crate::DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: codex_utils_path_uri::PathUri::from_host_native_path(&root)?,
         sandbox: None,
     };

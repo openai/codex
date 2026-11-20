@@ -348,7 +348,7 @@ impl ExecServerHandler {
     ) -> Result<Arc<DiscoverV2CapabilitiesResponse>, JSONRPCErrorError> {
         self.require_initialized_for("capability discovery")?;
         self.capability_manager
-            .get_or_refresh_discovery(params)
+            .discover(params.sandbox, params.force_reload)
             .await
             .map_err(|error| internal_error(error.to_string()))
     }

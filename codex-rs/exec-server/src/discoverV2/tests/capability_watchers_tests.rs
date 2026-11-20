@@ -40,6 +40,7 @@ async fn watch_events_invalidate_discovery_and_no_subscription_disables_caching(
     let manager = CapabilityManager::new(LocalFileSystem::unsandboxed());
     manager.seed_prewarmed_locations(request.clone()).await?;
     let params = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: PathUri::from_host_native_path(&root)?,
         sandbox: None,
     };
@@ -279,6 +280,7 @@ async fn failed_watch_registration_reloads_locations_and_contents() -> anyhow::R
     )?;
     let request = request(&root)?;
     let params = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: PathUri::from_host_native_path(&root)?,
         sandbox: None,
     };

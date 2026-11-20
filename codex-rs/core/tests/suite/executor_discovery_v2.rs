@@ -1123,6 +1123,7 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
             .context("remote environment")?;
         let cache = codex_exec_server::ExecutorCapabilityDiscoveryV2Cache::default();
         let request = codex_exec_server::DiscoverV2CapabilitiesRequest {
+            force_reload: false,
             cwd: codex_utils_path_uri::PathUri::parse("file:///repo")?,
             sandbox: None,
         };
@@ -1276,6 +1277,16 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
         assert_eq!(calls().await, before, "invalidation is lazy");
         let _ = test.codex.current_mcp_config_and_runtime_context().await;
         assert_eq!(calls().await, before + 1);
+        assert_eq!(
+            executor
+                .requests
+                .lock()
+                .await
+                .iter()
+                .rfind(|request| request["method"] == "capabilities/discoverV2")
+                .context("refreshed discovery request")?["params"]["forceReload"],
+            true,
+        );
         let observed = observed.lock().await;
         let inventory = observed
             .last()
@@ -1591,6 +1602,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .context("remote environment")?;
     let cache = codex_exec_server::ExecutorCapabilityDiscoveryV2Cache::default();
     let request = codex_exec_server::DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: codex_utils_path_uri::PathUri::from_host_native_path(root.path())?,
         sandbox: None,
     };
@@ -1718,12 +1730,77 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
         .map_err(anyhow::Error::msg)?;
     // Reading the oldest entry did not promote it: eviction is FIFO, not LRU.
     let reloaded = cache
-        .discover("other-executor", &environment, request)
+        .discover("other-executor", &environment, request.clone())
         .await
         .map_err(anyhow::Error::msg)?;
     assert_eq!(calls().await, 19);
     assert!(!Arc::ptr_eq(&other, &reloaded));
     assert_eq!(other.as_ref(), reloaded.as_ref());
+
+    // Explicit requests and dirty entries reload once; ordinary reads reuse the result.
+    let mut previous = reloaded;
+    for (expected_calls, force_reload) in [(20, true), (21, false)] {
+        if !force_reload {
+            cache.invalidate();
+            assert_eq!(calls().await, expected_calls - 1);
+        }
+        let refreshed = cache
+            .discover(
+                "executor",
+                &environment,
+                codex_exec_server::DiscoverV2CapabilitiesRequest {
+                    force_reload,
+                    ..request.clone()
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(!Arc::ptr_eq(&previous, &refreshed));
+        let ordinary = cache
+            .discover("executor", &environment, request.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(Arc::ptr_eq(&refreshed, &ordinary));
+        assert_eq!(calls().await, expected_calls);
+        assert_eq!(
+            executor
+                .requests
+                .lock()
+                .await
+                .iter()
+                .rfind(|request| request["method"] == "capabilities/discoverV2")
+                .context("forced discovery request")?["params"]["forceReload"],
+            true,
+        );
+        previous = refreshed;
+    }
+
+    // Reloading one dirty entry leaves the others dirty; new contexts load normally.
+    for (cwd, force_reload) in [("overflow", true), ("new-context", false)] {
+        cache
+            .discover(
+                "executor",
+                &environment,
+                codex_exec_server::DiscoverV2CapabilitiesRequest {
+                    cwd: request.cwd.join(cwd)?,
+                    ..request.clone()
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            executor
+                .requests
+                .lock()
+                .await
+                .iter()
+                .rfind(|request| request["method"] == "capabilities/discoverV2")
+                .context("discovery request")?["params"]["forceReload"]
+                .as_bool()
+                .unwrap_or(false),
+            force_reload,
+        );
+    }
 
     Ok(())
 }

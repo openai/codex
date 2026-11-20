@@ -120,6 +120,7 @@ async fn discovery_preserves_inventory_and_v1_metadata() -> anyhow::Result<()> {
     manager.seed_prewarmed_locations(request.clone()).await?;
     let response = manager
         .get_or_refresh_discovery(DiscoverV2CapabilitiesRequest {
+            force_reload: false,
             cwd: PathUri::from_host_native_path(temp.path().join("project"))?,
             sandbox: None,
         })
@@ -344,6 +345,7 @@ policy:
         manager.seed_prewarmed_locations(request.clone()).await?;
         let response = manager
             .get_or_refresh_discovery(DiscoverV2CapabilitiesRequest {
+                force_reload: false,
                 cwd: PathUri::from_host_native_path(temp.path().join("project"))?,
                 sandbox: None,
             })
@@ -396,6 +398,7 @@ async fn standalone_skills_retain_their_search_roots() -> anyhow::Result<()> {
     let manager = CapabilityManager::new(LocalFileSystem::unsandboxed());
     manager.seed_prewarmed_locations(request.clone()).await?;
     let query = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: PathUri::from_host_native_path(temp.path().join("project"))?,
         sandbox: None,
     };

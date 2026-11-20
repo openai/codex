@@ -53,6 +53,7 @@ impl ExecutorDiscovery {
                     &selected.selection.environment_id,
                     selected.environment(),
                     DiscoverV2CapabilitiesRequest {
+                        force_reload: false,
                         cwd: selected.cwd().clone(),
                         sandbox: Some(selected.sandbox_context(/*additional_permissions*/ None)),
                     },
@@ -129,6 +130,7 @@ impl Session {
                 continue;
             }
             let request = DiscoverV2CapabilitiesRequest {
+                force_reload: false,
                 cwd: selected.cwd().clone(),
                 sandbox: Some(self.discovery_sandbox(selected, skill_turn)),
             };

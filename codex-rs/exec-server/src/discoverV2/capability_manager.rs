@@ -1,7 +1,6 @@
 //! Retains watched global locations and sandbox-scoped response snapshots.
 //! Replacement snapshots isolate in-flight loads; failed watch registration forces request-time reloads.
 
-use crate::DiscoverV2CapabilitiesRequest;
 use crate::DiscoverV2CapabilitiesResponse;
 use crate::FileSystemSandboxContext;
 use crate::LocalFileSystem;
@@ -80,22 +79,25 @@ impl CapabilityManager {
     }
 
     /// Reuses startup locations, retrying prewarming if the background scan failed.
-    pub(crate) async fn get_or_refresh_discovery(
+    pub(crate) async fn discover(
         self: &Arc<Self>,
-        params: DiscoverV2CapabilitiesRequest,
+        sandbox: Option<FileSystemSandboxContext>,
+        force_reload: bool,
     ) -> io::Result<Arc<DiscoverV2CapabilitiesResponse>> {
         let (location_request, _) = self.prewarm_locations().await?;
-        let location_state = self.get_or_refresh_locations(location_request).await?;
+        let location_state = self
+            .get_or_refresh_locations(location_request, force_reload)
+            .await?;
         let discovery = {
             let mut discoveries = location_state.sandbox_discoveries.lock().await;
             if let Some(discovery) = discoveries
                 .iter()
-                .find(|discovery| discovery.sandbox == params.sandbox)
+                .find(|discovery| discovery.sandbox == sandbox)
             {
                 Arc::clone(discovery)
             } else {
                 let discovery = Arc::new(CachedSandboxDiscovery {
-                    sandbox: params.sandbox,
+                    sandbox,
                     response: OnceCell::new(),
                 });
                 if discoveries.len() == MAX_CACHED_SANDBOX_CONTEXTS {
@@ -130,8 +132,10 @@ impl CapabilityManager {
     async fn get_or_refresh_locations(
         &self,
         request: &CapabilityLocationRequest,
+        force_reload: bool,
     ) -> io::Result<Arc<LocationState>> {
-        if let Some(location_state) = self.location_snapshot().await
+        if !force_reload
+            && let Some(location_state) = self.location_snapshot().await
             && location_state.registration.registration_succeeded()
             && !location_state.dirty.load(Ordering::Relaxed)
         {
@@ -142,7 +146,8 @@ impl CapabilityManager {
             .acquire()
             .await
             .map_err(io::Error::other)?;
-        if let Some(location_state) = self.location_snapshot().await
+        if !force_reload
+            && let Some(location_state) = self.location_snapshot().await
             && location_state.registration.registration_succeeded()
             && !location_state.dirty.load(Ordering::Relaxed)
         {
@@ -152,7 +157,7 @@ impl CapabilityManager {
         let locations = match prewarm_locations(&self.file_system, request).await {
             Ok(locations) => locations,
             Err(error) => {
-                if let Some(location_state) = self.location_snapshot().await {
+                if !force_reload && let Some(location_state) = self.location_snapshot().await {
                     tracing::warn!(error_kind = ?error.kind(), "capability refresh failed; retrying on the next request");
                     return Ok(location_state);
                 }

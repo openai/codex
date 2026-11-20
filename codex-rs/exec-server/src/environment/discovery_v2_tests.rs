@@ -93,6 +93,7 @@ async fn discovery_checks_version_and_retries_disconnect(
         ScopedSkillsConfig::default(),
     );
     let params = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: PathUri::parse("file:///caller/project-b")?,
         sandbox: None,
     };

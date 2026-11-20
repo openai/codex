@@ -7,13 +7,25 @@ use pretty_assertions::assert_eq;
 #[test]
 fn discovery_contract_round_trips_json() -> Result<(), Box<dyn std::error::Error>> {
     let request = DiscoverV2CapabilitiesRequest {
+        force_reload: false,
         cwd: PathUri::parse("file:///workspace")?,
         sandbox: None,
     };
     let wire = serde_json::to_value(&request)?;
+    assert!(wire.get("forceReload").is_none());
     assert_eq!(
         serde_json::from_value::<DiscoverV2CapabilitiesRequest>(wire)?,
         request
+    );
+    let refreshed = DiscoverV2CapabilitiesRequest {
+        force_reload: true,
+        ..request
+    };
+    let wire = serde_json::to_value(&refreshed)?;
+    assert_eq!(wire["forceReload"], true);
+    assert_eq!(
+        serde_json::from_value::<DiscoverV2CapabilitiesRequest>(wire)?,
+        refreshed
     );
     let text_file = CapabilityTextFile {
         path: PathUri::parse("file:///plugin/config.json")?,

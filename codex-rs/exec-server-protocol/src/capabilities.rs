@@ -39,6 +39,9 @@ pub struct DiscoverV2CapabilitiesRequest {
     pub cwd: PathUri,
     #[serde(default)]
     pub sandbox: Option<FileSystemSandboxContext>,
+    /// Rescan the executor's files even if its watcher has not reported a change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_reload: bool,
 }
 
 /// Discovered metadata before caller policy is applied.
