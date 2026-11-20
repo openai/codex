@@ -68,6 +68,8 @@ async fn rc_menu_snapshot() {
     );
     chat.show_selection_view(pairing("ABCD-EFGH".into()));
     views.push(render_bottom_popup(&chat, /*width*/ 80));
+    chat.show_selection_view(menu(/*connection*/ None, ADMIN_UPDATE_GUIDANCE));
+    views.push(render_bottom_popup(&chat, /*width*/ 80));
     insta::assert_snapshot!("rc_menu", views.join("\n\n"));
 }
 

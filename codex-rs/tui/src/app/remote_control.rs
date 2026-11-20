@@ -12,9 +12,12 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_features::Feature;
 use std::time::Duration;
 
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
+const ADMIN_UPDATE_GUIDANCE: &str =
+    "Contact your administrator to update the background server for persistent remote control.";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Action {
@@ -188,9 +191,10 @@ pub(super) fn handle(app: &mut App, backends: &BackendSessions, event: AppEvent)
     app.remote_control_pending = true;
     let backend_id = daemon.backend_id();
     let tx = app.app_event_tx.app_event_tx.clone();
+    let updates_allowed = app.config.features.enabled(Feature::DaemonUpdates);
     tokio::spawn(async move {
         let operation = async {
-            match verified_daemon_session(endpoint.as_path(), backend_id).await {
+            match verified_daemon_session(endpoint.as_path(), backend_id, updates_allowed).await {
                 Ok((session, settings_file)) => {
                     let mut result = run(session, action).await;
                     let expected = match (&action, &result) {
@@ -244,6 +248,7 @@ async fn bounded(action: Action, operation: impl std::future::Future<Output = Ou
 async fn verified_daemon_session(
     endpoint: &std::path::Path,
     backend_id: BackendId,
+    updates_allowed: bool,
 ) -> Result<(AppServerSession, std::path::PathBuf), String> {
     let status = codex_app_server_daemon::run(codex_app_server_daemon::LifecycleCommand::Version)
         .await
@@ -285,9 +290,12 @@ async fn verified_daemon_session(
                 || semver::Version::parse("0.163.0-alpha.2").is_ok_and(|minimum| v >= minimum)
         });
     if !supported {
-        return Err(
-            "Update the background server with /daemon to use persistent remote control.".into(),
-        );
+        return Err(if updates_allowed {
+            "Update the background server with /daemon to use persistent remote control."
+        } else {
+            ADMIN_UPDATE_GUIDANCE
+        }
+        .into());
     }
     let home = status
         .socket_path

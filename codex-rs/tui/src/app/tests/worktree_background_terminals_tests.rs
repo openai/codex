@@ -21,9 +21,11 @@ fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
             },
         })
     };
+    let mut features = codex_features::Features::with_defaults();
     let message = managed_worktree_creation::background_terminals_blocker(
         missing_method(-32601, "method not found"),
         &target,
+        &features,
     )
     .expect("unsupported daemon must block worktree creation");
     let cell = crate::history_cell::new_error_event(message.to_string());
@@ -38,6 +40,7 @@ fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
                 "Invalid request: unknown variant `thread/backgroundTerminals/list`"
             ),
             &target,
+            &features,
         ),
         Some(message),
     );
@@ -45,6 +48,7 @@ fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
         managed_worktree_creation::background_terminals_blocker(
             missing_method(-32600, "Invalid request: unknown variant `another/method`"),
             &target,
+            &features,
         ),
         Some("Active background terminals block /cd."),
     );
@@ -52,6 +56,7 @@ fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
         managed_worktree_creation::background_terminals_blocker(
             missing_method(-32601, "method not found"),
             &AppServerTarget::Embedded,
+            &features,
         ),
         Some("Active background terminals block /cd."),
     );
@@ -62,8 +67,21 @@ fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
                 next_cursor: None,
             }),
             &target,
+            &features,
         ),
         None,
+    );
+    features.disable(Feature::DaemonUpdates);
+    let message = managed_worktree_creation::background_terminals_blocker(
+        missing_method(-32601, "method not found"),
+        &target,
+        &features,
+    )
+    .expect("unsupported daemon must block worktree creation");
+    let cell = crate::history_cell::new_error_event(message.to_string());
+    insta::assert_snapshot!(
+        lines_to_single_string(&cell.display_lines(/*width*/ 120)),
+        @"■ The local Codex service cannot check background terminals. Contact your administrator to update it."
     );
     Ok(())
 }

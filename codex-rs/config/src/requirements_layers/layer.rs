@@ -112,6 +112,20 @@ impl ComposableRequirementsLayer {
                 });
             }
 
+            if matches!(source, RequirementSource::EnterpriseManaged { .. })
+                && ["features", "feature_requirements"].into_iter().any(|key| {
+                    regular_toml
+                        .get(key)
+                        .and_then(|features| features.get("daemon_updates"))
+                        .is_some()
+                })
+            {
+                return Err(RequirementsCompositionError::Parse {
+                    layer_source: source.clone(),
+                    message: "features.daemon_updates may only be configured in local managed requirements".into(),
+                });
+            }
+
             if let Some(otel) = regular_toml.get("otel")
                 && (otel.get("headers_helper").is_some()
                     || otel.get("headers_helper_refresh_interval_ms").is_some())

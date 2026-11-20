@@ -57,11 +57,7 @@ pub async fn load_local_application_requirements(
         .flatten();
     #[cfg(target_os = "macos")]
     let mdm = {
-        if overrides.macos_managed_config_requirements_base64.is_none() {
-            tokio::task::spawn_blocking(super::macos::synchronize_managed_preferences)
-                .await
-                .map_err(io::Error::other)??;
-        }
+        super::refresh_managed_preferences(overrides).await?;
         super::macos::load_managed_admin_requirements_layer(
             overrides
                 .macos_managed_config_requirements_base64

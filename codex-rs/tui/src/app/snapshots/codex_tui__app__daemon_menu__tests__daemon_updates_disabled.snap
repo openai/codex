@@ -1,0 +1,13 @@
+---
+source: tui/src/app/daemon_menu_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 80)"
+---
+  Daemon
+  Not connected to the local background server.
+  Daemon updates are disabled by managed policy (features.daemon_updates =
+  false).
+
+
+›    Restart background server
+
+  enter select · esc back

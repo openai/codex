@@ -51,6 +51,7 @@ impl App {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .server_version_notice = server_version.and_then(|server| {
             let guidance = if matches!(self.app_server_target, AppServerTarget::LocalDaemon { .. })
+                && self.config.features.enabled(Feature::DaemonUpdates)
             {
                 " · /daemon"
             } else {

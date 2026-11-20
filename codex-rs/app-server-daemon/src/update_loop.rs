@@ -198,6 +198,15 @@ async fn run_with_http(
                 if restore_release.is_some() {
                     return Ok(());
                 }
+                match crate::update_policy::allowed(daemon).await {
+                    Ok(false) => return Ok(()),
+                    Err(_) => {
+                        daemon.diagnostic(format_args!("warning: daemon update policy is unavailable; retrying"));
+                        next_check = Instant::now() + Duration::from_secs(60);
+                        continue;
+                    }
+                    Ok(true) => {}
+                }
                 match UpdaterSettings::load(&daemon.settings_file).await {
                     Ok(settings) if !settings.auto_update_enabled => return Ok(()),
                     Err(_) => {
@@ -338,6 +347,7 @@ async fn update_once(
     terminate: &mut Signal,
     trigger: UpdateTrigger<'_>,
 ) -> Result<(UpdateLoopControl, Option<RestartIfRunningOutcome>)> {
+    crate::update_policy::ensure_allowed(daemon).await?;
     if trigger == UpdateTrigger::Scheduled
         && !UpdaterSettings::load(&daemon.settings_file)
             .await?
@@ -404,6 +414,7 @@ async fn update_once(
         crate::managed_install::package_root(codex_home) == package_root,
         "daemon package root changed during the update; retry the command"
     );
+    crate::update_policy::ensure_allowed(daemon).await?;
     let started = std::time::Instant::now();
     #[cfg(unix)]
     if matches!(

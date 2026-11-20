@@ -147,6 +147,7 @@ pub(crate) fn server_version_notice_key(
 pub(crate) fn pending_server_version_notice(
     settings: &codex_config::types::Tui,
     target: &AppServerTarget,
+    daemon_updates_allowed: bool,
     server_home: Option<&str>,
     client: &str,
     server: Option<&str>,
@@ -155,7 +156,8 @@ pub(crate) fn pending_server_version_notice(
     let message = server_version_notice_for_tui(settings, client, server)?;
     let notice = ServerVersionNotice {
         message,
-        offer_update: matches!(target, AppServerTarget::LocalDaemon { .. }),
+        offer_update: daemon_updates_allowed
+            && matches!(target, AppServerTarget::LocalDaemon { .. }),
     };
     let key = server_version_notice_key(target, server_home, client, server)?;
     (last_shown != Some(key.as_str())).then_some((notice, key))
@@ -278,6 +280,7 @@ mod tests {
             pending_server_version_notice(
                 &settings,
                 target,
+                /*daemon_updates_allowed*/ true,
                 /*server_home*/ None,
                 "0.153.0-alpha.10.1",
                 Some("0.153.0-alpha.9.2"),

@@ -523,6 +523,21 @@ exporter = { otlp-http = { endpoint = "", protocol = "binary" } }
 }
 
 #[test]
+fn cloud_requirements_cannot_configure_daemon_updates() {
+    for table in ["features", "feature_requirements"] {
+        let err = compose(vec![layer(
+            "cloud",
+            "Cloud",
+            &format!("[{table}]\ndaemon_updates = false"),
+        )])
+        .unwrap_err();
+        assert!(
+            matches!(err, RequirementsCompositionError::Parse { message, .. } if message.contains("local managed requirements"))
+        );
+    }
+}
+
+#[test]
 fn otel_cloud_requirements_cannot_install_or_reschedule_a_helper() {
     for setting in [
         "headers_helper = 'headers'",

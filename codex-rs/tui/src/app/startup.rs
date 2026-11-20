@@ -498,6 +498,7 @@ impl App {
                 crate::status::remote_connection::pending_server_version_notice(
                     &local_settings.tui,
                     &app_server_target,
+                    config.features.enabled(Feature::DaemonUpdates),
                     app_server.server_codex_home(),
                     CODEX_CLI_VERSION,
                     app_server.server_version(),

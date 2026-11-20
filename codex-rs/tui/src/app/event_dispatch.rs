@@ -230,7 +230,16 @@ impl App {
             event => (event, None),
         };
         match event {
-            AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
+            AppEvent::OpenDaemonMenu => {
+                let policy_error = if self.daemon_cli_executable.is_some()
+                    && !matches!(self.app_server_target, AppServerTarget::Remote { .. } | AppServerTarget::Cloud)
+                {
+                    codex_app_server_daemon::ensure_updates_allowed().await.err().map(|error| error.to_string())
+                } else {
+                    None
+                };
+                self.open_daemon_menu(policy_error.as_deref());
+            }
             AppEvent::RemoteControl(_) | AppEvent::RemoteControlForBackend { .. } | AppEvent::RemoteControlFinished { .. } => {}
             AppEvent::ConfirmDaemonRestart => self.confirm_daemon_restart(),
             AppEvent::RunDaemonRestart => {
@@ -244,8 +253,17 @@ impl App {
                     )));
                 }
             }
-            AppEvent::ConfirmDaemonUpdate(source) => self.confirm_daemon_update(source),
+            AppEvent::ConfirmDaemonUpdate(source) => {
+                match codex_app_server_daemon::ensure_updates_allowed().await {
+                    Ok(()) => self.confirm_daemon_update(source),
+                    Err(error) => self.chat_widget.add_error_message(error.to_string()),
+                }
+            }
             AppEvent::RunDaemonUpdate(source) => {
+                if let Err(error) = codex_app_server_daemon::ensure_updates_allowed().await {
+                    self.chat_widget.add_error_message(error.to_string());
+                    return Ok(AppRunControl::Continue);
+                }
                 self.pending_update_action = Some(UpdateAction::Daemon(source));
                 return Ok(self.handle_exit_mode(app_server, ExitMode::Immediate).await);
             }

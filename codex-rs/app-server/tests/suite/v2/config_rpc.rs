@@ -1904,14 +1904,20 @@ writable_roots = [{}]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_value_write_replaces_value() -> Result<()> {
+async fn config_value_write_replaces_value_despite_stale_daemon_update_setting() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let codex_home = temp_dir.path().canonicalize()?;
     write_config(
         &temp_dir,
         r#"
 model = "gpt-old"
+[features]
+daemon_updates = true
 "#,
+    )?;
+    std::fs::write(
+        codex_home.join("requirements.toml"),
+        "[features]\ndaemon_updates = false\n",
     )?;
 
     let mut mcp = TestAppServer::builder()

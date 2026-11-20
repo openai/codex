@@ -1486,11 +1486,17 @@ personality = true
 }
 
 #[tokio::test]
-async fn system_requirements_control_in_app_updates() -> anyhow::Result<()> {
+async fn system_requirements_control_update_features() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    tokio::fs::write(
+        codex_home.join("config.toml"),
+        "[features]\ndaemon_updates = false\n",
+    )
+    .await?;
 
     let default_config = ConfigBuilder::default()
         .codex_home(codex_home.clone())
@@ -1499,6 +1505,7 @@ async fn system_requirements_control_in_app_updates() -> anyhow::Result<()> {
         .build()
         .await?;
     assert!(default_config.features.enabled(Feature::InAppUpdates));
+    assert!(default_config.features.enabled(Feature::DaemonUpdates));
 
     let requirements_path = tmp.path().join("requirements.toml");
     tokio::fs::write(
@@ -1506,6 +1513,7 @@ async fn system_requirements_control_in_app_updates() -> anyhow::Result<()> {
         r#"
 [features]
 in_app_updates = false
+daemon_updates = false
 "#,
     )
     .await?;
@@ -1519,6 +1527,7 @@ in_app_updates = false
         .await?;
 
     assert!(!managed_config.features.enabled(Feature::InAppUpdates));
+    assert!(!managed_config.features.enabled(Feature::DaemonUpdates));
     Ok(())
 }
 

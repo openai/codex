@@ -73,6 +73,19 @@ pub use local::LocalTomlLayerStack;
 pub use local::load_local_config_layers;
 pub use managed_requirements::load_guardian_policy_snapshot;
 pub use managed_requirements::load_managed_requirements_state;
+
+/// Refreshes local managed preferences before enforcing policy in a long-lived process.
+pub async fn refresh_managed_preferences(overrides: &LoaderOverrides) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    if overrides.macos_managed_config_requirements_base64.is_none() {
+        tokio::task::spawn_blocking(macos::synchronize_managed_preferences)
+            .await
+            .map_err(std::io::Error::other)??;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = overrides;
+    Ok(())
+}
 #[cfg(windows)]
 pub use windows::WindowsSystemConfigNamespaceProbe;
 #[cfg(windows)]

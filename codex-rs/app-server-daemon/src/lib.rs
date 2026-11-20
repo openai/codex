@@ -25,6 +25,7 @@ mod settings;
 pub mod telemetry;
 mod thread_recovery;
 mod update_loop;
+mod update_policy;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -319,13 +320,20 @@ pub fn maintain_stderr_log() -> Result<()> {
     Ok(())
 }
 
+/// Checks the current locally managed daemon update policy.
+pub async fn ensure_updates_allowed() -> Result<()> {
+    update_policy::ensure_allowed(&Daemon::from_environment()?).await
+}
+
 pub async fn update(
     http_client_factory: codex_http_client::HttpClientFactory,
 ) -> Result<UpdateOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    update_loop::request_manual_update(&Daemon::from_environment()?, http_client_factory).await
+    let daemon = Daemon::from_environment()?;
+    crate::update_policy::ensure_allowed(&daemon).await?;
+    update_loop::request_manual_update(&daemon, http_client_factory).await
 }
 
 #[cfg(any(unix, windows))]
@@ -1016,9 +1024,14 @@ impl Daemon {
 
     async fn ensure_managed_updater(&self, settings: &DaemonSettings) -> Result<bool> {
         let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        if !settings.auto_update_enabled {
+        let allowed = if settings.auto_update_enabled {
+            crate::update_policy::allowed(self).await
+        } else {
+            Ok(false)
+        };
+        if !matches!(&allowed, Ok(true)) {
             updater.stop().await?;
-            return Ok(false);
+            return allowed;
         }
         if !self.is_stable_standalone_release()? {
             // An installer publishes current and the latest marker separately.
@@ -1088,6 +1101,7 @@ impl Daemon {
 
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
         if !settings.auto_update_enabled
+            || !crate::update_policy::allowed(self).await.unwrap_or(false)
             || !self.is_stable_standalone_release()?
             || !managed_install::supports_daemon_update_loop(&self.managed_codex_bin).await
         {

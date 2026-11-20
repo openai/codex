@@ -705,6 +705,7 @@ impl App {
         if let Some((notice, key)) = crate::status::remote_connection::pending_server_version_notice(
             &self.local_settings.tui,
             &self.app_server_target,
+            self.config.features.enabled(Feature::DaemonUpdates),
             app_server.server_codex_home(),
             client_version,
             app_server.server_version(),

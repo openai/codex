@@ -263,6 +263,7 @@ impl App {
             if let Some(message) = check_background_terminals(
                 app_server,
                 &self.app_server_target,
+                &self.config.features,
                 tracked_ids.iter().copied(),
             )
             .await
@@ -442,8 +443,13 @@ impl App {
                 }
             }
         }
-        if let Some(message) =
-            check_background_terminals(app_server, &self.app_server_target, tracked_ids).await
+        if let Some(message) = check_background_terminals(
+            app_server,
+            &self.app_server_target,
+            &self.config.features,
+            tracked_ids,
+        )
+        .await
         {
             return self.working_directory_error(message);
         }

@@ -59,6 +59,7 @@ pub(super) async fn run(http: &impl InstallerHttp, legacy: &Daemon) -> Result<Up
             .any(|window| window == b"CODEX_INSTALL_DEFER_SELECTION"),
         "the published installer does not support daemon migration yet; the legacy installation was left unchanged"
     );
+    crate::update_policy::ensure_allowed(legacy).await?;
     eprintln!("Preparing the daemon update in {}...", root.display());
     #[cfg(unix)]
     {
@@ -123,6 +124,7 @@ pub(super) async fn run(http: &impl InstallerHttp, legacy: &Daemon) -> Result<Up
     if cancellation.as_mut().now_or_never().is_some() {
         return Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into());
     }
+    crate::update_policy::ensure_allowed(legacy).await?;
     let cutover = async {
         backend::pid_update_loop_backend(legacy.backend_paths(&settings))
             .stop()
