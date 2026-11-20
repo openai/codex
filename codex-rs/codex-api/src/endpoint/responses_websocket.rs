@@ -83,12 +83,43 @@ struct WsRequestText {
 }
 
 struct WsCommand {
+    deadline: Instant,
     request: WsRequestText,
-    tx_result: oneshot::Sender<Result<(), WsError>>,
+    tx_result: oneshot::Sender<WsSendOutcome>,
+}
+
+enum WsSendOutcome {
+    Flushed,
+    NotStarted(ApiError),
+    Interrupted(ApiError),
+}
+
+impl WsSendOutcome {
+    async fn receive(result: &mut oneshot::Receiver<Self>) -> Result<Self, ApiError> {
+        let outcome = result
+            .await
+            .unwrap_or_else(|_| Self::NotStarted(map_ws_stream_error(WsError::ConnectionClosed)));
+        match outcome {
+            Self::NotStarted(error) | Self::Interrupted(error)
+                if matches!(error, ApiError::Transport(TransportError::Policy(_))) =>
+            {
+                Err(error)
+            }
+            outcome => Ok(outcome),
+        }
+    }
+
+    fn into_result(self) -> Result<(), ApiError> {
+        match self {
+            Self::Flushed => Ok(()),
+            Self::NotStarted(error) | Self::Interrupted(error) => Err(error),
+        }
+    }
 }
 
 const FRAGMENT_SIZE: usize = 1024 * 1024;
 const RECEIVE_BATCH_SIZE: usize = 32;
+const UPLOAD_READ_AHEAD_BYTES: usize = 1024 * 1024;
 
 fn request_frames(text: Utf8Bytes) -> impl Iterator<Item = Message> {
     let (message, mut data) = if text.len() <= FRAGMENT_SIZE {
@@ -113,10 +144,11 @@ fn request_frames(text: Utf8Bytes) -> impl Iterator<Item = Message> {
     }))
 }
 
-/// Owns the socket and forwards incoming messages while waiting for a request.
+/// Owns the socket and recovers peer replies after a failed upload.
 struct WsPump<S> {
     socket: S,
     messages: mpsc::UnboundedSender<Result<Message, WsError>>,
+    read_budget: Option<usize>,
     queued_pongs: usize,
 }
 
@@ -128,28 +160,51 @@ where
         Self {
             socket,
             messages,
+            read_budget: None,
             queued_pongs: 0,
         }
     }
 
-    fn poll_incoming(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), WsError>> {
-        if self.queued_pongs != 0 && self.socket.poll_flush_unpin(cx)?.is_ready() {
+    fn poll_incoming(
+        &mut self,
+        cx: &mut Context<'_>,
+        recovering: bool,
+    ) -> Poll<Result<(), WsError>> {
+        if self.queued_pongs != 0 && !recovering && self.socket.poll_flush_unpin(cx)?.is_ready() {
             self.queued_pongs = 0;
         }
         for _ in 0..RECEIVE_BATCH_SIZE {
-            if self.queued_pongs >= RECEIVE_BATCH_SIZE {
+            if self.read_budget == Some(0) {
+                return Poll::Ready(Ok(()));
+            }
+            if !recovering && self.queued_pongs >= RECEIVE_BATCH_SIZE {
                 return Poll::Pending;
             }
-            let Some(message) = ready!(self.socket.poll_next_unpin(cx)).transpose()? else {
+            let next = self.socket.poll_next_unpin(cx);
+            if recovering && next.is_pending() {
+                return Poll::Ready(Ok(()));
+            }
+            let Some(message) = ready!(next).transpose()? else {
                 return Poll::Ready(Err(WsError::ConnectionClosed));
             };
+            if let Some(budget) = &mut self.read_budget
+                && (recovering || !matches!(message, Message::Ping(_) | Message::Pong(_)))
+            {
+                *budget = budget.saturating_sub(message.len() + std::mem::size_of::<Message>());
+            }
             match message {
                 Message::Ping(_) => {
                     // Queue the automatic Pong before starting the next data frame.
                     match self.socket.poll_flush_unpin(cx) {
                         Poll::Ready(Ok(())) => self.queued_pongs = 0,
-                        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                        Poll::Pending => self.queued_pongs += 1,
+                        Poll::Ready(Err(error))
+                            if !recovering
+                                || codex_websocket_client::network_policy_denial(&error)
+                                    .is_some() =>
+                        {
+                            return Poll::Ready(Err(error));
+                        }
+                        Poll::Pending | Poll::Ready(Err(_)) => self.queued_pongs += 1,
                     }
                 }
                 Message::Pong(_) => {}
@@ -166,20 +221,78 @@ where
         Poll::Pending
     }
 
-    async fn send_frames(&mut self, text: Utf8Bytes) -> Result<(), WsError> {
-        for frame in request_frames(text) {
-            self.socket.send(frame).await?;
+    async fn recover(&mut self, error: WsError, deadline: Instant) -> WsError {
+        if matches!(error, WsError::ConnectionClosed)
+            || codex_websocket_client::network_policy_denial(&error).is_some()
+        {
+            return error;
         }
-        Ok(())
+        // Drain immediately readable replies until the socket would block.
+        let replies = poll_fn(|cx| self.poll_incoming(cx, /*recovering*/ true));
+        if let Ok(Err(read_error)) = tokio::time::timeout_at(deadline, replies).await
+            && codex_websocket_client::network_policy_denial(&read_error).is_some()
+        {
+            return read_error;
+        }
+        error
+    }
+
+    async fn send_frames(&mut self, text: Utf8Bytes, deadline: Instant) -> WsSendOutcome {
+        self.read_budget = Some(UPLOAD_READ_AHEAD_BYTES);
+        let mut check_idle = true;
+        let mut started = false;
+        for frame in request_frames(text) {
+            let mut frame = Some(frame);
+            let write = poll_fn(|cx| {
+                // A close already readable before the first frame belongs to the idle socket.
+                if std::mem::take(&mut check_idle) {
+                    let _ = self.poll_incoming(cx, /*recovering*/ false)?;
+                }
+                let socket = &mut self.socket;
+                if frame.is_some() {
+                    ready!(socket.poll_ready_unpin(cx))?;
+                }
+                if let Some(frame) = frame.take() {
+                    // Even an I/O failure can follow a partially written frame header.
+                    let result = socket.start_send_unpin(frame);
+                    started |= matches!(result, Ok(()) | Err(WsError::Io(_)));
+                    result?;
+                }
+                socket.poll_flush_unpin(cx)
+            });
+            let error = match tokio::time::timeout_at(deadline, write).await {
+                Ok(Ok(())) => continue,
+                Ok(Err(error)) if started => {
+                    map_ws_stream_error(self.recover(error, deadline).await)
+                }
+                Ok(Err(error)) => map_ws_stream_error(error),
+                Err(_) => ApiError::Stream("idle timeout sending websocket request".into()),
+            };
+            return if started {
+                WsSendOutcome::Interrupted(error)
+            } else {
+                WsSendOutcome::NotStarted(error)
+            };
+        }
+        self.read_budget = None;
+        WsSendOutcome::Flushed
     }
 
     async fn run(mut self, mut commands: mpsc::Receiver<WsCommand>) {
         loop {
-            let command = tokio::select! {
-                command = commands.recv() => Ok(command),
-                incoming = poll_fn(|cx| self.poll_incoming(cx)) => incoming.map(|()| None),
-            };
-            let WsCommand { request, tx_result } = match command {
+            let command = poll_fn(|cx| {
+                let command = commands.poll_recv(cx);
+                if command.is_pending() {
+                    let _ = self.poll_incoming(cx, /*recovering*/ false)?;
+                }
+                command.map(Ok)
+            })
+            .await;
+            let WsCommand {
+                request,
+                deadline,
+                tx_result,
+            } = match command {
                 Ok(Some(command)) => command,
                 Ok(None) | Err(WsError::ConnectionClosed) => break,
                 Err(error) => {
@@ -187,16 +300,16 @@ where
                     break;
                 }
             };
-            let send = self.send_frames(request.text);
+            let send = self.send_frames(request.text, deadline);
             // Tungstenite traces frame payloads from inside this future.
-            let result = if request.private {
+            let outcome = if request.private {
                 send.with_subscriber(tracing::Dispatch::none()).await
             } else {
                 send.await
             };
-            let should_break = result.is_err();
-            let _ = tx_result.send(result);
-            if should_break {
+            let flushed = matches!(outcome, WsSendOutcome::Flushed);
+            let _ = tx_result.send(outcome);
+            if !flushed {
                 break;
             }
         }
@@ -232,21 +345,62 @@ impl WsStream {
         }
     }
 
-    async fn send(&mut self, request: WsRequestText) -> Result<(), WsError> {
-        let (tx_result, rx_result) = oneshot::channel();
+    /// Queue a write with a deadline.
+    async fn queue_request(
+        &mut self,
+        request: WsRequestText,
+        idle_timeout: Duration,
+    ) -> Result<oneshot::Receiver<WsSendOutcome>, ApiError> {
         if self
-            .tx_command
-            .send(WsCommand { request, tx_result })
-            .await
-            .is_ok()
-            && let Ok(result) = rx_result.await
+            .max_message_bytes
+            .is_some_and(|limit| request.text.len() > limit)
         {
-            return result;
+            return Err(ApiError::WebsocketMessageTooLarge);
         }
-        while let Some(message) = self.rx_message.recv().await {
-            message?;
+        let deadline = tokio::time::sleep(idle_timeout).deadline();
+        let (tx_result, rx_result) = oneshot::channel();
+        let _ = self
+            .tx_command
+            .send(WsCommand {
+                request,
+                deadline,
+                tx_result,
+            })
+            .await;
+        Ok(rx_result)
+    }
+
+    async fn send_create(
+        &mut self,
+        request: WsRequestText,
+        idle_timeout: Duration,
+        telemetry: Option<&dyn WebsocketTelemetry>,
+        connection_reused: bool,
+    ) -> Result<WsSendOutcome, ApiError> {
+        let start = Instant::now();
+        let mut send = self.queue_request(request, idle_timeout).await?;
+        let result = match WsSendOutcome::receive(&mut send).await {
+            Ok(WsSendOutcome::NotStarted(mut error)) => {
+                // Replies preceding the create are stale. Recover any idle transport error.
+                while let Some(message) = self.next().await {
+                    if let Err(idle_error) = message {
+                        error = map_ws_stream_error(idle_error);
+                        break;
+                    }
+                }
+                Err(error)
+            }
+            outcome => outcome,
+        };
+        if let Some(t) = telemetry {
+            let send_error = match &result {
+                Ok(WsSendOutcome::Flushed) => None,
+                Ok(WsSendOutcome::NotStarted(error) | WsSendOutcome::Interrupted(error))
+                | Err(error) => Some(error),
+            };
+            t.on_ws_request(start.elapsed(), send_error, connection_reused);
         }
-        Err(WsError::ConnectionClosed)
+        result
     }
 
     async fn next(&mut self) -> Option<Result<Message, WsError>> {
@@ -277,6 +431,7 @@ const THREAD_ID_CLIENT_METADATA_KEY: &str = "thread_id";
 const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str = "x-codex-ws-stream-request-start-ms";
 
+#[cfg_attr(test, derive(Default))]
 struct ResponsesWebsocketTimingLogContext {
     model: String,
     session_id: Option<String>,
@@ -917,14 +1072,14 @@ async fn run_websocket_response_stream(
         // No request reached the backend, so this socket is still reusable.
         return Ok(());
     }
-    send_websocket_request(
-        ws_stream,
-        request_text,
-        idle_timeout,
-        telemetry.as_ref(),
-        timing_log_context.connection_reused,
-    )
-    .await?;
+    let mut send_outcome = ws_stream
+        .send_create(
+            request_text,
+            idle_timeout,
+            telemetry.as_deref(),
+            timing_log_context.connection_reused,
+        )
+        .await?;
 
     // A response owns its interrupt, and create must be sent before interrupt.
     let mut interrupt_request = interrupt.clone().fuse();
@@ -938,27 +1093,31 @@ async fn run_websocket_response_stream(
             response = tokio::time::timeout(idle_timeout, ws_stream.next()) => {
                 response.map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()))
             }
-            request = &mut interrupt_request, if response_id.is_some() => {
-                interruption = Some(request);
-                send_websocket_request(
-                    ws_stream,
-                    WsRequestText {
-                        text: serde_json::json!({
-                            "type": "response.interrupt",
-                            "response_id": response_id,
-                            "mode": "discard_partial_items",
-                        }).to_string().into(),
-                        private: false,
-                    },
-                    idle_timeout,
-                    /*telemetry*/ None,
-                    timing_log_context.connection_reused,
-                )
-                .await?;
-                awaiting_interrupt_ack = matches!(request, ResponseInterrupt::Cancel { .. });
+            request = &mut interrupt_request, if response_id.is_some() && matches!(send_outcome, WsSendOutcome::Flushed) => {
+                let command = WsRequestText {
+                    text: serde_json::json!({
+                        "type": "response.interrupt",
+                        "response_id": response_id,
+                        "mode": "discard_partial_items",
+                    }).to_string().into(),
+                    private: false,
+                };
+                let mut send = ws_stream.queue_request(command, idle_timeout).await?;
+                send_outcome = WsSendOutcome::receive(&mut send).await?;
+                if !matches!(send_outcome, WsSendOutcome::NotStarted(_)) {
+                    interruption = Some(request);
+                    awaiting_interrupt_ack = matches!(request, ResponseInterrupt::Cancel { .. });
+                }
                 continue;
             }
         };
+        // A failed send retires the pump. Process replies until its queue runs dry.
+        if matches!(response, Ok(None))
+            && let WsSendOutcome::NotStarted(error) | WsSendOutcome::Interrupted(error) =
+                send_outcome
+        {
+            return Err(error);
+        }
         let poll_duration = poll_start.elapsed();
         if let Some(telemetry) = &telemetry
             && is_websocket_receive_failure(&response)
@@ -1098,22 +1257,7 @@ async fn run_websocket_response_stream(
                         return Err(error.into_api_error());
                     }
                 }
-                if completion.is_some() {
-                    if awaiting_interrupt_ack {
-                        continue;
-                    }
-                    if matches!(
-                        interrupt.clone().now_or_never(),
-                        Some(ResponseInterrupt::Cancel { .. })
-                    ) {
-                        break;
-                    }
-                    // Ordinary responses deliver completion before releasing the socket.
-                    // Preserve it if cancellation wins while delivery is backpressured.
-                    let permit = tx_event.reserve().await;
-                    if let (Ok(permit), Some(event)) = (permit, completion.take()) {
-                        permit.send(Ok(event));
-                    }
+                if completion.is_some() && !awaiting_interrupt_ack {
                     break;
                 }
             }
@@ -1133,6 +1277,19 @@ async fn run_websocket_response_stream(
         }
     }
 
+    send_outcome.into_result()?;
+    if matches!(
+        interrupt.clone().now_or_never(),
+        Some(ResponseInterrupt::Cancel { .. })
+    ) {
+        return Ok(());
+    }
+    // Ordinary responses deliver completion before releasing the socket.
+    // Preserve it if cancellation wins while delivery is backpressured.
+    let permit = tx_event.reserve().await;
+    if let (Ok(permit), Some(event)) = (permit, completion.take()) {
+        permit.send(Ok(event));
+    }
     Ok(())
 }
 
@@ -1176,38 +1333,6 @@ fn safety_buffering_for_event(
         *treatment = updated_treatment;
     }
     event.safety_buffering(treatment)
-}
-
-async fn send_websocket_request(
-    ws_stream: &mut WsStream,
-    request_text: WsRequestText,
-    idle_timeout: Duration,
-    telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
-    connection_reused: bool,
-) -> Result<(), ApiError> {
-    if ws_stream
-        .max_message_bytes
-        .is_some_and(|limit| request_text.text.len() > limit)
-    {
-        return Err(ApiError::WebsocketMessageTooLarge);
-    }
-    let request_start = Instant::now();
-    let result = tokio::time::timeout(idle_timeout, ws_stream.send(request_text))
-        .await
-        .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-        .and_then(|result| result.map_err(map_ws_stream_error));
-
-    if let Some(t) = telemetry.as_ref() {
-        t.on_ws_request(
-            request_start.elapsed(),
-            result.as_ref().err(),
-            connection_reused,
-        );
-    }
-
-    result?;
-
-    Ok(())
 }
 
 fn serialize_websocket_request(request: &ResponsesWsRequest<'_>) -> Result<String, ApiError> {
