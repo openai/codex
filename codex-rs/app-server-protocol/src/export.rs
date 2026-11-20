@@ -2414,8 +2414,10 @@ mod tests {
                 // These are only allowed in *Params types, except additive stable fields
                 // that older servers omit and newer servers may return as null.
                 let legacy_optional_nullable_field = (path
-                    == Path::new("v2/GetAccountTokenUsageResponse.ts")
-                    && field_prefix.trim() == "threadUsage?")
+                    == Path::new("v2/FsGetMetadataResponse.ts")
+                    && field_prefix.trim() == "sizeBytes?")
+                    || (path == Path::new("v2/GetAccountTokenUsageResponse.ts")
+                        && field_prefix.trim() == "threadUsage?")
                     || (path == Path::new("v2/ThreadUsage.ts")
                         && field_prefix.trim() == "nativeUsageUsdMicros?")
                     || (path == Path::new("v2/ThreadItem.ts")

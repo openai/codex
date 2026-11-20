@@ -25,4 +25,8 @@ createdAtMs: number,
 /**
  * File modification time in Unix milliseconds when available, otherwise `0`.
  */
-modifiedAtMs: number, };
+modifiedAtMs: number,
+/**
+ * Size in bytes if the path resolves to a regular file, otherwise null. Older servers omit this field.
+ */
+sizeBytes?: number | null, };

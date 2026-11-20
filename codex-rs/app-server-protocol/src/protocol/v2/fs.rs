@@ -107,6 +107,9 @@ pub struct FsGetMetadataResponse {
     /// File modification time in Unix milliseconds when available, otherwise `0`.
     #[ts(type = "number")]
     pub modified_at_ms: i64,
+    /// Size in bytes if the path resolves to a regular file, otherwise null. Older servers omit this field.
+    #[ts(type = "number | null", optional)]
+    pub size_bytes: Option<u64>,
 }
 
 /// List direct child names for a directory.

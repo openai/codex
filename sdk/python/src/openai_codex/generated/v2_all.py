@@ -1671,6 +1671,14 @@ class FsGetMetadataResponse(BaseModel):
             description="File modification time in Unix milliseconds when available, otherwise `0`.",
         ),
     ]
+    size_bytes: Annotated[
+        int | None,
+        Field(
+            alias="sizeBytes",
+            description="Size in bytes if the path resolves to a regular file, otherwise null. Older servers omit this field.",
+            ge=0,
+        ),
+    ] = None
 
 
 class FsReadDirectoryEntry(BaseModel):

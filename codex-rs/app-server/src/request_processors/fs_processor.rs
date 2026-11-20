@@ -126,6 +126,7 @@ impl FsRequestProcessor {
             is_symlink: metadata.is_symlink,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
+            size_bytes: metadata.is_file.then_some(metadata.size),
         })
     }
 
