@@ -45,9 +45,10 @@
 use crate::line_truncation::span_width;
 use crate::markdown_text_merge::DecodedTextMerge;
 use crate::render::highlight::current_syntax_theme;
+use crate::render::highlight::foreground_color_for_scopes;
 use crate::render::highlight::foreground_style_for_scopes;
-use crate::render::highlight::foreground_style_for_scopes_with_theme;
 use crate::render::highlight::highlight_code_to_lines;
+use crate::render::highlight::with_syntax_theme;
 use crate::render::line_utils::line_to_static;
 use crate::style::accent_color;
 use crate::style::table_separator_style;
@@ -158,19 +159,17 @@ struct MarkdownStyles {
 
 impl Default for MarkdownStyles {
     fn default() -> Self {
-        Self::for_theme(&crate::render::highlight::current_syntax_theme())
+        with_syntax_theme(Self::for_theme)
     }
 }
 
 impl MarkdownStyles {
     fn for_theme(theme: &syntect::highlighting::Theme) -> Self {
-        let foreground = |scopes: &[&str]| {
-            let mut style =
-                foreground_style_for_scopes_with_theme(theme, scopes).unwrap_or_default();
-            style.fg = style.fg.map(|foreground| {
-                crate::style::readable_color_on(foreground, /*background*/ None)
-            });
-            style
+        let highlighter = syntect::highlighting::Highlighter::new(theme);
+        let color = |scopes: &[&str]| foreground_color_for_scopes(&highlighter, scopes);
+        let foreground = |scopes: &[&str]| Style {
+            fg: color(scopes).map(|c| crate::style::readable_color_on(c, /*background*/ None)),
+            ..Style::default()
         };
         Self {
             h1: foreground(&["markup.heading.1.markdown", "markup.heading.markdown"])
@@ -183,14 +182,11 @@ impl MarkdownStyles {
             h4: foreground(&["markup.heading.4.markdown", "markup.heading.markdown"]).italic(),
             h5: foreground(&["markup.heading.5.markdown", "markup.heading.markdown"]).italic(),
             h6: foreground(&["markup.heading.6.markdown", "markup.heading.markdown"]).italic(),
-            code: foreground_style_for_scopes_with_theme(
-                theme,
-                &[
-                    "markup.inline.raw.string.markdown",
-                    "markup.raw.inline.markdown",
-                ],
-            )
-            .unwrap_or_else(|| Style::new().fg(accent_color())),
+            code: Style::new().fg(color(&[
+                "markup.inline.raw.string.markdown",
+                "markup.raw.inline.markdown",
+            ])
+            .unwrap_or_else(accent_color)),
             emphasis: foreground(&["markup.italic.markdown"]).italic(),
             strong: foreground(&["markup.bold.markdown"]).bold(),
             strikethrough: Style::new().crossed_out(),
