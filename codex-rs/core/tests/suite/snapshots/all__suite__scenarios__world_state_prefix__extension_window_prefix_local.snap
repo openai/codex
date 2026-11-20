@@ -51,27 +51,11 @@ Settings:
 
 02:message/developer:
     <scenario_instructions>scenario_prefix: A</scenario_instructions>
-03:message/developer[2]:
-    [01] <permissions instructions>
-        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
-        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-        </permissions instructions>
-    [02] <collaboration_mode># Collaboration Mode: Default
-
-        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
-
-        ## request_user_input availability
-
-        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
-
-        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
-
-        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
-
-        Never use the `request_user_input` tool for permission requests or permission-related escalations.
-        </collaboration_mode>
+03:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+    Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+    </permissions instructions>
 04:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
@@ -171,27 +155,11 @@ Settings: unavailable (items only)
     Plan the release.
 04:message/user:
     Check the plan.
-05:message/developer[2]:
-    [01] <permissions instructions>
-        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
-        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-        </permissions instructions>
-    [02] <collaboration_mode># Collaboration Mode: Default
-
-        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
-
-        ## request_user_input availability
-
-        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
-
-        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
-
-        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
-
-        Never use the `request_user_input` tool for permission requests or permission-related escalations.
-        </collaboration_mode>
+05:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+    Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+    </permissions instructions>
 06:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
@@ -268,27 +236,11 @@ Settings: same as window 1
     Plan the release.
 04:message/user:
     Check the plan.
-05:message/developer[2]:
-    [01] <permissions instructions>
-        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
-        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-        </permissions instructions>
-    [02] <collaboration_mode># Collaboration Mode: Default
-
-        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
-
-        ## request_user_input availability
-
-        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
-
-        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
-
-        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
-
-        Never use the `request_user_input` tool for permission requests or permission-related escalations.
-        </collaboration_mode>
+05:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+    Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+    </permissions instructions>
 06:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 

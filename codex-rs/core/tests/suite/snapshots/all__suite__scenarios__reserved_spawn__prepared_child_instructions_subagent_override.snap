@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_reserved_spawn.rs
-assertion_line: 264
 expression: "context_snapshot::format_request_history_snapshot(\"Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.
@@ -27,7 +26,7 @@ Settings:
           - function/sleep
 01:message/developer:
     Keep the custom base instructions.
-02:message/developer[3]:
+02:message/developer[2]:
     [01] Explain the reasoning behind your findings.
     [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
@@ -46,22 +45,6 @@ Settings:
         - ["gh", "pr", "check"]
         - ["cargo", "test"]
         </permissions instructions>
-    [03] <collaboration_mode># Collaboration Mode: Default
-
-        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
-
-        ## request_user_input availability
-
-        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
-
-        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
-
-        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
-
-        Never use the `request_user_input` tool for permission requests or permission-related escalations.
-        </collaboration_mode>
 03:message/developer:
     <multi_agent_mode>
     Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-ag...k for sub-agents, delegation, or parallel agent work. [hash=6e1e1baf5a87faf5]

@@ -2630,17 +2630,10 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
 }
 
 #[tokio::test]
-async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
+async fn turn_start_applies_default_mode_instructions_only_after_plan_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let body = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "Done"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let response_mock = responses::mount_sse_once(&server, body).await;
-
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
@@ -2649,55 +2642,65 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
         .build_initialized()
         .await?;
 
+    let model = "mock-model-collab";
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
+            model: Some(model.to_string()),
             ..Default::default()
         })
         .await?;
 
-    let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model: "mock-model-collab".to_string(),
-            reasoning_effort: Some(ReasoningEffort::High),
-            developer_instructions: None,
-        },
-    };
-
-    let _turn: TurnStartResponse = mcp
-        .request(|request_id| ClientRequest::TurnStart {
-            request_id,
-            params: TurnStartParams {
-                thread_id: thread.id.clone(),
-                client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: "Hello".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                model: Some("mock-model-override".to_string()),
-                effort: Some(ReasoningEffort::Low),
-                summary: Some(ReasoningSummary::Auto),
-                output_schema: None,
-                collaboration_mode: Some(collaboration_mode),
-                ..Default::default()
+    let plan = "# Plan Mode (Conversational)";
+    let default = "# Collaboration Mode: Default";
+    for (prompt, mode, expected) in [
+        ("Start", None, vec![]),
+        ("Continue", Some(ModeKind::Default), vec![]),
+        ("Plan the changes", Some(ModeKind::Plan), vec![plan]),
+        ("Refine the plan", None, vec![plan]),
+        ("Implement it", Some(ModeKind::Default), vec![plan, default]),
+        ("Check the changes", None, vec![plan, default]),
+    ] {
+        let response_mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_response_created(prompt),
+                responses::ev_completed(prompt),
+            ]),
+        )
+        .await;
+        let collaboration_mode = mode.map(|mode| CollaborationMode {
+            mode,
+            settings: Settings {
+                model: model.to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: None,
             },
+        });
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: collaboration_mode
+                .as_ref()
+                .map(|_| "mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            collaboration_mode,
+            ..Default::default()
         })
         .await?;
 
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let request = response_mock.single_request();
-    let payload = request.body_json();
-    assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
-    let payload_text = payload.to_string();
-    assert!(payload_text.contains(
-        "Use the `request_user_input` tool only when it is listed in the available tools"
-    ));
+        let request = response_mock.single_request();
+        assert_eq!(request.body_json()["model"].as_str(), Some(model));
+        let texts = request.message_input_texts("developer");
+        let headers = texts
+            .iter()
+            .filter_map(|text| text.strip_prefix("<collaboration_mode>"))
+            .map(|text| text.lines().next().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(headers, expected, "{prompt}");
+    }
 
     Ok(())
 }

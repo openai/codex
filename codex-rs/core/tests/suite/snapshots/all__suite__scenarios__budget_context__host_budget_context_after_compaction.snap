@@ -23,9 +23,8 @@ Scenario: Core renders the host's roster with native World State cadence. Compac
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 03:message/developer:
     <MULTI_AGENT_ROLE>
 04:message/developer:
@@ -84,9 +83,8 @@ Scenario: Core renders the host's roster with native World State cadence. Compac
     Start planning the release.
 03:message/user:
     Continue planning.
-04:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
+04:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 05:message/developer:
     <MULTI_AGENT_ROLE>
 06:message/developer:

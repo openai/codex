@@ -4430,15 +4430,19 @@ impl Session {
         // Read the step's model and record its environments together so an update cannot split them.
         // Match apply_turn_settings and activate_turn_environments: active_turn before state.
         // Wait for executor startup below, after releasing both locks.
-        let (mut settings, environments, inherited_environments) = {
+        let (mut settings, active_collaboration_mode, environments, inherited_environments) = {
             let _active = self
                 .active_turn
                 .lock()
                 .or_cancel(cancellation_token)
                 .await?;
-            let _state = self.state.lock().or_cancel(cancellation_token).await?;
+            let state = self.state.lock().or_cancel(cancellation_token).await?;
+            let settings = turn_context.next_step_settings.load_full();
+            let active_collaboration_mode =
+                settings.active_collaboration_mode(state.history.reference_context_item_ref());
             (
-                turn_context.next_step_settings.load_full(),
+                settings,
+                active_collaboration_mode,
                 self.services.turn_environments.snapshot(),
                 self.features
                     .enabled(Feature::SubagentThreadEnvironments)
@@ -4706,6 +4710,7 @@ impl Session {
         }
         let (executor_hook_sources, mcp, tool_router, extension_data) = prepared_tools??;
         Ok(Arc::new(StepContext {
+            active_collaboration_mode,
             sampled_through_sequence: None,
             serving_assessment: None,
             guardian_probe: None,

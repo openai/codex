@@ -43,9 +43,8 @@ Settings:
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 02:message/developer:
     <MULTI_AGENT_ROLE>
 03:message/developer:

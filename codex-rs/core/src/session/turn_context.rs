@@ -938,7 +938,10 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+    pub(super) fn context_item_with_mode(
+        &self,
+        collaboration_mode: Option<CollaborationMode>,
+    ) -> TurnContextItem {
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -959,7 +962,7 @@ impl TurnContext {
             ),
             model: self.model_info().slug.clone(),
             comp_hash: self.model_info().comp_hash.clone(),
-            collaboration_mode: Some(self.collaboration_mode()),
+            collaboration_mode,
             multi_agent_version: Some(self.multi_agent_version),
             realtime_active: Some(self.realtime_active),
             cyber_access_program: self.cyber_access_program,

@@ -35,9 +35,8 @@ Scenario: Permission discovery preserves legacy output, exposes reply-only acces
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 03:message/developer:
     <MULTI_AGENT_ROLE>
 04:message/developer:

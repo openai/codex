@@ -159,81 +159,78 @@ async fn catalog_collaboration_messages_track_mode_changes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
-    let req2 = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-    )
-    .await;
-
     let model_slug = "catalog-collaboration-model";
     let default_text = "## Plan tool\nPreserve the custom default policy.\n";
     let plan_text = "## `update_plan`\nPreserve the custom Plan Mode policy.\n";
-    let model = model_with_collaboration_messages(model_slug, Some(default_text), Some(plan_text));
-    let mut builder = test_codex()
-        .with_model(model_slug)
-        .with_config(move |config| {
-            config.model_catalog = Some(ModelsResponse {
-                models: vec![model],
-            });
-        });
-    let test = builder.build(&server).await?;
-
-    core_test_support::submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            collaboration_mode: Some(collab_mode_for_model(
-                ModeKind::Default,
-                model_slug,
-                Some("legacy default instructions"),
-            )),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("default turn").await?;
-
-    let first_dev_texts = developer_texts(&req1.single_request().input());
-    assert_eq!(
-        count_messages_containing(&first_dev_texts, &collab_xml(default_text)),
-        1
-    );
-    assert_eq!(
-        count_messages_containing(&first_dev_texts, "legacy default instructions"),
-        0
-    );
-
-    core_test_support::submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            collaboration_mode: Some(collab_mode_for_model(
-                ModeKind::Plan,
-                model_slug,
-                Some("legacy plan instructions"),
-            )),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("plan turn").await?;
-
-    let second_dev_texts = developer_texts(&req2.single_request().input());
-    assert_eq!(
-        count_messages_containing(&second_dev_texts, &collab_xml(default_text)),
-        1
-    );
-    assert_eq!(
-        count_messages_containing(&second_dev_texts, &collab_xml(plan_text)),
-        1
-    );
-    assert_eq!(
-        count_messages_containing(&second_dev_texts, "legacy plan instructions"),
-        0
-    );
+    let builder = || {
+        let mut model =
+            model_with_collaboration_messages(model_slug, Some(default_text), Some(plan_text));
+        model.auto_compact_token_limit = Some(50_000);
+        test_codex()
+            .with_model(model_slug)
+            .with_config(move |config| {
+                config.model_catalog = Some(ModelsResponse {
+                    models: vec![model],
+                });
+            })
+    };
+    let mut test = builder().build_with_auto_env(&server).await?;
+    let fallback = "legacy caller instructions";
+    let mut compact = false;
+    for (turn, mode, tokens, resume, expected) in [
+        ("startup", ModeKind::Default, 10, false, (0, 0)),
+        ("resume before Plan", ModeKind::Default, 10, true, (0, 0)),
+        ("plan", ModeKind::Plan, 60_000, false, (1, 0)),
+        ("exit Plan", ModeKind::Default, 60_000, false, (0, 1)),
+        ("continue", ModeKind::Default, 10, false, (0, 1)),
+        ("resume after Plan", ModeKind::Default, 10, true, (0, 1)),
+    ] {
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                collaboration_mode: Some(collab_mode_for_model(mode, model_slug, Some(fallback))),
+                ..Default::default()
+            },
+        )
+        .await?;
+        if resume {
+            test = builder().restart_with_auto_env(&server, &test).await?;
+        }
+        if compact {
+            mount_sse_once(
+                &server,
+                sse(vec![
+                    ev_response_created("compact"),
+                    json!({
+                        "type": "response.output_item.done",
+                        "item": {"type": "compaction", "encrypted_content": "summary"},
+                    }),
+                    ev_completed("compact"),
+                ]),
+            )
+            .await;
+        }
+        compact = tokens > 50_000;
+        let response = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created(turn),
+                core_test_support::responses::ev_completed_with_tokens(turn, tokens),
+            ]),
+        )
+        .await;
+        test.submit_text_turn(turn).await?;
+        let texts = developer_texts(&response.single_request().input());
+        assert_eq!(
+            (
+                count_messages_containing(&texts, &collab_xml(plan_text)),
+                count_messages_containing(&texts, &collab_xml(default_text))
+            ),
+            expected,
+            "{turn}"
+        );
+        assert_eq!(count_messages_containing(&texts, fallback), 0, "{turn}");
+    }
 
     Ok(())
 }
@@ -281,6 +278,27 @@ async fn catalog_collaboration_messages_refresh_without_mode_or_model_change(
         .build_with_auto_env(&server)
         .await?;
 
+    if mode == ModeKind::Default {
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                collaboration_mode: Some(collab_mode_for_model(
+                    ModeKind::Plan,
+                    MODEL,
+                    /*instructions*/ None,
+                )),
+                ..Default::default()
+            },
+        )
+        .await?;
+        mount_sse_once(
+            &server,
+            sse(vec![ev_response_created("plan"), ev_completed("plan")]),
+        )
+        .await;
+        test.submit_text_turn("plan").await?;
+    }
+
     core_test_support::submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
@@ -326,7 +344,12 @@ async fn catalog_collaboration_messages_refresh_without_mode_or_model_change(
                     .0
             })
             .collect::<Vec<_>>();
-        assert_eq!(collaboration_instructions.as_slice(), expected, "{turn}");
+        let mut expected_history = Vec::new();
+        if mode == ModeKind::Default {
+            expected_history.push(INACTIVE);
+        }
+        expected_history.extend_from_slice(expected);
+        assert_eq!(collaboration_instructions, expected_history, "{turn}");
         requests.push(request);
     }
 
@@ -360,11 +383,10 @@ async fn empty_collaboration_guidance_clears_prior_instructions_once(
     let server = start_mock_server().await;
     let model_slug = "catalog-collaboration-clear-model";
     let empty_model_slug = "catalog-collaboration-empty-model";
-    let default_text = "catalog default instructions";
+    let plan_text = "catalog plan instructions";
     let fallback_text = "legacy fallback instructions";
     let fallback = empty_instructions.map(|_| fallback_text);
-    let model =
-        model_with_collaboration_messages(model_slug, Some(default_text), empty_instructions);
+    let model = model_with_collaboration_messages(model_slug, empty_instructions, Some(plan_text));
     let empty_model =
         model_with_collaboration_messages(empty_model_slug, empty_instructions, empty_instructions);
     let mut builder = test_codex()
@@ -377,11 +399,11 @@ async fn empty_collaboration_guidance_clears_prior_instructions_once(
     let test = builder.build_with_auto_env(&server).await?;
 
     for (turn, mode, model, clear_count) in [
-        ("default", ModeKind::Default, model_slug, 0),
-        ("clear", ModeKind::Plan, model_slug, 1),
-        ("still-clear", ModeKind::Plan, model_slug, 1),
-        ("change-model", ModeKind::Plan, empty_model_slug, 1),
-        ("change-mode", ModeKind::Default, empty_model_slug, 1),
+        ("plan", ModeKind::Plan, model_slug, 0),
+        ("clear", ModeKind::Default, model_slug, 1),
+        ("still-clear", ModeKind::Default, model_slug, 1),
+        ("change-model", ModeKind::Default, empty_model_slug, 1),
+        ("change-mode", ModeKind::Plan, empty_model_slug, 1),
     ] {
         let response = mount_sse_once(
             &server,
@@ -401,7 +423,7 @@ async fn empty_collaboration_guidance_clears_prior_instructions_once(
         let dev_texts = response.single_request().message_input_texts("developer");
         assert_eq!(
             (
-                count_messages_containing(&dev_texts, &collab_xml(default_text)),
+                count_messages_containing(&dev_texts, &collab_xml(plan_text)),
                 count_messages_containing(&dev_texts, &collab_xml("")),
                 count_messages_containing(&dev_texts, fallback_text),
             ),
@@ -433,9 +455,10 @@ async fn model_change_appends_new_catalog_collaboration_message() -> Result<()> 
     let second_slug = "catalog-collaboration-model-b";
     let first_text = "model A collaboration instructions";
     let second_text = "model B collaboration instructions";
-    let first = model_with_collaboration_messages(first_slug, Some(first_text), /*plan*/ None);
+    let first =
+        model_with_collaboration_messages(first_slug, /*default*/ None, Some(first_text));
     let second =
-        model_with_collaboration_messages(second_slug, Some(second_text), /*plan*/ None);
+        model_with_collaboration_messages(second_slug, /*default*/ None, Some(second_text));
     let mut builder = test_codex()
         .with_model(first_slug)
         .with_config(move |config| {
@@ -449,7 +472,7 @@ async fn model_change_appends_new_catalog_collaboration_message() -> Result<()> 
         &test.codex,
         ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_for_model(
-                ModeKind::Default,
+                ModeKind::Plan,
                 first_slug,
                 Some("legacy instructions"),
             )),
@@ -1013,9 +1036,8 @@ async fn cold_resume_refreshes_legacy_collaboration_snapshot_once(
     const MODEL: &str = "catalog-collaboration-resume-model";
     const ORIGINAL: &str = "original collaboration instructions";
     const CURRENT: &str = "current collaboration instructions";
-    let builder_with_instructions = |instructions: &str| {
-        let model =
-            model_with_collaboration_messages(MODEL, Some(instructions), /*plan*/ None);
+    let builder_with_instructions = |instructions| {
+        let model = model_with_collaboration_messages(MODEL, instructions, /*plan*/ None);
         test_codex().with_model(MODEL).with_config(move |config| {
             config.model_catalog = Some(ModelsResponse {
                 models: vec![model],
@@ -1032,9 +1054,21 @@ async fn cold_resume_refreshes_legacy_collaboration_snapshot_once(
         ]),
     )
     .await;
-    let initial = builder_with_instructions(ORIGINAL)
+    let initial = builder_with_instructions(None)
         .build_with_auto_env(&server)
         .await?;
+    core_test_support::submit_thread_settings(
+        &initial.codex,
+        ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Default,
+                MODEL,
+                Some(ORIGINAL),
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
     initial.submit_text_turn("before upgrading").await?;
 
     let home = initial.home.clone();
@@ -1049,6 +1083,14 @@ async fn cold_resume_refreshes_legacy_collaboration_snapshot_once(
         .lines()
         .map(|original_line| {
             let mut line = codex_rollout::parse_rollout_line(original_line)?;
+            if let RolloutItem::TurnContext(context) = &mut line.item {
+                context.collaboration_mode = Some(collab_mode_for_model(
+                    ModeKind::Default,
+                    MODEL,
+                    Some(ORIGINAL),
+                ));
+                return serde_json::to_string(&line);
+            }
             if let RolloutItem::WorldState(world_state) = &mut line.item
                 && let Some(snapshot) = world_state.state.get_mut("collaboration_mode")
             {
@@ -1067,7 +1109,7 @@ async fn cold_resume_refreshes_legacy_collaboration_snapshot_once(
     );
     std::fs::write(&rollout_path, format!("{legacy_rollout}\n"))?;
 
-    let resumed = builder_with_instructions(CURRENT)
+    let resumed = builder_with_instructions(Some(CURRENT))
         .resume(&server, home, rollout_path)
         .await?;
     let mut previous_input = initial_response.single_request().input();

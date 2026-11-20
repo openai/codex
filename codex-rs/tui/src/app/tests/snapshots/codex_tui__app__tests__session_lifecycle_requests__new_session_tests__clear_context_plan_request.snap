@@ -8,11 +8,10 @@ Scenario: Clear context and implement the approved plan in a fresh thread.
 -- request 1 (request) --
 00:message/developer:
     Help the user.
-01:message/developer[4]:
+01:message/developer[3]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-    [03] <COLLABORATION_MODE>
-    [04] <tools>
+    [03] <tools>
         Deferred tool namespaces:
         - codex_tui: Manage Codex tasks available through the connected app server.
         </tools>

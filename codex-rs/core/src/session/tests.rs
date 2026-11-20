@@ -299,6 +299,7 @@ impl StepContext {
         });
         settings.service_tier = turn.config.service_tier.clone();
         Arc::new(Self {
+            active_collaboration_mode: settings.active_collaboration_mode(/*previous*/ None),
             sampled_through_sequence: None,
             turn_cancellation: tokio_util::sync::CancellationToken::new(),
             preempt: turn
@@ -13478,4 +13479,14 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
             .is_some_and(|server| server.enabled),
         "rejection must not permit same-name ordinary-auth replacement in this session"
     );
+}
+
+impl TurnContext {
+    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        self.context_item_with_mode(
+            self.initial_settings
+                .active_collaboration_mode(/*previous*/ None)
+                .map(|_| self.collaboration_mode()),
+        )
+    }
 }

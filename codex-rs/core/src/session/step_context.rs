@@ -19,6 +19,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_otel::SessionTelemetry;
 use codex_plugin::ExecutorPluginHookSource;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::protocol::TurnContextItem;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +42,8 @@ pub(crate) struct StepContext {
     pub(crate) realtime: RealtimeConversationSnapshot,
     /// One immutable settings version captured before request preparation.
     pub(crate) settings: Arc<ResolvedStepSettings>,
+    /// None until the first Plan turn. Carried into replacement context during compaction.
+    pub(crate) active_collaboration_mode: Option<ModeKind>,
     /// Frozen turn preferences resolved against this step's captured model.
     pub(crate) token_budget: Option<TokenBudgetConfig>,
     /// Telemetry context tagged with this sampling request's model.
@@ -102,7 +105,10 @@ impl StepContext {
 
     /// Persist the context captured for this request, even after a live update.
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let mut item = self.turn.to_turn_context_item();
+        let mut item = self.turn.context_item_with_mode(
+            self.active_collaboration_mode
+                .map(|_| self.settings.effective_collaboration_mode()),
+        );
         item.realtime_active = Some(self.realtime.active);
         item
     }

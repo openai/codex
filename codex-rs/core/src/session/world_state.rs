@@ -342,7 +342,8 @@ impl Session {
         }
         if turn_context.config.include_collaboration_mode_instructions {
             world_state.add_section(CollaborationModeState::from_collaboration_mode(
-                &settings.effective_collaboration_mode(),
+                step_context.active_collaboration_mode,
+                &settings.effective_collaboration_mode().settings,
                 model_messages.collaboration_modes(),
                 turn_context.config.update_plan_enabled,
                 turn_context.config.model_catalog.is_some(),

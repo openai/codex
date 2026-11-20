@@ -23,9 +23,8 @@ Scenario: Astra uses the catalog question schema to ask who a launch update is f
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 03:message/developer:
     <MULTI_AGENT_ROLE>
 04:message/developer:

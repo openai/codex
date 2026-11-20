@@ -1087,8 +1087,8 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                 let messages = model.model_messages.as_mut().expect("model messages");
                 messages.instructions_template = Some(format!("Instructions for {slug}."));
                 messages.collaboration_modes = Some(CollaborationModeMessages {
-                    default: Some(format!("Default collaboration for {slug}.")),
-                    plan: None,
+                    default: None,
+                    plan: Some(format!("Plan collaboration for {slug}.")),
                 });
                 messages.multi_agent = Some(MultiAgentMessages {
                     role: Some(MultiAgentRoleMessages {
@@ -1128,6 +1128,14 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
             }
         })
         .build_with_auto_env(&server)
+        .await?;
+    let mut collaboration_mode = test.codex.config_snapshot().await.collaboration_mode;
+    collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
+    test.codex
+        .update_thread_settings(ThreadSettingsOverrides {
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
         .await?;
     let request = start_paused_turn(&test.codex).await?;
 
@@ -1205,7 +1213,7 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
             "model-switch instructions should not contain a personality update"
         );
         for text in [
-            format!("Default collaboration for {MODEL_B}."),
+            format!("Plan collaboration for {MODEL_B}."),
             format!("Approval instructions for {MODEL_B}."),
             format!("Root role for {MODEL_B}."),
             format!("Delegation policy for {MODEL_B}."),

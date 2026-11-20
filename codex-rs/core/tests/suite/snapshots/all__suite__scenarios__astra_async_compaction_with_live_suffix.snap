@@ -23,10 +23,9 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[3]:
+02:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
-    [03] install_budget: 400 tokens remain.
+    [02] install_budget: 400 tokens remain.
 03:message/developer:
     <MULTI_AGENT_ROLE>
 04:message/developer:
@@ -62,10 +61,9 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[3]:
+02:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
-    [03] install_budget: 400 tokens remain.
+    [02] install_budget: 400 tokens remain.
 03:message/developer:
     <MULTI_AGENT_ROLE>
 04:message/developer:
@@ -108,10 +106,9 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
 02:message/user:
     Draft the launch notes.
 03:compaction:encrypted=true; chars=23; hash=159cfcb231cc70f0
-04:message/developer[3]:
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <COLLABORATION_MODE>
-    [03] install_budget: 400 tokens remain.
+    [02] install_budget: 400 tokens remain.
 05:message/developer:
     <MULTI_AGENT_ROLE>
 06:message/developer:

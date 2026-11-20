@@ -584,7 +584,11 @@ impl ContextManager {
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
-        self.reference_context_item.clone()
+        self.reference_context_item_ref().cloned()
+    }
+
+    pub(crate) fn reference_context_item_ref(&self) -> Option<&TurnContextItem> {
+        self.reference_context_item.as_ref()
     }
 
     pub(crate) fn render_step_world_state(
