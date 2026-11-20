@@ -1274,26 +1274,17 @@ async fn dispatch_cli(
             prepend_config_flags(&mut config_overrides, root_config_overrides.clone());
             match subcommand {
                 PluginSubcommand::Add(args) => {
-                    let overrides = config_overrides
-                        .parse_overrides()
-                        .map_err(anyhow::Error::msg)?;
-                    plugin_cmd::run_plugin_add(overrides, args).await?;
+                    plugin_cmd::run_plugin_add(&config_overrides, args).await?;
                 }
                 PluginSubcommand::List(args) => {
-                    let overrides = config_overrides
-                        .parse_overrides()
-                        .map_err(anyhow::Error::msg)?;
-                    plugin_cmd::run_plugin_list(overrides, args).await?;
+                    plugin_cmd::run_plugin_list(&config_overrides, args).await?;
                 }
                 PluginSubcommand::Marketplace(mut marketplace_cli) => {
                     prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
                     marketplace_cli.run().await?;
                 }
                 PluginSubcommand::Remove(args) => {
-                    let overrides = config_overrides
-                        .parse_overrides()
-                        .map_err(anyhow::Error::msg)?;
-                    plugin_cmd::run_plugin_remove(overrides, args).await?;
+                    plugin_cmd::run_plugin_remove(&config_overrides, args).await?;
                 }
             }
         }
