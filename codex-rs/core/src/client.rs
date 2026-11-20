@@ -2949,11 +2949,13 @@ fn is_guardian_reviewer(responses_headers: &ApiHeaderMap) -> bool {
 ///
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
+/// - `x-codex-exclude` asks the server to omit the echoed tool catalog.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
+    headers.insert("x-codex-exclude", HeaderValue::from_static("tools"));
     if let Some(value) = beta_features_header
         && !value.is_empty()
         && let Ok(header_value) = HeaderValue::from_str(value)
