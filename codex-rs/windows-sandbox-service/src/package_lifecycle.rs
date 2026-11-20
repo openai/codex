@@ -28,6 +28,9 @@ use windows::Win32::System::WinRT::RO_INIT_MULTITHREADED;
 use windows::Win32::System::WinRT::RoInitialize;
 use windows::Win32::System::WinRT::RoUninitialize;
 use windows::core::HSTRING;
+use windows_sys::Win32::Foundation::ERROR_CTX_WINSTATION_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_NO_TOKEN;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security as security;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
@@ -52,6 +55,11 @@ struct UserInstallation {
     user_token: OwnedHandle,
     catalog: PackageCatalog,
     token: EventRegistrationToken,
+}
+
+enum OwnerRestore {
+    Complete,
+    OwnerUnavailable,
 }
 
 pub(crate) struct PackageLifecycle {
@@ -192,8 +200,10 @@ impl PackageLifecycle {
     }
 
     pub(crate) fn restore_logged_in_owner(&self, recorded_session_id: u32) -> Result<()> {
-        let Err(error) = self.restore_authenticated_user(recorded_session_id) else {
-            return Ok(());
+        let mut failure = match self.restore_authenticated_user(recorded_session_id) {
+            Ok(OwnerRestore::Complete) => return Ok(()),
+            Ok(OwnerRestore::OwnerUnavailable) => None,
+            Err(error) => Some(error),
         };
 
         // Session IDs can change while the service is stopped; the owner SID is durable.
@@ -213,39 +223,63 @@ impl PackageLifecycle {
         }
         let restored = (0..count).any(|index| {
             let session_id = unsafe { (*sessions.add(index as usize)).SessionId };
-            session_id != recorded_session_id && self.restore_authenticated_user(session_id).is_ok()
+            if session_id == recorded_session_id {
+                return false;
+            }
+            match self.restore_authenticated_user(session_id) {
+                Ok(OwnerRestore::Complete) => true,
+                Ok(OwnerRestore::OwnerUnavailable) => false,
+                Err(error) => {
+                    failure.get_or_insert(error);
+                    false
+                }
+            }
         });
         unsafe { WTSFreeMemory(sessions.cast()) };
-        if restored { Ok(()) } else { Err(error) }
+        if restored {
+            Ok(())
+        } else {
+            failure.map_or(Ok(()), Err)
+        }
     }
 
-    pub(crate) fn restore_authenticated_user(&self, session_id: u32) -> Result<()> {
+    fn restore_authenticated_user(&self, session_id: u32) -> Result<OwnerRestore> {
         if self.installation.borrow().is_some() {
-            return Ok(());
+            return Ok(OwnerRestore::Complete);
         }
         let setup_lock =
             codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
         let Some(mut record) = crate::installation_record::load()? else {
-            return Ok(());
+            return Ok(OwnerRestore::Complete);
         };
 
         if record.runtime.is_some()
             && !crate::installation_record::is_current_package_family(&record)?
         {
-            return Ok(());
+            return Ok(OwnerRestore::Complete);
         }
         let mut raw_token = std::ptr::null_mut();
         if unsafe { WTSQueryUserToken(session_id, &mut raw_token) } == 0 {
-            return Err(io::Error::last_os_error()).context("open the logged-in user's token");
+            let error = io::Error::last_os_error();
+            if let Some(code) = error.raw_os_error()
+                && matches!(
+                    code as u32,
+                    ERROR_FILE_NOT_FOUND | ERROR_CTX_WINSTATION_NOT_FOUND | ERROR_NO_TOKEN
+                )
+            {
+                // At boot the recorded session may not exist yet, or may not have a token.
+                // A session change wakes the listener to try again at sign-in.
+                return Ok(OwnerRestore::OwnerUnavailable);
+            }
+            return Err(error).context("open the logged-in user's token");
         }
         // SAFETY: WTSQueryUserToken transferred this handle on success.
         let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
         let user = unsafe { codex_windows_sandbox::get_user_sid_bytes(token.as_raw_handle()) }?;
         let user_sid = string_from_sid_bytes(&user).map_err(anyhow::Error::msg)?;
-        ensure!(
-            user_sid == record.user_sid,
-            "logged-in user does not match the recorded sandbox owner"
-        );
+        if user_sid != record.user_sid {
+            return Ok(OwnerRestore::OwnerUnavailable);
+        }
 
         let mut pins = Vec::new();
         if let Some(home) = with_owner_impersonation(token.as_raw_handle(), || {
@@ -271,7 +305,7 @@ impl PackageLifecycle {
             },
             token,
         )
-        .map(|_| ())
+        .map(|_| OwnerRestore::Complete)
     }
 
     pub(crate) fn clean_up(&self) -> Result<()> {
