@@ -227,14 +227,12 @@ impl TurnRequestProcessor {
         Ok(Some(
             ThreadGuardianReviewResponse {
                 call_id: result.call_id,
-                assessment: result
-                    .assessment
-                    .map(|assessment| ThreadGuardianAssessment {
-                        outcome: assessment.outcome,
-                        risk_level: assessment.risk_level.into(),
-                        user_authorization: assessment.user_authorization.into(),
-                        rationale: assessment.rationale,
-                    }),
+                assessment: ThreadGuardianAssessment {
+                    outcome: result.assessment.outcome,
+                    risk_level: result.assessment.risk_level.into(),
+                    user_authorization: result.assessment.user_authorization.into(),
+                    rationale: result.assessment.rationale,
+                },
             }
             .into(),
         ))

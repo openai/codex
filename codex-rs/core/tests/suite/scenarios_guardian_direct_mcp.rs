@@ -90,8 +90,60 @@ async fn direct_mcp_review_without_dispatch() -> Result<()> {
     let prompt = "Use [$calendar](app://calendar) to create a lunch event.";
     test.submit_text_turn(prompt).await?;
     assert_eq!(recorded_apps_tool_calls(&server).await, Vec::<Value>::new());
-    test.codex.flush_rollout().await?;
-    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let items = recorded_mcp_items(&test.codex, prompt).await?;
+
+    let mut options = test.start_thread_options().await;
+    set_default_app_approval_mode_and_reviewer(
+        &mut options.config,
+        AppToolApproval::Approve,
+        ApprovalsReviewer::AutoReview,
+    );
+    let direct = test.thread_manager.start_thread(options).await?;
+    wait_for_mcp_server(&direct.thread, "codex_apps").await?;
+    direct.thread.inject_response_items(items).await?;
+    let result = direct
+        .thread
+        .guardian_review(&CancellationToken::new())
+        .await?;
+    assert_eq!(
+        result,
+        GuardianReviewResult {
+            call_id: "mcp-review".to_owned(),
+            assessment: serde_json::from_value(assessment)?,
+        }
+    );
+    let requests = mock.requests();
+    let [_, live, _, recorded] = requests.as_slice() else {
+        panic!("expected parent, live Guardian, parent, direct Guardian");
+    };
+
+    assert_eq!(
+        model_input(recorded, direct.thread_id)?,
+        model_input(live, test.session_configured.thread_id)?,
+    );
+    assert_eq!(recorded_apps_tool_calls(&server).await, Vec::<Value>::new());
+    direct.thread.shutdown_and_wait().await?;
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "A live MCP denial and a direct approval render the same action; neither dispatches the tool.",
+        &mock.requests(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    let environment_id = &test.executor_environment().selection().environment_id;
+    let snapshot = snapshot.replace(
+        &format!("environment {environment_id:?}"),
+        "environment \"<ENVIRONMENT>\"",
+    );
+    insta::assert_snapshot!("guardian_direct_mcp", snapshot);
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+pub(in crate::suite) async fn recorded_mcp_items(
+    thread: &codex_core::CodexThread,
+    prompt: &str,
+) -> Result<Vec<ResponseItem>> {
+    thread.flush_rollout().await?;
+    let history = thread.load_history(/*include_archived*/ false).await?;
     let items = history
         .items
         .into_iter()
@@ -109,60 +161,5 @@ async fn direct_mcp_review_without_dispatch() -> Result<()> {
         })
         .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
-
-    // Review the same recorded call under each current policy, using one live baseline.
-    for (current_approval_mode, expected_assessment) in [
-        (
-            AppToolApproval::Prompt,
-            Some(serde_json::from_value(assessment)?),
-        ),
-        (AppToolApproval::Approve, None),
-    ] {
-        let mut options = test.start_thread_options().await;
-        set_default_app_approval_mode_and_reviewer(
-            &mut options.config,
-            current_approval_mode,
-            ApprovalsReviewer::AutoReview,
-        );
-        let direct = test.thread_manager.start_thread(options).await?;
-        wait_for_mcp_server(&direct.thread, "codex_apps").await?;
-        direct.thread.inject_response_items(items.clone()).await?;
-        let result = direct
-            .thread
-            .guardian_review(&CancellationToken::new())
-            .await?;
-        assert_eq!(
-            result,
-            GuardianReviewResult {
-                call_id: "mcp-review".to_owned(),
-                assessment: expected_assessment,
-            }
-        );
-        // The approve policy adds no Guardian request; both phases leave exactly four.
-        let requests = mock.requests();
-        let [_, live, _, recorded] = requests.as_slice() else {
-            panic!("expected parent, live Guardian, parent, direct Guardian");
-        };
-        if result.assessment.is_some() {
-            assert_eq!(
-                model_input(recorded, direct.thread_id)?,
-                model_input(live, history.thread_id)?,
-            );
-        }
-        assert_eq!(recorded_apps_tool_calls(&server).await, Vec::<Value>::new());
-        direct.thread.shutdown_and_wait().await?;
-    }
-    let snapshot = context_snapshot::format_request_history_snapshot(
-        "A live MCP denial and a direct approval render the same action; neither dispatches the tool.",
-        &mock.requests(),
-        &ContextSnapshotOptions::default().rewrite_known_segments(),
-    );
-    let environment_id = &test.executor_environment().selection().environment_id;
-    let snapshot = snapshot.replace(
-        &format!("environment {environment_id:?}"),
-        "environment \"<ENVIRONMENT>\"",
-    );
-    insta::assert_snapshot!("guardian_direct_mcp", snapshot);
-    test.codex.shutdown_and_wait().await?;
-    Ok(())
+    Ok(items)
 }

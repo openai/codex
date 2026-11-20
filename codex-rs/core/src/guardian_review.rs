@@ -18,8 +18,7 @@ pub enum ReviewRetrieval {
 #[derive(Debug, PartialEq, Eq)]
 pub struct GuardianReviewResult {
     pub call_id: String,
-    /// Absent when current policy or a remembered approval skips review.
-    pub assessment: Option<codex_guardian_reviewer::GuardianAssessment>,
+    pub assessment: codex_guardian_reviewer::GuardianAssessment,
 }
 
 /// Scope backend reviewer attribution to the provider-selected Guardian model.

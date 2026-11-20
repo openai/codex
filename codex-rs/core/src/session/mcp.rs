@@ -1198,6 +1198,7 @@ async fn review_guardian_mcp_elicitation(
                     call_id,
                     invocation,
                     Some(metadata),
+                    /*prompt_permissions*/ None,
                 ),
             )
         } else {

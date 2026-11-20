@@ -1,23 +1,22 @@
-//! Prepares MCP approval actions using current bindings without dispatching or remembering approval.
+//! Prepares Guardian review requests using current bindings without dispatching or remembering approval.
 
 use codex_mcp::ToolInfo;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::FunctionCallError;
 
-use super::McpToolApprovalRequirement;
+use super::build_guardian_mcp_tool_review_request;
+use super::capture_environment_permissions;
 use super::mcp_tool_approval_policy;
 use super::mcp_tool_metadata;
 use super::parse_mcp_tool_arguments;
-use super::prepare_mcp_tool_approval;
+use crate::guardian::GuardianApprovalRequest;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::McpHandler;
-use crate::tools::sandboxing::ApprovalAction;
 
-pub(crate) async fn prepare_approval_action(
+pub(crate) async fn prepare_review_request(
     invocation: &ToolInvocation,
     advertised_tool: &ToolInfo,
-) -> Result<Option<ApprovalAction>, FunctionCallError> {
+) -> Result<GuardianApprovalRequest, FunctionCallError> {
     let ToolPayload::Function { arguments } = &invocation.payload else {
         return Err(FunctionCallError::RespondToModel(
             "mcp handler received unsupported payload".into(),
@@ -45,32 +44,15 @@ pub(crate) async fn prepare_approval_action(
         mcp_invocation.arguments.as_ref(),
     )
     .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-    let policy = mcp_tool_approval_policy(&call, &metadata).ok_or_else(|| {
-        FunctionCallError::RespondToModel("MCP tool call blocked by app configuration".into())
-    })?;
-    let requested_reviewer = invocation
-        .session
-        .mcp_requested_reviewer(&invocation.step_context.settings)
-        .await;
-    match prepare_mcp_tool_approval(
-        &invocation.session,
-        &invocation.step_context,
+    if mcp_tool_approval_policy(&call, &metadata).is_none() {
+        return Err(FunctionCallError::RespondToModel(
+            "MCP tool call blocked by app configuration".into(),
+        ));
+    }
+    Ok(build_guardian_mcp_tool_review_request(
         &invocation.call_id,
         &mcp_invocation,
-        &McpHandler::hook_tool_name_for(advertised_tool),
-        &metadata,
-        call.config(),
-        call.permission_source(),
-        call.server_environment_id(),
-        call.server_key(),
-        policy,
-        requested_reviewer,
-    )
-    .await
-    {
-        McpToolApprovalRequirement::NotRequired | McpToolApprovalRequirement::Remembered => {
-            Ok(None)
-        }
-        McpToolApprovalRequirement::Required { action, .. } => Ok(Some(*action)),
-    }
+        Some(&metadata),
+        capture_environment_permissions(call.permission_source()),
+    ))
 }

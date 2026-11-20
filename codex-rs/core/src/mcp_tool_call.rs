@@ -2086,6 +2086,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     call_id: &str,
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
+    prompt_permissions: Option<(String, Arc<FileSystemSandboxContext>)>,
 ) -> GuardianApprovalRequest {
     GuardianApprovalRequest::McpToolCall {
         id: call_id.to_string(),
@@ -2107,7 +2108,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 open_world_hint: annotations.open_world_hint,
                 read_only_hint: annotations.read_only_hint,
             }),
-        prompt_permissions: None,
+        prompt_permissions,
     }
 }
 

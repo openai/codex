@@ -1,6 +1,8 @@
 //! Reviews bind each action to its captured target policy while reusing the reviewer context.
 
 use super::*;
+use crate::suite::scenarios::guardian_direct_mcp::recorded_mcp_items;
+use crate::suite::scenarios::guardian_direct_review::model_input;
 use codex_core::context::UserGoalUpdate;
 use codex_history::RolloutItem;
 use codex_protocol::permissions::FileSystemSpecialPath;
@@ -21,7 +23,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()> {
+async fn live_and_recorded_mcp_reviews_use_the_server_owners_denied_paths() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let workspace = TempDir::new()?;
@@ -41,6 +43,7 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
             "cwd": workspace.path(),
             "environment_id": REMOTE_ENVIRONMENT_ID,
             "default_tools_approval_mode": "prompt",
+            "required": true,
         }
     }))?;
     let test = test_codex()
@@ -77,13 +80,12 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
     )
     .await?;
 
+    let prompt = "Call the files tool.";
+    let call = ev_function_call_with_namespace("call", "mcp__files", "echo", r#"{"message":"hi"}"#);
     let (release, gate) = tokio::sync::oneshot::channel();
     let (parent, _) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
         gate: Some(gate),
-        body: sse(vec![
-            ev_function_call_with_namespace("call", "mcp__files", "echo", r#"{"message":"hi"}"#),
-            ev_completed("parent"),
-        ]),
+        body: sse(vec![call, ev_completed("parent")]),
     }]])
     .await;
     Mock::given(method("POST"))
@@ -104,6 +106,10 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
                 ev_completed("review"),
             ]),
             sse(vec![ev_completed("done")]),
+            sse(vec![
+                ev_assistant_message("recorded-review", r#"{"outcome":"deny"}"#),
+                ev_completed("recorded-review"),
+            ]),
         ],
     )
     .await;
@@ -118,17 +124,29 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
     );
     // The step didn't see the deny rule. MCP receives it before preparing the call.
-    tokio::try_join!(test.submit_text_turn("Call the files tool."), async {
+    tokio::try_join!(test.submit_text_turn(prompt), async {
         parent.wait_for_request_count(/*count*/ 1).await;
         test.codex.environment_ready(&owner, owner_config).await?;
         release.send(()).expect("let the model call the tool");
         Ok(())
     })?;
-    let review = responses
-        .requests()
-        .into_iter()
-        .find(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
-        .context("expected a Guardian review")?;
+    let options = test.start_thread_options().await;
+    let recorded = test.thread_manager.start_thread(options).await?;
+    let items = recorded_mcp_items(&test.codex, prompt).await?;
+    recorded.thread.inject_response_items(items).await?;
+    recorded
+        .thread
+        .guardian_review(&tokio_util::sync::CancellationToken::new())
+        .await?;
+    let requests = responses.requests();
+    let [review, _, replay] = requests.as_slice() else {
+        anyhow::bail!("expected live review, parent completion, and recorded review");
+    };
+    assert_eq!(
+        model_input(replay, recorded.thread_id)?,
+        model_input(review, test.session_configured.thread_id)?
+    );
+    recorded.thread.shutdown_and_wait().await?;
     let owner_label = format!("permission profile for environment {REMOTE_ENVIRONMENT_ID:?}");
     let permissions = review
         .message_input_texts("user")

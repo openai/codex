@@ -783,8 +783,9 @@ async fn inline_review_delegate_runs_strict_guardian_assessment() -> Result<()> 
 }
 
 #[tokio::test]
-async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Result<()> {
-    let rationale = "Guardian approved the recorded file write.";
+async fn guardian_review_assesses_allowlisted_calls_and_reuses_private_history_per_parent()
+-> Result<()> {
+    let rationale = "Guardian approved the recorded listing.";
     let verdict = assistant_response(
         &json!({
             "outcome": "allow",
@@ -798,6 +799,12 @@ async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Re
     let requests = responses::mount_sse_sequence(&server, vec![verdict; 3]).await;
     let codex_home = TempDir::new()?;
     sync_config(&server.uri()).write(codex_home.path())?;
+    let rules = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules)?;
+    std::fs::write(
+        rules.join("default.rules"),
+        r#"prefix_rule(pattern=["git", "ls-files"], decision="allow")"#,
+    )?;
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
@@ -816,7 +823,7 @@ async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Re
             json!({
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "Create the requested file."}],
+                "content": [{"type": "input_text", "text": "List tracked files."}],
             })
         };
         let items = vec![
@@ -825,7 +832,7 @@ async fn guardian_review_reuses_private_recorded_call_history_per_parent() -> Re
                 "type": "function_call",
                 "name": "exec_command",
                 "call_id": call_id,
-                "arguments": r#"{"cmd":"echo reviewed > guardian-direct.txt","sandbox_permissions":"require_escalated","justification":"Create the requested file."}"#,
+                "arguments": r#"{"cmd":"git ls-files"}"#,
             }),
         ];
         let _: ThreadInjectItemsResponse = app

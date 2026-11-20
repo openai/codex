@@ -2322,7 +2322,12 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
         Some("Open a page"),
     );
     metadata.connected_account_email = Some("owner@example.com".to_string());
-    let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
+    let request = build_guardian_mcp_tool_review_request(
+        "call-1",
+        &invocation,
+        Some(&metadata),
+        /*prompt_permissions*/ None,
+    );
 
     assert_eq!(
         request,
@@ -2369,7 +2374,12 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         openai_file_input_optional_fields: None,
     };
 
-    let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
+    let request = build_guardian_mcp_tool_review_request(
+        "call-1",
+        &invocation,
+        Some(&metadata),
+        /*prompt_permissions*/ None,
+    );
 
     assert_eq!(
         request,
@@ -2409,7 +2419,12 @@ fn guardian_mcp_review_request_ignores_untrusted_connected_account_email() {
     );
     metadata.connected_account_email = Some("spoofed@example.com".to_string());
 
-    let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
+    let request = build_guardian_mcp_tool_review_request(
+        "call-1",
+        &invocation,
+        Some(&metadata),
+        /*prompt_permissions*/ None,
+    );
 
     assert_eq!(
         request,

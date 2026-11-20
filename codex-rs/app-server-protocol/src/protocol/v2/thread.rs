@@ -1863,8 +1863,7 @@ pub struct ThreadGuardianReviewParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadGuardianReviewResponse {
     pub call_id: String,
-    /// Null when current policy or a remembered approval skips review.
-    pub assessment: Option<ThreadGuardianAssessment>,
+    pub assessment: ThreadGuardianAssessment,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
