@@ -3256,9 +3256,16 @@ async fn try_run_sampling_request(
             if resampling.update_usage_boundary {
                 sess.state.lock().await.history.reset_last_usage_boundary();
             }
+            // A completed final retained during the drain can defer queue-only mail.
+            // Recheck that boundary instead of reopening it solely because we interrupted.
+            let mailbox_preempted = *draining_for_mailbox
+                && sess
+                    .input_queue
+                    .should_preempt_sampling_for_mail(&sess.active_turn, &turn_context.sub_id)
+                    .await;
             break Ok(SamplingRequestResult {
-                needs_follow_up,
-                mailbox_preempted: *draining_for_mailbox,
+                needs_follow_up: needs_follow_up || mailbox_preempted,
+                mailbox_preempted,
                 last_agent_message,
             });
         }
@@ -3581,7 +3588,6 @@ async fn try_run_sampling_request(
                     }
                     // Keep the response ID and terminal decision. Later tools receive a denial.
                     *draining_for_mailbox = true;
-                    needs_follow_up = true;
                     continue;
                 }
             }
