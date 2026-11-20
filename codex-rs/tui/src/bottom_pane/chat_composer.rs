@@ -7907,14 +7907,18 @@ mod tests {
                                 title: "Review database migration".to_string(),
                                 label_style: crate::thread_label::ThreadLabelStyle::Cloud,
                                 cwd: "/workspace/project".to_string(),
-                                snippet: "database migration".to_string(),
                             },
                             crate::task_mentions::TaskMention {
                                 thread_id: "task-456".to_string(),
                                 title: "migration".to_string(),
                                 label_style: crate::thread_label::ThreadLabelStyle::Plain,
                                 cwd: "/another/project".to_string(),
-                                snippet: "migration".to_string(),
+                            },
+                            crate::task_mentions::TaskMention {
+                                thread_id: "task-789".to_string(),
+                                title: "Unrelated task".to_string(),
+                                label_style: crate::thread_label::ThreadLabelStyle::Plain,
+                                cwd: "/workspace/migration".to_string(),
                             },
                         ],
                     );
@@ -7947,7 +7951,6 @@ mod tests {
             title: format!("task\n\t{}é{}", "a".repeat(154), "é".repeat(200)),
             label_style: crate::thread_label::ThreadLabelStyle::Plain,
             cwd: "/workspace/project".to_string(),
-            snippet: String::new(),
         };
         composer.on_task_search_result("task", vec![task.clone()]);
         composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

@@ -49,11 +49,7 @@ pub(crate) fn build_search_catalog(
         Candidate {
             display_name: title.clone(),
             description: (!task.cwd.is_empty()).then(|| task.cwd.clone()),
-            search_terms: vec![
-                title.clone(),
-                task.cwd.chars().take(MAX_TASK_TITLE_CHARS).collect(),
-                task.snippet.chars().take(MAX_TASK_TITLE_CHARS).collect(),
-            ],
+            search_terms: Vec::new(),
             mention_type: MentionType::Task,
             label_style: task.label_style,
             selection: Selection::Tool {
