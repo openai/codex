@@ -6,6 +6,7 @@ use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadHistoryTurnMetadata;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemEntry;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -223,6 +224,10 @@ impl ThreadState {
 
     pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {
         self.current_turn_history.active_turn_snapshot()
+    }
+
+    pub(crate) fn release_saved_mcp_results(&mut self, entries: &[ThreadItemEntry]) {
+        self.current_turn_history.release_saved_mcp_results(entries);
     }
 
     /// Returns the same turn ID as `active_turn_snapshot` without cloning its items.

@@ -1270,6 +1270,7 @@ impl ThreadRequestProcessor {
     fn listener_task_context(&self) -> ListenerTaskContext {
         ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
+            thread_store: Arc::clone(&self.thread_store),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
@@ -1400,16 +1401,7 @@ impl ThreadRequestProcessor {
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
-        let listener_task_context = ListenerTaskContext {
-            thread_manager: Arc::clone(&self.thread_manager),
-            thread_state_manager: self.thread_state_manager.clone(),
-            outgoing: Arc::clone(&self.outgoing),
-            pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            thread_watch_manager: self.thread_watch_manager.clone(),
-            codex_home: self.config.codex_home.to_path_buf(),
-            skills_watcher: Arc::clone(&self.skills_watcher),
-            turn_cost_worker: self.turn_cost_worker.clone(),
-        };
+        let listener_task_context = self.listener_task_context();
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
         let thread_store = Arc::clone(&self.thread_store);

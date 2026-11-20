@@ -5,6 +5,7 @@ use crate::bespoke_event_handling::complete_command_execution_item;
 use crate::extensions::send_thread_warning;
 use crate::thread_state::ListenerStateCandidate;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_core::ThreadEvictionOutcome;
@@ -27,6 +28,7 @@ mod replay_tests;
 #[derive(Clone)]
 pub(super) struct ListenerTaskContext {
     pub(super) thread_manager: Arc<ThreadManager>,
+    pub(super) thread_store: Arc<dyn ThreadStore>,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) pending_thread_unloads: PendingThreadUnloads,
@@ -503,6 +505,7 @@ async fn start_listener(
     let ListenerTaskContext {
         outgoing,
         thread_manager,
+        thread_store,
         thread_state_manager,
         pending_thread_unloads,
         thread_watch_manager,
@@ -511,8 +514,13 @@ async fn start_listener(
         ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
+    let verify_mcp_results = config_snapshot.history_mode
+        == codex_protocol::protocol::ThreadHistoryMode::Paginated
+        && conversation.rollout_path().is_some();
     tokio::spawn(async move {
         let mut replays = JoinSet::new();
+        let mut mcp_turn_id = String::new();
+        let mut mcp_result_ids = Vec::new();
         let shutdown_complete = loop {
             tokio::select! {
                 biased;
@@ -600,6 +608,23 @@ async fn start_listener(
                         ).await;
                     }
                     let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+                    let batch = if verify_mcp_results
+                        && let EventMsg::McpToolCallEnd(call) = &event.msg
+                        && call.is_success() && !call.turn_id.is_empty()
+                    {
+                        if mcp_turn_id != call.turn_id {
+                            mcp_turn_id.clone_from(&call.turn_id);
+                            mcp_result_ids.clear();
+                        }
+                        mcp_result_ids.push(call.call_id.clone());
+                        (mcp_result_ids.len() == THREAD_ITEMS_MAX_LIMIT).then(|| ThreadItemsReadParams {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: mcp_turn_id.clone(),
+                            item_ids: std::mem::take(&mut mcp_result_ids),
+                        })
+                    } else {
+                        None
+                    };
                     apply_bespoke_event_handling(
                         event,
                         conversation_id,
@@ -612,6 +637,15 @@ async fn start_listener(
                     .await;
                     if is_shutdown_complete {
                         break true;
+                    }
+                    // Storage may hold only a preview. A failed lookup leaves the live results intact.
+                    if let Some(batch) = batch
+                        && let Ok(saved) = ThreadRequestProcessor::read_thread_items(thread_store.as_ref(), batch).await
+                    {
+                        let mut state = thread_state.lock().await;
+                        if state.listener_generation == listener_generation {
+                            state.release_saved_mcp_results(&saved.data);
+                        }
                     }
                 }
                 idle_guard = async {
@@ -1134,7 +1168,7 @@ async fn handle_pending_thread_resume_request(
                 .iter_mut()
                 .flat_map(|page| &mut page.data),
         );
-        if let Err(error) = restore_evicted_agent_text(store, conversation_id, turn, stored).await {
+        if let Err(error) = restore_evicted_payloads(store, conversation_id, turn, stored).await {
             outgoing.send_error(pending.request_id, error).await;
             return;
         }
@@ -1442,6 +1476,16 @@ pub(super) async fn resolve_pending_server_request(
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct HistoryItemId<'a>(Cow<'a, str>);
 
+pub(super) async fn restore_evicted_payloads<'a>(
+    store: &dyn ThreadStore,
+    thread_id: ThreadId,
+    turn: &mut Turn,
+    stored: impl Iterator<Item = &'a mut Turn>,
+) -> Result<(), JSONRPCErrorError> {
+    restore_evicted_mcp_results(store, thread_id, turn).await?;
+    restore_evicted_agent_text(store, thread_id, turn, stored).await
+}
+
 async fn restore_evicted_agent_text<'a>(
     store: &dyn ThreadStore,
     thread_id: ThreadId,
@@ -1471,12 +1515,7 @@ async fn restore_evicted_agent_text<'a>(
     // The prepared page can predate some of the listener's items. Fetch only those gaps.
     let ids: Vec<_> = missing.keys().cloned().collect();
     for chunk in ids.chunks(THREAD_ITEMS_MAX_LIMIT) {
-        let params = ThreadItemsReadParams {
-            thread_id: thread_id.to_string(),
-            turn_id: turn.id.clone(),
-            item_ids: chunk.iter().map(|id| id.0.to_string()).collect(),
-        };
-        let saved = ThreadRequestProcessor::read_thread_items(store, params).await?;
+        let saved = read_evicted_items(store, thread_id, &turn.id, chunk).await?;
         fill_agent_text(&mut missing, saved.data.into_iter().map(|entry| entry.item));
     }
     if missing.is_empty() {
@@ -1501,6 +1540,65 @@ fn fill_agent_text(
             *slot = text;
         }
     }
+}
+
+async fn restore_evicted_mcp_results(
+    store: &dyn ThreadStore,
+    thread_id: ThreadId,
+    turn: &mut Turn,
+) -> Result<(), JSONRPCErrorError> {
+    let mut missing: HashMap<_, _> = turn
+        .items
+        .iter_mut()
+        .filter_map(|item| match &mut item.payload {
+            ThreadItemPayload::McpToolCall {
+                id,
+                status: McpToolCallStatus::Completed,
+                result,
+                ..
+            } if result.is_none() => Some((HistoryItemId(Cow::Borrowed(id)), result)),
+            _ => None,
+        })
+        .collect();
+    // A prepared page may contain a stale result for the same call ID.
+    let ids: Vec<_> = missing.keys().cloned().collect();
+    for chunk in ids.chunks(THREAD_ITEMS_MAX_LIMIT) {
+        let saved = read_evicted_items(store, thread_id, &turn.id, chunk).await?;
+        for entry in saved.data {
+            if let ThreadItemPayload::McpToolCall {
+                id,
+                status: McpToolCallStatus::Completed,
+                result: Some(result),
+                ..
+            } = entry.item.payload
+                && let Some(slot) = missing.remove(&HistoryItemId(Cow::Owned(id)))
+            {
+                *slot = Some(result);
+            }
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(internal_error(format!(
+            "saved history is missing completed MCP results for turn {}",
+            turn.id
+        )))
+    }
+}
+
+async fn read_evicted_items(
+    store: &dyn ThreadStore,
+    thread_id: ThreadId,
+    turn_id: &str,
+    ids: &[HistoryItemId<'_>],
+) -> Result<codex_app_server_protocol::ThreadItemsReadResponse, JSONRPCErrorError> {
+    let params = ThreadItemsReadParams {
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_owned(),
+        item_ids: ids.iter().map(|id| id.0.to_string()).collect(),
+    };
+    ThreadRequestProcessor::read_thread_items(store, params).await
 }
 
 pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {

@@ -18,6 +18,7 @@ use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
 use crate::protocol::v2::ThreadItem;
+use crate::protocol::v2::ThreadItemEntry;
 use crate::protocol::v2::ThreadItemPayload;
 use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError as V2TurnError;
@@ -426,6 +427,32 @@ impl ThreadHistoryBuilder {
             {
                 // A read by ID could still find the prior version of a corrected item.
                 turn.evictable_agent_item = None;
+            }
+        }
+    }
+
+    /// Drops only completed MCP results that the active turn can recover in full by ID.
+    pub fn release_saved_mcp_results(&mut self, entries: &[ThreadItemEntry]) {
+        let Some(turn) = self.current_turn.as_mut() else {
+            return;
+        };
+        for entry in entries {
+            if entry.turn_id == turn.id
+                && let ThreadItemPayload::McpToolCall {
+                    id,
+                    status: McpToolCallStatus::Completed,
+                    result: Some(saved),
+                    ..
+                } = &entry.item.payload
+                && let Some(index) = turn.item_index.position(&turn.items, id)
+                && let ThreadItemPayload::McpToolCall {
+                    status: McpToolCallStatus::Completed,
+                    result,
+                    ..
+                } = &mut turn.items[index]
+                && result.as_ref() == Some(saved)
+            {
+                *result = None;
             }
         }
     }
@@ -1893,11 +1920,7 @@ impl TurnItemIndex {
         items.push(item);
     }
 
-    fn upsert<'a>(
-        &mut self,
-        items: &'a mut Vec<ThreadItemPayload>,
-        item: ThreadItemPayload,
-    ) -> &'a ThreadItemPayload {
+    fn position(&mut self, items: &[ThreadItemPayload], id: &str) -> Option<usize> {
         if self.positions.is_none() && items.len() >= TURN_ITEM_INDEX_THRESHOLD {
             let mut positions = HashMap::with_capacity(items.len());
             for (index, existing) in items.iter().enumerate() {
@@ -1906,11 +1929,18 @@ impl TurnItemIndex {
             self.positions = Some(positions);
         }
 
-        let existing_index = match &self.positions {
-            Some(positions) => positions.get(item.id()).copied(),
-            None => items.iter().position(|existing| existing.id() == item.id()),
-        };
-        if let Some(index) = existing_index {
+        match &self.positions {
+            Some(positions) => positions.get(id).copied(),
+            None => items.iter().position(|existing| existing.id() == id),
+        }
+    }
+
+    fn upsert<'a>(
+        &mut self,
+        items: &'a mut Vec<ThreadItemPayload>,
+        item: ThreadItemPayload,
+    ) -> &'a ThreadItemPayload {
+        if let Some(index) = self.position(items, item.id()) {
             items[index] = item;
             &items[index]
         } else {

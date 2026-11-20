@@ -690,6 +690,7 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
         .await;
     let turn_processor = TurnRequestProcessor::new(
         test.thread_manager.clone(),
+        test.thread_store.clone(),
         processor.outgoing.clone(),
         AnalyticsEventsClient::disabled(),
         processor.config.clone(),

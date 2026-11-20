@@ -580,6 +580,7 @@ impl MessageProcessor {
         );
         let turn_processor = TurnRequestProcessor::new(
             Arc::clone(&thread_manager),
+            Arc::clone(&thread_store),
             outgoing.clone(),
             analytics_events_client.clone(),
             Arc::clone(&config),
