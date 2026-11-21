@@ -103,6 +103,14 @@ pub(super) fn parse(
     Ok(parsed)
 }
 
+pub(super) fn parse_settings(
+    args: &str,
+    command: crate::slash_command::SlashCommand,
+) -> Result<ParsedCommandArgs, String> {
+    let settings = crate::slash_command_settings::for_command(command);
+    parse(args, settings.values, settings.switches, settings.booleans)
+}
+
 fn parse_named_argument(
     word: &str,
     words: &mut std::iter::Peekable<std::vec::IntoIter<String>>,

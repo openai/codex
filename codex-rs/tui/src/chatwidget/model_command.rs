@@ -23,7 +23,8 @@ struct ModelCommand {
 }
 
 fn parse_model_command_args(args: &str) -> Result<ModelCommandArgs, String> {
-    let parsed = slash_command_args::parse(args, &["--reasoning", "--speed"], &[], &[])?;
+    let parsed =
+        slash_command_args::parse_settings(args, crate::slash_command::SlashCommand::Model)?;
     if let Some(unexpected) = parsed.positionals.get(1) {
         return Err(format!(
             "Unexpected argument '{unexpected}'. Use '--reasoning=<level>' or '--speed=<tier>'."

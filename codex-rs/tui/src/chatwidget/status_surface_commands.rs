@@ -74,7 +74,7 @@ fn parse_terminal_title_command(
     args: &str,
     preview_data: &StatusSurfacePreviewData,
 ) -> Result<Vec<TerminalTitleItem>, String> {
-    let args = slash_command_args::parse(args, &[], &["--clear"], &[])?;
+    let args = slash_command_args::parse_settings(args, SlashCommand::Title)?;
     let items = args
         .positionals
         .iter()
@@ -91,7 +91,7 @@ fn parse_status_line_command(
     args: &str,
     preview_data: &StatusSurfacePreviewData,
 ) -> Result<StatusLineCommand, String> {
-    let args = slash_command_args::parse(args, &[], &["--clear"], &["colors"])?;
+    let args = slash_command_args::parse_settings(args, SlashCommand::Statusline)?;
     let items = args
         .positionals
         .iter()

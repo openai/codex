@@ -111,6 +111,119 @@ fn slash_argument_respects_catalog_and_unavailable_thread() {
     assert_eq!(composer.draft.textarea.text(), "/raw on");
 }
 
+fn set_named_draft(composer: &mut ChatComposer, text: &str, cursor: usize) {
+    composer.draft.textarea.set_text_clearing_elements(text);
+    composer.draft.textarea.set_cursor(/*pos*/ cursor);
+    composer.sync_popups();
+}
+
+#[test]
+fn named_settings_complete_names_and_both_value_forms() {
+    let (mut composer, _rx) = super::super::tests::new_test_composer();
+    for (draft, expected) in [
+        (
+            "/permissions p --reviewer=a",
+            "/permissions p --reviewer=auto_review",
+        ),
+        (
+            "/permissions p --reviewer a",
+            "/permissions p --reviewer auto_review",
+        ),
+        ("/statusline model --no-c", "/statusline model --no-colors"),
+        ("/model\u{a0}--sp", "/model\u{a0}--speed"),
+        ("/model\n--speed=f", "/model\n--speed=flex"),
+        ("/model --speed\n  f", "/model --speed\n  flex"),
+        ("/model\n\u{a0}--sp", "/model\n\u{a0}--speed"),
+        ("/mcp login 'a b' --e", "/mcp login 'a b' --environment"),
+    ] {
+        set_named_draft(&mut composer, draft, /*cursor*/ draft.len());
+        composer.handle_key_event(KeyCode::Tab.into());
+        assert_eq!(composer.draft.textarea.text(), expected);
+    }
+}
+
+#[test]
+fn named_setting_completion_preserves_tail_and_respects_shell_context() {
+    let (mut composer, _rx) = super::super::tests::new_test_composer();
+    let draft = "/mcp login --enX=\"foo bar\" srv";
+    set_named_draft(&mut composer, draft, "/mcp login --en".len());
+    composer.handle_key_event(KeyCode::Tab.into());
+    assert_eq!(
+        composer.draft.textarea.text(),
+        "/mcp login --environment=\"foo bar\" srv"
+    );
+    set_named_draft(
+        &mut composer,
+        "/model --speed=f\u{a0}x",
+        "/model --speed=f".len(),
+    );
+    composer.handle_key_event(KeyCode::Tab.into());
+    assert_eq!(composer.draft.textarea.text(), "/model --speed=flex");
+    let cursor = "/model --spe".len();
+    set_named_draft(&mut composer, "/model --spe --reasoning=high", cursor);
+    for (draft, cursor) in [
+        ("/model --spe --speed=flex", cursor),
+        ("/model --speed  flex", "/model --speed ".len()),
+        ("/model --speed= flex", "/model --speed=".len()),
+        ("/model --speed # comment\nflex", "/model --speed ".len()),
+        ("/title --cl -- model", "/title --cl".len()),
+        ("/model --spe\n--speed=flex", cursor),
+        ("/statusline --no-c=true", "/statusline --no-c".len()),
+    ] {
+        set_named_draft(&mut composer, draft, cursor);
+        assert!(!composer.popup_active(), "{draft}");
+    }
+    let draft = "/model --spe --rea";
+    set_named_draft(&mut composer, draft, cursor);
+    composer.handle_key_event(KeyCode::Esc.into());
+    set_named_draft(&mut composer, draft, /*cursor*/ draft.len());
+    assert!(matches!(composer.popups.active, ActivePopup::Argument(_)));
+
+    for draft in [
+        "/raw\no",
+        "/model --speed=flex\n--spe",
+        "/model -- --spe",
+        "/model 'quoted --spe",
+        "/model escaped\\ --spe",
+        "/model --speed=flex --speed=s",
+        "/model --speed=flex --speed s",
+        "/statusline --colors --no-c",
+        "/mcp verbose --env",
+        "/mcp 'login' server --env",
+        "/model __codex_completion_probe__ # --spe",
+    ] {
+        set_named_draft(&mut composer, draft, /*cursor*/ draft.len());
+        assert!(!composer.popup_active(), "{draft}");
+    }
+
+    set_named_draft(
+        &mut composer,
+        "/statusline -- model",
+        "/statusline --".len(),
+    );
+    assert_eq!(
+        composer.handle_key_event(KeyCode::Tab.into()).0,
+        InputResult::CommandWithArgs(SlashCommand::Statusline, "-- model".to_owned(), Vec::new())
+    );
+}
+
+#[test]
+fn named_setting_popup_snapshot() {
+    let (mut composer, _rx) = super::super::tests::new_test_composer();
+    let draft = "/model --";
+    set_named_draft(&mut composer, draft, /*cursor*/ draft.len());
+    let mut terminal = Terminal::new(TestBackend::new(/*width*/ 16, /*height*/ 2)).unwrap();
+    terminal
+        .draw(|frame| {
+            let ActivePopup::Argument(popup) = &composer.popups.active else {
+                unreachable!()
+            };
+            popup.render_ref(frame.area(), frame.buffer_mut());
+        })
+        .unwrap();
+    insta::assert_snapshot!("named_setting_popup", terminal.backend());
+}
+
 #[test]
 fn slash_argument_acceptance_revalidates_the_draft() {
     let (mut composer, _rx) = super::super::tests::new_test_composer();

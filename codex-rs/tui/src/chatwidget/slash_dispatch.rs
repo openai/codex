@@ -889,11 +889,9 @@ impl ChatWidget {
                         let (name, environment_id) = if name.split_whitespace().any(|word| {
                             word == "--environment" || word.starts_with("--environment=")
                         }) {
-                            let args = match super::slash_command_args::parse(
+                            let args = match super::slash_command_args::parse_settings(
                                 name,
-                                &["--environment"],
-                                &[],
-                                &[],
+                                SlashCommand::Mcp,
                             ) {
                                 Ok(args) => args,
                                 Err(error) => {

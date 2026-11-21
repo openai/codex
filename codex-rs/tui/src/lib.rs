@@ -223,6 +223,7 @@ mod sidebar_image;
 mod sidebar_tab_strip;
 mod skills_helpers;
 mod slash_command;
+mod slash_command_settings;
 mod startup_draft;
 mod startup_error;
 mod startup_hooks_review;

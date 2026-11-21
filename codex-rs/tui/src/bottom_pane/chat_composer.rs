@@ -122,14 +122,8 @@
 //! keeps prompt-history search; explicitly configured keybindings retain precedence.
 //! Vim queries stay draft-local.
 //!
-//! Slash commands are staged for local history instead of being recorded immediately.
-//! Finite first arguments have a separate completion menu: Tab inserts the selected argument,
-//! while Enter submits the literal draft. Mentions retain priority over argument suggestions.
-//! Argument suggestions retain the latest restricted routing mode across redraws and evaluate
-//! completed arguments against parent-owned policy during ordinary input. Unavailable-thread
-//! recovery keeps its existing exemption from that policy.
-//! Command recall is a two-phase handoff: stage the submitted slash text here, then record it after
-//! `ChatWidget` dispatches the command.
+//! Slash history is staged here and recorded after `ChatWidget` dispatches the command.
+//! [`slash_argument`] handles positional and named completions, popup keys, and restricted routing.
 //!
 //! # Question Draft Recovery
 //!
