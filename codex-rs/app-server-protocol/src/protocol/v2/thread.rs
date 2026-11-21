@@ -137,6 +137,11 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.daybreakEnabled")]
     #[ts(optional = nullable)]
     pub daybreak_enabled: Option<bool>,
+    /// False opts this new root out of Daybreak propagation unless managed policy
+    /// requires it. Omitted, null, or true uses the configured enrollment rule.
+    #[experimental("thread/start.daybreakProgramPropagationEnrolled")]
+    #[ts(optional = nullable)]
+    pub daybreak_program_propagation_enrolled: Option<bool>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is

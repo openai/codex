@@ -1347,6 +1347,7 @@ impl ThreadRequestProcessor {
             thread_source,
             project_id,
             daybreak_enabled,
+            daybreak_program_propagation_enrolled,
             environments,
         } = params;
         if matches!(
@@ -1426,6 +1427,7 @@ impl ThreadRequestProcessor {
                 thread_source.map(Into::into),
                 project_id,
                 daybreak_enabled,
+                daybreak_program_propagation_enrolled,
                 environment_requests,
                 service_name,
                 allow_provider_model_fallback,
@@ -1508,6 +1510,7 @@ impl ThreadRequestProcessor {
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         project_id: Option<String>,
         daybreak_enabled: Option<bool>,
+        daybreak_program_propagation_enrolled: Option<bool>,
         environment_requests: Option<Vec<TurnEnvironmentRequest>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
@@ -1689,6 +1692,8 @@ impl ThreadRequestProcessor {
                 parent_trace: request_trace,
                 environments: Some(environment_requests),
                 thread_extension_init,
+                prevent_daybreak_program_propagation_enrollment:
+                    daybreak_program_propagation_enrolled == Some(false),
                 client_mcp_extensions,
                 ..start_options
             })
@@ -1699,10 +1704,7 @@ impl ThreadRequestProcessor {
             ))
             .await;
         let NewThread {
-            thread_id,
-            thread,
-            session_configured,
-            ..
+            thread_id, thread, ..
         } = match new_thread {
             Ok(new_thread) => new_thread,
             Err(err) => {
@@ -1742,13 +1744,7 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
-        let mut thread = build_thread_from_snapshot(
-            thread_id,
-            session_configured.session_id.to_string(),
-            thread.multi_agent_version(),
-            &config_snapshot,
-            session_configured.rollout_path.clone(),
-        )?;
+        let mut thread = build_thread_from_loaded_snapshot(&thread, &config_snapshot)?;
         thread.project_id = project_id.clone();
         thread.daybreak_enabled = daybreak_enabled;
 
@@ -2235,7 +2231,7 @@ impl ThreadRequestProcessor {
         if let Ok(loaded_thread) = self.thread_manager.get_thread(thread_uuid).await {
             thread.session_id = loaded_thread.startup_metadata().session_id.to_string();
             let config_snapshot = loaded_thread.config_snapshot().await;
-            apply_live_thread_settings(&mut thread, &config_snapshot);
+            apply_live_thread_settings(&mut thread, &loaded_thread, &config_snapshot);
         }
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
@@ -2293,7 +2289,7 @@ impl ThreadRequestProcessor {
 
         if let Ok(loaded_thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = loaded_thread.config_snapshot().await;
-            apply_live_thread_settings(&mut thread, &config_snapshot);
+            apply_live_thread_settings(&mut thread, &loaded_thread, &config_snapshot);
         }
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -3410,7 +3406,7 @@ impl ThreadRequestProcessor {
                 loaded_thread.multi_agent_version(),
                 &config_snapshot.session_source,
             ));
-            apply_live_thread_settings(&mut thread, &config_snapshot);
+            apply_live_thread_settings(&mut thread, loaded_thread, &config_snapshot);
             if !include_turns {
                 if let Some(title) = display_thread_title(
                     thread.history_mode,
@@ -3423,7 +3419,7 @@ impl ThreadRequestProcessor {
             }
             thread
         } else {
-            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, loaded_thread)
+            build_thread_from_loaded_snapshot(loaded_thread, &config_snapshot)
                 .map_err(ThreadReadViewError::JsonRpc)?
         };
         self.attach_thread_name(thread_id, &mut thread).await;
@@ -5028,7 +5024,7 @@ impl ThreadRequestProcessor {
             )?;
             thread_summary.session_id = existing_thread.startup_metadata().session_id.to_string();
             thread_summary.thread_source = config_snapshot.thread_source.clone().map(Into::into);
-            apply_live_thread_settings(&mut thread_summary, &config_snapshot);
+            apply_live_thread_settings(&mut thread_summary, &existing_thread, &config_snapshot);
             thread_summary.can_accept_direct_input = Some(can_accept_direct_input(
                 existing_thread.multi_agent_version(),
                 &config_snapshot.session_source,
@@ -5324,16 +5320,16 @@ impl ThreadRequestProcessor {
     async fn load_thread_from_resume_source_or_send_internal(
         &self,
         thread_id: ThreadId,
-        thread: &CodexThread,
+        loaded_thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
         resume_source_thread: Option<StoredThread>,
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
-        let config_snapshot = thread.config_snapshot().await;
-        let session_id = thread.startup_metadata().session_id.to_string();
+        let config_snapshot = loaded_thread.config_snapshot().await;
+        let session_id = loaded_thread.startup_metadata().session_id.to_string();
         let can_accept_direct_input = can_accept_direct_input(
-            thread.multi_agent_version(),
+            loaded_thread.multi_agent_version(),
             &config_snapshot.session_source,
         );
         let thread = match thread_history {
@@ -5393,14 +5389,8 @@ impl ThreadRequestProcessor {
                 }
             }
             InitialHistory::Forked(items) => {
-                let mut thread = build_thread_from_snapshot(
-                    thread_id,
-                    session_id.clone(),
-                    thread.multi_agent_version(),
-                    &config_snapshot,
-                    Some(rollout_path.into()),
-                )
-                .map_err(|error| error.message)?;
+                let mut thread = build_thread_from_loaded_snapshot(loaded_thread, &config_snapshot)
+                    .map_err(|error| error.message)?;
                 thread.preview = preview_from_rollout_items(items);
                 Ok(thread)
             }
@@ -5409,7 +5399,7 @@ impl ThreadRequestProcessor {
             )),
         };
         let mut thread = thread?;
-        apply_live_thread_settings(&mut thread, &config_snapshot);
+        apply_live_thread_settings(&mut thread, loaded_thread, &config_snapshot);
         thread.can_accept_direct_input = Some(can_accept_direct_input);
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
@@ -6049,13 +6039,7 @@ impl ThreadRequestProcessor {
             });
             (thread, token_usage_turn_id)
         } else {
-            let mut thread = build_thread_from_snapshot(
-                thread_id,
-                session_configured.session_id.to_string(),
-                forked_thread.multi_agent_version(),
-                &config_snapshot,
-                /*path*/ None,
-            )?;
+            let mut thread = build_thread_from_loaded_snapshot(&forked_thread, &config_snapshot)?;
             thread.preview = inherited_preview;
             thread.forked_from_id = Some(source_thread_id.to_string());
             thread.turns = ephemeral_turns;
@@ -6081,7 +6065,7 @@ impl ThreadRequestProcessor {
         ));
         thread.session_id = session_configured.session_id.to_string();
         thread.thread_source = config_snapshot.thread_source.clone().map(Into::into);
-        apply_live_thread_settings(&mut thread, &config_snapshot);
+        apply_live_thread_settings(&mut thread, &forked_thread, &config_snapshot);
         if thread.path.is_none() {
             thread.project_id = inherited_project_id.clone();
         }
@@ -6982,6 +6966,7 @@ fn thread_from_stored_thread(
         git_info,
         name: thread.name,
         daybreak_enabled: thread.daybreak_enabled,
+        daybreak_program_propagation_enrolled: None,
         turns: Vec::new(),
     };
     Ok((thread, history))
@@ -7121,16 +7106,14 @@ fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
         .unwrap_or_default()
 }
 
-fn build_thread_from_snapshot(
-    thread_id: ThreadId,
-    session_id: String,
-    multi_agent_version: Option<codex_protocol::protocol::MultiAgentVersion>,
+fn build_thread_from_loaded_snapshot(
+    loaded_thread: &CodexThread,
     config_snapshot: &ThreadConfigSnapshot,
-    path: Option<PathBuf>,
 ) -> Result<Thread, JSONRPCErrorError> {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let metadata = loaded_thread.startup_metadata();
     Ok(Thread {
-        id: thread_id.to_string(),
+        id: metadata.thread_id.to_string(),
         environments: Some(
             config_snapshot
                 .environment_selections()
@@ -7139,7 +7122,7 @@ fn build_thread_from_snapshot(
                 .collect(),
         ),
         extra: None,
-        session_id,
+        session_id: metadata.session_id.to_string(),
         forked_from_id: None,
         attached_to_thread_id: None,
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
@@ -7156,7 +7139,7 @@ fn build_thread_from_snapshot(
         updated_at: now,
         recency_at: Some(now),
         status: ThreadStatus::NotLoaded,
-        path,
+        path: loaded_thread.rollout_path(),
         cwd: thread_cwd_for_api(config_snapshot.cwd())?,
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         originator: (!config_snapshot.originator.is_empty())
@@ -7165,13 +7148,16 @@ fn build_thread_from_snapshot(
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         can_accept_direct_input: Some(can_accept_direct_input(
-            multi_agent_version,
+            loaded_thread.multi_agent_version(),
             &config_snapshot.session_source,
         )),
         thread_source: config_snapshot.thread_source.clone().map(Into::into),
         git_info: None,
         name: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: Some(
+            loaded_thread.daybreak_program_propagation_enrolled(),
+        ),
         turns: Vec::new(),
     })
 }
@@ -7202,20 +7188,6 @@ fn paginate_background_terminals(
     let end = start.saturating_add(effective_limit).min(terminals.len());
     let next_cursor = (end < terminals.len()).then(|| terminals[end - 1].process_id.clone());
     Ok((terminals[start..end].to_vec(), next_cursor))
-}
-
-fn build_thread_from_loaded_snapshot(
-    thread_id: ThreadId,
-    config_snapshot: &ThreadConfigSnapshot,
-    loaded_thread: &CodexThread,
-) -> Result<Thread, JSONRPCErrorError> {
-    build_thread_from_snapshot(
-        thread_id,
-        loaded_thread.startup_metadata().session_id.to_string(),
-        loaded_thread.multi_agent_version(),
-        config_snapshot,
-        loaded_thread.rollout_path(),
-    )
 }
 
 #[cfg(test)]

@@ -1075,6 +1075,9 @@ impl Session {
                     Arc::default()
                 }
             });
+        let prevent_root_enrollment = thread_extension_init
+            .remove::<crate::agent::helper_daybreak::PreventRootEnrollment>()
+            .is_some();
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
@@ -1099,6 +1102,11 @@ impl Session {
             InitialHistory::New | InitialHistory::Cleared
         ) && !session_source.is_non_root_agent()
             && config.features.enabled(Feature::DaybreakProgramPropagation)
+            && (!prevent_root_enrollment
+                || config
+                    .features
+                    .required_value(Feature::DaybreakProgramPropagation)
+                    == Some(true))
         {
             thread_extension_data.insert(crate::agent::helper_daybreak::Enrollment::Root);
         }

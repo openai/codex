@@ -121,6 +121,10 @@ impl ManagedFeatures {
         self.value.get()
     }
 
+    pub(crate) fn required_value(&self, feature: Feature) -> Option<bool> {
+        self.pinned_features.get(&feature).copied()
+    }
+
     fn normalize_and_validate(&self, candidate: Features) -> ConstraintResult<Features> {
         let normalized = normalize_candidate(candidate, &self.pinned_features);
         self.value.can_set(&normalized)?;
@@ -160,8 +164,8 @@ impl ManagedFeatures {
             Feature::McpOAuthRefreshCoordination,
         ] {
             values.set_enabled(feature, next.enabled(feature));
-            if let Some(enabled) = next.pinned_features.get(&feature) {
-                refreshed.pinned_features.insert(feature, *enabled);
+            if let Some(enabled) = next.required_value(feature) {
+                refreshed.pinned_features.insert(feature, enabled);
             } else {
                 refreshed.pinned_features.remove(&feature);
             }

@@ -772,6 +772,7 @@ pub(in crate::app) fn overview_thread(
         extra: None,
         project_id: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: None,
         session_id: parent_thread_id.unwrap_or(thread_id).to_string(),
         forked_from_id: None,
         attached_to_thread_id: None,

@@ -334,6 +334,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             git_info: None,
             name: None,
             daybreak_enabled: None,
+            daybreak_program_propagation_enrolled: None,
             turns: Vec::new(),
         },
         model: "gpt-5".to_string(),
