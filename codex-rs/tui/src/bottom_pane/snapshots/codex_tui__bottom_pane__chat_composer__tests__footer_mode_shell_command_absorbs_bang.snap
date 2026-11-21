@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"! git status                                                                                        "
+"! echo $env:HTTP_PROXY                                                                              "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "

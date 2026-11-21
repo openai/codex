@@ -26,6 +26,7 @@
 //! Preset submenu hints borrow slots and reflow with the composer.
 //!
 //! Shell mode starts when input inserts a leading `!`, never when deletion exposes one.
+//! Completion menus stay closed in shell mode so shell syntax remains literal.
 //! Literal leading bangs remain ordinary messages on submission and during same-draft restoration.
 //! Vim Replace preserves the overwritten leading grapheme until Backspace removes an absorbed `!`.
 //! The plain-text preset keeps command prefixes literal, including `!`, so Enter and Tab
@@ -4071,18 +4072,12 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
             return;
         }
-        let mut mentions_v2_token = self.current_mentions_v2_token_range();
-        let mut file_token = if self.mentions_v2_enabled {
-            None
-        } else {
-            self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
-        };
-        let browsing_history = self
-            .history
-            .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
-        // When browsing input history (shell-style Up/Down recall), skip all popup
-        // synchronization so nothing steals focus from continued history navigation.
-        if browsing_history {
+        // Suspend completion during shell input and history navigation, preserving dismissals.
+        if self.draft.is_bash_mode
+            || self
+                .history
+                .should_handle_navigation(&self.current_text(), self.history_navigation_cursor())
+        {
             if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
@@ -4091,6 +4086,12 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
             return;
         }
+        let mut mentions_v2_token = self.current_mentions_v2_token_range();
+        let mut file_token = if self.mentions_v2_enabled {
+            None
+        } else {
+            self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
+        };
         let mut mention_target = self.current_mention_target();
         let at_token_start = mentions_v2_token
             .as_ref()
@@ -4109,7 +4110,6 @@ impl ChatComposer {
         }
 
         let allow_command_popup = self.slash_commands_enabled()
-            && !self.draft.is_bash_mode
             && file_token.is_none()
             && mentions_v2_token.is_none()
             && mention_target.is_none();
@@ -5458,7 +5458,13 @@ mod tests {
                 composer.set_status_line(Some(
                     Line::from("gpt-5.4 high fast · ~/code/codex-1 · Context 0% used").into(),
                 ));
-                composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
+                composer.set_skill_mentions(Some(vec![test_skill_metadata("available")]));
+                composer.set_text_content(
+                    "!echo $env:HTTP_PROXY".to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                composer.move_cursor_to_end();
             },
         );
 
@@ -10316,30 +10322,28 @@ mod tests {
     }
 
     #[test]
-    fn bang_prefixed_slash_text_submits_literal_shell_command() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
+    fn bang_commands_submit_literal_completion_tokens() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_skill_mentions(Some(vec![test_skill_metadata("available")]));
 
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        type_chars_humanlike(&mut composer, &['!', '/', 'd', 'i', 'f', 'f']);
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert!(matches!(
-            result,
-            InputResult::Submitted { ref text, .. } if text == "!/diff"
-        ));
+        for command in [
+            "!/diff",
+            "!echo $env:HTTP_PROXY",
+            "!echo $avail",
+            "!echo @file",
+        ] {
+            type_chars_humanlike(&mut composer, &command.chars().collect::<Vec<_>>());
+            assert!(!composer.popup_active(), "{command}");
+            let (result, _) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert_eq!(
+                result,
+                InputResult::Submitted {
+                    text: command.to_string(),
+                    text_elements: Vec::new(),
+                }
+            );
+        }
     }
 
     #[test]
@@ -10655,7 +10659,7 @@ mod tests {
     }
 
     #[test]
-    fn dismissed_file_popup_tracks_token_across_leading_whitespace_edits() {
+    fn dismissed_file_popup_tracks_token_across_prefix_edits() {
         let (mut composer, _rx) = new_test_composer();
         composer.set_text_content("@ma".to_string(), Vec::new(), Vec::new());
         composer.draft.textarea.set_cursor("@ma".len());
@@ -10667,6 +10671,10 @@ mod tests {
         assert!(matches!(composer.popups.active, ActivePopup::None));
 
         composer.draft.textarea.set_cursor(/*pos*/ 0);
+        type_chars_humanlike(&mut composer, &['!']);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(!composer.popup_active());
+
         composer.insert_str("   ");
         assert!(matches!(composer.popups.active, ActivePopup::None));
 
