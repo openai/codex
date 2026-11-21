@@ -28,6 +28,7 @@ const STATUS: ConfigPanelStatus = ConfigPanelStatus {
     copy_on_select: true,
     right_click_paste: Ok(false),
     custom_notification_filters: false,
+    reasoning_summary: Ok(None),
 };
 
 fn panel() -> (ConfigPanel, UnboundedReceiver<AppEvent>) {
@@ -324,6 +325,29 @@ fn session_picker_layout_uses_editor_handoff_and_saves_choice() {
         AppEvent::SaveConfigPreference(ConfigPreference::SessionPickerLayout(
             SessionPickerViewMode::Comfortable,
         ))
+    ));
+}
+
+#[test]
+fn reasoning_summary_picker_saves_explicit_auto() {
+    use codex_protocol::config_types::ReasoningSummary;
+
+    let (tx, mut rx) = unbounded_channel();
+    let keymap = RuntimeKeymap::defaults().list;
+    let backend = crate::backend_id::BackendId::new();
+    let mut picker = ListSelectionView::new(
+        reasoning_summary(/*configured*/ None, backend, &keymap),
+        AppEventSender::new(tx),
+        keymap,
+    );
+    insta::assert_snapshot!(
+        "config_reasoning_summary_choice",
+        render(&picker, /*width*/ 100)
+    );
+    picker.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(
+        rx.try_recv().expect("save choice event"),
+        AppEvent::SaveReasoningSummary { backend: saved_backend, summary: ReasoningSummary::Auto } if saved_backend == backend
     ));
 }
 

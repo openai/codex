@@ -12,6 +12,7 @@ pub(crate) use render::effects;
 pub(crate) use render::effects_with_toggle_states;
 pub(crate) use render::mouse_scroll_speed;
 pub(crate) use render::notification_condition;
+pub(crate) use render::reasoning_summary;
 pub(crate) use render::resume_directory;
 pub(crate) use render::right_click_paste;
 pub(crate) use render::session_picker_layout;
@@ -31,6 +32,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::Notifications;
 use codex_config::types::RightClickPaste;
 use codex_config::types::Tui;
+use codex_protocol::config_types::ReasoningSummary;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -60,6 +62,7 @@ pub(crate) enum ConfigEditor {
     TerminalTitle,
     Keyboard,
     ModelProviders,
+    ReasoningSummary,
     MouseScrollSpeed,
     SessionPickerLayout,
     ResumeDirectory,
@@ -74,6 +77,16 @@ pub(crate) enum ResumeCurrentAvailability {
     RequiresCwdOverride,
 }
 
+fn reasoning_summary_label(summary: Option<ReasoningSummary>) -> &'static str {
+    match summary {
+        None => "Auto (default)",
+        Some(ReasoningSummary::Auto) => "Auto",
+        Some(ReasoningSummary::Concise) => "Concise",
+        Some(ReasoningSummary::Detailed) => "Detailed",
+        Some(ReasoningSummary::None) => "None",
+    }
+}
+
 /// Effective state the panel cannot derive from the `Tui` preferences alone.
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigPanelStatus {
@@ -81,6 +94,7 @@ pub(crate) struct ConfigPanelStatus {
     pub(crate) copy_on_select: bool,
     pub(crate) right_click_paste: Result<bool, &'static str>,
     pub(crate) custom_notification_filters: bool,
+    pub(crate) reasoning_summary: Result<Option<ReasoningSummary>, &'static str>,
 }
 
 /// State shared by the panel that queued an editor and the event that will open it.
@@ -143,6 +157,10 @@ impl ConfigEditor {
     fn value(self, tui: &Tui, status: ConfigPanelStatus) -> ConfigSettingValue {
         let label = match self {
             Self::ModelProviders => "Choose".to_string(),
+            Self::ReasoningSummary => match status.reasoning_summary {
+                Ok(summary) => reasoning_summary_label(summary).into(),
+                Err(reason) => return ConfigSettingValue::Unavailable { reason },
+            },
             Self::Theme => tui.theme.clone().unwrap_or_else(|| "Automatic".to_string()),
             Self::MouseScrollSpeed => format!("{}×", tui.mouse_scroll_speed.unwrap_or(1.0)),
             Self::SessionPickerLayout => match tui.session_picker_view.unwrap_or_default() {
@@ -426,6 +444,13 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             description: "Choose the default provider for new chats on the connected server",
             keywords: "provider gateway endpoint model default",
             value: ConfigEditor::ModelProviders.value(tui, status),
+        },
+        ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Reasoning summary",
+            description: "Choose the reasoning summary style for new chats on the connected server",
+            keywords: "model thinking concise detailed none auto",
+            value: ConfigEditor::ReasoningSummary.value(tui, status),
         },
         ConfigSetting {
             section: ConfigSection::TextSelection,

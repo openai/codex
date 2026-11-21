@@ -33,6 +33,17 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::Provider(event));
             }
+            ConfigEditor::ReasoningSummary => {
+                let Some((backend, summary)) = self.config_panel_reasoning_summary else {
+                    self.config_editor_open_failed("Reasoning summary is unavailable.".into());
+                    return;
+                };
+                let keymap = self.bottom_pane.list_keymap();
+                self.bottom_pane
+                    .show_selection_view(crate::config_panel::reasoning_summary(
+                        summary, backend, &keymap,
+                    ));
+            }
             ConfigEditor::Theme => self.open_theme_picker(),
             ConfigEditor::Effects => {
                 let keymap = self.bottom_pane.list_keymap();
@@ -220,6 +231,10 @@ impl ChatWidget {
                 self.local_settings.transcript_mode,
             ),
             custom_notification_filters: self.local_settings.custom_notification_filters,
+            reasoning_summary: self
+                .config_panel_reasoning_summary
+                .map(|(_, summary)| summary)
+                .ok_or("Reconnect or update the connected server to change this setting"),
         }
     }
 

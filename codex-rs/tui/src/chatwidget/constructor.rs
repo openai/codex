@@ -129,6 +129,7 @@ impl ChatWidget {
             config,
             local_settings,
             config_panel_tui,
+            config_panel_reasoning_summary: None,
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,

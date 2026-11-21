@@ -40,6 +40,50 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) const EFFECTS_VIEW_ID: &str = "config-effects";
 
+pub(crate) fn reasoning_summary(
+    configured: Option<codex_protocol::config_types::ReasoningSummary>,
+    backend: crate::backend_id::BackendId,
+    keymap: &ListKeymap,
+) -> SelectionViewParams {
+    use codex_protocol::config_types::ReasoningSummary;
+
+    let current = configured.unwrap_or(ReasoningSummary::Auto);
+    let choices = [
+        ReasoningSummary::Auto,
+        ReasoningSummary::Concise,
+        ReasoningSummary::Detailed,
+        ReasoningSummary::None,
+    ];
+    SelectionViewParams {
+        title: Some("Reasoning summary".into()),
+        subtitle: Some("Choose the reasoning summary style for new chats".into()),
+        footer_hint: Some(picker_hint_line_for_keymap(keymap)),
+        initial_selected_idx: choices.iter().position(|choice| *choice == current),
+        allow_input_when_disconnected: true,
+        items: choices
+            .into_iter()
+            .map(|choice| SelectionItem {
+                name: super::reasoning_summary_label(if choice == current {
+                    configured
+                } else {
+                    Some(choice)
+                })
+                .into(),
+                is_current: choice == current,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::SaveReasoningSummary {
+                        backend,
+                        summary: choice,
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect(),
+        ..SelectionViewParams::picker()
+    }
+}
+
 pub(crate) fn effects(tui: &codex_config::types::Tui, keymap: &ListKeymap) -> SelectionViewParams {
     effects_with_toggle_states(tui, keymap, &[])
 }

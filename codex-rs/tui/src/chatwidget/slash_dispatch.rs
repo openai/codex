@@ -587,7 +587,10 @@ impl ChatWidget {
                 self.open_status_line_setup();
             }
             SlashCommand::Config => {
+                self.config_panel_reasoning_summary = None;
                 self.open_config_panel();
+                self.app_event_tx
+                    .send(AppEvent::RefreshConfigReasoningSummary);
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();

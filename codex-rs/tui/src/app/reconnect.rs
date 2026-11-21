@@ -254,6 +254,8 @@ impl App {
                 pane.opening = None;
             }
             self.reconnect.offline = true;
+            self.chat_widget.config_panel_reasoning_summary = None;
+            self.chat_widget.refresh_config_panel(/*notice*/ None);
             self.account_email_request_id = None;
             // Cached blank sessions are usable only while this connection owns a subscription.
             self.agents_overview.blank_sessions.retain(|id, _| {
@@ -669,6 +671,10 @@ impl App {
             server.reconnect(app_server.request_handle(), self.app_event_tx.clone());
         }
         self.reconnect.offline = false;
+        if self.chat_widget.refresh_config_panel(/*notice*/ None) {
+            self.app_event_tx
+                .send(AppEvent::RefreshConfigReasoningSummary);
+        }
         if self.reconnect.presentation == ReconnectPresentation::Overview {
             self.refresh_agents_overview_threads(app_server);
         }

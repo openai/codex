@@ -1971,6 +1971,15 @@ pub(crate) enum AppEvent {
     /// Requests saving a local `/config` preference and refreshing its effective value.
     SaveConfigPreference(crate::config_panel::ConfigPreference),
 
+    /// Save the connected server's reasoning-summary default for new chats.
+    SaveReasoningSummary {
+        backend: BackendId,
+        summary: codex_protocol::config_types::ReasoningSummary,
+    },
+
+    /// Refresh the connected server's reasoning-summary default without writing config.
+    RefreshConfigReasoningSummary,
+
     /// Save the transcript renderer preference for the next launch only.
     FullscreenTranscriptSelected {
         enabled: bool,

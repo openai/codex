@@ -1,0 +1,14 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+expression: "render(&picker, 100)"
+---
+  Reasoning summary
+  Choose the reasoning summary style for new chats
+
+
+› 1. Auto (default) (current)
+  2. Concise
+  3. Detailed
+  4. None
+
+  enter select · esc back
