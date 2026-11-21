@@ -12,7 +12,7 @@ export type ModelReasoningEffort =
   | "ultra"
   | "persistent";
 
-export type WebSearchMode = "disabled" | "cached" | "live";
+export type WebSearchMode = "disabled" | "cached" | "indexed" | "live";
 
 export type ThreadOptions = {
   model?: string;

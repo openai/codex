@@ -367,13 +367,13 @@ describe("Codex", () => {
     }
   });
 
-  it("passes webSearchMode to exec", async () => {
+  it.each(["cached", "indexed"] as const)("passes %s webSearchMode to exec", async (mode) => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
         sse(
           responseStarted("response_1"),
-          assistantMessage("Web search cached", "item_1"),
+          assistantMessage(`Web search ${mode}`, "item_1"),
           responseCompleted("response_1"),
         ),
       ],
@@ -384,13 +384,13 @@ describe("Codex", () => {
 
     try {
       const thread = client.startThread({
-        webSearchMode: "cached",
+        webSearchMode: mode,
       });
       await thread.run("test web search mode");
 
       const commandArgs = spawnArgs[0];
       expect(commandArgs).toBeDefined();
-      expectPair(commandArgs, ["--config", 'web_search="cached"']);
+      expectPair(commandArgs, ["--config", `web_search="${mode}"`]);
     } finally {
       cleanup();
       restore();

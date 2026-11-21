@@ -393,6 +393,7 @@ async fn new_config(
         forced_chatgpt_workspace_id: auth_config.forced_chatgpt_workspace_id.clone(),
         forced_login_method: auth_config.forced_login_method,
         web_search_mode: Constrained::allow_any(WebSearchMode::Disabled),
+        web_search_mode_was_explicit: true,
         web_search_config: None,
         experimental_request_user_input_enabled: true,
         update_plan_enabled: true,
