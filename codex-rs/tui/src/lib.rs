@@ -240,6 +240,7 @@ mod subscription;
 mod system_motion;
 mod task_mentions;
 mod temporary_structured_request;
+mod terminal_capabilities;
 mod terminal_hyperlinks;
 mod terminal_palette;
 mod terminal_probe;
