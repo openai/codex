@@ -11,15 +11,32 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub(super) struct CloudCatalogPreparation {
     /// Serializes catalog refreshes and snapshot capture.
-    refresh_lock: Mutex<()>,
+    refresh_lock: Mutex<CatalogRefreshState>,
     /// Requests resource invalidation on the next lock acquisition.
     /// Survives cancellation while waiting.
     refresh_pending: AtomicBool,
 }
 
+#[derive(Default)]
+pub(crate) struct CatalogRefreshState {
+    // Leave the check for the next catalog lock holder if discovery is cancelled.
+    startup_retry_pending: bool,
+}
+
 impl Session {
-    pub(crate) async fn lock_cloud_catalogs(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        let guard = self.cloud_catalog_preparation.refresh_lock.lock().await;
+    fn finish_catalog_startup(&self, catalogs: &mut CatalogRefreshState) {
+        if std::mem::take(&mut catalogs.startup_retry_pending)
+            && self.services.mcp_runtime.has_failed_startup_for_retry()
+        {
+            self.request_mcp_runtime_reprojection(McpRefreshReason::ServerStartupFailed);
+        }
+    }
+
+    pub(crate) async fn lock_cloud_catalogs(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, CatalogRefreshState> {
+        let mut guard = self.cloud_catalog_preparation.refresh_lock.lock().await;
+        self.finish_catalog_startup(&mut guard);
         if self
             .cloud_catalog_preparation
             .refresh_pending
@@ -38,7 +55,8 @@ impl Session {
         self.cloud_catalog_preparation
             .refresh_pending
             .store(true, Ordering::Release);
-        let _catalogs = self.lock_cloud_catalogs().await;
+        let mut catalogs = self.lock_cloud_catalogs().await;
+        catalogs.startup_retry_pending = true;
         self.refresh_mcp_if_dirty().await;
         let results = futures::future::join_all(
             self.services
@@ -46,20 +64,24 @@ impl Session {
                 .turn_lifecycle_contributors()
                 .iter()
                 .map(|contributor| async move {
-                    let result = contributor
+                    let outcome = contributor
                         .refresh_cloud_catalog(CloudCatalogRefreshInput {
                             session_store: &self.services.session_extension_data,
                             thread_store: &self.services.thread_extension_data,
                         })
                         .await;
-                    // Retain publication even if another provider is still pending at cancellation.
-                    self.mark_mcp_runtime_dirty(McpRefreshReason::ExtensionCatalogChanged);
-                    result
+                    // Queue the work before a slower sibling can time out the whole refresh.
+                    if outcome.needs_mcp_refresh {
+                        self.request_mcp_runtime_reprojection(
+                            McpRefreshReason::ExtensionCatalogChanged,
+                        );
+                    }
+                    outcome.result
                 }),
         )
         .await;
-        drop(_catalogs);
-        self.schedule_mcp_prewarm();
+        self.finish_catalog_startup(&mut catalogs);
+        drop(catalogs);
         let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
         anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
         Ok(())

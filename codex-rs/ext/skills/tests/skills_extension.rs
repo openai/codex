@@ -2713,18 +2713,33 @@ async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
         refresh_registered_catalogs_for_step(&registry, &session_store, &thread_store, "turn-3")
             .await;
         assert_eq!(list_calls.load(Ordering::Relaxed), 2);
-        for contributor in registry.turn_lifecycle_contributors() {
-            contributor
-                .refresh_cloud_catalog(codex_extension_api::CloudCatalogRefreshInput {
-                    session_store: &session_store,
-                    thread_store: &thread_store,
-                })
-                .await
-                .map_err(|error| format!("partial catalogs should be accepted: {error}"))?;
+        let input = codex_extension_api::CloudCatalogRefreshInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+        };
+        let contributors = registry.turn_lifecycle_contributors();
+        for contributor in contributors {
+            assert_eq!(
+                contributor.refresh_cloud_catalog(input).await,
+                codex_extension_api::CloudCatalogRefreshOutcome::UNCHANGED
+            );
         }
         refresh_registered_catalogs_for_step(&registry, &session_store, &thread_store, "turn-4")
             .await;
         assert_eq!(list_calls.load(Ordering::Relaxed), 3);
+
+        // Re-arm the provider's first-call failure for an explicit refresh.
+        list_calls.store(0, Ordering::Relaxed);
+        let mut errors = Vec::new();
+        for contributor in contributors {
+            let outcome = contributor.refresh_cloud_catalog(input).await;
+            assert!(!outcome.needs_mcp_refresh);
+            errors.extend(outcome.result.err());
+        }
+        assert_eq!(
+            errors,
+            ["cloud skills unavailable: temporary cloud failure"]
+        );
     }
     Ok(())
 }

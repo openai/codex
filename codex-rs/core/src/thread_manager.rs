@@ -315,6 +315,7 @@ pub enum McpRefreshReason {
     RemotePluginUninstalled,
     RuntimeAuthChanged,
     SelectedCapabilityRootsChanged,
+    ServerStartupFailed,
     SessionMcpInputsChanged,
     SessionPermissionsGranted,
     SkillMcpDependenciesAdded,

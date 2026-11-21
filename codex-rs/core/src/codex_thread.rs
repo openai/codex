@@ -1622,7 +1622,7 @@ impl CodexThread {
     }
 
     /// Refreshes cloud plugin and skill catalogs before input admission, without starting a turn.
-    /// Serializes publication with step preparation and marks MCP dirty for later reconciliation.
+    /// Serializes publication with step preparation and queues MCP prewarm as plugins are published.
     /// Accepts complete or partial catalogs; failed discovery remains retryable.
     pub async fn refresh_cloud_plugins(&self) -> anyhow::Result<()> {
         self.session.refresh_cloud_plugins().await

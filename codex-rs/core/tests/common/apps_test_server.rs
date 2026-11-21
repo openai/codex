@@ -64,7 +64,8 @@ const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/cale
 pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_extract_text";
 
-type AppsStartupInitializeGate = Arc<Mutex<VecDeque<mpsc::Receiver<()>>>>;
+type AppsStartupInitializeGate =
+    Arc<Mutex<VecDeque<(mpsc::Receiver<()>, Option<ResponseTemplate>)>>>;
 
 pub struct HostedMessagingServer(pub String);
 
@@ -118,11 +119,20 @@ impl AppsTestServerStartupControl {
     /// Holds one successful startup without turning recovery into a fresh runtime refresh.
     /// Multiple holds are consumed in order, so tests can gate startup and recovery in advance.
     pub fn hold_next_successful_initialize(&self) -> mpsc::Sender<()> {
+        self.hold_initialize(/*response_override*/ None)
+    }
+
+    /// Hold the next successful handshake and return a non-retryable HTTP error on release.
+    pub fn hold_initialize_until_failure(&self) -> mpsc::Sender<()> {
+        self.hold_initialize(Some(ResponseTemplate::new(400)))
+    }
+
+    fn hold_initialize(&self, response_override: Option<ResponseTemplate>) -> mpsc::Sender<()> {
         let (release, gate) = mpsc::channel();
         self.successful_initialize_gate
             .lock()
             .expect("Apps initialization gate lock should not be poisoned")
-            .push_back(gate);
+            .push_back((gate, response_override));
         release
     }
 }
@@ -584,12 +594,15 @@ impl Respond for CodexAppsJsonRpcResponder {
                 });
                 // This responder's dedicated mock server stays paused while the test controls
                 // when this existing client's background retry may finish.
-                if let Some(gate) = gate
-                    && gate.recv().is_err()
-                {
-                    return ResponseTemplate::new(500).set_body_json(json!({
-                        "error": "Apps initialization gate was dropped before release",
-                    }));
+                if let Some((gate, response_override)) = gate {
+                    if gate.recv().is_err() {
+                        return ResponseTemplate::new(500).set_body_json(json!({
+                            "error": "Apps initialization gate was dropped before release",
+                        }));
+                    }
+                    if let Some(response) = response_override {
+                        return response;
+                    }
                 }
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
                 let protocol_version = body

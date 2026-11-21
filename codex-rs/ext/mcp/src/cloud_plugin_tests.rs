@@ -79,13 +79,13 @@ async fn cloud_source_policy_skips_startup_discovery() -> anyhow::Result<()> {
             thread_store: &thread_store,
         })
         .await;
-    contributor
+    let outcome = contributor
         .refresh_cloud_catalog(CloudCatalogRefreshInput {
             session_store: &session_store,
             thread_store: &thread_store,
         })
-        .await
-        .expect("disabled discovery succeeds");
+        .await;
+    assert_eq!(outcome, CloudCatalogRefreshOutcome::UNCHANGED);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
@@ -431,13 +431,40 @@ async fn explicit_cloud_refresh_replaces_cached_catalog() {
     };
     provider.set_reply(Ok(refreshed_catalog.clone()));
     assert!(!contributor.refresh_catalog_for_step(input).await);
-    contributor
-        .refresh_cloud_catalog(input.into())
-        .await
-        .unwrap();
-    assert_eq!(state.cloud_catalog(), Some(refreshed_catalog));
+    let outcome = contributor.refresh_cloud_catalog(input.into()).await;
+    assert_eq!(
+        outcome,
+        CloudCatalogRefreshOutcome {
+            result: Ok(()),
+            needs_mcp_refresh: true
+        }
+    );
+    assert_eq!(state.cloud_catalog(), Some(refreshed_catalog.clone()));
     assert!(!contributor.refresh_catalog_for_step(input).await);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+
+    provider.set_reply(Err("discovery failed".to_string()));
+    assert_eq!(
+        contributor.refresh_cloud_catalog(input.into()).await,
+        CloudCatalogRefreshOutcome {
+            result: Err("discovery failed".to_string()),
+            needs_mcp_refresh: false,
+        }
+    );
+    assert_eq!(state.cloud_catalog(), Some(refreshed_catalog));
+
+    // Switching auth scopes clears the old catalog before the failed lookup.
+    session.insert(McpResourceClient::new(Arc::new(
+        codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
+    )));
+    assert_eq!(
+        contributor.refresh_cloud_catalog(input.into()).await,
+        CloudCatalogRefreshOutcome {
+            result: Err("discovery failed".to_string()),
+            needs_mcp_refresh: true,
+        }
+    );
+    assert_eq!(state.cloud_catalog(), None);
 }
 
 struct CloudProvider {

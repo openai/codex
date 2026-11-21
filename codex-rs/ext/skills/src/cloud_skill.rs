@@ -2,6 +2,7 @@
 
 use codex_extension_api::CatalogRefreshInput as StepCatalogRefreshInput;
 use codex_extension_api::CloudCatalogRefreshInput;
+use codex_extension_api::CloudCatalogRefreshOutcome;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::TurnLifecycleContributor;
 use std::sync::Arc;
@@ -68,15 +69,19 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
     fn refresh_cloud_catalog<'a>(
         &'a self,
         input: CloudCatalogRefreshInput<'a>,
-    ) -> ExtensionFuture<'a, Result<(), String>> {
+    ) -> ExtensionFuture<'a, CloudCatalogRefreshOutcome> {
         Box::pin(async move {
             let Some((state, query)) = cloud_catalog_query(input, /*turn_id*/ None) else {
-                return Ok(());
+                return CloudCatalogRefreshOutcome::UNCHANGED;
             };
-            state
+            let result = state
                 .refresh_cloud_catalog(&self.providers, query)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string());
+            CloudCatalogRefreshOutcome {
+                result,
+                needs_mcp_refresh: false,
+            }
         })
     }
 }

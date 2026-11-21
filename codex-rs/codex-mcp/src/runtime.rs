@@ -691,6 +691,14 @@ impl McpRuntime {
             .await
     }
 
+    /// Checks for completed startup failures eligible for retry without polling any client.
+    pub fn has_failed_startup_for_retry(&self) -> bool {
+        self.current
+            .load()
+            .connections
+            .has_failed_startup_for_retry()
+    }
+
     /// Checks the current generation before retrying servers detected outside the refresh gate.
     pub async fn has_authentication_failed_servers(&self, server_names: &[McpServerKey]) -> bool {
         !self

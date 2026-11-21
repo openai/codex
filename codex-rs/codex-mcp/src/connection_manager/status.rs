@@ -9,6 +9,20 @@ use crate::McpServerKey;
 use crate::server::McpServerConnectionIdentity;
 
 impl McpConnectionSet {
+    pub(crate) fn has_failed_startup_for_retry(&self) -> bool {
+        self.servers.values().any(|view| {
+            let client = &view.connection.client;
+            // Apps manages its own reconnects. Leave pending handshakes alone.
+            client.startup_reconnect.is_none()
+                && !client.cancel_token.is_cancelled()
+                && matches!(
+                    client.client.peek(),
+                    Some(Err(error @ super::StartupOutcomeError::Failed { .. }))
+                        if !error.is_authentication_required()
+                )
+        })
+    }
+
     /// Reads readiness without starting deferred clients or consulting the OAuth store.
     pub(crate) async fn has_reusable_status_catalog(&self, key: &McpServerKey) -> bool {
         let Some(view) = self.servers.get(key) else {

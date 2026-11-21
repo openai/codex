@@ -58,6 +58,21 @@ impl<'a> From<CatalogRefreshInput<'a>> for CloudCatalogRefreshInput<'a> {
     }
 }
 
+/// Result of explicit discovery and its effect on the thread's MCP servers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloudCatalogRefreshOutcome {
+    pub result: Result<(), String>,
+    /// Also true when discovery failed after clearing a stale plugin catalog.
+    pub needs_mcp_refresh: bool,
+}
+
+impl CloudCatalogRefreshOutcome {
+    pub const UNCHANGED: Self = Self {
+        result: Ok(()),
+        needs_mcp_refresh: false,
+    };
+}
+
 /// Input supplied when the host completes a turn.
 pub struct TurnStopInput<'a> {
     /// Store scoped to the host session runtime.

@@ -6,6 +6,7 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_extension_api::CloudCatalogRefreshOutcome;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
@@ -420,6 +421,358 @@ async fn root_and_spawned_subagent_receive_distinct_mcp_session_sources() -> Res
     )));
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_reuses_local_and_cloud_servers_after_cancelled_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server");
+
+    let fixture = CloudRefreshFixture::new(/*other_server*/ None).await?;
+    let release_startup = fixture.startup.hold_next_successful_initialize();
+    // Drop the refresh at the caller's deadline with the cloud handshake still in flight.
+    tokio::select! {
+        result = fixture.test.codex.refresh_cloud_plugins() => panic!("expected pending catalog: {result:?}"),
+        started = tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.startup.initialize_attempts() == 0 {
+                tokio::task::yield_now().await;
+            }
+        }) => started.expect("cloud startup should begin while the other lookup is pending"),
+    }
+    release_startup.send(())?;
+    fixture.assert_first_turn_uses_both_tools().await?;
+    fixture.assert_start_counts(/*cloud_attempts*/ 1).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_recovers_server_that_failed_during_cloud_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server");
+
+    // A configured server has already failed when the plugin adds the calendar.
+    let other = responses::start_mock_server().await;
+    let (apps, broken) = AppsTestServer::mount_with_startup_control(&other).await?;
+    broken.fail_next_initialize_attempts(usize::MAX);
+    let fixture = CloudRefreshFixture::new(Some(apps)).await?;
+    assert_eq!(broken.initialize_attempts(), 1);
+    fixture
+        .refresh_with_startup_failures(/*failures*/ 1)
+        .await?;
+    fixture.assert_first_turn_uses_both_tools().await?;
+    fixture.assert_start_counts(/*cloud_attempts*/ 2).await?;
+    // Each publication may retry the configured server: initial, plugin update, recovery.
+    assert!((2..=3).contains(&broken.initialize_attempts()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_refresh_retries_persistent_startup_failure_only_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server");
+
+    let fixture = CloudRefreshFixture::new(/*other_server*/ None).await?;
+    fixture.refresh_with_startup_failures(usize::MAX).await?;
+    wait_for_calendar_failure(&fixture.test.codex).await;
+    for prompt in ["first message", "follow-up"] {
+        let response = responses::mount_sse_once(
+            &fixture.server,
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+        fixture.test.submit_text_turn(prompt).await?;
+        let body = response.single_request().body_json();
+        assert!(namespace_child_tool(&body, "mcp__calendar", "calendar_list_events").is_none());
+        assert!(namespace_child_tool(&body, "mcp__local", "echo").is_some());
+    }
+    fixture.assert_start_counts(/*cloud_attempts*/ 2).await
+}
+
+#[derive(Default)]
+struct PendingCatalog {
+    entered: tokio::sync::Notify,
+    finish: tokio::sync::Notify,
+}
+
+impl codex_extension_api::TurnLifecycleContributor for PendingCatalog {
+    fn refresh_cloud_catalog<'a>(
+        &'a self,
+        _input: codex_extension_api::CloudCatalogRefreshInput<'a>,
+    ) -> ExtensionFuture<'a, CloudCatalogRefreshOutcome> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.finish.notified().await;
+            CloudCatalogRefreshOutcome::UNCHANGED
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_recovers_configured_server_with_plugins_disabled() -> Result<()> {
+    check_configured_server_recovery(/*cancel*/ false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_recovers_configured_server_after_cancelled_discovery() -> Result<()> {
+    check_configured_server_recovery(/*cancel*/ true).await
+}
+
+async fn check_configured_server_recovery(cancel: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (apps, startup) = AppsTestServer::mount_with_startup_control(&server).await?;
+    let fail_startup = startup.hold_initialize_until_failure();
+    let calendar = serde_json::from_value(json!({
+        "url": format!("{}/api/codex/ps/mcp", apps.chatgpt_base_url),
+    }))?;
+    let skills = Arc::new(PendingCatalog::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(skills.clone());
+    let test = core_test_support::test_codex::test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::Plugins)
+                .expect("test config should allow disabling plugins");
+            config
+                .mcp_servers
+                .set(HashMap::from([("calendar".to_string(), calendar)]))
+                .expect("test config should accept MCP servers");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("test config should allow code mode");
+            config.code_mode.direct_only_tool_namespaces = vec!["mcp__calendar".to_string()];
+        })
+        .build(&server)
+        .await?;
+    let mut refresh = Box::pin(test.codex.refresh_cloud_plugins());
+    tokio::select! {
+        result = &mut refresh => panic!("expected pending skills: {result:?}"),
+        _ = skills.entered.notified() => {}
+    }
+    fail_startup.send(())?;
+    wait_for_calendar_failure(&test.codex).await;
+    assert_eq!(startup.initialize_attempts(), 1);
+    if cancel {
+        drop(refresh);
+    } else {
+        skills.finish.notify_one();
+        refresh.await?;
+    }
+
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    test.submit_text_turn("list calendar events").await?;
+    let body = response.single_request().body_json();
+    assert_eq!(startup.initialize_attempts(), 2);
+    assert!(namespace_child_tool(&body, "mcp__calendar", "calendar_list_events").is_some());
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+async fn wait_for_calendar_failure(codex: &CodexThread) {
+    wait_for_event(codex, |event| matches!(event,
+        EventMsg::McpStartupUpdate(update) if update.server == "calendar"
+            && matches!(update.status, codex_protocol::protocol::McpStartupStatus::Failed { .. })
+    )).await;
+}
+
+struct CloudRefreshFixture {
+    test: core_test_support::test_codex::TestCodex,
+    server: wiremock::MockServer,
+    startup: core_test_support::apps_test_server::AppsTestServerStartupControl,
+    skills: Arc<PendingCatalog>,
+    dir: TempDir,
+}
+
+impl CloudRefreshFixture {
+    async fn new(other_server: Option<AppsTestServer>) -> Result<Self> {
+        let dir = TempDir::new()?;
+        let starts = dir.path().join("local-process-starts");
+        let local_config = serde_json::from_value(json!({
+            "command": core_test_support::stdio_server_bin()?,
+            "env": {"MCP_TEST_PROCESS_START_LOG": starts},
+            "enabled_tools": ["echo"],
+            "default_tools_approval_mode": "approve",
+        }))?;
+
+        struct PublishServer {
+            contributor: Arc<CoalescingMcpContributor>,
+            server: McpServerContribution,
+        }
+        impl codex_extension_api::TurnLifecycleContributor for PublishServer {
+            fn refresh_cloud_catalog<'a>(
+                &'a self,
+                _input: codex_extension_api::CloudCatalogRefreshInput<'a>,
+            ) -> ExtensionFuture<'a, CloudCatalogRefreshOutcome> {
+                Box::pin(async move {
+                    *self
+                        .contributor
+                        .contributions
+                        .lock()
+                        .expect("test contributions lock should not be poisoned") =
+                        vec![self.server.clone()];
+                    CloudCatalogRefreshOutcome {
+                        result: Ok(()),
+                        needs_mcp_refresh: true,
+                    }
+                })
+            }
+        }
+        let server = responses::start_mock_server().await;
+        let (apps, startup) = AppsTestServer::mount_with_startup_control(&server).await?;
+        let contributor = Arc::new(CoalescingMcpContributor::new());
+        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+        extensions.mcp_server_contributor(contributor.clone());
+        extensions.turn_lifecycle_contributor(Arc::new(PublishServer {
+            contributor,
+            server: McpServerContribution::Set {
+                name: "calendar".to_string(),
+                config: Box::new(serde_json::from_value(json!({
+                    "url": format!("{}/api/codex/ps/mcp", apps.chatgpt_base_url),
+                    "default_tools_approval_mode": "approve",
+                }))?),
+            },
+        }));
+        let skills = Arc::new(PendingCatalog::default());
+        extensions.turn_lifecycle_contributor(skills.clone());
+        let mut configured = HashMap::from([("local".to_string(), local_config)]);
+        if let Some(other) = other_server {
+            configured.insert(
+                "broken".to_string(),
+                serde_json::from_value(json!({
+                    "url": format!("{}/api/codex/ps/mcp", other.chatgpt_base_url),
+                }))?,
+            );
+        }
+        let test = core_test_support::test_codex::test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_config(move |config| {
+                config
+                    .mcp_servers
+                    .set(configured)
+                    .expect("test config should accept MCP servers");
+                config
+                    .features
+                    .enable(Feature::CodeModeOnly)
+                    .expect("test config should allow code mode");
+                config.code_mode.direct_only_tool_namespaces =
+                    vec!["mcp__calendar".to_string(), "mcp__local".to_string()];
+            })
+            .build(&server)
+            .await?;
+        wait_for_mcp_server(&test.codex, "local").await?;
+        assert_eq!(std::fs::read_to_string(starts)?.lines().count(), 1);
+        Ok(Self {
+            test,
+            server,
+            startup,
+            skills,
+            dir,
+        })
+    }
+
+    async fn refresh_with_startup_failures(&self, failures: usize) -> Result<()> {
+        self.startup.fail_next_initialize_attempts(failures);
+        let refresh = self.test.codex.refresh_cloud_plugins();
+        tokio::pin!(refresh);
+        tokio::select! {
+            result = &mut refresh => panic!("expected pending catalog: {result:?}"),
+            _ = wait_for_calendar_failure(&self.test.codex) => {}
+        }
+        assert_eq!(self.startup.initialize_attempts(), 1);
+        // Let every server in the early publication finish before completing skills.
+        wait_for_event(&self.test.codex, |event| {
+            matches!(event, EventMsg::McpStartupComplete(_))
+        })
+        .await;
+        self.skills.finish.notify_one();
+        refresh.await?;
+        Ok(())
+    }
+
+    async fn assert_start_counts(&self, cloud_attempts: usize) -> Result<()> {
+        self.test.codex.shutdown_and_wait().await?;
+        let starts = std::fs::read_to_string(self.dir.path().join("local-process-starts"))?;
+        assert_eq!(starts.lines().count(), 1);
+        assert_eq!(self.startup.initialize_attempts(), cloud_attempts);
+        Ok(())
+    }
+
+    async fn assert_first_turn_uses_both_tools(&self) -> Result<()> {
+        wait_for_event(&self.test.codex, |event| {
+            matches!(event,
+                EventMsg::McpStartupUpdate(update) if update.server == "calendar"
+                    && matches!(update.status, codex_protocol::protocol::McpStartupStatus::Ready)
+            )
+        })
+        .await;
+
+        let response = mount_sse_sequence(
+            &self.server,
+            vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call_with_namespace(
+                        "local-call",
+                        "mcp__local",
+                        "echo",
+                        r#"{"message":"hello"}"#,
+                    ),
+                    ev_function_call_with_namespace(
+                        "cloud-call",
+                        "mcp__calendar",
+                        "calendar_list_events",
+                        "{}",
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_response_created("resp-2"),
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ],
+        )
+        .await;
+        self.test
+            .submit_text_turn("Echo hello locally and list calendar events")
+            .await?;
+        let requests = response.requests();
+        let body = requests[0].body_json();
+        assert!(namespace_child_tool(&body, "mcp__local", "echo").is_some());
+        assert!(namespace_child_tool(&body, "mcp__calendar", "calendar_list_events").is_some());
+        let calls =
+            core_test_support::apps_test_server::recorded_apps_tool_calls(&self.server).await;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["params"]["name"], "calendar_list_events");
+        for (id, expected) in [
+            ("local-call", json!({"echo": "ECHOING: hello", "env": null})),
+            ("cloud-call", json!({"_codex_apps": null})),
+        ] {
+            let output = requests[1]
+                .function_call_output_text(id)
+                .expect("tool result");
+            let (_, payload) = output
+                .split_once("\nOutput:\n")
+                .expect("wrapped MCP result");
+            assert_eq!(serde_json::from_str::<Value>(payload)?, expected, "{id}");
+        }
+        Ok(())
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

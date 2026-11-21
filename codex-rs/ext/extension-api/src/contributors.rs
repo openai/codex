@@ -64,6 +64,7 @@ pub use turn_input::TurnInputContext;
 pub use turn_input::TurnInputEnvironment;
 pub use turn_lifecycle::CatalogRefreshInput;
 pub use turn_lifecycle::CloudCatalogRefreshInput;
+pub use turn_lifecycle::CloudCatalogRefreshOutcome;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
@@ -249,16 +250,16 @@ pub trait TurnLifecycleContributor: Send + Sync {
     }
 
     /// Publishes cloud catalogs after explicit invalidation, without requiring a turn.
-    /// Core marks MCP dirty after publication. Accepted complete or partial catalogs
-    /// replace the previous result; failed or superseded discovery returns an error.
+    /// Report whether MCP needs updating so Core can start clients while other
+    /// providers are still running.
     /// Core invalidates resource keys before calling. MCP-backed catalogs record
     /// the new key only on acceptance, keeping failed or cancelled refreshes stale.
     /// Called under the same per-thread catalog lock as step preparation.
     fn refresh_cloud_catalog<'a>(
         &'a self,
         _input: CloudCatalogRefreshInput<'a>,
-    ) -> ExtensionFuture<'a, Result<(), String>> {
-        Box::pin(async { Ok(()) })
+    ) -> ExtensionFuture<'a, CloudCatalogRefreshOutcome> {
+        Box::pin(async { CloudCatalogRefreshOutcome::UNCHANGED })
     }
 
     /// Observes a completed item without changing it or delaying streamed deltas.

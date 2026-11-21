@@ -1168,6 +1168,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     eprintln!("starting rmcp test server");
+    if let Some(path) = std::env::var_os("MCP_TEST_PROCESS_START_LOG") {
+        use std::io::Write;
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(log, "{}", std::process::id())?;
+    }
     if let Ok(pid_file) = std::env::var("MCP_TEST_PID_FILE") {
         std::fs::write(pid_file, std::process::id().to_string())?;
     }
