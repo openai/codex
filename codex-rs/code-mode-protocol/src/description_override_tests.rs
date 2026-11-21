@@ -29,15 +29,15 @@ fn exec_override_renders_only_known_literal_placeholders() {
             UNIFIED_IMAGE_HELPER_DESCRIPTION,
         ),
     ] {
-        let (description, _) = build_exec_tool_description_and_definitions(
+        let (description, definitions) = build_exec_tool_description_and_definitions(
             &[],
             &[],
             &BTreeMap::new(),
             /*default_exec_yield_time_ms*/ 4567,
-            /*code_mode_only*/ false,
+            /*code_mode_only*/ true,
             image_detail_visibility,
             DeferredToolDiscovery::Catalog,
-            /*incremental_exec_enabled*/ false,
+            /*incremental_exec_enabled*/ true,
             Some(&CodeModeToolMessages {
                 exec: Some(ToolMessage {
                     description: Some(" \nDefaults to 10000 ms. {{ default_exec_yield_time_ms }} ms.\n{{ image_helper }}\n{{ unknown }} {{default_exec_yield_time_ms}}\t ".to_string()),
@@ -50,9 +50,10 @@ fn exec_override_renders_only_known_literal_placeholders() {
         assert_eq!(
             description,
             format!(
-                " \nDefaults to 10000 ms. 4567 ms.\n{image_helper}\n{{{{ unknown }}}} {{{{default_exec_yield_time_ms}}}}\t \n\n{DEFERRED_NESTED_TOOLS_GUIDANCE}"
+                " \nDefaults to 10000 ms. 4567 ms.\n{image_helper}\n{{{{ unknown }}}} {{{{default_exec_yield_time_ms}}}}\t \n\n{DEFERRED_NESTED_TOOLS_GUIDANCE}\n\nShared MCP Types:\n```ts\n{MCP_TYPESCRIPT_PREAMBLE}\n```"
             ),
         );
+        assert!(image_helper.starts_with(&format!("`{}`: ", definitions.helper_signatures)));
     }
 }
 

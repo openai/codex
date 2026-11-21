@@ -1,6 +1,6 @@
 //! Diffs the one-level Responses Lite catalog: namespaces of callable tools and built-ins.
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
-//! One developer notice precedes each incremental namespace batch; catalog hashes are unchanged.
+//! An incremental update sends the configured hint once before its first namespace declaration.
 //! Whole namespace removals subsume their members in the removal notice.
 //! Metrics count rendered tool deltas and measure replacement description bytes.
 
@@ -9,9 +9,11 @@ use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
+use super::WorldStateUpdateContent;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
 use codex_code_mode::ExecDefinition;
+use codex_code_mode::ExecDefinitions;
 use codex_code_mode::PUBLIC_TOOL_NAME;
 use codex_extension_api::ExtensionMetrics;
 use codex_otel::EXEC_TOOL_ENTRY_UPDATES_METRIC;
@@ -48,7 +50,7 @@ pub(crate) struct TopLevelToolsState {
     /// Whether this captured step uses granular exec catalog updates.
     incremental_exec_tools: bool,
     /// Diffable entries for the current CodeModeOnly catalog; absent in other tool modes.
-    exec_definitions: Option<Arc<Vec<ExecDefinition>>>,
+    exec_definitions: Option<Arc<ExecDefinitions>>,
 }
 
 /// Ordinary catalogs keep their landed flat format; exec mode adds its own comparison state.
@@ -59,6 +61,8 @@ pub(crate) enum TopLevelToolsSnapshot {
         tools: BTreeMap<String, WorldStateHash>,
         /// Stable entry keys and definition hashes, retained while exec is unavailable.
         exec: BTreeMap<String, WorldStateHash>,
+        /// Recorded only when exec is advertised, even if its helper list is empty.
+        exec_helpers: Option<WorldStateHash>,
     },
     ToolsOnly(BTreeMap<String, WorldStateHash>),
 }
@@ -108,7 +112,7 @@ impl TopLevelToolsState {
     /// Track granular exec updates as part of this tool catalog.
     pub(crate) fn with_incremental_exec_tools(
         mut self,
-        exec_definitions: Option<Arc<Vec<ExecDefinition>>>,
+        exec_definitions: Option<Arc<ExecDefinitions>>,
     ) -> Self {
         self.incremental_exec_tools = true;
         self.exec_definitions = exec_definitions;
@@ -170,17 +174,19 @@ impl WorldStateSection for TopLevelToolsState {
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
-        let (previous, previous_exec) = match previous {
-            PreviousSectionState::Known(TopLevelToolsSnapshot::WithExec { tools, exec }) => {
-                (Some(tools), Some(exec))
-            }
+        let (previous, previous_exec, previous_exec_helpers) = match previous {
+            PreviousSectionState::Known(TopLevelToolsSnapshot::WithExec {
+                tools,
+                exec,
+                exec_helpers,
+            }) => (Some(tools), Some(exec), exec_helpers.as_ref()),
             PreviousSectionState::Known(TopLevelToolsSnapshot::ToolsOnly(tools)) => {
-                (Some(tools), None)
+                (Some(tools), None, None)
             }
-            PreviousSectionState::Absent | PreviousSectionState::Unknown => (None, None),
+            PreviousSectionState::Absent | PreviousSectionState::Unknown => (None, None, None),
         };
         // Only an advertised CodeModeOnly exec declaration gets granular updates.
-        let exec_catalog = self.exec_definitions.as_ref().and_then(|entries| {
+        let exec_catalog = self.exec_definitions.as_deref().and_then(|definitions| {
             self.definitions.iter().find_map(|namespace| {
                 if namespace["type"] != "namespace"
                     || namespace["name"] != DEFAULT_FUNCTION_NAMESPACE
@@ -191,22 +197,49 @@ impl WorldStateSection for TopLevelToolsState {
                     .as_array()?
                     .iter()
                     .find(|tool| tool["type"] == "custom" && tool["name"] == PUBLIC_TOOL_NAME)?;
-                Some((namespace, exec, entries.as_slice()))
+                Some((namespace, exec, definitions))
             })
         });
         let manages_exec = exec_catalog.is_some();
         let mut updates = self.render_declaration_updates(previous, manages_exec);
         self.append_removed_tools(previous, &mut updates);
         let snapshot = if self.incremental_exec_tools {
-            let exec =
-                self.append_exec_updates(previous, previous_exec, exec_catalog, &mut updates);
+            let exec_helpers = exec_catalog.map(|(_, _, definitions)| {
+                WorldStateHash::from_json(&Value::String(definitions.helper_signatures.clone()))
+            });
+            let exec = self.append_exec_updates(
+                previous,
+                previous_exec,
+                previous_exec_helpers == exec_helpers.as_ref(),
+                exec_catalog,
+                &mut updates,
+            );
             TopLevelToolsSnapshot::WithExec {
                 tools: self.hashes.clone(),
                 exec,
+                exec_helpers,
             }
         } else {
             TopLevelToolsSnapshot::ToolsOnly(self.hashes.clone())
         };
+        // Exec and its siblings can arrive in separate declaration batches that share one hint.
+        if previous.is_some()
+            && !self.messages.tool_update_hint.is_empty()
+            && let Some(index) = updates.iter().position(|update| {
+                let WorldStateUpdateContent::Item(item) = &update.content else {
+                    return false;
+                };
+                matches!(item.as_ref(), ResponseItem::AdditionalTools { tools, .. }
+                    if tools.iter().any(|tool| tool["type"] == "namespace"))
+            })
+        {
+            updates.insert(
+                index,
+                WorldStateUpdate::prefix_item(ContextualUserFragment::into(
+                    IncrementalToolsUpdate(self.messages.tool_update_hint.clone()),
+                )),
+            );
+        }
         // Persist empty catalogs as known comparison baselines.
         (Some(snapshot), updates)
     }
@@ -284,15 +317,6 @@ impl TopLevelToolsState {
         }
         let mut updates = Vec::new();
         if !tools.is_empty() {
-            // Incremental tool updates: introduce an appended batch of namespace declarations.
-            if previous.is_some()
-                && tools.iter().any(|tool| tool["type"] == "namespace")
-                && !self.messages.tool_update_hint.is_empty()
-            {
-                updates.push(WorldStateUpdate::prefix_item(ContextualUserFragment::into(
-                    IncrementalToolsUpdate(self.messages.tool_update_hint.clone()),
-                )));
-            }
             updates.push(WorldStateUpdate::prefix_item(
                 ResponseItem::AdditionalTools {
                     id: None,
@@ -360,13 +384,15 @@ impl TopLevelToolsState {
         &self,
         previous: Option<&BTreeMap<String, WorldStateHash>>,
         previous_exec: Option<&BTreeMap<String, WorldStateHash>>,
-        exec_catalog: Option<(&Value, &Value, &[ExecDefinition])>,
+        helper_signatures_unchanged: bool,
+        exec_catalog: Option<(&Value, &Value, &ExecDefinitions)>,
         updates: &mut Vec<WorldStateUpdate>,
     ) -> BTreeMap<String, WorldStateHash> {
         // Retain entry hashes while functions.exec is not advertised.
         // When it returns, send the full current catalog and withdraw removed entries.
         let mut exec = BTreeMap::new();
-        if let Some((namespace, declaration, entries)) = exec_catalog {
+        if let Some((namespace, declaration, definitions)) = exec_catalog {
+            let entries = &definitions.entries;
             exec = entries
                 .iter()
                 .map(|entry| {
@@ -376,16 +402,13 @@ impl TopLevelToolsState {
                     )
                 })
                 .collect();
-            if previous_exec.is_some()
-                && previous.is_some_and(|tools| tools.contains_key("functions.exec"))
+            if let Some(previous_exec) = previous_exec
+                && helper_signatures_unchanged
             {
                 // Incremental tool updates: append entries; the exec declaration stays frozen.
                 let changed = entries
                     .iter()
-                    .filter(|entry| {
-                        previous_exec.and_then(|previous| previous.get(&entry.key))
-                            != exec.get(&entry.key)
-                    })
+                    .filter(|entry| previous_exec.get(&entry.key) != exec.get(&entry.key))
                     .collect::<Vec<_>>();
                 if !changed.is_empty() {
                     let update =
@@ -393,10 +416,7 @@ impl TopLevelToolsState {
                     if let Some(metrics) = self.metrics.as_deref() {
                         let added = changed
                             .iter()
-                            .filter(|entry| {
-                                !previous_exec
-                                    .is_some_and(|previous| previous.contains_key(&entry.key))
-                            })
+                            .filter(|entry| !previous_exec.contains_key(&entry.key))
                             .count();
                         for (action, count) in [
                             (ACTION_ADDED, added),
@@ -420,14 +440,13 @@ impl TopLevelToolsState {
                     updates.push(WorldStateUpdate::fragment(update).standalone());
                 }
             } else if previous.is_some() {
-                // Install the full catalog when enabling granular updates or restoring exec.
-                if previous_exec.is_some()
-                    && let Some(metrics) = self.metrics.as_deref()
-                {
-                    metrics.counter(
-                        TOOL_INCREMENTAL_UPDATES_METRIC,
-                        /*inc*/ 1,
-                        &[("action", ACTION_ADDED), ("tool", "functions.exec")],
+                // Refresh exec when enabling granular updates, restoring it, or changing helper signatures.
+                if previous_exec.is_some() {
+                    record_changed_tool_metrics(
+                        "functions.exec",
+                        declaration,
+                        previous,
+                        self.metrics.as_deref(),
                     );
                 }
                 let mut namespace = namespace.clone();

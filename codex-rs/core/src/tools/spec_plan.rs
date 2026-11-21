@@ -960,7 +960,7 @@ fn register_code_mode_executors(
     indirect_prefixes: &IndirectNamespacePrefixes<'_>,
 ) -> (
     BTreeMap<String, ToolName>,
-    Option<Arc<Vec<codex_code_mode::ExecDefinition>>>,
+    Option<Arc<codex_code_mode::ExecDefinitions>>,
 ) {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {

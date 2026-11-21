@@ -2,7 +2,7 @@
 source: core/tests/suite/scenarios_exec_tools.rs
 expression: snapshot
 ---
-Scenario: Code Mode appends complete changed tool entries and namespace instructions in combined developer messages. Namespace clearing, eager/deferred movement, remove-all and re-enabling preserve context. Common instructions and shared types stay frozen while nested methods update; compaction installs the latest full catalog.
+Scenario: Code Mode appends complete changed tool entries and namespace instructions in combined developer messages. Namespace clearing, eager/deferred movement, remove-all and re-enabling preserve context. Removing shared helpers sends the full catalog. Later changes to instructions and shared types wait for compaction.
 
 ## Window 1
 -- request 1 (turn) --
@@ -241,21 +241,15 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 23:message/user:
     Re-enable echo service entries: echo and cwd.
 24:message/developer:
-    Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier versio...ls keep their latest definitions and `tools` methods. [hash=4d13008df632810d]
-
-    ## Namespace: functions
-    ### `read_mcp_resource`
-    Read a selected resource revision.
-
-    exec tool declaration:
-    ```ts
-    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
-    ```
-25:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+25:additional_tools/developer (1; hash=dfeda0757db82f16):
+        - namespace/functions; hash=62310bdd854be17c
+          - custom/exec
+26:message/developer:
     <model_instructions>
     The current model is catalog-updated.
     </model_instructions>
-26:message/user:
+27:message/user:
     Combined redefinition: resource revision, common instructions, and shared types.
 
 ## Window 3 (after request 11: settings changed (model))
@@ -372,30 +366,24 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 23:message/user:
     Re-enable echo service entries: echo and cwd.
 24:message/developer:
-    Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier versio...ls keep their latest definitions and `tools` methods. [hash=4d13008df632810d]
-
-    ## Namespace: functions
-    ### `read_mcp_resource`
-    Read a selected resource revision.
-
-    exec tool declaration:
-    ```ts
-    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
-    ```
-25:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+25:additional_tools/developer (1; hash=dfeda0757db82f16):
+        - namespace/functions; hash=62310bdd854be17c
+          - custom/exec
+26:message/developer:
     <model_instructions>
     The current model is catalog-updated.
     </model_instructions>
-26:message/user:
+27:message/user:
     Combined redefinition: resource revision, common instructions, and shared types.
-27:message/developer:
+28:message/developer:
     <model_instructions>
     The current model is catalog-compacted.
     </model_instructions>
-28:message/user:
+29:message/user:
     Only common instructions and shared types change: wait for compaction.
 -- request 13 (compaction) --
-29:compaction_trigger
+30:compaction_trigger
 
 ## Window 4 (after request 13: input diverged at item 00)
 -- request 14 (turn) --

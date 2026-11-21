@@ -4643,34 +4643,29 @@ async fn astra_async_compaction_preserves_exec_catalog(change: ExecCatalogRefres
                 core_test_support::responses::namespace_child_tool(item, "functions", "exec")
             })
             .expect("initial exec declaration");
-        assert_eq!(exec_declarations, vec![initial_exec]);
-        assert!(exec_positions[0] < compaction && compaction < user);
-        let is_view_image_update = |item: &&serde_json::Value| {
-            item["role"] == "developer"
-                && item["content"][0]["text"]
-                    .as_str()
-                    .is_some_and(|text| text.lines().any(|line| line == "### `view_image`"))
-        };
-        let live_update = requests[2]["input"]
+        let live_exec = requests[2]["input"]
             .as_array()
             .expect("input before adoption")
             .iter()
-            .find(is_view_image_update)
-            .expect("view_image redefinition during background compaction");
+            .rev()
+            .find_map(|item| {
+                core_test_support::responses::namespace_child_tool(item, "functions", "exec")
+            })
+            .expect("full exec refresh during background compaction");
+        let live_description = live_exec["description"].as_str().expect("exec description");
+        assert!(live_description.starts_with("Previous exec instructions."));
         assert!(
-            live_update["content"][0]["text"]
-                .as_str()
-                .expect("view_image update text")
-                .contains("detail?: \"high\" | \"original\"")
+            live_description
+                .split_once("### `view_image`\n")
+                .and_then(|(_, tool)| tool.split("\n### ").next())
+                .is_some_and(|tool| tool.contains("detail?: \"high\" | \"original\""))
         );
-        assert_eq!(
-            input
-                .iter()
-                .filter(is_view_image_update)
-                .collect::<Vec<_>>(),
-            vec![live_update]
+        assert_eq!(exec_declarations, vec![initial_exec, live_exec]);
+        assert!(
+            exec_positions[0] < compaction
+                && compaction < exec_positions[1]
+                && exec_positions[1] < user
         );
-        assert!(input[compaction + 1..].contains(live_update));
         return Ok(());
     }
     assert_eq!(exec_declarations.len(), 2);

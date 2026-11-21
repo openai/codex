@@ -1,4 +1,4 @@
-//! Exec tools append changed entries and refresh frozen exec sections only at compaction.
+//! Request-history coverage for incremental exec updates and full catalog refreshes.
 
 use anyhow::Result;
 use codex_features::Feature;
@@ -339,14 +339,14 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
             if index == 4 {
                 assert!(updates.is_empty() && notices.is_empty() && declarations[index].is_empty());
             }
-            if matches!(index, 1 | 7 | 10) {
+            if matches!(index, 1 | 7) {
                 assert_eq!(updates.len(), 1);
             }
             if index == 7 {
                 assert!(updates[0].contains("mcp__echo_service__echo(args:"));
             }
             if index == 10 {
-                assert!(updates[0].contains("revision?: number"));
+                assert!(updates.is_empty());
             }
             if matches!(index, 5 | 6 | 8) {
                 assert_eq!(notices.len(), 1);
@@ -380,13 +380,21 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
         actual["description"] = json!(null);
         assert_eq!(actual, native_fields, "compaction preserves native fields");
     }
-    for request in &requests[10..13] {
+    let [refreshed] = declarations[10].as_slice() else {
+        panic!("removing the bundled helpers must publish one full declaration");
+    };
+    let refreshed = refreshed["description"]
+        .as_str()
+        .expect("refreshed catalog");
+    assert!(refreshed.starts_with("Run JavaScript. Await every tool call before returning."));
+    assert!(refreshed.contains("revision?: number"));
+    assert!(declarations[11].is_empty());
+    for request in &requests[11..13] {
         let retained_input = serde_json::to_string(&request.input())?;
         for frozen in [
-            "Run JavaScript. Await every tool call",
-            "Find deferred tools in ALL_TOOLS.",
+            "Await every tool call and inspect its result",
             "Find deferred tools by name in ALL_TOOLS.",
-            "content: unknown[]; structuredContent?: T; isError?: boolean",
+            "isError?: boolean; _meta?: unknown",
         ] {
             assert!(
                 !retained_input.contains(frozen),
@@ -416,7 +424,7 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
     } else {
         (
             "incremental_exec_tools",
-            "Code Mode appends complete changed tool entries and namespace instructions in combined developer messages. Namespace clearing, eager/deferred movement, remove-all and re-enabling preserve context. Common instructions and shared types stay frozen while nested methods update; compaction installs the latest full catalog.",
+            "Code Mode appends complete changed tool entries and namespace instructions in combined developer messages. Namespace clearing, eager/deferred movement, remove-all and re-enabling preserve context. Removing shared helpers sends the full catalog. Later changes to instructions and shared types wait for compaction.",
         )
     };
     let snapshot = context_snapshot::format_request_history_snapshot(
@@ -425,5 +433,97 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
     insta::assert_snapshot!(snapshot_name, snapshot);
+    Ok(())
+}
+
+#[test_case::test_case(None, true; "bundled_helpers")]
+#[test_case::test_case(Some("Run JavaScript."), false; "helper_free_override")]
+#[test_case::test_case(Some("Run JavaScript. {{ image_helper }}"), true; "image_helper_override")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_resume_refreshes_only_when_helper_signatures_change(
+    description_override: Option<&'static str>,
+    includes_image_helper: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["initial", "refreshed", "steady"]
+            .map(responses::sse_completed)
+            .to_vec(),
+    )
+    .await;
+    let builder = |unified_image_budget: bool| {
+        test_codex()
+            .with_config(move |config| {
+                super::configure_scenario_catalog(config);
+                for feature in [Feature::IncrementalTools, Feature::IncrementalExecTools] {
+                    config
+                        .features
+                        .enable(feature)
+                        .expect("enable catalog updates");
+                }
+                config
+                    .features
+                    .set_enabled(Feature::UnifiedImageBudget, unified_image_budget)
+                    .expect("set image budget mode");
+            })
+            .with_model_info_override("catalog-initial", move |model| {
+                model.use_responses_lite = true;
+                model.tool_mode = Some(ToolMode::CodeModeOnly);
+                model.model_messages = description_override.map(|description| {
+                    serde_json::from_value(json!({
+                        "tools": {"code_mode": {"exec": {"description": description}}},
+                    }))
+                    .expect("exec description override")
+                });
+            })
+            .with_model("catalog-initial")
+    };
+
+    let original = builder(false).build_with_auto_env(&server).await?;
+    original.submit_text_turn("Publish exec.").await?;
+    let resumed = builder(true)
+        .restart_with_auto_env(&server, &original)
+        .await?;
+    resumed
+        .submit_text_turn("Refresh exec after resuming.")
+        .await?;
+    resumed
+        .submit_text_turn("Keep the refreshed catalog.")
+        .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let expected_counts = if includes_image_helper {
+        [1, 2, 2]
+    } else {
+        [1, 1, 1]
+    };
+    for (request, expected_count) in requests.iter().zip(expected_counts) {
+        let input = request.input();
+        let declarations = input
+            .iter()
+            .filter(|item| item["type"] == "additional_tools")
+            .filter_map(|item| responses::namespace_child_tool(item, "functions", "exec"))
+            .collect::<Vec<_>>();
+        assert_eq!(declarations.len(), expected_count);
+        let description = declarations.last().expect("exec declaration")["description"]
+            .as_str()
+            .expect("exec declaration should have a string description");
+        if description_override.is_some() {
+            assert!(description.starts_with("Run JavaScript."));
+        }
+        if includes_image_helper {
+            let expected_signature = if expected_count == 1 {
+                "image(imageUrlOrItem: string | { image_url: string; detail?"
+            } else {
+                "image(imageUrlOrItem: string | { image_url: string } | ImageContent)"
+            };
+            assert!(description.contains(expected_signature));
+        } else {
+            assert!(!description.contains("image(imageUrlOrItem:"));
+        }
+    }
     Ok(())
 }

@@ -280,19 +280,15 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 24:message/user:
     Re-enable echo service entries: echo and cwd.
 25:message/developer:
-    ## Namespace: functions
-    ### `read_mcp_resource`
-    Read a selected resource revision.
-
-    exec tool declaration:
-    ```ts
-    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
-    ```
-26:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+26:additional_tools/developer (1; hash=dfeda0757db82f16):
+        - namespace/functions; hash=62310bdd854be17c
+          - custom/exec
+27:message/developer:
     <model_instructions>
     The current model is catalog-updated.
     </model_instructions>
-27:message/user:
+28:message/user:
     Combined redefinition: resource revision, common instructions, and shared types.
 
 ## Window 4 (after request 11: settings changed (model))
@@ -406,28 +402,24 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 24:message/user:
     Re-enable echo service entries: echo and cwd.
 25:message/developer:
-    ## Namespace: functions
-    ### `read_mcp_resource`
-    Read a selected resource revision.
-
-    exec tool declaration:
-    ```ts
-    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
-    ```
-26:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+26:additional_tools/developer (1; hash=dfeda0757db82f16):
+        - namespace/functions; hash=62310bdd854be17c
+          - custom/exec
+27:message/developer:
     <model_instructions>
     The current model is catalog-updated.
     </model_instructions>
-27:message/user:
+28:message/user:
     Combined redefinition: resource revision, common instructions, and shared types.
-28:message/developer:
+29:message/developer:
     <model_instructions>
     The current model is catalog-compacted.
     </model_instructions>
-29:message/user:
+30:message/user:
     Only common instructions and shared types change: wait for compaction.
 -- request 13 (compaction) --
-30:compaction_trigger
+31:compaction_trigger
 
 ## Window 5 (after request 13: input diverged at item 00)
 -- request 14 (turn) --

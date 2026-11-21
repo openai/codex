@@ -31,9 +31,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to {{ default_exec_yield_time_ms }} ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
-- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
-
-- Global helpers:
+- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded."#;
+const EXEC_HELPERS_TEMPLATE: &str = r#"- Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
 - `text(value: string | number | boolean | undefined | null)`: Appends a text item. Non-string values are stringified with `JSON.stringify(...)` when possible.
 - {{ image_helper }}
@@ -169,6 +168,13 @@ pub struct ExecDefinition {
     pub description: String,
 }
 
+#[derive(Debug, Default)]
+pub struct ExecDefinitions {
+    pub entries: Vec<ExecDefinition>,
+    /// Newline-separated signatures of the global helpers inserted by the renderer.
+    pub helper_signatures: String,
+}
+
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct CodeModeExecPragma {
@@ -297,23 +303,44 @@ pub fn build_exec_tool_description_and_definitions(
     deferred_tool_discovery: DeferredToolDiscovery,
     incremental_exec_enabled: bool,
     messages: Option<&CodeModeToolMessages>,
-) -> (String, Vec<ExecDefinition>) {
+) -> (String, ExecDefinitions) {
     let mut sections = Vec::new();
     let image_helper = match image_detail_visibility {
         ImageDetailVisibility::Visible => LEGACY_IMAGE_HELPER_DESCRIPTION,
         ImageDetailVisibility::Hidden => UNIFIED_IMAGE_HELPER_DESCRIPTION,
     };
-    let description = messages
+    const IMAGE_HELPER_PLACEHOLDER: &str = "{{ image_helper }}";
+    let yield_time = default_exec_yield_time_ms.to_string();
+    let render = |template: &str| {
+        template
+            .replace("{{ default_exec_yield_time_ms }}", &yield_time)
+            .replace(IMAGE_HELPER_PLACEHOLDER, image_helper)
+    };
+    let description_override = messages
         .and_then(|messages| messages.exec.as_ref())
-        .and_then(|exec| exec.description.as_deref())
-        .unwrap_or(EXEC_DESCRIPTION_TEMPLATE)
-        .replace(
-            "{{ default_exec_yield_time_ms }}",
-            &default_exec_yield_time_ms.to_string(),
-        )
-        .replace("{{ image_helper }}", image_helper);
-    if !description.is_empty() {
-        sections.push(description);
+        .and_then(|exec| exec.description.as_deref());
+    let mut definitions = ExecDefinitions::default();
+    if let Some(template) = description_override {
+        let description = render(template);
+        if !description.is_empty() {
+            sections.push(description);
+        }
+        if incremental_exec_enabled && template.contains(IMAGE_HELPER_PLACEHOLDER) {
+            definitions.helper_signatures = helper_signature(image_helper)
+                .unwrap_or_default()
+                .to_owned();
+        }
+    } else {
+        sections.push(render(EXEC_DESCRIPTION_TEMPLATE));
+        let helpers = render(EXEC_HELPERS_TEMPLATE);
+        if incremental_exec_enabled {
+            definitions.helper_signatures = helpers
+                .lines()
+                .filter_map(|line| helper_signature(line.strip_prefix("- ")?))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        sections.push(helpers);
     }
     let default_guidance = match deferred_tool_discovery {
         // In Code Mode Only, the enabled search tool's description is rendered below.
@@ -331,7 +358,7 @@ pub fn build_exec_tool_description_and_definitions(
         sections.push(guidance.to_string());
     }
     if !code_mode_only {
-        return (sections.join("\n\n"), Vec::new());
+        return (sections.join("\n\n"), definitions);
     }
 
     let preamble = messages
@@ -341,7 +368,6 @@ pub fn build_exec_tool_description_and_definitions(
         sections.push(format!("Shared MCP Types:\n```ts\n{preamble}\n```"));
     }
 
-    let mut entries = Vec::new();
     if !enabled_tools.is_empty() {
         let mut current_namespace: Option<&str> = None;
         let mut seen_namespaces = BTreeSet::new();
@@ -369,7 +395,7 @@ pub fn build_exec_tool_description_and_definitions(
                             namespace_description.name
                         );
                         if new_entry {
-                            entries.push(ExecDefinition {
+                            definitions.entries.push(ExecDefinition {
                                 key: format!(
                                     "Namespace instructions: {}",
                                     namespace_description.name
@@ -396,7 +422,7 @@ pub fn build_exec_tool_description_and_definitions(
                 )
             };
             if incremental_exec_enabled {
-                entries.push(ExecDefinition {
+                definitions.entries.push(ExecDefinition {
                     key: format!("Tool: tools.{global_name}"),
                     description: description.clone(),
                 });
@@ -407,7 +433,15 @@ pub fn build_exec_tool_description_and_definitions(
         sections.push(nested_tool_sections.join("\n\n"));
     }
 
-    (sections.join("\n\n"), entries)
+    (sections.join("\n\n"), definitions)
+}
+
+// The renderer formats each helper as `signature`: description.
+fn helper_signature(helper: &str) -> Option<&str> {
+    helper
+        .strip_prefix('`')?
+        .split_once("`:")
+        .map(|(signature, _)| signature)
 }
 
 pub fn build_wait_tool_description() -> &'static str {
@@ -777,7 +811,7 @@ mod tests {
 
     #[test]
     fn code_mode_only_description_includes_nested_tools() {
-        let (description, entries) = build_exec_tool_description_and_definitions(
+        let (description, definitions) = build_exec_tool_description_and_definitions(
             &[ToolDefinition {
                 name: "foo".to_string(),
                 tool_name: ToolName::plain("foo"),
@@ -796,7 +830,7 @@ mod tests {
             /*incremental_exec_enabled*/ false,
             /*messages*/ None,
         );
-        assert!(entries.is_empty());
+        assert!(definitions.entries.is_empty());
         assert!(description.contains(
             "### `foo`
 bar"
@@ -869,7 +903,7 @@ bar"
                 }))),
             },
         ];
-        let (description, entries) = build_exec_tool_description_and_definitions(
+        let (description, definitions) = build_exec_tool_description_and_definitions(
             &enabled_tools,
             &[],
             &namespace_descriptions,
@@ -890,7 +924,8 @@ bar"
         ));
 
         assert_eq!(
-            entries
+            definitions
+                .entries
                 .iter()
                 .map(|entry| entry.key.as_str())
                 .collect::<Vec<_>>(),
@@ -902,7 +937,8 @@ bar"
         );
         let catalog_start = description.find("## mcp__sample\n").unwrap();
         assert_eq!(
-            entries
+            definitions
+                .entries
                 .iter()
                 .map(|entry| entry.description.as_str())
                 .collect::<Vec<_>>()
@@ -914,7 +950,7 @@ bar"
         let mut plain_tool = enabled_tools[1].clone();
         plain_tool.name = "plain".to_string();
         plain_tool.tool_name = ToolName::plain("plain");
-        let (description, interleaved_entries) = build_exec_tool_description_and_definitions(
+        let (description, interleaved_definitions) = build_exec_tool_description_and_definitions(
             &[
                 enabled_tools[0].clone(),
                 plain_tool,
@@ -931,11 +967,12 @@ bar"
         );
         assert_eq!(description.matches("## mcp__sample").count(), 2);
         assert_eq!(
-            interleaved_entries
+            interleaved_definitions
+                .entries
                 .iter()
                 .filter(|entry| entry.key.starts_with("Namespace instructions:"))
                 .collect::<Vec<_>>(),
-            vec![&entries[0]],
+            vec![&definitions.entries[0]],
         );
     }
 
