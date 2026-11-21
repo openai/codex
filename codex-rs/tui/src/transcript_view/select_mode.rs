@@ -15,6 +15,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod blocks;
 mod motion;
 pub(super) mod table;
 
@@ -33,7 +34,34 @@ pub(super) struct Mark {
     anchor_edges: Option<(Anchor, Anchor)>,
     active_edges: Option<(Anchor, Anchor)>,
     unit: SelectionUnit,
-    table: Option<table::TableMark>,
+    scope: Scope,
+}
+
+#[derive(Clone, Copy)]
+enum Scope {
+    Text,
+    Table(table::TableMark),
+    Block(blocks::BlockMark),
+}
+
+impl Mark {
+    fn at(cursor: Anchor, unit: SelectionUnit) -> Self {
+        Self {
+            anchor: cursor,
+            active: cursor,
+            anchor_edges: None,
+            active_edges: None,
+            unit,
+            scope: Scope::Text,
+        }
+    }
+
+    fn table(self) -> Option<table::TableMark> {
+        match self.scope {
+            Scope::Table(table) => Some(table),
+            Scope::Text | Scope::Block(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -93,7 +121,7 @@ impl SelectMode {
         self.table_caret = self
             .mark
             .take()
-            .and_then(|mark| mark.table)
+            .and_then(Mark::table)
             .map(|table| table.active)
             .or(self.table_caret);
         self.preferred_column = None;
@@ -105,7 +133,7 @@ impl SelectMode {
 
     fn padding_column(self, width: u16) -> Option<u16> {
         self.mark
-            .and_then(|mark| mark.table.map(|table| table.active))
+            .and_then(|mark| mark.table().map(|table| table.active))
             .or(self.table_caret)
             .and_then(|cell| cell.padding_column)
             .map(|column| column.min(width.saturating_sub(1)))
@@ -241,8 +269,11 @@ impl TranscriptView {
         }
         if pressed
             && self.disclosure.keymap.pager.mark_markdown.is_pressed(key)
-            && self.start_select_table(cells)
+            && self.toggle_markdown(cells)
         {
+            return Some(ViewAction::Changed);
+        }
+        if pressed && self.change_block_level(cells, code, modifiers) {
             return Some(ViewAction::Changed);
         }
         if pressed && code == KeyCode::Char('o') && modifiers == KeyModifiers::NONE {
@@ -271,6 +302,8 @@ impl TranscriptView {
             ) => {
                 if matches!(code, KeyCode::Up | KeyCode::Down) {
                     CursorMotion::Rows(if code == KeyCode::Up { -1 } else { 1 })
+                } else if shift_arrow && self.marked_block().is_some() {
+                    return Some(ViewAction::Changed);
                 } else {
                     CursorMotion::Character(code)
                 }
@@ -333,24 +366,17 @@ impl TranscriptView {
         };
         let cursor = mode.cursor(selection);
         mode.mark = match mode.mark {
-            Some(mark) if mark.unit == unit && mark.table.is_none() => {
+            Some(mark) if mark.unit == unit && matches!(mark.scope, Scope::Text) => {
                 self.clear_select_mark();
                 return;
             }
-            Some(mark) if mark.table.is_none() => Some(Mark {
+            Some(mark) if matches!(mark.scope, Scope::Text) => Some(Mark {
                 anchor_edges: None,
                 active_edges: None,
                 unit,
                 ..mark
             }),
-            _ => Some(Mark {
-                anchor: cursor,
-                active: cursor,
-                anchor_edges: None,
-                active_edges: None,
-                unit,
-                table: None,
-            }),
+            _ => Some(Mark::at(cursor, unit)),
         };
         mode.preferred_column = None;
         mode.table_caret = None;
@@ -381,8 +407,10 @@ impl TranscriptView {
         };
         std::mem::swap(&mut mark.anchor, &mut mark.active);
         std::mem::swap(&mut mark.anchor_edges, &mut mark.active_edges);
-        if let Some(table) = &mut mark.table {
-            std::mem::swap(&mut table.anchor, &mut table.active);
+        match &mut mark.scope {
+            Scope::Text => {}
+            Scope::Table(table) => std::mem::swap(&mut table.anchor, &mut table.active),
+            Scope::Block(block) => block.swap(),
         }
         mode.preferred_column = None;
         self.sync_select_range(cells);
@@ -467,7 +495,7 @@ impl TranscriptView {
                     anchor_edges: Some((start, anchor_end)),
                     active_edges: Some((active_start, end)),
                     unit,
-                    table: None,
+                    scope: Scope::Text,
                 }
             } else {
                 let anchor = self.before_grapheme(cells, start);
@@ -483,7 +511,7 @@ impl TranscriptView {
                     anchor_edges: Some((anchor_start, start)),
                     active_edges: Some((end, active_end)),
                     unit,
-                    table: None,
+                    scope: Scope::Text,
                 }
             }
         });
@@ -531,7 +559,10 @@ impl TranscriptView {
         }
         mode.preferred_column = None;
         mode.table_caret = None;
-        if mode.mark.is_some_and(|mark| mark.table.is_some()) {
+        if mode
+            .mark
+            .is_some_and(|mark| !matches!(mark.scope, Scope::Text))
+        {
             mode.mark = None;
         }
         if let Some(mark) = &mut mode.mark {

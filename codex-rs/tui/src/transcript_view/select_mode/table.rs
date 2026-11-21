@@ -35,7 +35,7 @@ fn table_hit(layout: &TextLayout, cursor: Anchor) -> Option<TableCellHit> {
 
 impl TranscriptView {
     pub(in crate::transcript_view) fn table_mark(&self) -> Option<TableMark> {
-        self.select_mode?.mark?.table
+        self.select_mode?.mark?.table()
     }
 
     pub(in crate::transcript_view) fn select_cursor_is_on_table(&self) -> bool {
@@ -71,7 +71,7 @@ impl TranscriptView {
         };
         let cell = mode
             .mark
-            .and_then(|mark| mark.table.map(|table| table.active))
+            .and_then(|mark| mark.table().map(|table| table.active))
             .or(mode.table_caret)
             .or_else(|| {
                 table_hit(&layout, cursor).map(|hit| CellPosition {
@@ -84,16 +84,12 @@ impl TranscriptView {
         self.cancel_pending_select_search();
         self.cancel_beginning();
         mode.mark = Some(Mark {
-            anchor: cursor,
-            active: cursor,
-            anchor_edges: None,
-            active_edges: None,
-            unit: SelectionUnit::Character,
-            table: Some(TableMark {
+            scope: Scope::Table(TableMark {
                 anchor: cell,
                 active: cell,
                 kind: TableMarkKind::Cells,
             }),
+            ..Mark::at(cursor, SelectionUnit::Character)
         });
         mode.preferred_column = None;
         self.select_mode = Some(mode);
@@ -105,7 +101,7 @@ impl TranscriptView {
         let Some(mut mode) = self.select_mode else {
             return;
         };
-        let Some((mut mark, table)) = mode.mark.and_then(|mark| Some((mark, mark.table?))) else {
+        let Some((mut mark, table)) = mode.mark.and_then(|mark| Some((mark, mark.table()?))) else {
             return;
         };
         if table.kind == TableMarkKind::Text {
@@ -141,7 +137,7 @@ impl TranscriptView {
         };
         mark.anchor = cursor;
         mark.active = cursor;
-        mark.table = Some(TableMark {
+        mark.scope = Scope::Table(TableMark {
             anchor: cell,
             active: cell,
             kind: TableMarkKind::Text,
@@ -275,7 +271,9 @@ impl TranscriptView {
         mut mark: Mark,
         motion: CursorMotion,
     ) {
-        let Some(table) = &mut mark.table else { return };
+        let Scope::Table(table) = &mut mark.scope else {
+            return;
+        };
         let (row, column) = table.active.cell;
         let cell = match motion {
             CursorMotion::Character(KeyCode::Left) => column.checked_sub(1).map(|col| (row, col)),

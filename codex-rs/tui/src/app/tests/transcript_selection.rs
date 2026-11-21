@@ -182,7 +182,7 @@ async fn offline_selection_reserves_keys_and_preserves_draft_and_backtrack_state
 }
 
 #[tokio::test]
-async fn markdown_chord_marks_whole_cells_in_the_transcript_overlay() -> Result<()> {
+async fn markdown_key_marks_whole_cells_in_the_transcript_overlay() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut app_server = start_config_write_test_app_server(&app).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -215,8 +215,7 @@ async fn markdown_chord_marks_whole_cells_in_the_transcript_overlay() -> Result<
         TuiEvent::Paste("Be".into()),
         TuiEvent::Draw,
         TuiEvent::Key(KeyCode::Enter.into()),
-        TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
-        TuiEvent::Key(KeyCode::Char('v').into()),
+        TuiEvent::Key(KeyCode::Char('m').into()),
     ] {
         app.handle_tui_event(&mut tui, &mut app_server, event)
             .await?;

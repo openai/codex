@@ -68,6 +68,7 @@ pub(in crate::keymap) fn register(
             action: name,
         };
         if (!workspace && (action.is_side_pane() || name == "open_agents"))
+            || (name == "mark_markdown" && !resolved.pager.mark_markdown.is_empty())
             || !matches!(
                 super::configured_binding_for_action(keymap, action),
                 Some(None)

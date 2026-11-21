@@ -10,6 +10,8 @@ use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 
+#[path = "text_blocks.rs"]
+pub(super) mod blocks;
 #[path = "text_logical.rs"]
 mod logical;
 
@@ -46,6 +48,7 @@ use ratatui::text::Line;
 
 /// One cell's logical text and its width-dependent display rows.
 pub(crate) struct TextLayout {
+    blocks: std::sync::OnceLock<blocks::BlockIndex>,
     pub(super) image: Option<std::sync::Arc<crate::transcript_image::TranscriptImage>>,
     pub(super) image_left_aligned: bool,
     logical: Vec<LogicalLine>,
@@ -78,6 +81,7 @@ struct TextRow {
     content_width: u16,
     first_column: usize,
     prefix_columns: usize,
+    marker_only: bool,
     tabs: tabs::TabStops,
 }
 
@@ -350,6 +354,7 @@ impl TextLayout {
                 content_width: self.width,
                 first_column: indent,
                 prefix_columns: indent,
+                marker_only: false,
                 tabs: tabs::TabStops::default(),
             },
         );
@@ -724,6 +729,9 @@ impl TextLayout {
     /// Return the first selectable source grapheme on a display row, excluding synthetic rows.
     pub(super) fn first_cursor_position(&self, row: usize) -> Option<usize> {
         let row = self.rows.get(row)?;
+        if row.marker_only {
+            return Some(row.source.start);
+        }
         self.text[row.source.clone()]
             .grapheme_indices(/*is_extended*/ true)
             .next()
@@ -963,6 +971,7 @@ impl TextLayout {
             }
         }
         Self {
+            blocks: Default::default(),
             image: None,
             image_left_aligned: false,
             logical,
@@ -1060,6 +1069,12 @@ fn layout_line(logical: &LogicalLine, text_start: usize, width: u16) -> Vec<Text
                 content_width,
                 first_column: first_column + prefix_columns,
                 prefix_columns,
+                marker_only: logical.origin.range.is_empty()
+                    && logical
+                        .origin
+                        .copy
+                        .as_ref()
+                        .is_some_and(|copy| copy.has_list_marker()),
                 tabs,
             }
         })

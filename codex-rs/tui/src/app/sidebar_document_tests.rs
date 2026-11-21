@@ -244,7 +244,7 @@ async fn document_preview_scenario() -> Result<()> {
     side_frame(&mut app, &mut tui, size)?;
     let sidebar = app.conversation_frame.panel_area().expect("document panel");
     let footer = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
-    insta::assert_snapshot!(footer, @"v mark · enter/q close");
+    insta::assert_snapshot!(footer, @"m mark paragraph · q close");
     for key in [KeyCode::Char('v'), KeyCode::Right] {
         Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
     }

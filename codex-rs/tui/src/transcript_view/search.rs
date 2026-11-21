@@ -333,7 +333,7 @@ impl TranscriptView {
         mode.table_caret = origin.table_caret;
         mode.preferred_column = origin.preferred_column;
         selection.set_keyboard_range(origin.start, origin.end);
-        if self.table_mark().is_some() {
+        if self.table_mark().is_some() || self.marked_block().is_some() {
             self.sync_select_range(cells);
         }
     }

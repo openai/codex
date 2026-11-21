@@ -1857,7 +1857,7 @@ impl RuntimeKeymap {
                 });
             }
         }
-        resolved.configure_search(keymap)?;
+        resolved.configure_transcript_and_vim_defaults(keymap)?;
         chords::leader_defaults::register(keymap, &mut resolved, workspace);
         resolved.validate_conflicts()?;
         chords::validate_chord_conflicts(&resolved)?;
@@ -2176,7 +2176,7 @@ impl RuntimeKeymap {
                 close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
                 close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 find: default_bindings![plain(KeyCode::F(3)), plain(KeyCode::Char('/'))],
-                mark_markdown: Vec::new(),
+                mark_markdown: default_bindings![plain(KeyCode::Char('m'))],
                 chord_hints: Arc::default(),
             },
             list: ListKeymap {

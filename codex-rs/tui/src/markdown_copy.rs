@@ -15,6 +15,7 @@ use pulldown_cmark::Tag;
 use crate::clipboard_copy::CopyFormat;
 use crate::terminal_hyperlinks::LogicalLineSource;
 
+pub(crate) mod block;
 pub(crate) mod table;
 
 /// A transformed fenced block and its coordinates in the renderer input.
@@ -40,21 +41,39 @@ pub(crate) const MAX_COPY_DEPTH: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SelectionOutput {
+    Blocks(usize),
     Markdown,
     PlainText,
 }
 
 impl SelectionOutput {
+    fn prefix(self, prefix: &str, indentation: Option<usize>) -> String {
+        let Self::Blocks(outer) = self else {
+            return dedent(prefix, indentation.unwrap_or_default());
+        };
+        let prefix = prefix.get(outer..).unwrap_or_default();
+        // Checkboxes extend their marker but do not increase the continuation indent.
+        if outer > 0 {
+            prefix
+                .strip_prefix("[x] ")
+                .or_else(|| prefix.strip_prefix("[ ] "))
+                .unwrap_or(prefix)
+        } else {
+            prefix
+        }
+        .to_owned()
+    }
+
     fn render(self, plain: &str, markdown: impl FnOnce() -> String) -> String {
         match self {
-            Self::Markdown => markdown(),
+            Self::Blocks(_) | Self::Markdown => markdown(),
             Self::PlainText => plain.to_owned(),
         }
     }
 
     fn push_prose(self, out: &mut String, plain: &str, markdown: impl FnOnce() -> String) {
         match self {
-            Self::Markdown => push_prose_fragment(out, &markdown()),
+            Self::Blocks(_) | Self::Markdown => push_prose_fragment(out, &markdown()),
             Self::PlainText => out.push_str(plain),
         }
     }
@@ -96,11 +115,14 @@ impl Inline {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CopyLine {
+    pub(crate) block: Option<Arc<block::Block>>,
     pub(crate) prefix: String,
     pub(crate) continuation: String,
     /// Restore the containing item when a multiline selection starts in its later paragraph.
     pub(crate) item_prefix: String,
     pub(crate) code: bool,
+    /// Language of the displayed code, absent when the renderer replaces its body.
+    pub(crate) code_language: Option<Arc<str>>,
     /// Source shared by rows when rendering replaces code with a diagram or table.
     pub(crate) code_source: Option<Arc<str>>,
     /// Outer quote source, retained even when it contains only code.
@@ -149,6 +171,10 @@ pub(crate) fn has_visible_markup(
 }
 
 impl CopyLine {
+    pub(crate) fn has_list_marker(&self) -> bool {
+        self.prefix != self.continuation
+    }
+
     pub(crate) fn push(&mut self, length: usize, inline: &[Inline]) {
         if length == 0 {
             return;
@@ -319,6 +345,10 @@ pub(crate) struct SelectedLine {
 }
 
 impl SelectedLine {
+    fn block(&self) -> Option<&Arc<block::Block>> {
+        self.source.copy.as_ref()?.block.as_ref()
+    }
+
     pub(crate) fn append(
         lines: &mut Vec<Self>,
         source: LogicalLineSource,
@@ -391,6 +421,16 @@ pub(crate) fn selection(
     render_selection(lines, plain, rectangle_rows, SelectionOutput::Markdown)
 }
 
+pub(crate) fn block_selection(lines: &[SelectedLine], outer_prefix: usize) -> String {
+    render_selection(
+        lines,
+        "",
+        /*rectangle_rows*/ None,
+        SelectionOutput::Blocks(outer_prefix),
+    )
+    .0
+}
+
 pub(crate) fn literal_selection(
     lines: &[SelectedLine],
     plain: &str,
@@ -405,8 +445,10 @@ fn render_selection(
     rectangle_rows: Option<&RangeInclusive<usize>>,
     output: SelectionOutput,
 ) -> (String, CopyFormat) {
+    let blocks = matches!(output, SelectionOutput::Blocks(_));
     // Soft wraps and streamed fragments of the same logical line are already coalesced.
-    if rectangle_rows.is_none()
+    if !blocks
+        && rectangle_rows.is_none()
         && let [line] = lines
         && line
             .source
@@ -424,7 +466,8 @@ fn render_selection(
             !line.range.is_empty() && !line.source.copy.as_ref().is_some_and(|copy| copy.omit)
         })
         .peekable();
-    let quote_only = content.peek().is_some()
+    let quote_only = !blocks
+        && content.peek().is_some()
         && content.all(|line| {
             line.source
                 .copy
@@ -473,7 +516,7 @@ fn render_selection(
                 .as_ref()
                 .is_some_and(|copy| !copy.code && !copy.omit)
     });
-    if !rich {
+    if !rich && !blocks {
         return (plain.to_owned(), CopyFormat::PlainText);
     }
     let mut out = String::new();
@@ -488,25 +531,40 @@ fn render_selection(
             out.push_str(line.separator(output));
         }
         let prefix = line.source.copy.as_ref().map_or("", |copy| {
-            if indentation.is_none() && !line.range.is_empty() && lines.peek().is_some() {
+            if !blocks && indentation.is_none() && !line.range.is_empty() && lines.peek().is_some()
+            {
                 &copy.item_prefix
             } else {
                 &copy.prefix
             }
         });
-        if !line.range.is_empty() {
+        if !blocks && !line.range.is_empty() {
             let spaces = prefix
                 .split("> ")
                 .map(|part| part.len() - part.trim_start_matches(' ').len())
                 .sum();
             indentation = Some(indentation.map_or(spaces, |previous| previous.min(spaces)));
         }
-        let prefix = dedent(prefix, indentation.unwrap_or(/*default*/ 0));
+        let prefix = output.prefix(prefix, indentation);
+        let task_marker = prefix.ends_with("[ ] ") || prefix.ends_with("[x] ");
         // A rectangle is scoped to the table at the start of the selection.
         let rectangle = rectangle_rows.filter(|_| first);
-        if line.range.is_empty() && rectangle.is_none() {
+        if line.range.is_empty()
+            && rectangle.is_none()
+            && !(blocks
+                && line
+                    .source
+                    .copy
+                    .as_ref()
+                    .is_some_and(|copy| copy.code || copy.table.is_some()))
+        {
             if line.source.text.is_empty() {
-                out.push_str(prefix.trim_end());
+                // Keep the space after an empty checkbox so it still parses as a task item.
+                out.push_str(if blocks && task_marker {
+                    &prefix
+                } else {
+                    prefix.trim_end()
+                });
             }
             first = false;
             continue;
@@ -540,7 +598,7 @@ fn render_selection(
                 .copy
                 .as_ref()
                 .map_or("", |copy| copy.continuation.as_str());
-            let continuation = dedent(continuation, indentation.unwrap_or(/*default*/ 0));
+            let continuation = output.prefix(continuation, indentation);
             for (index, row) in body.lines().enumerate() {
                 if index > 0 {
                     out.push('\n');
@@ -578,7 +636,12 @@ fn render_selection(
                 .copy
                 .as_ref()
                 .map_or("", |copy| copy.continuation.as_str());
+            let block = line.block();
             while let Some(next) = lines.peek()
+                && (!blocks
+                    || block
+                        .zip(next.block())
+                        .is_some_and(|(a, b)| Arc::ptr_eq(a, b)))
                 && !next.source.copy_as_prose
                 && next.source.copy.is_some() == line.source.copy.is_some()
                 && next.source.copy.as_ref().is_none_or(|copy| copy.code)
@@ -609,16 +672,25 @@ fn render_selection(
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
             }
-            let continuation = dedent(continuation, indentation.unwrap_or(/*default*/ 0));
+            let continuation = output.prefix(continuation, indentation);
             // A checkbox label must precede the fence on its own line.
-            if prefix.ends_with("[ ] ") || prefix.ends_with("[x] ") {
+            if task_marker {
                 out.push_str(prefix.trim_end());
                 out.push('\n');
                 out.push_str(&continuation);
             } else {
                 out.push_str(&prefix);
             }
-            out.push_str(&format!("{fence}\n"));
+            let language = if blocks {
+                line.source
+                    .copy
+                    .as_ref()
+                    .and_then(|copy| copy.code_language.as_deref())
+                    .unwrap_or_default()
+            } else {
+                ""
+            };
+            out.push_str(&format!("{fence}{language}\n"));
             for row in code.split_inclusive('\n') {
                 out.push_str(&continuation);
                 out.push_str(row);

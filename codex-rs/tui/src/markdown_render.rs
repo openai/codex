@@ -535,6 +535,7 @@ struct Writer<'a, 'policy> {
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     copy_inline: Vec<crate::markdown_copy::Inline>,
+    blocks: crate::markdown_copy::block::Stack,
     copy_line: crate::markdown_copy::CopyLine,
     quote_sources: Vec<std::sync::Arc<str>>,
     code_sources: Vec<crate::markdown_copy::SourceBlock>,
@@ -582,6 +583,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             copy_inline: Vec::new(),
+            blocks: Default::default(),
             copy_line: Default::default(),
             quote_sources: Vec::new(),
             code_sources: Vec::new(),
@@ -658,8 +660,17 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 )
         );
         match event {
-            Event::Start(tag) => self.start_tag(tag, range, iter),
-            Event::End(tag) => self.end_tag(tag, range),
+            Event::Start(tag) => {
+                if let Some(kind) = crate::markdown_copy::block::Stack::kind(&tag) {
+                    let prefix = self.copy_prefix(/*pending_marker_line*/ false).len();
+                    self.blocks.push(kind, prefix);
+                }
+                self.start_tag(tag, range, iter);
+            }
+            Event::End(tag) => {
+                self.end_tag(tag, range);
+                self.blocks.end(tag);
+            }
             Event::Text(text) => {
                 if self.in_code_block {
                     self.code_block_content.start = self.code_block_content.start.min(range.start);
@@ -1240,6 +1251,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 } else {
                     None
                 };
+                let code_language: Option<std::sync::Arc<str>> = diagram
+                    .is_none()
+                    .then(|| lang.split('`').next().unwrap_or_default().into());
                 let highlighted = match diagram {
                     Some(diagram) => diagram,
                     None => highlight_code_to_lines(&code, &lang),
@@ -1257,6 +1271,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                 for hl_line in highlighted {
                     self.push_line(Line::default());
                     self.copy_line.code_source = Some(std::sync::Arc::clone(&source));
+                    self.copy_line.code_language = code_language.clone();
                     for span in hl_line.spans {
                         self.push_span(span);
                     }
@@ -2575,6 +2590,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             .and_then(|source| source.copy.as_deref())
             .cloned()
             .unwrap_or_default();
+        copy.block = self.blocks.current();
         copy.code_source = self.transformed_code_source.clone();
         copy.quote_source = self.quote_sources.first().cloned();
         copy.prefix = self.copy_prefix(pending_marker_line);
@@ -2607,6 +2623,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         self.current_subsequent_indent = self.prefix_spans(/*pending_marker_line*/ false);
         self.current_line_style = style;
         self.copy_line = crate::markdown_copy::CopyLine::default();
+        self.copy_line.block = self.blocks.current();
         self.copy_line.prefix = self.copy_prefix(was_pending);
         self.copy_line.continuation = self.copy_prefix(/*pending_marker_line*/ false);
         self.copy_line.item_prefix = self.copy_prefix(/*pending_marker_line*/ true);

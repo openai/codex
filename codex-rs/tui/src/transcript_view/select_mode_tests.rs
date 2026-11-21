@@ -806,11 +806,7 @@ fn select_mode_renders_cursor_and_scannable_footer_hints() {
     ));
 }
 
-fn select_table_at_match(
-    cells: &[Arc<dyn HistoryCell>],
-    width: u16,
-    query: &str,
-) -> TranscriptView {
+fn select_at_match(cells: &[Arc<dyn HistoryCell>], width: u16, query: &str) -> TranscriptView {
     let mut view = TranscriptView::default();
     crate::transcript_view::tests::render(&mut view, cells, width, /*height*/ 32);
     assert!(view.begin_select_mode(cells));
@@ -821,14 +817,8 @@ fn select_table_at_match(
     view
 }
 
-// These view tests receive the semantic event produced by the app's chord router.
 fn mark_markdown(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) {
-    let key = crate::keymap::dispatch_event(crate::keymap::KeymapActionId {
-        context: crate::keymap::KeymapContext::Pager,
-        action: "mark_markdown",
-    })
-    .unwrap();
-    press(view, cells, key.code);
+    press(view, cells, KeyCode::Char('m'));
 }
 
 #[test]
@@ -837,7 +827,7 @@ fn keyboard_table_mark_selects_cells_and_swaps_rectangle_corners() {
         "| Left | Right |\n|---|---|\n| alpha | Beta |\n| Gamma | delta |".into(),
         std::path::Path::new("/"),
     ))];
-    let mut view = select_table_at_match(&cells, /*width*/ 32, "Beta");
+    let mut view = select_at_match(&cells, /*width*/ 32, "Beta");
     let footer = |view: &TranscriptView| {
         view.footer_with_navigation(/*width*/ 32, crate::motion::MotionMode::Reduced, "")
             .unwrap()
@@ -898,7 +888,7 @@ fn keyboard_table_header_rectangle_excludes_record_values() {
         std::path::Path::new("/"),
     )) as Arc<dyn HistoryCell>];
     for width in [10, 32] {
-        let mut view = select_table_at_match(&cells, width, "Left");
+        let mut view = select_at_match(&cells, width, "Left");
         mark_markdown(&mut view, &cells);
         press(&mut view, &cells, KeyCode::Right);
         assert_eq!(
@@ -916,7 +906,7 @@ fn shift_click_extends_from_the_fixed_in_cell_text_anchor() {
         std::path::Path::new("/"),
     )) as Arc<dyn HistoryCell>];
     for (motion, target, expected) in [(KeyCode::Left, "e", "bcd"), (KeyCode::Right, "a", "ab")] {
-        let mut view = select_table_at_match(&cells, /*width*/ 32, "bcd");
+        let mut view = select_at_match(&cells, /*width*/ 32, "bcd");
         mark_markdown(&mut view, &cells);
         press(&mut view, &cells, KeyCode::Char('v'));
         press(&mut view, &cells, motion);
@@ -953,7 +943,7 @@ fn in_cell_word_motion_projects_boundaries_past_escaped_pipes() {
             format!("| {header} | B |\n|---|---|"),
             std::path::Path::new("/"),
         )) as Arc<dyn HistoryCell>];
-        let mut view = select_table_at_match(&cells, /*width*/ 8, query);
+        let mut view = select_at_match(&cells, /*width*/ 8, query);
         mark_markdown(&mut view, &cells);
         press(&mut view, &cells, KeyCode::Char('v'));
         press(&mut view, &cells, KeyCode::Char(motion));
@@ -970,7 +960,7 @@ fn shift_click_replaces_the_cell_mark_at_the_same_endpoint() {
         "| Left | Right |\n|---|---|\n| alpha | Beta |\n| Gamma | delta |".into(),
         std::path::Path::new("/"),
     )) as Arc<dyn HistoryCell>];
-    let mut view = select_table_at_match(&cells, /*width*/ 32, "Beta");
+    let mut view = select_at_match(&cells, /*width*/ 32, "Beta");
     mark_markdown(&mut view, &cells);
     press(&mut view, &cells, KeyCode::Down);
     crate::transcript_view::tests::render(&mut view, &cells, /*width*/ 32, /*height*/ 12);
@@ -1009,7 +999,7 @@ fn keyboard_cell_word_motion_crosses_a_wrapped_identifier() {
         "| Name | Value |\n|---|---|\n| abcdefghijklmnop next | 1 |".into(),
         std::path::Path::new("/"),
     )) as Arc<dyn HistoryCell>];
-    let mut view = select_table_at_match(&cells, /*width*/ 12, "abcd");
+    let mut view = select_at_match(&cells, /*width*/ 12, "abcd");
     mark_markdown(&mut view, &cells);
     press(&mut view, &cells, KeyCode::Char('v'));
     press(&mut view, &cells, KeyCode::Char('e'));
@@ -1032,7 +1022,7 @@ fn keyboard_table_motion_skips_record_labels_and_reaches_empty_cells() {
         std::path::Path::new("/"),
     ))];
     for width in [32, 10] {
-        let mut view = select_table_at_match(&cells, width, "Beta");
+        let mut view = select_at_match(&cells, width, "Beta");
         mark_markdown(&mut view, &cells);
         press(&mut view, &cells, KeyCode::Char('j'));
         press(&mut view, &cells, KeyCode::Char('j'));
@@ -1068,7 +1058,7 @@ fn keyboard_cell_text_crosses_wraps_without_selecting_neighbors() {
         std::path::Path::new("/"),
     ))];
     for width in [34, 12] {
-        let mut view = select_table_at_match(&cells, width, "界");
+        let mut view = select_at_match(&cells, width, "界");
         mark_markdown(&mut view, &cells);
         press(&mut view, &cells, KeyCode::Char('v'));
         assert_eq!(view.selected_text(&cells).as_deref(), Some("界"));
@@ -1115,4 +1105,365 @@ fn keyboard_cell_text_crosses_wraps_without_selecting_neighbors() {
             "width {width}"
         );
     }
+}
+
+fn marked_markdown_at(
+    markdown: &str,
+    width: u16,
+    query: &str,
+) -> (TranscriptView, [Arc<dyn HistoryCell>; 1]) {
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(AgentMarkdownCell::new(
+        markdown.into(),
+        std::path::Path::new("/"),
+    ))];
+    let mut view = select_at_match(&cells, width, query);
+    mark_markdown(&mut view, &cells);
+    (view, cells)
+}
+
+#[test]
+fn markdown_mark_copies_wrapped_siblings_from_the_displayed_revision() {
+    let (mut view, cells) = marked_markdown_at(
+        "## Release notes\n\nRead the **界 changes** before updating.\n\nRead the **界 changes** before updating.",
+        /*width*/ 20,
+        "Release",
+    );
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("## Release notes")
+    );
+    press(&mut view, &cells, KeyCode::Down);
+    let pair = "## Release notes\n\nRead the **界 changes** before updating.";
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(pair));
+    press(&mut view, &cells, KeyCode::Tab);
+    let section = format!("{pair}\n\nRead the **界 changes** before updating.");
+    press(&mut view, &cells, KeyCode::Char('/'));
+    press(&mut view, &cells, KeyCode::Esc);
+    let updated = [cell(&["new revision"])];
+    let painted = crate::transcript_view::tests::render(
+        &mut view, &updated, /*width*/ 24, /*height*/ 8,
+    );
+    let hints = [120, 45].map(|width| {
+        view.footer_with_navigation(width, crate::motion::MotionMode::Reduced, "")
+            .unwrap()
+            .text
+            .to_string()
+    });
+    let selected = painted
+        .content()
+        .chunks(24)
+        .map(|row| {
+            row.iter()
+                .filter(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(format!("{}\n{}", selected.trim_end(), hints.join("\n")));
+    let Some(ViewAction::Copy(text)) = view.handle_key(KeyCode::Char('y').into(), &updated) else {
+        panic!("expected copy")
+    };
+    view.copy_selected_text_with(
+        &updated,
+        &text,
+        /*clear_selection*/ false,
+        |text, format| {
+            assert_eq!(
+                (text, format),
+                (
+                    section.as_str(),
+                    crate::clipboard_copy::CopyFormat::Markdown
+                )
+            );
+            Ok(CopyStatus::Confirmed)
+        },
+    )
+    .unwrap();
+    press(&mut view, &updated, KeyCode::BackTab);
+    assert_eq!(view.selected_text(&updated).as_deref(), Some(pair));
+    press(&mut view, &updated, KeyCode::Char('o'));
+    press(&mut view, &updated, KeyCode::Down);
+    assert_eq!(
+        view.selected_text(&updated).as_deref(),
+        Some("Read the **界 changes** before updating.")
+    );
+}
+
+#[test]
+fn markdown_mark_expands_and_moves_between_sections() {
+    let macos = "### macOS\n\nOpen the **disk image**.\n\nDrag the app.";
+    let linux = "### Linux\n\nUnpack the archive.\n\n***";
+    let platforms = format!("{macos}\n\n{linux}");
+    let install = format!("## Install\n\n{platforms}");
+    let (mut view, cells) = marked_markdown_at(
+        &format!("{install}\n\n## Usage"),
+        /*width*/ 32,
+        "macOS",
+    );
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("### macOS"));
+    for (key, expected) in [
+        (KeyCode::Right, "Open the **disk image**."),
+        (KeyCode::Left, "### macOS"),
+        (KeyCode::Tab, macos),
+        (KeyCode::Char('l'), linux),
+        (KeyCode::BackTab, "### Linux"),
+        (KeyCode::Tab, linux),
+        (KeyCode::Char('h'), macos),
+        (KeyCode::Char('j'), platforms.as_str()),
+        (KeyCode::Tab, install.as_str()),
+        (KeyCode::BackTab, platforms.as_str()),
+        (KeyCode::Char('k'), macos),
+        (KeyCode::Tab, install.as_str()),
+        (KeyCode::BackTab, macos),
+    ] {
+        press(&mut view, &cells, key);
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some(expected),
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn markdown_sections_respect_heading_rank_and_parser_containers() {
+    let (mut view, cells) = marked_markdown_at(
+        "# Guide\n\n> Intro\n> -----\n>\n> #### Example\n>\n> ```sh\n> # a comment\n> ```\n\nOutside the quote.\n\n# Usage",
+        /*width*/ 40,
+        "Example",
+    );
+    for (key, expected) in [
+        (KeyCode::Tab, "#### Example\n\n```sh\n# a comment\n```"),
+        (
+            KeyCode::Tab,
+            "## Intro\n\n#### Example\n\n```sh\n# a comment\n```",
+        ),
+        (KeyCode::BackTab, "#### Example\n\n```sh\n# a comment\n```"),
+        (KeyCode::BackTab, "#### Example"),
+    ] {
+        press(&mut view, &cells, key);
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some(expected),
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn markdown_mark_expands_nested_items_and_recovers_original_sibling_range() {
+    let (mut view, cells) = marked_markdown_at(
+        "- First\n- Parent\n  - **Nested**\n  - Second\n  - Third\n- Last",
+        /*width*/ 32,
+        "Nested",
+    );
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("- **Nested**"));
+    press(&mut view, &cells, KeyCode::Char('j'));
+    let pair = "- **Nested**\n- Second";
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(pair));
+    // Move from the active end of the pair, staying within the nested list.
+    for (key, expected) in [
+        (KeyCode::Char('l'), "- Third"),
+        (KeyCode::Right, "- Third"),
+        (KeyCode::Left, "- Second"),
+        (KeyCode::Tab, "- **Nested**\n- Second\n- Third"),
+        (KeyCode::BackTab, "- Second"),
+        (KeyCode::Char('h'), "- **Nested**"),
+        (KeyCode::Left, "- **Nested**"),
+        (KeyCode::Right, "- Second"),
+        (KeyCode::Char('k'), pair),
+    ] {
+        press(&mut view, &cells, key);
+        assert_eq!(
+            view.selected_text(&cells).as_deref(),
+            Some(expected),
+            "{key:?}"
+        );
+    }
+    press(&mut view, &cells, KeyCode::Char('o'));
+    press(&mut view, &cells, KeyCode::Tab);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("- **Nested**\n- Second\n- Third")
+    );
+    let hints = [120, 40].map(|width| {
+        use ratatui::style::Modifier;
+        let footer = view
+            .footer_with_navigation(width, crate::motion::MotionMode::Reduced, "")
+            .unwrap();
+        footer.text.lines[0]
+            .spans
+            .iter()
+            .map(|span| {
+                if span.style.add_modifier.contains(Modifier::BOLD) {
+                    format!("**{}**", span.content)
+                } else {
+                    span.content.to_string()
+                }
+            })
+            .collect::<String>()
+    });
+    insta::assert_snapshot!("markdown_list_footer", hints.join("\n"));
+    press(&mut view, &cells, KeyCode::Tab);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("- Parent\n  - **Nested**\n  - Second\n  - Third")
+    );
+    press(&mut view, &cells, KeyCode::BackTab);
+    press(&mut view, &cells, KeyCode::BackTab);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(pair));
+    press(&mut view, &cells, KeyCode::Char('v'));
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("S"));
+}
+
+#[test]
+fn markdown_mark_copies_code_with_language_and_only_selected_quote_levels() {
+    let (mut view, cells) = marked_markdown_at(
+        "> > ```rust\n> > let example = 1;\n> >\n> > example\n> > ```",
+        /*width*/ 16,
+        "example",
+    );
+    let code = "```rust\nlet example = 1;\n\nexample\n```";
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(code));
+    view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT), &cells);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("> ```rust\n> let example = 1;\n> \n> example\n> ```")
+    );
+    view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT), &cells);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some(code));
+}
+
+#[test]
+fn markdown_mark_copies_empty_items_at_the_edges_of_a_list() {
+    let (mut view, cells) =
+        marked_markdown_at("- [ ] \n- [x] Done\n- [ ] ", /*width*/ 32, "Done");
+    press(&mut view, &cells, KeyCode::Tab); // Paragraph to item.
+    press(&mut view, &cells, KeyCode::Tab); // Item to list.
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("- [ ] \n- [x] Done\n- [ ] ")
+    );
+    let buffer = render(&mut view, &cells);
+    let highlighted: Vec<_> = buffer
+        .content()
+        .chunks(usize::from(buffer.area.width))
+        .map(|row| {
+            row.iter()
+                .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::REVERSED))
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        })
+        .map(|row| row.trim().to_owned())
+        .filter(|row| !row.is_empty())
+        .collect();
+    insta::assert_snapshot!(highlighted.join("\n"), @"
+    • ☐
+    ☑ Done
+    ☐
+    ");
+
+    press(&mut view, &cells, KeyCode::BackTab);
+    press(&mut view, &cells, KeyCode::Right);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("- [ ] "));
+}
+
+#[test]
+fn markdown_mark_can_start_on_a_list_with_no_item_text() {
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(AgentMarkdownCell::new(
+        "- [ ] \n- [x] ".into(),
+        std::path::Path::new("/"),
+    ))];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    mark_markdown(&mut view, &cells);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("- [x] "));
+    press(&mut view, &cells, KeyCode::Tab);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("- [ ] \n- [x] ")
+    );
+}
+
+#[test]
+fn markdown_mark_fences_rendered_mermaid_as_plain_code() {
+    let (mut view, cells) = marked_markdown_at(
+        "```mermaid\nflowchart LR\nA[Start] --> B[Finish]\n```",
+        /*width*/ 80,
+        "Finish",
+    );
+    let text = view.selected_text(&cells).unwrap();
+    let body = text
+        .strip_prefix("```\n")
+        .and_then(|text| text.strip_suffix("\n```"))
+        .unwrap();
+    assert!(body.contains("Start") && body.contains("Finish"));
+    assert!(!body.contains("flowchart LR"));
+}
+
+#[test]
+fn markdown_mark_can_round_trip_from_rectangle_to_table() {
+    let table = "| Left | Right |\n|---|---|\n| alpha | **Beta** |\n| Gamma | delta |";
+    for width in [10, 32] {
+        let (mut view, cells) = marked_markdown_at(table, width, "Beta");
+        press(&mut view, &cells, KeyCode::Down);
+        let rectangle = view.selected_text(&cells).unwrap();
+        press(&mut view, &cells, KeyCode::Tab);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some(table));
+        press(&mut view, &cells, KeyCode::BackTab);
+        assert_eq!(view.selected_text(&cells), Some(rectangle));
+    }
+}
+
+#[test]
+fn markdown_mark_copies_the_visible_task_label_and_only_the_selected_container() {
+    let (mut view, cells) = marked_markdown_at(
+        "- [x] :codex-followup[Check **status**]{prompt=\"hidden instruction\"}\n\n  Read the logs.\n\n- [ ] Retry",
+        /*width*/ 24,
+        "status",
+    );
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("Check **status**")
+    );
+    press(&mut view, &cells, KeyCode::Tab);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("- [x] Check **status**\n\n  Read the logs.")
+    );
+}
+
+#[test]
+fn markdown_mark_expands_the_live_table_at_the_revision_seen_before_the_next_delta() {
+    let mut stream = crate::streaming::controller::StreamController::new(
+        /*width*/ Some(32),
+        std::path::Path::new("/"),
+        crate::history_cell::HistoryRenderMode::Rich,
+    );
+    stream.push("| Left | Right |\n|---|---|\n| alpha | **Beta** |\n");
+    let mut view = TranscriptView::default();
+    view.sync_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(stream.current_tail_lines()),
+    );
+    render(&mut view, &[]);
+    assert!(view.begin_select_mode(&[]));
+    mark_markdown(&mut view, &[]);
+    stream.push("| newer | delta |\n");
+    view.sync_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(stream.current_tail_lines()),
+    );
+    render(&mut view, &[]);
+    press(&mut view, &[], KeyCode::Tab);
+    assert_eq!(
+        view.selected_text(&[]).as_deref(),
+        Some("| Left | Right |\n|---|---|\n| alpha | **Beta** |")
+    );
 }

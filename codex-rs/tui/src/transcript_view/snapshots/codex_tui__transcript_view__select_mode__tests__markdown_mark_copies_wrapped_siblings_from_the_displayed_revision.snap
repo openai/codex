@@ -1,0 +1,14 @@
+---
+source: tui/src/transcript_view/select_mode_tests.rs
+assertion_line: 1165
+expression: "format!(\"{}\\n{}\", selected.trim_end(), hints.join(\"\\n\"))"
+---
+• ## Release notes
+
+  Read the 界  changes
+  before updating.
+
+  Read the 界  changes
+  before updating.
+Markdown section · ←→/hl move · ↑↓/jk extend · ⇧tab shrink · v mark text · y copy · esc clear
+section · ←→ move · ↑↓ extend · y copy

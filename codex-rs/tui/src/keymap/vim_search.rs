@@ -1,5 +1,4 @@
-//! Transcript and Vim search defaults yield to explicit bindings; explicit search conflicts
-//! remain configuration errors.
+//! Defaults for transcript actions and Vim search yield to explicit bindings.
 
 use super::bindings::configured_binding_for_action;
 use super::*;
@@ -26,25 +25,26 @@ impl Default for VimSearchKeymap {
 }
 
 impl RuntimeKeymap {
-    pub(super) fn configure_search(&mut self, config: &TuiKeymap) -> Result<(), String> {
-        for context in [KeymapContext::Global, KeymapContext::Pager] {
-            let setting = match context {
-                KeymapContext::Global => &config.global.find_transcript,
-                _ => &config.pager.find,
+    pub(super) fn configure_transcript_and_vim_defaults(
+        &mut self,
+        config: &TuiKeymap,
+    ) -> Result<(), String> {
+        for (context, name) in [
+            (KeymapContext::Global, "find_transcript"),
+            (KeymapContext::Pager, "find"),
+            (KeymapContext::Pager, "mark_markdown"),
+        ] {
+            let target = bindings::KeymapActionId {
+                context,
+                action: name,
             };
-            if setting.is_some() {
+            if configured_binding_for_action(config, target).is_some_and(Option::is_some) {
                 continue;
             }
-            let find_action = bindings::KeymapActionId {
-                context,
-                action: if context == KeymapContext::Global {
-                    "find_transcript"
-                } else {
-                    "find"
-                },
-            };
             let conflicts = |action: bindings::KeymapActionId| {
-                action.overlaps(find_action)
+                action.overlaps(target)
+                    || name == "mark_markdown"
+                        && KeymapContextSet::transcript().contains_action(action)
                     || context == KeymapContext::Global && action.context == KeymapContext::Approval
             };
             let configured: Vec<_> = runtime_action_bindings(self)
@@ -62,8 +62,9 @@ impl RuntimeKeymap {
                         .map(|chord| chord.chord.prefix),
                 )
                 .collect();
-            let bindings = match context {
-                KeymapContext::Global => &mut self.app.find_transcript,
+            let bindings = match name {
+                "find_transcript" => &mut self.app.find_transcript,
+                "mark_markdown" => &mut self.pager.mark_markdown,
                 _ => &mut self.pager.find,
             };
             bindings.retain(|binding| {
