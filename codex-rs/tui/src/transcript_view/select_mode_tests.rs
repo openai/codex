@@ -282,6 +282,7 @@ fn configured_pager_page_motion_moves_the_select_cursor() {
     render(&mut view, &cells);
     assert!(view.begin_select_mode(&cells));
     press(&mut view, &cells, KeyCode::Char('g'));
+    render(&mut view, &cells);
 
     press(&mut view, &cells, KeyCode::Char('v'));
     assert!(view.select_mode.is_some_and(|mode| mode.mark.is_some()));
@@ -298,6 +299,93 @@ fn configured_pager_page_motion_moves_the_select_cursor() {
             .saturating_add_signed(cursor.row_bias.saturating_neg()),
         5
     );
+
+    render(&mut view, &cells);
+    press(&mut view, &cells, KeyCode::Down);
+    let buffer = render(&mut view, &cells);
+    insta::assert_snapshot!(super::super::tests::text(&buffer), @"
+    line 1
+    line 2
+    line 3
+    line 4
+    line 5
+    line 6
+    ");
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 1, /*width*/ 32, /*height*/ 5,
+    );
+    let mut shrunk = Buffer::empty(area);
+    view.render(area, &mut shrunk, &cells);
+    assert_eq!(
+        super::super::tests::text(&shrunk),
+        "line 2\nline 3\nline 4\nline 5\nline 6"
+    );
+    let saved_position = view.position;
+    let parked_area = Rect::new(
+        /*x*/ 0, /*y*/ 1, /*width*/ 32, /*height*/ 3,
+    );
+    let mut parked = Buffer::empty(parked_area);
+    view.render_parked(
+        parked_area,
+        &mut parked,
+        &cells,
+        /*active*/ None,
+        /*auxiliary*/ &[],
+        /*collapse_turn_details*/ false,
+    );
+    assert_eq!(view.position, saved_position);
+    assert!(super::super::tests::text(&parked).contains("line 6"));
+    let mut active = Buffer::empty(parked_area);
+    view.render(parked_area, &mut active, &cells);
+    assert_eq!(active, parked);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 1, /*width*/ 5, /*height*/ 3,
+    );
+    view.prepare_width(area.width);
+    let mut narrowed = Buffer::empty(area);
+    view.render(area, &mut narrowed, &cells);
+    let cursor = view
+        .select_mode
+        .unwrap()
+        .cursor(view.selection.as_ref().unwrap());
+    assert!(view.visible.iter().any(|visible| visible.key == cursor.key
+        && visible.row == visible.layout.row_for_offset(cursor.offset)));
+
+    let mut cells = cells;
+    cells.insert(
+        0,
+        Arc::new(crate::history_cell::new_user_prompt(
+            "question".into(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )),
+    );
+    let mut view = TranscriptView::default();
+    view.jump_to_entry(&cells, /*index*/ 0);
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::PageDown);
+    press(&mut view, &cells, KeyCode::Char('j'));
+    render(&mut view, &cells);
+    let cursor = view.selection.as_ref().unwrap().start;
+    assert!(view.visible.iter().any(|visible| visible.key == cursor.key
+        && visible.row == visible.layout.row_for_offset(cursor.offset)));
+
+    let mut view = TranscriptView::default();
+    view.jump_to_entry(&cells, /*index*/ 0);
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::PageDown);
+    view.scroll(&cells, /*rows*/ 100);
+    assert_eq!(view.position, Position::Latest);
+    for _ in 0..2 {
+        press(&mut view, &cells, KeyCode::Up);
+    }
+    render(&mut view, &cells);
+    let cursor = view.selection.as_ref().unwrap().start;
+    assert!(view.visible.iter().any(|visible| visible.key == cursor.key
+        && visible.row == visible.layout.row_for_offset(cursor.offset)));
 }
 
 #[test]

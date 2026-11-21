@@ -54,7 +54,7 @@ pub(crate) struct TextLayout {
     logical: Vec<LogicalLine>,
     text: String,
     rows: Vec<TextRow>,
-    width: u16,
+    pub(super) width: u16,
     pub(super) separated: bool,
     pub(super) disclosure: bool,
     leading_blank_hidden: bool,

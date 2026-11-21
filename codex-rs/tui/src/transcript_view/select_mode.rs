@@ -425,18 +425,51 @@ impl TranscriptView {
             return;
         };
         let cursor = mode.cursor(selection);
+        let snapshot = self.snapshot_cells();
+        let cells = snapshot.as_deref().unwrap_or(cells);
         let index = self.resolve(cells, cursor);
         let row = self.layout(cells, index).map_or(/*default*/ 0, |layout| {
             layout
                 .row_for_offset(cursor.offset)
                 .saturating_add_signed(cursor.row_bias.saturating_neg())
         });
-        if !self
+        let start = self.start(cells);
+        let height = self.area.height + u16::from(self.prompt_header_target.is_some());
+        let width = self.area.width;
+        let detailed = self.detailed;
+        let has_header =
+            |index| height >= 4 && prompt_header::line(cells, index, width, detailed).is_some();
+        let painted_start = self
             .visible
-            .iter()
-            .any(|visible| visible.index == index && visible.row == row)
+            .first()
+            .is_some_and(|first| (first.index, first.row) == start);
+        let end = self
+            .visible
+            .last()
+            .filter(|_| painted_start)
+            .map(|last| (last.index, last.row))
+            .unwrap_or_else(|| {
+                let last_row = height.saturating_sub(1 + u16::from(has_header(start.0))) as isize;
+                self.move_rows(cells, start.0, start.1, last_row)
+            });
+        if (index, row) < start
+            || ((index, row) == start
+                && matches!(self.position, Position::Latest)
+                && !painted_start
+                && self.prompt_header_target.is_none()
+                && has_header(start.0))
         {
             self.position = Position::Reading(Anchor { index, ..cursor });
+        } else if (index, row) > end {
+            let context = height.saturating_sub(1) as isize;
+            let (mut index, mut row) = self.move_rows(cells, index, row, -context);
+            // A newly pinned prompt consumes one of the rows available to the cursor.
+            if has_header(index) {
+                (index, row) = self.move_rows(cells, index, row, /*rows*/ 1);
+            }
+            if let Some(layout) = self.layout(cells, index) {
+                self.read_from_row(cells, index, row, &layout);
+            }
         }
     }
 

@@ -119,6 +119,7 @@ pub(crate) struct TranscriptView {
     visible: Vec<VisibleRow>,
     selection: Option<Selection>,
     select_mode: Option<SelectMode>,
+    select_reveal_pending: bool,
     copy_mode: Option<copy_mode::CopyMode>,
     held_reading: Option<ViewSnapshot>,
     search: Search,
@@ -163,6 +164,7 @@ impl Default for TranscriptView {
             visible: Vec::new(),
             selection: None,
             select_mode: None,
+            select_reveal_pending: false,
             copy_mode: None,
             held_reading: None,
             search: Search::default(),
@@ -212,6 +214,8 @@ impl TranscriptView {
     }
 
     fn paint_rows(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
+        let previous_viewport_height =
+            self.area.height + u16::from(self.prompt_header_target.is_some());
         self.composer_tip = None;
         self.prompt_header_target = None;
         self.cache.begin_frame();
@@ -223,6 +227,10 @@ impl TranscriptView {
         Clear.render(area, buf);
         let previous_height = self.area.height;
         let resized = self.area.width != area.width || self.area.bottom() != area.bottom();
+        let select_width_changed = self
+            .visible
+            .first()
+            .is_some_and(|row| row.layout.width != area.width);
         self.prepare_width(area.width);
         self.area = area;
         self.normalize_selection(cells);
@@ -233,6 +241,15 @@ impl TranscriptView {
         if area.is_empty() {
             self.tail_visible = false;
             return;
+        }
+        let select_reveal_pending = std::mem::take(&mut self.select_reveal_pending);
+        if (resized
+            || select_width_changed
+            || previous_viewport_height != area.height
+            || select_reveal_pending)
+            && self.is_select_mode()
+        {
+            self.reveal_select_cursor(cells);
         }
         if let Some(key) = self.disclosure.anchor_control.take()
             && let Position::Reading(mut anchor) = self.position
@@ -536,7 +553,13 @@ impl TranscriptView {
                 })
             });
         }
+        let position = self.position;
         self.render(area, buffer, cells);
+        if self.is_select_mode() && self.position != position {
+            self.position = position;
+            // Reveal again if this pane becomes active without another resize.
+            self.select_reveal_pending = true;
+        }
         self.unseen_activity = unseen_activity;
     }
 

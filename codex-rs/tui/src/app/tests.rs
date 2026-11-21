@@ -4715,7 +4715,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         app.transcript_view.end_select_mode();
         let reopened = side_frame(&mut app, &mut tui, size)?;
         assert!(
-            reopened.contains(child_row) && reopened.contains("child draft!"),
+            reopened.contains("child-29") && reopened.contains("child draft!"),
             "{reopened}"
         );
         assert_eq!(
