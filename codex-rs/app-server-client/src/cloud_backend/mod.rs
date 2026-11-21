@@ -24,6 +24,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde_json::Value;
+use std::io;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -95,22 +96,23 @@ impl Replies {
             recovery.held = None;
             if let Some(opened) = opened {
                 if let Err(reason) = recovery.check_permit() {
-                    let _ = opened.ack.send(Err(reason));
+                    let _ = opened.ack.send(Err(io::Error::other(reason)));
                     return;
                 }
-                let Ok((stream, first)) = check_prepared_stream((opened.stream, opened.first))
-                else {
-                    let _ = opened
-                        .ack
-                        .send(Err("Cloud reply stream disconnected again."));
-                    return;
+                let (stream, first) = match check_prepared_stream((opened.stream, opened.first)) {
+                    Ok(attachment) => attachment,
+                    Err(error) => {
+                        let _ = opened
+                            .ack
+                            .send(Err(idle::reply_stream_error(error.as_ref())));
+                        return;
+                    }
                 };
                 // Commit through the acknowledgement. If the caller timed out
                 // and closed it first, leave the stream held and drop it here.
                 if opened.ack.send(Ok(())).is_err() {
                     return;
                 }
-                recovery.attempts += 1;
                 recovery.installed = Some(tokio::time::Instant::now());
                 recovery.observed_idle = None;
                 self.stream_losses.supersede(&root);
@@ -242,7 +244,7 @@ impl Replies {
             return Ok(None);
         }
         let mut stream = self.while_listening(open, output).await?;
-        let first = probe_reply_stream(&mut stream)?;
+        let first = check_reply_stream(&mut stream).map_err(activation_stream_error)?;
         Ok(Some((stream, first)))
     }
 
@@ -335,12 +337,8 @@ impl Replies {
     }
 }
 
-fn probe_reply_stream(stream: &mut ReplyStream) -> Result<Option<cloud::Event>> {
-    check_reply_stream(stream).map_err(|_| {
-        eyre!(
-            "Cloud conversation activated but its stream did not connect. Reopen it before sending."
-        )
-    })
+fn activation_stream_error(_: Option<cloud::Error>) -> color_eyre::Report {
+    eyre!("Cloud conversation activated but its stream did not connect. Reopen it before sending.")
 }
 
 /// Opens an app-server client backed by the authenticated native Cloud client.
@@ -493,9 +491,13 @@ async fn run_worker_with_prepared(
             CloudOperation::ResumeDisconnectedThread {
                 thread_id,
                 require_history,
-                deadline,
+                timeout,
+                dispatched,
                 release,
             } => {
+                if dispatched.send(()).is_err() {
+                    continue;
+                }
                 // Retire canceled holds, but commit a ready handoff through its normal ACK.
                 if replies
                     .idle
@@ -518,7 +520,7 @@ async fn run_worker_with_prepared(
                         thread_id,
                         cached.clone(),
                         require_history,
-                        deadline,
+                        timeout,
                         release,
                         command.response,
                     );
@@ -563,6 +565,7 @@ async fn run_worker_with_prepared(
                 let is_read = history_thread.is_some()
                     || matches!(&request, protocol::ClientRequest::ThreadList { .. });
                 let login = history_thread.and_then(|id| replies.idle.as_ref()?.history_login(id));
+                let recovery_read = login.is_some();
                 // When closure and the handshake are both ready, cancel before
                 // the handshake can replace the active attachment.
                 let result = tokio::select! {
@@ -576,10 +579,10 @@ async fn run_worker_with_prepared(
                     }
                     result = async {
                         let read = handle_request(request, mode, environment, requests, replies, output);
-                        let Some((login, deadline)) = login else {
+                        let Some((login, timeout)) = login else {
                             return read.await;
                         };
-                        tokio::time::timeout_at(deadline, login.permit.run(async {
+                        tokio::time::timeout(timeout, login.permit.run(async {
                             if !login.current().await {
                                 return Err(eyre!(CloudRecoverySignInChanged));
                             }
@@ -589,10 +592,19 @@ async fn run_worker_with_prepared(
                             }
                             login.permit.check().map_err(|_| eyre!(CLOUD_RECOVERY_NETWORK_BLOCKED))?;
                             result
-                        })).await.map_err(|_| eyre!(idle::RECOVERY_TIMEOUT))?
+                        })).await.map_err(|_| cloud::Error::Timeout)?
                             .map_err(|_| eyre!(CLOUD_RECOVERY_NETWORK_BLOCKED))?
                     } => result,
                 };
+                if recovery_read
+                    && let Err(error) = &result
+                    && let Some(cause) = error.downcast_ref::<cloud::Error>()
+                {
+                    let _ = command
+                        .response
+                        .send(Err(idle::reply_stream_error(Some(cause))));
+                    continue;
+                }
                 if unloads
                     && result.is_ok()
                     && let Some(root) = prepared
@@ -649,11 +661,13 @@ struct PreparedResume {
 
 const PREPARED_EVENT_LIMIT: usize = 8;
 
-fn check_prepared_stream((mut stream, first): OpenReplyStream) -> Result<OpenReplyStream> {
+fn check_prepared_stream(
+    (mut stream, first): OpenReplyStream,
+) -> Result<OpenReplyStream, Option<cloud::Error>> {
     let mut prefix = Vec::new();
     // The regular stream path forwards the prefix and unread tail in order.
     for _ in usize::from(first.is_some())..PREPARED_EVENT_LIMIT {
-        let Some(event) = probe_reply_stream(&mut stream)? else {
+        let Some(event) = check_reply_stream(&mut stream)? else {
             break;
         };
         prefix.push(Ok(event));
@@ -720,7 +734,9 @@ async fn advance_prepared_resume(
         match operation {
             CloudOperation::CommitPreparedResume => {
                 let ready = match candidate.opened {
-                    Some(opened) => check_prepared_stream(opened).map(Some),
+                    Some(opened) => check_prepared_stream(opened)
+                        .map(Some)
+                        .map_err(activation_stream_error),
                     None if replies.admit_turn(id, output).is_ok()
                         && replies.generation == candidate.generation =>
                     {

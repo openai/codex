@@ -1,11 +1,13 @@
 //! Restores Cloud reply streams under the original login and network permit.
 //! An active recovery holds its stream until the caller has read history.
 
+use super::CloudRecoverySignInChanged;
 use super::ReplyStream;
 use super::check_reply_stream;
 use crate::CLOUD_RECOVERY_NETWORK_BLOCKED;
 use crate::RequestResult;
 use crate::cloud::IdleReconnect;
+use crate::cloud::MAX_RECOVERY_BACKOFF;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_cloud_client as cloud;
@@ -50,8 +52,12 @@ pub(super) struct Login {
 }
 
 impl Login {
+    pub(super) fn supports_recovery(&self) -> bool {
+        matches!(self.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
+    }
+
     pub(super) async fn current(&self) -> bool {
-        if !matches!(self.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens) {
+        if !self.supports_recovery() {
             return false;
         }
         let Ok(Some(auth)) = self
@@ -73,11 +79,12 @@ impl Login {
             })
     }
 
+    /// A missing reason means all attempts failed transiently.
     async fn attach(
         &self,
         client: &cloud::Client,
         thread_id: &str,
-    ) -> Result<(ReplyStream, Option<cloud::Event>), &'static str> {
+    ) -> Result<(ReplyStream, Option<cloud::Event>), Option<&'static str>> {
         for delay in [
             Duration::ZERO,
             Duration::from_millis(500),
@@ -87,7 +94,7 @@ impl Login {
                 tokio::time::sleep(delay).await;
             }
             if !self.current().await {
-                return Err(SIGN_IN_AGAIN);
+                return Err(Some(SIGN_IN_AGAIN));
             }
             match client
                 .attach(thread_id)
@@ -99,27 +106,26 @@ impl Login {
                 }) {
                 Ok(attachment) => {
                     if !self.current().await {
-                        return Err(SIGN_IN_AGAIN);
+                        return Err(Some(SIGN_IN_AGAIN));
                     }
                     return Ok(attachment);
                 }
                 Err(Some(error)) if !transient(Some(&error)) => {
-                    return Err(blocked_recovery(&error).unwrap_or(RECOVERY_FAILED));
+                    return Err(Some(blocked_recovery(&error).unwrap_or(RECOVERY_FAILED)));
                 }
                 Err(_) => {}
             }
         }
-        Err("Cloud did not restore the reply stream after several attempts.")
+        Err(None)
     }
 }
 
-pub(super) const RECOVERY_TIMEOUT: &str = "Cloud could not restore the reply stream in time.";
-type Release = oneshot::Receiver<oneshot::Sender<Result<(), &'static str>>>;
+type Release = oneshot::Receiver<oneshot::Sender<io::Result<()>>>;
 
 pub(super) struct Opened {
     pub(super) stream: ReplyStream,
     pub(super) first: Option<cloud::Event>,
-    pub(super) ack: oneshot::Sender<Result<(), &'static str>>,
+    pub(super) ack: oneshot::Sender<io::Result<()>>,
 }
 
 type Open = BoxFuture<'static, Result<(ReplyStream, Option<cloud::Event>), Option<&'static str>>>;
@@ -128,7 +134,7 @@ pub(super) struct Recovery {
     pub(super) state: watch::Sender<IdleReconnect>,
     pub(super) pending: Option<(Arc<str>, Open)>,
     pub(super) installed: Option<Instant>,
-    pub(super) held: Option<(String, Instant, BoxFuture<'static, Option<Opened>>)>,
+    pub(super) held: Option<(String, Duration, BoxFuture<'static, Option<Opened>>)>,
     pub(super) attempts: u8,
     // None until either the initial Attach event or the activation snapshot establishes status.
     pub(super) observed_idle: Option<bool>,
@@ -144,6 +150,22 @@ pub(super) fn transient(error: Option<&cloud::Error>) -> bool {
     }
 }
 
+pub(super) fn reply_stream_error(error: Option<&cloud::Error>) -> io::Error {
+    match error {
+        Some(cloud::Error::Timeout) => io::ErrorKind::TimedOut.into(),
+        Some(cloud::Error::Rpc(status)) if status.code == 4 => io::ErrorKind::TimedOut.into(),
+        error if transient(error) => io::ErrorKind::ConnectionAborted.into(),
+        error => io::Error::other(error.and_then(blocked_recovery).unwrap_or(RECOVERY_FAILED)),
+    }
+}
+
+fn recovery_backoff(attempts: u8) -> Duration {
+    if attempts == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis(500 << (attempts - 1).min(6)).min(MAX_RECOVERY_BACKOFF)
+}
+
 impl Recovery {
     pub(super) fn check_permit(&self) -> Result<(), &'static str> {
         self.login
@@ -152,11 +174,11 @@ impl Recovery {
             .map_err(|_| CLOUD_RECOVERY_NETWORK_BLOCKED)
     }
 
-    pub(super) fn history_login(&self, thread_id: &str) -> Option<(Arc<Login>, Instant)> {
+    pub(super) fn history_login(&self, thread_id: &str) -> Option<(Arc<Login>, Duration)> {
         self.held
             .as_ref()
             .filter(|(root, _, _)| root == thread_id)
-            .map(|(_, deadline, _)| (Arc::clone(&self.login), *deadline))
+            .map(|(_, timeout, _)| (Arc::clone(&self.login), *timeout))
     }
 
     pub(super) fn start(
@@ -164,7 +186,7 @@ impl Recovery {
         thread_id: String,
         cached: Box<ThreadResumeResponse>,
         _require_history: bool,
-        deadline: Instant,
+        timeout: Duration,
         release: Release,
         mut response: oneshot::Sender<io::Result<RequestResult>>,
     ) {
@@ -177,35 +199,35 @@ impl Recovery {
             ))));
             return;
         }
-        let attempts = self.attempts;
-        if attempts >= 3 {
-            let _ = response.send(Ok(Err(recovery_error(
-                "The cloud reply stream keeps disconnecting. Your transcript and draft are still here.",
-            ))));
-            return;
-        }
         self.cancel();
+        let backoff = recovery_backoff(self.attempts);
+        self.attempts = self.attempts.saturating_add(1);
         let client = Arc::clone(&self.client);
         let login = Arc::clone(&self.login);
         let root = thread_id.clone();
         let open = async move {
-            let attempt = login.permit.run(async {
-                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempts))).await;
-                login.attach(&client, &root).await
-            });
+            let attach = login.permit.run(login.attach(&client, &root));
+            let attempt = async {
+                if !backoff.is_zero() {
+                    tokio::time::sleep(backoff).await;
+                }
+                tokio::time::timeout(timeout, attach).await
+            };
             let opened = tokio::select! {
                 biased;
                 _ = response.closed() => return None,
-                result = tokio::time::timeout_at(deadline, attempt) => match result {
-                    Ok(Ok(result)) => result,
-                    Ok(Err(_)) => Err(CLOUD_RECOVERY_NETWORK_BLOCKED),
-                    Err(_) => Err(RECOVERY_TIMEOUT),
+                result = attempt => match result {
+                    Ok(Ok(Ok(attachment))) => Ok(attachment),
+                    Ok(Ok(Err(None))) => Err(Err(io::ErrorKind::ConnectionAborted.into())),
+                    Ok(Ok(Err(Some(reason)))) => Err(Ok(Err(recovery_error(reason)))),
+                    Ok(Err(_)) => Err(Ok(Err(recovery_error(CLOUD_RECOVERY_NETWORK_BLOCKED)))),
+                    Err(error) => Err(Err(error.into())),
                 },
             };
             let (stream, first) = match opened {
                 Ok(opened) => opened,
-                Err(reason) => {
-                    let _ = response.send(Ok(Err(recovery_error(reason))));
+                Err(failure) => {
+                    let _ = response.send(failure);
                     return None;
                 }
             };
@@ -221,19 +243,18 @@ impl Recovery {
                 }
             };
             response.send(Ok(Ok(value))).ok()?;
-            let ack = tokio::time::timeout_at(deadline, release)
-                .await
-                .ok()?
-                .ok()?;
+            let mut ack = release.await.ok()?;
             let checked = login.permit.run(login.current());
-            let authorized = match tokio::time::timeout_at(deadline, checked).await {
-                Ok(Ok(true)) => login
-                    .permit
-                    .check()
-                    .map_err(|_| CLOUD_RECOVERY_NETWORK_BLOCKED),
-                Ok(Ok(false)) => Err(SIGN_IN_AGAIN),
-                Ok(Err(_)) => Err(CLOUD_RECOVERY_NETWORK_BLOCKED),
-                Err(_) => Err(RECOVERY_TIMEOUT),
+            let authorized = tokio::select! {
+                biased;
+                _ = ack.closed() => return None,
+                result = tokio::time::timeout(timeout, checked) => match result {
+                    Ok(Ok(true)) => login.permit.check()
+                        .map_err(|_| io::Error::other(CLOUD_RECOVERY_NETWORK_BLOCKED)),
+                    Ok(Ok(false)) => Err(io::Error::other(CloudRecoverySignInChanged)),
+                    Ok(Err(_)) => Err(io::Error::other(CLOUD_RECOVERY_NETWORK_BLOCKED)),
+                    Err(error) => Err(error.into()),
+                },
             };
             if let Err(reason) = authorized {
                 let _ = ack.send(Err(reason));
@@ -241,7 +262,7 @@ impl Recovery {
             }
             Some(Opened { stream, first, ack })
         };
-        self.held = Some((thread_id, deadline, open.boxed()));
+        self.held = Some((thread_id, timeout, open.boxed()));
     }
 
     pub(super) fn cancel(&mut self) -> Option<Arc<str>> {
@@ -315,10 +336,7 @@ impl Recovery {
 
     pub(super) fn offer(&mut self, id: &str) {
         // Only OAuth credentials can be rechecked locally. PATs use ordinary explicit reopen.
-        if !matches!(
-            self.login.mode,
-            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens
-        ) {
+        if !self.login.supports_recovery() {
             return;
         }
         let root: Arc<str> = Arc::from(id);
@@ -342,7 +360,11 @@ impl Recovery {
                 .await
                 .map_err(|_| None)?
                 .map_err(|_| None)?
-                .map_err(Some)
+                .map_err(|reason| {
+                    Some(reason.unwrap_or(
+                        "Cloud did not restore the reply stream after several attempts.",
+                    ))
+                })
         };
         self.pending = Some((root, open.boxed()));
     }

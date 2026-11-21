@@ -103,6 +103,49 @@ async fn cloud_shutdown_times_out_when_owner_does_not_respond() {
     assert!(commands.recv().await.is_none());
 }
 
+#[tokio::test(start_paused = true)]
+async fn cloud_recovery_dispatch_wait_does_not_use_the_attach_budget() {
+    let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let handle = client.request_handle();
+    let budget = Duration::from_secs(15);
+    let one_second = Duration::from_secs(1);
+
+    let start = tokio::time::Instant::now();
+    let Err(TypedRequestError::Transport { source, .. }) = handle
+        .resume_disconnected_thread("t".into(), /*require_history*/ false, budget)
+        .await
+    else {
+        panic!("an undispatched request must time out");
+    };
+    assert!(start.elapsed() < budget + one_second);
+    assert_eq!(source.kind(), io::ErrorKind::TimedOut);
+    let expired = commands.try_recv().unwrap();
+    let CloudOperation::ResumeDisconnectedThread { dispatched, .. } = expired.operation else {
+        panic!("expected the expired recovery command");
+    };
+    assert!(dispatched.send(()).is_err());
+    assert!(expired.response.is_closed());
+
+    let retry =
+        handle.resume_disconnected_thread("t".into(), /*require_history*/ false, budget);
+    let worker = async {
+        tokio::time::sleep(budget - one_second).await;
+        let command = commands.recv().await.unwrap();
+        let CloudOperation::ResumeDisconnectedThread { dispatched, .. } = command.operation else {
+            panic!("expected a new recovery command");
+        };
+        dispatched.send(()).unwrap();
+        tokio::time::sleep(MAX_RECOVERY_BACKOFF + budget - one_second).await;
+        command
+            .response
+            .send(Ok(Ok(serde_json::Value::Null)))
+            .unwrap();
+    };
+    let (result, ()) = tokio::join!(retry, worker);
+    let (settings, _release) = result.unwrap();
+    assert!(settings.is_none());
+}
+
 #[tokio::test]
 async fn native_model_list_bypasses_the_cloud_command_queue() -> color_eyre::Result<()> {
     use codex_app_server_protocol::ModelListResponse;

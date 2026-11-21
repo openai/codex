@@ -23,14 +23,15 @@ use std::sync::MutexGuard;
 use std::sync::PoisonError;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::time::Instant;
-use tokio::time::timeout_at;
 
 /// Rejection from the original network policy during Cloud recovery.
 pub const CLOUD_RECOVERY_NETWORK_BLOCKED: &str =
     "The current network policy blocks cloud reconnection.";
+
+pub(super) const MAX_RECOVERY_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Operations the cloud worker must handle without forwarding to another backend.
 /// Unsupported operations must return an explicit error; they must not claim success.
@@ -56,8 +57,9 @@ pub enum CloudOperation {
     ResumeDisconnectedThread {
         thread_id: String,
         require_history: bool,
-        deadline: Instant,
-        release: oneshot::Receiver<oneshot::Sender<Result<(), &'static str>>>,
+        timeout: Duration,
+        dispatched: oneshot::Sender<()>,
+        release: oneshot::Receiver<oneshot::Sender<io::Result<()>>>,
     },
     Notify(ClientNotification),
     Resolve {
@@ -90,24 +92,23 @@ pub struct CloudCommand {
 /// Allows the worker to install a held stream after the caller reads its history.
 /// Dropping the token cancels that replacement.
 pub struct CloudRecoveryRelease {
-    release: oneshot::Sender<oneshot::Sender<Result<(), &'static str>>>,
-    deadline: Instant,
+    release: oneshot::Sender<oneshot::Sender<io::Result<()>>>,
+    timeout: Duration,
 }
 
 impl CloudRecoveryRelease {
-    pub async fn install(self) -> Result<(), &'static str> {
+    pub async fn install(self) -> io::Result<()> {
         let (ack, mut installed) = oneshot::channel();
-        self.release
-            .send(ack)
-            .map_err(|_| "Cloud reconnection expired.")?;
-        let response = match timeout_at(self.deadline, &mut installed).await {
-            Ok(result) => result.ok(),
+        let closed = || io::Error::new(io::ErrorKind::BrokenPipe, "Cloud reconnection expired.");
+        self.release.send(ack).map_err(|_| closed())?;
+        let response = match tokio::time::timeout(self.timeout, &mut installed).await {
+            Ok(result) => return result.map_err(|_| closed())?,
             Err(_) => {
                 installed.close();
                 installed.try_recv().ok()
             }
         };
-        response.unwrap_or(Err("Cloud reconnection expired."))
+        response.unwrap_or_else(|| Err(io::ErrorKind::TimedOut.into()))
     }
 }
 
@@ -348,24 +349,32 @@ impl CloudRequestHandle {
         &self,
         thread_id: String,
         require_history: bool,
-        deadline: Instant,
+        timeout: Duration,
     ) -> Result<(Option<ThreadResumeResponse>, CloudRecoveryRelease), TypedRequestError> {
         let (release, held) = oneshot::channel();
-        let response = timeout_at(
-            deadline,
-            self.send(CloudOperation::ResumeDisconnectedThread {
-                thread_id,
-                require_history,
-                deadline,
-                release: held,
-            }),
-        )
-        .await
-        .map_err(io::Error::from)
-        .and_then(std::convert::identity);
+        let (dispatched, dispatch) = oneshot::channel();
+        let request = self.send(CloudOperation::ResumeDisconnectedThread {
+            thread_id,
+            require_history,
+            timeout,
+            dispatched,
+            release: held,
+        });
+        // Bound time in the queue separately so it cannot eat into the
+        // worker's backoff and Attach budget. Prefer a ready response on expiry.
+        let watchdog = async {
+            if tokio::time::timeout(timeout, dispatch).await.is_ok() {
+                tokio::time::sleep(timeout.saturating_add(MAX_RECOVERY_BACKOFF)).await;
+            }
+        };
+        let response = tokio::select! {
+            biased;
+            result = request => result,
+            () = watchdog => Err(io::ErrorKind::TimedOut.into()),
+        };
         let settings: Option<ThreadResumeResponse> =
             crate::decode_typed_response("thread/resume", response)?;
-        Ok((settings, CloudRecoveryRelease { release, deadline }))
+        Ok((settings, CloudRecoveryRelease { release, timeout }))
     }
 
     /// Whether a completed model read still belongs to the bound Cloud account.
