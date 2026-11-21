@@ -90,6 +90,7 @@ fn model_with_collaboration_messages(
         guardian_v2: None,
     });
     model_messages.collaboration_modes = Some(CollaborationModeMessages {
+        initial: None,
         default: default.map(str::to_string),
         plan: plan.map(str::to_string),
     });

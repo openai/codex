@@ -93,6 +93,7 @@ fn catalog_collaboration_messages_select_mode_variant() {
         let mut model = model_info_from_slug("test-model");
         model.model_messages = Some(ModelMessages {
             collaboration_modes: Some(CollaborationModeMessages {
+                initial: None,
                 default: Some(default.to_string()),
                 plan: Some(plan.to_string()),
             }),

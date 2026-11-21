@@ -45,6 +45,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         ..Default::default()
     };
     let collaboration_modes = CollaborationModeMessages {
+        initial: Some("initial instructions".to_string()),
         default: Some("default instructions".to_string()),
         plan: Some("plan instructions".to_string()),
     };

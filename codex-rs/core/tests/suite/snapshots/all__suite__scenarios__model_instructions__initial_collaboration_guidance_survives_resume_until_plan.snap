@@ -1,0 +1,31 @@
+---
+source: core/tests/suite/scenarios_model_instructions.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A catalog supplies initial guidance. After a restart, the client selects Default, enters Plan, and returns to Default.\",\n&mock.requests(), &ContextSnapshotOptions::default(),)"
+---
+Scenario: A catalog supplies initial guidance. After a restart, the client selects Default, enters Plan, and returns to Default.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    Help with the migration.
+01:message/developer[2]:
+    [01] <collaboration_mode>Work directly on the user's request.</collaboration_mode>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    Inspect the migration.
+-- request 2 (turn) --
+03:message/user:
+    Check the rollback path too.
+-- request 3 (turn) --
+04:message/developer:
+    <collaboration_mode>Prepare a plan before editing.</collaboration_mode>
+05:message/user:
+    Plan the migration.
+-- request 4 (turn) --
+06:message/developer:
+    <collaboration_mode>Resume implementation.</collaboration_mode>
+07:message/user:
+    Implement the plan.

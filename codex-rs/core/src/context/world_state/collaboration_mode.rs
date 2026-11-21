@@ -33,11 +33,6 @@ impl CollaborationModeState {
         custom_model_catalog: bool,
     ) -> Self {
         let bundled = ResolvedModelMessages::bundled().collaboration_modes();
-        let catalog_instructions = match mode {
-            None => None,
-            Some(ModeKind::Default) => messages.default.catalog_override(),
-            Some(ModeKind::Plan) => messages.plan.catalog_override(),
-        };
         // Before Plan, preserve custom caller text only when it would win over the catalog.
         let supplied = settings.developer_instructions.as_deref().filter(|text| {
             !text.is_empty()
@@ -45,6 +40,12 @@ impl CollaborationModeState {
                     || (messages.default.catalog_override().is_none()
                         && *text != bundled.default.text()))
         });
+        let catalog_instructions = match mode {
+            None if supplied.is_none() => messages.initial.filter(|text| !text.is_empty()),
+            None => None,
+            Some(ModeKind::Default) => messages.default.catalog_override(),
+            Some(ModeKind::Plan) => messages.plan.catalog_override(),
+        };
         let instructions = catalog_instructions.or(supplied).map(str::to_string);
         let instructions = instructions.map(|instructions| {
             if update_plan_enabled {
