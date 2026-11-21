@@ -42,6 +42,8 @@ pub enum TerminalName {
     Ghostty,
     /// Rex terminal emulator.
     Rex,
+    /// Orca integrated terminal.
+    Orca,
     /// iTerm2 terminal emulator.
     Iterm2,
     /// Warp terminal emulator.
@@ -180,6 +182,7 @@ impl TerminalInfo {
                 }
                 TerminalName::Ghostty => format_terminal_version("Ghostty", &self.version),
                 TerminalName::Rex => format_terminal_version("rex", &self.version),
+                TerminalName::Orca => format_terminal_version("Orca", &self.version),
                 TerminalName::Iterm2 => format_terminal_version("iTerm.app", &self.version),
                 TerminalName::WarpTerminal => {
                     format_terminal_version("WarpTerminal", &self.version)
@@ -421,6 +424,7 @@ fn terminal_name_from_term_program(value: &str) -> Option<TerminalName> {
         "appleterminal" => Some(TerminalName::AppleTerminal),
         "ghostty" => Some(TerminalName::Ghostty),
         "rex" => Some(TerminalName::Rex),
+        "orca" => Some(TerminalName::Orca),
         "iterm" | "iterm2" | "itermapp" => Some(TerminalName::Iterm2),
         "warp" | "warpterminal" => Some(TerminalName::WarpTerminal),
         "vscode" => Some(TerminalName::VsCode),

@@ -128,6 +128,23 @@ pub(crate) fn detect_pet_image_support() -> PetImageSupport {
         return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
     }
 
+    image_support_for_terminal_environment(&terminal_info())
+}
+
+fn image_support_for_terminal_environment(info: &TerminalInfo) -> PetImageSupport {
+    if info.name == TerminalName::Orca {
+        return if supports_orca_kitty_graphics(
+            info,
+            env::var("ORCA_IMAGE_PROTOCOL").ok().as_deref(),
+            env::var("TERM").ok().as_deref(),
+            /*sty_present*/ env::var_os("STY").is_some(),
+        ) {
+            PetImageSupport::Supported(ImageProtocol::Kitty)
+        } else {
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
+        };
+    }
+
     if env::var_os("KITTY_WINDOW_ID").is_some() {
         return PetImageSupport::Supported(ImageProtocol::Kitty);
     }
@@ -136,7 +153,21 @@ pub(crate) fn detect_pet_image_support() -> PetImageSupport {
         return PetImageSupport::Supported(ImageProtocol::Kitty);
     }
 
-    pet_image_support_for_terminal(&terminal_info())
+    pet_image_support_for_terminal(info)
+}
+
+fn supports_orca_kitty_graphics(
+    info: &TerminalInfo,
+    protocol: Option<&str>,
+    term: Option<&str>,
+    sty_present: bool,
+) -> bool {
+    info.multiplexer.is_none()
+        && protocol == Some("kitty")
+        && !sty_present
+        && !term.is_some_and(|term| {
+            term == "dumb" || term.starts_with("screen") || term.starts_with("tmux")
+        })
 }
 
 fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
@@ -606,6 +637,36 @@ mod tests {
     }
 
     #[test]
+    fn orca_graphics_require_a_direct_terminal_and_advertised_protocol() {
+        let mut info = terminal_info_for_test(
+            TerminalName::Orca,
+            /*multiplexer*/ None,
+            Some("Orca"),
+            /*term*/ None,
+        );
+        for (protocol, term, sty_present, expected) in [
+            (Some("kitty"), Some("xterm-256color"), false, true),
+            (None, Some("xterm-256color"), false, false),
+            (Some("kitty"), Some("screen-256color"), false, false),
+            (Some("kitty"), Some("tmux-256color"), false, false),
+            (Some("kitty"), Some("dumb"), false, false),
+            (Some("kitty"), Some("xterm-256color"), true, false),
+        ] {
+            assert_eq!(
+                supports_orca_kitty_graphics(&info, protocol, term, sty_present),
+                expected
+            );
+        }
+        info.multiplexer = Some(Multiplexer::Tmux { version: None });
+        assert!(!supports_orca_kitty_graphics(
+            &info,
+            Some("kitty"),
+            Some("xterm-256color"),
+            /*sty_present*/ false
+        ));
+    }
+
+    #[test]
     fn pet_image_support_detects_sixel_terminals() {
         for info in [
             terminal_info_for_test(
@@ -651,10 +712,25 @@ mod tests {
         let _kitty = EnvVarGuard::new("KITTY_WINDOW_ID", /*value*/ None);
         let _wezterm = EnvVarGuard::new("WEZTERM_VERSION", Some("20240203"));
         let _wezterm_executable = EnvVarGuard::new("WEZTERM_EXECUTABLE", /*value*/ None);
+        let _orca_protocol = EnvVarGuard::new("ORCA_IMAGE_PROTOCOL", /*value*/ None);
 
         assert_eq!(
-            detect_pet_image_support(),
+            image_support_for_terminal_environment(&terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                /*term*/ None,
+            )),
             PetImageSupport::Supported(ImageProtocol::Kitty)
+        );
+        assert_eq!(
+            image_support_for_terminal_environment(&terminal_info_for_test(
+                TerminalName::Orca,
+                /*multiplexer*/ None,
+                Some("Orca"),
+                /*term*/ None,
+            )),
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
         );
     }
 

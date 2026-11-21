@@ -74,6 +74,7 @@ impl WebLinkDisplay {
             | TerminalName::Iterm2
             | TerminalName::WezTerm
             | TerminalName::Rex
+            | TerminalName::Orca
             | TerminalName::Kitty
             | TerminalName::VsCode
             | TerminalName::Alacritty

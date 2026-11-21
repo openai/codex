@@ -227,6 +227,12 @@ fn detects_rex() {
 }
 
 #[test]
+fn detects_orca() {
+    let env = FakeEnvironment::new().with_var("TERM_PROGRAM", "Orca");
+    assert_eq!(detect_terminal_info_from_env(&env).name, TerminalName::Orca);
+}
+
+#[test]
 fn detects_vscode() {
     let env = FakeEnvironment::new()
         .with_var("TERM_PROGRAM", "vscode")

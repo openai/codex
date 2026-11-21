@@ -65,6 +65,7 @@ fn auto_resize_reflow_max_rows(
         TerminalName::AppleTerminal
         | TerminalName::Ghostty
         | TerminalName::Rex
+        | TerminalName::Orca
         | TerminalName::Iterm2
         | TerminalName::WarpTerminal
         | TerminalName::Kitty
