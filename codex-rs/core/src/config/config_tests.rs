@@ -7065,11 +7065,18 @@ async fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
 }
 
 #[test]
-fn web_search_mode_defaults_to_none_if_unset() {
+fn web_search_mode_defaults_to_cached_if_unset() {
     let cfg = ConfigToml::default();
     let features = Features::with_defaults();
 
-    assert_eq!(resolve_web_search_mode(&cfg, &features), None);
+    assert_eq!(
+        resolve_web_search_mode(
+            &cfg,
+            &features,
+            &Constrained::allow_any(WebSearchMode::Cached),
+        ),
+        WebSearchMode::Cached,
+    );
 }
 
 #[test]
@@ -7082,8 +7089,12 @@ fn web_search_mode_prefers_config_over_legacy_flags() {
     features.enable(Feature::WebSearchCached);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &features),
-        Some(WebSearchMode::Live)
+        resolve_web_search_mode(
+            &cfg,
+            &features,
+            &Constrained::allow_any(WebSearchMode::Cached),
+        ),
+        WebSearchMode::Live
     );
 }
 
@@ -7097,8 +7108,12 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     features.enable(Feature::WebSearchRequest);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &features),
-        Some(WebSearchMode::Disabled)
+        resolve_web_search_mode(
+            &cfg,
+            &features,
+            &Constrained::allow_any(WebSearchMode::Cached),
+        ),
+        WebSearchMode::Disabled
     );
 }
 
@@ -7107,6 +7122,7 @@ fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &PermissionProfile::Disabled,
         ProviderCapabilities::default(),
     );
@@ -7120,6 +7136,7 @@ fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let permission_profile = PermissionProfile::read_only();
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &permission_profile,
         ProviderCapabilities::default(),
     );
@@ -7132,6 +7149,7 @@ fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &PermissionProfile::Disabled,
         ProviderCapabilities::default(),
     );
@@ -7145,6 +7163,7 @@ fn web_search_mode_for_turn_falls_back_when_provider_disallows_external_web_acce
         let web_search_mode = Constrained::allow_any(preferred);
         let mode = resolve_web_search_mode_for_turn(
             &web_search_mode,
+            /*web_search_mode_was_explicit*/ true,
             &PermissionProfile::Disabled,
             ProviderCapabilities {
                 external_web_access: false,
@@ -7179,6 +7198,7 @@ fn web_search_mode_for_turn_disables_when_external_access_and_cached_are_disallo
         })?;
         let mode = resolve_web_search_mode_for_turn(
             &web_search_mode,
+            /*web_search_mode_was_explicit*/ true,
             &PermissionProfile::Disabled,
             ProviderCapabilities {
                 external_web_access: false,
@@ -7196,6 +7216,7 @@ fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &PermissionProfile::Disabled,
         ProviderCapabilities::default(),
     );
@@ -7220,6 +7241,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
     })?;
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &PermissionProfile::Disabled,
         ProviderCapabilities::default(),
     );
@@ -7249,6 +7271,7 @@ fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Resu
     })?;
     let mode = resolve_web_search_mode_for_turn(
         &web_search_mode,
+        /*web_search_mode_was_explicit*/ true,
         &PermissionProfile::Disabled,
         ProviderCapabilities::default(),
     );
@@ -12305,6 +12328,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
+            config.web_search_mode_was_explicit,
             &config.permissions.effective_permission_profile(),
             ProviderCapabilities::default(),
         ),

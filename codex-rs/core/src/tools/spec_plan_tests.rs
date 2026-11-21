@@ -3444,6 +3444,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     standalone_web_search.assert_visible_lacks(&["web_search"]);
 
     let bedrock_cached_web_search = probe(|turn| {
+        set_web_search_mode(turn, WebSearchMode::Cached);
         use_bedrock_provider(turn);
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).web_search_tool_type = WebSearchToolType::Text;

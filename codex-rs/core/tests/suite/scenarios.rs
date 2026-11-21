@@ -3515,6 +3515,53 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn indexed_search_rollout_request_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![ev_completed("indexed-search-request")])],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config.workspace_roots = vec![config.cwd.clone()];
+        })
+        .with_pre_build_hook(|codex_home| {
+            std::fs::write(
+                codex_home.join("config.toml"),
+                "[features]\nweb_search_indexed_default = true\n",
+            )
+            .expect("write indexed search rollout config");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_text_turn("Find the latest release notes.")
+        .await?;
+    let requests = mock.requests();
+    let body = requests[0].body_json();
+    assert_eq!(
+        body["tools"]
+            .as_array()
+            .and_then(|tools| { tools.iter().find(|tool| tool["type"] == "web_search") }),
+        Some(&json!({
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true,
+        })),
+    );
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "A restricted thread with the indexed-search rollout enabled advertises indexed web search in its first model request.",
+        &requests,
+        &ContextSnapshotOptions::default().include_request_settings(),
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prediction_fork_inherits_parent_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let requests = super::reasoning_effort_override::prediction_fork_requests().await?;

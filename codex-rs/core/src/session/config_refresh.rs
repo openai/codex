@@ -269,7 +269,7 @@ impl Session {
                     .refresh(&next_config.features);
             }
             let previous_config = notify_contributors
-                .then(|| self.build_effective_session_config(&state.session_configuration));
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
             if config.mcp_enterprise_managed_auth.is_none() {
                 config.config_layer_stack.mcp_ema_cancellation().cancel();
             }
@@ -293,7 +293,7 @@ impl Session {
                 RuntimeConfigRefresh::UserFiles => McpRefreshReason::UserConfigFilesReloaded,
             });
             let new_config = notify_contributors
-                .then(|| self.build_effective_session_config(&state.session_configuration));
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
             (previous_config, new_config)
         };
         if config

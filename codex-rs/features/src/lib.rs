@@ -203,6 +203,8 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
+    /// Prefer indexed search when the implicit cached default can be upgraded.
+    WebSearchIndexedDefault,
     /// Expose the extension-backed standalone web search tool.
     StandaloneWebSearch,
     /// Request the legacy Landlock mode of the Linux sandbox.
@@ -1461,6 +1463,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchCached,
         key: "web_search_cached",
         stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchIndexedDefault,
+        key: "web_search_indexed_default",
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {

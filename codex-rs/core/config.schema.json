@@ -1528,6 +1528,9 @@
             "web_search_cached": {
               "type": "boolean"
             },
+            "web_search_indexed_default": {
+              "type": "boolean"
+            },
             "web_search_request": {
               "type": "boolean"
             },
@@ -8901,6 +8904,9 @@
           "type": "boolean"
         },
         "web_search_cached": {
+          "type": "boolean"
+        },
+        "web_search_indexed_default": {
           "type": "boolean"
         },
         "web_search_request": {

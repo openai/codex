@@ -2253,7 +2253,7 @@ impl Session {
                             )
                 });
             let previous_config = notify_config_contributors
-                .then(|| self.build_effective_session_config(&state.session_configuration));
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
             let current = &state.session_configuration;
             let refresh_network_proxy = current.permission_profile()
                 != updated.permission_profile()
@@ -2306,7 +2306,7 @@ impl Session {
                 None
             };
             let new_config = notify_config_contributors
-                .then(|| self.build_effective_session_config(&state.session_configuration));
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
             let commit = SessionSettingsCommit {
                 configuration: state.session_configuration.clone(),
                 snapshot: state
@@ -2499,7 +2499,7 @@ impl Session {
                 state.reasoning_effort_pin.clone(),
             )
         };
-        let config = self.build_effective_session_config(&configuration);
+        let config = Self::build_effective_session_config(&configuration);
         if !config.features.enabled(Feature::ReasoningEffortOverride) {
             let model = configuration
                 .step_settings

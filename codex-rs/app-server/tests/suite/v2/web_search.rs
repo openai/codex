@@ -34,6 +34,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -84,8 +85,29 @@ enum WebSearchProvider {
     CustomResponses,
 }
 
+#[test_case(
+    r#"web_search = "cached""#, /*indexed_default*/ false, "",
+    [json!(false), json!(false), json!(true)]; "explicit_cached"
+)]
+#[test_case(
+    "", /*indexed_default*/ true, "",
+    [json!("indexed"), json!("indexed"), json!(true)]; "implicit_indexed"
+)]
+#[test_case(
+    r#"web_search = "indexed""#, /*indexed_default*/ true, "",
+    [json!("indexed"), json!("indexed"), json!("indexed")]; "explicit_indexed"
+)]
+#[test_case(
+    "", /*indexed_default*/ true, r#"allowed_web_search_modes = ["cached", "indexed"]"#,
+    [json!("indexed"), json!("indexed"), json!("indexed")]; "implicit_indexed_without_live"
+)]
 #[tokio::test]
-async fn standalone_web_search_uses_new_permissions_only_on_the_next_turn() -> Result<()> {
+async fn standalone_web_search_uses_new_permissions_only_on_the_next_turn(
+    root_config: &str,
+    indexed_default: bool,
+    requirements: &str,
+    expected: [Value; 3],
+) -> Result<()> {
     let server = responses::start_mock_server().await;
     let search_path = "/v1/alpha/search";
     mount_search_response(&server, search_path, /*expected_calls*/ 3).await;
@@ -130,13 +152,19 @@ async fn standalone_web_search_uses_new_permissions_only_on_the_next_turn() -> R
     .await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .with_root_config(r#"web_search = "cached""#)
+    let mut config = MockResponsesConfig::new(&server.uri())
+        .with_root_config(root_config)
         .enable_feature(Feature::StandaloneWebSearch)
         .enable_feature(Feature::DefaultModeRequestUserInput)
         .with_provider_config("supports_websockets = false")
-        .with_provider_config("supports_standalone_web_search = true")
-        .write(codex_home.path())?;
+        .with_provider_config("supports_standalone_web_search = true");
+    if indexed_default {
+        config = config.enable_feature(Feature::WebSearchIndexedDefault);
+    }
+    config.write(codex_home.path())?;
+    if !requirements.is_empty() {
+        std::fs::write(codex_home.path().join("requirements.toml"), requirements)?;
+    }
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
@@ -217,7 +245,7 @@ async fn standalone_web_search_uses_new_permissions_only_on_the_next_turn() -> R
             observed.push(body["settings"]["external_web_access"].clone());
         }
     }
-    assert_eq!(observed, vec![json!(false), json!(false), json!(true)]);
+    assert_eq!(observed, expected);
     Ok(())
 }
 
@@ -225,6 +253,7 @@ async fn assert_standalone_web_search_round_trips_output(
     provider: WebSearchProvider,
     literature_search: bool,
 ) -> Result<()> {
+    let indexed_by_default = matches!(provider, WebSearchProvider::ChatGpt);
     let call_id = "web-run-1";
     let (model, query, commands) = if literature_search {
         (
@@ -338,12 +367,17 @@ async fn assert_standalone_web_search_round_trips_output(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&env_overrides)
+        .without_managed_config()
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             service_name: Some("chatgpt_cca".to_string()),
+            config: Some(HashMap::from([(
+                "features.web_search_indexed_default".to_string(),
+                json!(indexed_by_default),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -447,6 +481,14 @@ async fn assert_standalone_web_search_round_trips_output(
         json!(["direct"])
     );
     assert_eq!(
+        search_body["settings"]["external_web_access"],
+        if indexed_by_default {
+            json!("indexed")
+        } else {
+            json!(false)
+        }
+    );
+    assert_eq!(
         search_body["input"]
             .as_array()
             .context("search input should be an array")?
@@ -528,6 +570,7 @@ async fn assert_standalone_web_search_round_trips_output(
     let mut reloaded_mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&env_overrides)
+        .without_managed_config()
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
     let read_req = reloaded_mcp

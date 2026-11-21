@@ -1,0 +1,75 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A restricted thread with the indexed-search rollout enabled advertises indexed web search in its first model request.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: A restricted thread with the indexed-search rollout enabled advertises indexed web search in its first model request.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"summary":"auto"}
+  store: false
+  stream: true
+  tool_choice: "auto"
+  tools (6; hash=b4b0ae189288b007):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=24f4b6739dd5d940
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
+    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c041c3bd4f63167c
+      - function/close_agent
+      - function/resume_agent
+      - function/send_input
+      - function/spawn_agent
+      - function/wait_agent
+    - web_search; hash=6f6c1b533d45fb52
+-- request 1 (turn) --
+00:message/developer:
+    You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
+
+    Your capabilities:
+
+    - Receive user prompts and other context provided by the harness, such as files in the workspace.
+    - Communicate with the user by streaming thinking & responses, and by making & updating plans.
+    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+
+    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Shell commands
+
+    When using the shell, you must adhere to the following guidelines:
+
+    - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much ...he `rg` command is not found, then use alternatives.) [hash=67af3ff3b546e946]
+    - Do not use python scripts to attempt to output larger chunks of a file.
+
+
+01:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Escalation Requests
+
+    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+    - Pipes: |
+    - Logical operators: &&, ||
+    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+    ### Examples
+    Good examples of prefixes:
+    - ["npm", "run", "dev"]
+    - ["gh", "pr", "check"]
+    - ["cargo", "test"]
+    </permissions instructions>
+02:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+03:message/user:
+    Find the latest release notes.

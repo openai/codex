@@ -38,6 +38,12 @@ pub(super) fn apply_launch_override(
             )
         })
     };
+    if is_launch("features.web_search_indexed_default") {
+        overrides
+            .entry("features".to_string())
+            .or_insert_with(|| serde_json::json!({}))["web_search_indexed_default"] =
+            serde_json::json!(effective["features"]["web_search_indexed_default"]);
+    }
     // A canonical setting always takes precedence, even when its origin is implicit.
     if let Some(value) = effective.get("web_search") {
         if is_launch("web_search") {
@@ -72,13 +78,31 @@ pub(super) fn apply_launch_override(
             if thread_params_mode == ThreadParamsMode::Embedded && (cached || live) {
                 return;
             }
-            // Explicitly disabling all legacy search features falls back to cached search.
             let Some(key) = ["web_search_cached", request_key].into_iter().find(|key| {
                 features.get(*key).and_then(toml::Value::as_bool) == Some(false)
                     && is_launch(&format!("features.{key}"))
             }) else {
                 return;
             };
+            let indexed_default_enabled = if thread_params_mode == ThreadParamsMode::Embedded {
+                config.features.enabled(Feature::WebSearchIndexedDefault)
+            } else {
+                is_launch("features.web_search_indexed_default")
+                    && features
+                        .get("web_search_indexed_default")
+                        .and_then(toml::Value::as_bool)
+                        == Some(true)
+            };
+            if indexed_default_enabled {
+                // Keep the default implicit so full-access turns can still promote it to live.
+                let features = overrides
+                    .entry("features".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                features["web_search_cached"] = false.into();
+                features["web_search_request"] = false.into();
+                return;
+            }
+            // Preserve the legacy cached fallback while the rollout is disabled.
             (key, "cached")
         }
     };

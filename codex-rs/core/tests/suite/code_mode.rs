@@ -516,7 +516,7 @@ async fn disabled_process_host_with_fallback_disabled_attempts_the_host() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_standalone_web_search() -> Result<()> {
     assert_code_mode_standalone_web_search(
-        WebSearchMode::Live,
+        StandaloneWebSearchConfiguration::Explicit(WebSearchMode::Live),
         serde_json::json!(true),
         SearchPolicy::Unmanaged,
     )
@@ -526,19 +526,39 @@ async fn code_mode_can_call_standalone_web_search() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_indexed_standalone_web_search() -> Result<()> {
     assert_code_mode_standalone_web_search(
-        WebSearchMode::Indexed,
+        StandaloneWebSearchConfiguration::Explicit(WebSearchMode::Indexed),
         serde_json::json!("indexed"),
         SearchPolicy::Unmanaged,
     )
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_defaults_to_live_standalone_web_search_with_full_access() -> Result<()> {
+    assert_code_mode_standalone_web_search(
+        StandaloneWebSearchConfiguration::FullAccessDefault,
+        serde_json::json!(true),
+        SearchPolicy::Unmanaged,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum StandaloneWebSearchConfiguration {
+    Explicit(WebSearchMode),
+    FullAccessDefault,
+}
+
 #[test_case(SearchPolicy::DenySearch; "initial_request")]
 #[test_case(SearchPolicy::DenyRedirect; "redirect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_web_search_preserves_managed_policy(policy: SearchPolicy) -> Result<()> {
-    assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true), policy)
-        .await
+    assert_code_mode_standalone_web_search(
+        StandaloneWebSearchConfiguration::Explicit(WebSearchMode::Live),
+        serde_json::json!(true),
+        policy,
+    )
+    .await
 }
 
 enum SearchPolicy {
@@ -548,7 +568,7 @@ enum SearchPolicy {
 }
 
 async fn assert_code_mode_standalone_web_search(
-    web_search_mode: WebSearchMode,
+    web_search_configuration: StandaloneWebSearchConfiguration,
     expected_external_web_access: Value,
     policy: SearchPolicy,
 ) -> Result<()> {
@@ -615,6 +635,18 @@ text(result);
         .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))
         .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |codex_home| {
+            let config = match web_search_configuration {
+                StandaloneWebSearchConfiguration::Explicit(mode) => {
+                    format!("web_search = \"{mode}\"\n")
+                }
+                StandaloneWebSearchConfiguration::FullAccessDefault => {
+                    "sandbox_mode = \"danger-full-access\"\n[features]\nweb_search_indexed_default = true\n".to_string()
+                }
+            };
+            std::fs::write(codex_home.join("config.toml"), config)
+                .expect("write web search configuration");
+        })
         .with_config(move |config| {
             if managed {
                 config.application_network_policy = policy;
@@ -628,14 +660,18 @@ text(result);
                 .features
                 .enable(Feature::StandaloneWebSearch)
                 .expect("standalone web search should be enabled");
-            config
-                .web_search_mode
-                .set(web_search_mode)
-                .expect("web search mode should be accepted");
         });
     let test = builder.build_with_auto_env(&server).await?;
 
-    test.submit_turn("Search the web from code mode").await?;
+    match web_search_configuration {
+        StandaloneWebSearchConfiguration::Explicit(_) => {
+            test.submit_turn("Search the web from code mode").await?;
+        }
+        StandaloneWebSearchConfiguration::FullAccessDefault => {
+            test.submit_text_turn("Search the web from code mode")
+                .await?;
+        }
+    }
 
     if managed {
         let output =

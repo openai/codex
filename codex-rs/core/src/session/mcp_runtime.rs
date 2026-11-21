@@ -84,7 +84,7 @@ impl Session {
             )
         };
         let config =
-            self.build_per_turn_config(&session_configuration, environments.local_selection());
+            Self::build_per_turn_config(&session_configuration, environments.local_selection());
         let local_process_cwd = config.cwd.to_path_buf();
 
         McpDesiredState {
@@ -106,7 +106,7 @@ impl Session {
         mcp_projection: McpRuntimeProjection,
         resolved_environments: &TurnEnvironmentSnapshot,
     ) -> anyhow::Result<()> {
-        let config = self.build_per_turn_config(
+        let config = Self::build_per_turn_config(
             session_configuration,
             resolved_environments.local_selection(),
         );
