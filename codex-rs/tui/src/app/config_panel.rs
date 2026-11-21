@@ -42,6 +42,7 @@ impl App {
                 self.chat_widget.config_ref(),
                 server,
                 &self.app_server_target,
+                /*resumed_cwd*/ None,
             );
             let effective = crate::config_update::read_effective_config_if_supported(handle, cwd)
                 .await?

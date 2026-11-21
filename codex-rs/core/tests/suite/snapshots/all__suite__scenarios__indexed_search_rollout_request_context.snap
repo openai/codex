@@ -13,6 +13,7 @@ Settings:
   reasoning: {"summary":"auto"}
   store: false
   stream: true
+  stream_options: {"reasoning_summary_delivery":"sequential_cutoff"}
   tool_choice: "auto"
   tools (6; hash=b4b0ae189288b007):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=24f4b6739dd5d940
