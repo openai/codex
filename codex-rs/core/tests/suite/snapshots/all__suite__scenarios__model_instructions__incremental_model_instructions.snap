@@ -13,6 +13,7 @@ Settings:
   reasoning: {"context":"all_turns","summary":"auto"}
   store: false
   stream: true
+  stream_options: {"reasoning_summary_delivery":"sequential_cutoff"}
   tool_choice: "auto"
 -- request 1 (turn) --
 00:additional_tools/developer (2; hash=86ed27a8ce319b21):

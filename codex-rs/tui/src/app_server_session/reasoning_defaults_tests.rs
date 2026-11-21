@@ -14,7 +14,7 @@ async fn reasoning_defaults_reach_responses() -> Result<()> {
         (
             "",
             json!("concise"),
-            json!(null),
+            json!({"reasoning_summary_delivery": "sequential_cutoff"}),
             ThreadParamsMode::Embedded,
         ),
         (
@@ -32,7 +32,7 @@ async fn reasoning_defaults_reach_responses() -> Result<()> {
         (
             "model_reasoning_summary = 'detailed'",
             json!("detailed"),
-            json!(null),
+            json!({"reasoning_summary_delivery": "sequential_cutoff"}),
             ThreadParamsMode::Embedded,
         ),
         (
@@ -50,7 +50,7 @@ async fn reasoning_defaults_reach_responses() -> Result<()> {
         (
             "model_reasoning_summary = 'detailed'\nmodel_verbosity = 'high'\nweb_search = 'live'",
             json!("detailed"),
-            json!(null),
+            json!({"reasoning_summary_delivery": "sequential_cutoff"}),
             ThreadParamsMode::Remote,
         ),
     ] {

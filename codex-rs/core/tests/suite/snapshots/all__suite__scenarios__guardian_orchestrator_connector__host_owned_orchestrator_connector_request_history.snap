@@ -22,7 +22,7 @@ Scenario: Guardian reviews a host-owned orchestrator connector, then the parent 
 03:message/user:
     List today's calendar events.
 
-## Window 2 (after request 1: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, text, tool_choice, tools))
+## Window 2 (after request 1: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, stream_options, text, tool_choice, tools))
 -- request 2 (request) --
 00:additional_tools/developer (0; hash=09612b07b5ecb5a5):
 01:message/developer:
@@ -87,7 +87,7 @@ Scenario: Guardian reviews a host-owned orchestrator connector, then the parent 
     [07] >>> APPROVAL REQUEST END
 
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, text, tool_choice, tools))
+## Window 3 (after request 2: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, stream_options, text, tool_choice, tools))
 -- request 3 (request) --
 00:message/developer:
     <GUARDIAN_INSTRUCTIONS>

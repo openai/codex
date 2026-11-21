@@ -14,6 +14,7 @@ Settings:
   service_tier: "priority"
   store: false
   stream: true
+  stream_options: {"reasoning_summary_delivery":"sequential_cutoff"}
   tool_choice: "auto"
 -- request 1 (turn) --
 00:additional_tools/developer (3; hash=ba5ddd25650ac9fa):

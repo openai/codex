@@ -1164,7 +1164,15 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::ConcurrentReasoningSummaries)
+                .expect("disable concurrent summaries");
+        })
+        .build(&server)
+        .await?;
 
     let stream = sse(vec![
         ev_response_created("resp-1"),
@@ -1209,15 +1217,7 @@ async fn sequential_cutoff_renders_done_summaries_for_active_reasoning_item() ->
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries)
-                .expect("test config should allow feature update");
-        })
-        .build(&server)
-        .await?;
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
     let summary_done = |item_id: &str, summary_index: i64, text: &str| {
         serde_json::json!({
             "type": "response.reasoning_summary_text.done",

@@ -4571,6 +4571,10 @@ async fn conversation_relays_only_public_reasoning_as_quiet_status(enabled: bool
             config.realtime.version = RealtimeWsVersion::V3;
             config.model_reasoning_summary =
                 Some(codex_protocol::config_types::ReasoningSummary::None);
+            config
+                .features
+                .disable(Feature::ConcurrentReasoningSummaries)
+                .expect("disable concurrent summaries");
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;

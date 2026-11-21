@@ -56,6 +56,10 @@ async fn codex_delegate_ignores_legacy_deltas(explicit_guardian: bool) {
     mount_sse_sequence(&server, vec![sse_stream]).await;
 
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .disable(Feature::ConcurrentReasoningSummaries)
+            .expect("disable concurrent summaries");
         if explicit_guardian {
             config.guardian_model_provider = Some(Arc::new(GuardianInferenceProvider {
                 id: "guardian".to_string(),

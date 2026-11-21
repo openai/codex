@@ -3027,9 +3027,6 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
