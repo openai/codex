@@ -916,11 +916,13 @@ async fn modern_legacy_fallback_preserves_authentication_required_error() -> any
             let method = body["method"].as_str().expect("JSON-RPC method");
             recorded.lock().expect("requests lock").push(method.into());
             match method {
-                "server/discover" => ResponseTemplate::new(200).set_body_json(json!({
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "error": {"code": -32601, "message": "method not found"},
-                })),
+                "server/discover" => ResponseTemplate::new(400)
+                    .insert_header("www-authenticate", "Bearer")
+                    .set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "error": {"code": -32601, "message": "method not found"},
+                    })),
                 "initialize" => ResponseTemplate::new(401)
                     .insert_header("www-authenticate", "Bearer error=\"invalid_token\""),
                 other => panic!("unexpected authentication fallback request: {other}"),
@@ -1150,7 +1152,7 @@ async fn modern_discovery_rejects_uncorrelated_legacy_version_rejection() -> any
         .respond_with(|request: &Request| {
             let body: Value = request.body_json().expect("valid JSON-RPC request");
             assert_eq!(body["method"], "server/discover");
-            ResponseTemplate::new(400).set_body_json(json!({
+            ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0",
                 "id": "unrelated-request",
                 "error": {
@@ -1174,14 +1176,19 @@ async fn modern_discovery_rejects_uncorrelated_legacy_version_rejection() -> any
 
 #[tokio::test]
 async fn modern_discovery_rejects_uncorrelated_method_not_found_errors() -> anyhow::Result<()> {
-    for response_id in [Value::Null, json!("unrelated-request")] {
+    for (status, response_id) in [
+        (200, Value::Null),
+        (200, json!("unrelated-request")),
+        (400, Value::Null),
+        (400, json!("unrelated-request")),
+    ] {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/mcp"))
             .respond_with(move |request: &Request| {
                 let body: Value = request.body_json().expect("valid JSON-RPC request");
                 assert_eq!(body["method"], "server/discover");
-                ResponseTemplate::new(200).set_body_json(json!({
+                ResponseTemplate::new(status).set_body_json(json!({
                     "jsonrpc": "2.0",
                     "id": response_id,
                     "error": {"code": -32601, "message": "method not found"},
@@ -1206,63 +1213,90 @@ async fn modern_discovery_rejects_uncorrelated_method_not_found_errors() -> anyh
 
 #[tokio::test]
 async fn modern_mode_falls_back_for_legacy_http_prevalidation_errors() -> anyhow::Result<()> {
-    for (message, content_type) in [
-        (
-            "Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)",
-            "application/json",
-        ),
-        // tinymcp.dev omits the rejected version from its legacy error shape.
-        (
-            "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)",
-            "application/json",
-        ),
-        (
-            "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)",
-            "text/plain",
-        ),
-        (
-            "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)",
-            "application/octet-stream",
-        ),
-        (
+    let rejection = |id: Value, code: i64, message: &str| {
+        ResponseTemplate::new(400).set_body_json(json!({
+            "jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}
+        }))
+    };
+    for bad_request in [
+        rejection(
+            Value::Null,
+            -32000,
             "Bad Request: No valid session ID provided",
-            "application/json",
+        )
+        .insert_header("www-authenticate", "Bearer"),
+        // TypeScript SDK, before a session has been established.
+        rejection(
+            Value::Null,
+            -32000,
+            "Bad Request: Mcp-Session-Id header is required",
         ),
+        rejection(Value::Null, -32000, "Bad Request: Server not initialized"),
+        // Python SDK 1.x, stateful and stateless HTTP respectively.
+        rejection(
+            json!("server-error"),
+            -32600,
+            "Bad Request: Missing session ID",
+        ),
+        rejection(
+            json!("server-error"),
+            -32600,
+            "Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: 2025-06-18, 2025-11-25",
+        ),
+        ResponseTemplate::new(400),
+        ResponseTemplate::new(400).set_body_string("Bad Request"),
     ] {
         let server = MockServer::start().await;
-        let observed = Arc::new(Mutex::new(Vec::<String>::new()));
-        let recorded = Arc::clone(&observed);
-
         Mock::given(method("POST"))
             .and(path("/mcp"))
             .respond_with(move |request: &Request| {
                 let body: Value = request.body_json().expect("valid JSON-RPC request");
-                let method = body["method"].as_str().expect("JSON-RPC method");
-                recorded.lock().expect("requests lock").push(method.into());
-                match method {
-                    "server/discover" => ResponseTemplate::new(400).set_body_raw(
-                        serde_json::to_vec(&json!({
-                            "jsonrpc": "2.0",
-                            "id": null,
-                            "error": {"code": -32000, "message": message},
-                        }))
-                        .expect("legacy discovery error serializes"),
-                        content_type,
-                    ),
-                    "initialize" => legacy_initialize_response(&body),
+                match body["method"].as_str().unwrap() {
+                    "server/discover" => bad_request.clone(),
+                    "initialize" => {
+                        assert!(request.headers.get("mcp-session-id").is_none());
+                        assert_eq!(body["params"]["protocolVersion"], LEGACY_VERSION);
+                        legacy_initialize_response(&body).insert_header("mcp-session-id", "fresh")
+                    }
                     "notifications/initialized" => ResponseTemplate::new(202),
-                    other => panic!("unexpected legacy fallback method: {other}"),
+                    "tools/list" => {
+                        assert_eq!(request.headers["mcp-session-id"], "fresh");
+                        ResponseTemplate::new(200).set_body_json(json!({
+                            "jsonrpc": "2.0", "id": body["id"],
+                            "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+                        }))
+                    }
+                    other => panic!("unexpected method: {other}"),
                 }
             })
-            .expect(3)
+            .expect(4)
             .mount(&server)
             .await;
-
         let client = create_client(&server, McpProtocolMode::V20260728).await?;
         initialize_client(&client).await?;
+        let tools = client.list_tools(/*params*/ None, /*timeout*/ None).await?;
+        assert_eq!(tools.tools[0].name, "echo");
+        let methods: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .map(|r| {
+                r.body_json::<Value>().unwrap()["method"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
         assert_eq!(
-            *observed.lock().expect("requests lock"),
-            vec!["server/discover", "initialize", "notifications/initialized"]
+            methods,
+            [
+                "server/discover",
+                "initialize",
+                "notifications/initialized",
+                "tools/list"
+            ]
         );
         client.shutdown().await;
     }
@@ -1360,61 +1394,78 @@ async fn modern_mode_negotiates_a_server_selected_legacy_protocol_version() -> a
 }
 
 #[tokio::test]
-async fn modern_discovery_rejects_unrecognized_or_modern_null_id_errors() -> anyhow::Result<()> {
-    for (status, message, content_type) in [
-        (400, "Bad Request: malformed request", "application/json"),
-        (400, "Bad Request: malformed request", "text/plain"),
+async fn modern_discovery_preserves_challenges_and_malformed_modern_errors() -> anyhow::Result<()> {
+    for (rejection, diagnostic) in [
         (
-            400,
-            "Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-06-18, 2099-01-01)",
-            "application/json",
+            ResponseTemplate::new(400)
+                .insert_header("www-authenticate", "Bearer")
+                .set_body_string("ambiguous rejection"),
+            "HTTP 400: ambiguous rejection (WWW-Authenticate: Bearer)",
         ),
         (
-            400,
-            "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2099-01-01)",
-            "application/json",
-        ),
-        (
-            400,
-            "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2099-01-01)",
-            "text/plain",
-        ),
-        (
-            400,
-            "Bad Request: Unsupported protocol version (supported versions: 2024-10-07)",
-            "application/json",
-        ),
-        (
-            200,
-            "Bad Request: No valid session ID provided",
-            "application/json",
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"code": -32021}})),
+            "-32021",
         ),
     ] {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/mcp"))
-            .respond_with(move |request: &Request| {
-                let body: Value = request.body_json().expect("valid JSON-RPC request");
-                assert_eq!(body["method"], "server/discover");
-                ResponseTemplate::new(status).set_body_raw(
-                    serde_json::to_vec(&json!({
-                        "jsonrpc": "2.0",
-                        "id": null,
-                        "error": {"code": -32000, "message": message},
-                    }))
-                    .expect("legacy discovery error serializes"),
-                    content_type,
-                )
-            })
+            .respond_with(rejection)
             .expect(1)
+            .mount(&server)
+            .await;
+        let client = create_client(&server, McpProtocolMode::V20260728).await?;
+        let error = initialize_client(&client).await.unwrap_err();
+        assert!(format!("{error:#}").contains(diagnostic), "{error:#}");
+        client.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejection_after_modern_version_offer_stops_discovery() -> anyhow::Result<()> {
+    for (status, method_not_found) in [(400, false), (400, true), (200, true), (404, false)] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(|request: &Request| {
+                let body: Value = request.body_json().unwrap();
+                ResponseTemplate::new(400).set_body_json(json!({
+                    "jsonrpc": "2.0", "id": body["id"],
+                    "error": {"code": -32022, "message": "Unsupported protocol version: 2026-07-28",
+                              "data": {"supported": [MODERN_VERSION]}},
+                }))
+            })
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(move |request: &Request| {
+                let body: Value = request.body_json().unwrap();
+                if method_not_found {
+                    ResponseTemplate::new(status).set_body_json(json!({
+                        "jsonrpc": "2.0", "id": body["id"],
+                        "error": {"code": -32601, "message": "second probe failed"},
+                    }))
+                } else {
+                    ResponseTemplate::new(status).set_body_string("second probe failed")
+                }
+            })
             .mount(&server)
             .await;
 
         let client = create_client(&server, McpProtocolMode::V20260728).await?;
+        let error = initialize_client(&client).await.unwrap_err();
         assert!(
-            initialize_client(&client).await.is_err(),
-            "unproven legacy downgrade must fail (HTTP {status}, {message})"
+            format!("{error:#}").contains("second probe failed"),
+            "{error:#}"
         );
+        let methods: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.body_json::<Value>().unwrap()["method"].clone())
+            .collect();
+        assert_eq!(methods, ["server/discover", "server/discover"]);
         client.shutdown().await;
     }
     Ok(())
@@ -1426,10 +1477,8 @@ async fn modern_discovery_rejects_non_legacy_http_prevalidation_errors() -> anyh
         (400, -32022, None, "application/json"),
         (400, -32021, None, "application/json"),
         (400, -32020, None, "application/json"),
-        (400, -32601, None, "application/json"),
-        (400, -32602, None, "application/json"),
         (400, -32020, None, "text/plain"),
-        (400, -32000, Some("unrelated-request"), "application/json"),
+        (400, -32022, Some("unrelated-request"), "application/json"),
         (401, -32000, None, "application/json"),
         (403, -32000, None, "application/json"),
         (200, -32000, None, "application/json"),
@@ -1504,7 +1553,7 @@ async fn modern_mode_falls_back_for_plain_404_and_405_discovery_responses() -> a
 
 #[tokio::test]
 async fn modern_discovery_rejection_does_not_downgrade_to_legacy() -> anyhow::Result<()> {
-    for (status, error_code) in [(400, -32602), (403, -32021), (200, -32020)] {
+    for (status, error_code) in [(400, -32020), (403, -32021), (200, -32020)] {
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
