@@ -11,11 +11,14 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use anyhow::ensure;
+use codex_protocol::ResponseItemId;
 
 use crate::bundle::MANIFEST_FILE_NAME;
 use crate::bundle::RAW_EVENT_LOG_FILE_NAME;
 use crate::bundle::TRACE_MANIFEST_SCHEMA_VERSION;
 use crate::bundle::TraceBundleManifest;
+use crate::model::AgentThreadId;
+use crate::model::ConversationItemId;
 use crate::model::ExecutionStatus;
 use crate::model::RolloutTrace;
 use crate::model::ToolCallId;
@@ -207,7 +210,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
 }
 
 struct ReceivableItem {
-    item_id: String,
+    item_id: ConversationItemId,
     awaiting_snapshot: bool,
 }
 
@@ -217,9 +220,9 @@ struct TraceReducer {
     /// First (wall time, sequence) by receiving thread and Responses item ID.
     first_acceptances: BTreeMap<String, BTreeMap<String, (i64, crate::RawEventSeq)>>,
     /// First graph item for each receiving thread and Responses wire ID.
-    receivable_ids: BTreeMap<(String, String), ReceivableItem>,
+    receivable_ids: BTreeMap<(AgentThreadId, ResponseItemId), ReceivableItem>,
     /// Accepted tool outputs first encountered in the batch about to be appended.
-    snapshot_output_anchors: BTreeSet<String>,
+    snapshot_output_anchors: BTreeSet<ConversationItemId>,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
     /// Latest session for each thread-local runtime handle; each exec replaces it.
@@ -227,16 +230,16 @@ struct TraceReducer {
     /// Retains the begin/end consistency check when a handle is later reused.
     process_ids_by_terminal: BTreeMap<String, String>,
     /// Latest request and its response items, used to reconcile the next request.
-    thread_conversation_snapshots: BTreeMap<String, Vec<String>>,
+    thread_conversation_snapshots: BTreeMap<AgentThreadId, Vec<ConversationItemId>>,
     /// Full identities for JSON tool outputs whose reduced bodies contain only a preview.
-    structured_output_hashes: BTreeMap<String, [u8; 32]>,
+    structured_output_hashes: BTreeMap<ConversationItemId, [u8; 32]>,
     /// Replacement snapshot installed by compaction but not yet seen in a sampling request.
     ///
     /// The first full request after compaction should compare against the installed replacement
     /// history, not against the pre-compaction request. That keeps repeated prefix/context messages
     /// as fresh post-compaction conversation items while still reusing the summary/replacement
     /// items that actually became live history.
-    pending_compaction_replacement_item_ids: BTreeMap<String, Vec<String>>,
+    pending_compaction_replacement_item_ids: BTreeMap<AgentThreadId, Vec<ConversationItemId>>,
     /// Runtime cell ids indexed by thread-local code-mode handle.
     ///
     /// Reduced `CodeCellId`s are based on the model-visible `exec` call id
@@ -365,6 +368,7 @@ impl TraceReducer {
                     .thread_id
                     .context("history acceptance has no thread")?;
                 self.thread_mut(&thread_id)?;
+                let item_id = ResponseItemId::from_server(item_id);
                 if let Some(source) = source_tool_call_id {
                     self.record_agent_message_target(source, thread_id.clone(), item_id.clone())?;
                 }
@@ -383,7 +387,7 @@ impl TraceReducer {
                 self.first_acceptances
                     .entry(thread_id)
                     .or_default()
-                    .entry(item_id)
+                    .entry(item_id.into())
                     .or_insert((event.wall_time_unix_ms, event.seq));
             }
             RawTraceEventPayload::InferenceStarted {

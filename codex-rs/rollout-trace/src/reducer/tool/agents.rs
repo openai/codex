@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_protocol::ResponseItemId;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
@@ -13,6 +14,8 @@ use std::collections::HashSet;
 use std::collections::btree_map::Entry;
 
 use super::super::TraceReducer;
+use crate::model::AgentThreadId;
+use crate::model::ConversationItemId;
 use crate::model::ConversationItemKind;
 use crate::model::ConversationPart;
 use crate::model::ConversationRole;
@@ -56,9 +59,9 @@ pub(in crate::reducer) struct ObservedAgentResultEdge {
 
 /// Sender completion and recipient history can arrive in either order.
 pub(in crate::reducer) struct NativeToolDelivery {
-    receiver_thread_id: String,
+    receiver_thread_id: AgentThreadId,
     activity_at_unix_ms: Option<i64>,
-    wire_item_id: Option<String>,
+    wire_item_id: Option<ResponseItemId>,
 }
 
 /// Builds the stable edge id for the spawn relationship between two threads.
@@ -224,7 +227,7 @@ impl TraceReducer {
     fn native_tool_delivery(
         &mut self,
         call_id: ToolCallId,
-        receiver: String,
+        receiver: AgentThreadId,
     ) -> Result<&mut NativeToolDelivery> {
         match self.native_tool_deliveries.entry(call_id) {
             Entry::Occupied(entry) if entry.get().receiver_thread_id != receiver => {
@@ -242,8 +245,8 @@ impl TraceReducer {
     pub(in crate::reducer) fn record_agent_message_target(
         &mut self,
         call_id: ToolCallId,
-        receiver: String,
-        item_id: String,
+        receiver: AgentThreadId,
+        item_id: ResponseItemId,
     ) -> Result<()> {
         let delivery = self.native_tool_delivery(call_id, receiver)?;
         if delivery.wire_item_id.get_or_insert(item_id.clone()) != &item_id {
@@ -254,7 +257,9 @@ impl TraceReducer {
 
     /// Collect the distinct graph items actually sent to each receiver's model. A reset
     /// can give the same Responses item a new graph ID. Repeated prompt prefixes reuse it.
-    fn model_visible_deliveries(&self) -> BTreeMap<(String, String), Vec<String>> {
+    fn model_visible_deliveries(
+        &self,
+    ) -> BTreeMap<(AgentThreadId, ResponseItemId), Vec<ConversationItemId>> {
         let mut visible = BTreeMap::<_, Vec<_>>::new();
         let mut visited = HashSet::new();
         let mut requests: Vec<_> = self.rollout.inference_calls.values().collect();
@@ -270,7 +275,10 @@ impl TraceReducer {
                     && let Some(wire_id) = &item.responses_item_id
                 {
                     visible
-                        .entry((call.thread_id.clone(), wire_id.clone()))
+                        .entry((
+                            call.thread_id.clone(),
+                            ResponseItemId::from_server(wire_id.clone()),
+                        ))
                         .or_default()
                         .push(id.clone());
                 }
@@ -555,7 +563,7 @@ impl TraceReducer {
     /// Resolves pending agent edges whose target is the newly reduced conversation item.
     pub(in crate::reducer) fn resolve_pending_agent_edges_for_item(
         &mut self,
-        item_id: &str,
+        item_id: &ConversationItemId,
     ) -> Result<()> {
         if self.is_interaction_edge_target_item(item_id) {
             return Ok(());
@@ -577,7 +585,7 @@ impl TraceReducer {
             return Ok(());
         };
         let pending = self.pending_agent_interaction_edges.remove(pending_index);
-        self.upsert_agent_interaction_edge_for_item(pending, item_id.to_string())
+        self.upsert_agent_interaction_edge_for_item(pending, item_id.clone())
     }
 
     fn queue_or_resolve_agent_interaction_edge(
@@ -670,7 +678,7 @@ impl TraceReducer {
     fn upsert_agent_interaction_edge_for_item(
         &mut self,
         pending: PendingAgentInteractionEdge,
-        target_item_id: String,
+        target_item_id: ConversationItemId,
     ) -> Result<()> {
         self.upsert_interaction_edge(InteractionEdge {
             edge_id: pending.edge_id,
@@ -721,7 +729,7 @@ impl TraceReducer {
         thread_id: &str,
         message_author: &str,
         message_content: &str,
-    ) -> Option<String> {
+    ) -> Option<ConversationItemId> {
         self.rollout
             .threads
             .get(thread_id)?
@@ -738,7 +746,10 @@ impl TraceReducer {
             .cloned()
     }
 
-    fn inter_agent_message_item(&self, item_id: &str) -> Option<(String, String, String)> {
+    fn inter_agent_message_item(
+        &self,
+        item_id: &ConversationItemId,
+    ) -> Option<(String, String, String)> {
         let item = self.rollout.conversation_items.get(item_id)?;
         let delivery = item.agent_message.as_ref()?;
         let thread = self.rollout.threads.get(&item.thread_id)?;
@@ -769,7 +780,7 @@ impl TraceReducer {
             .with_context(|| format!("agent edge referenced unknown thread {thread_id}"))
     }
 
-    fn is_interaction_edge_target_item(&self, item_id: &str) -> bool {
+    fn is_interaction_edge_target_item(&self, item_id: &ConversationItemId) -> bool {
         self.rollout
             .interaction_edges
             .values()
@@ -780,7 +791,7 @@ impl TraceReducer {
         &self,
         thread_id: &str,
         codex_turn_id: &str,
-    ) -> Option<String> {
+    ) -> Option<ConversationItemId> {
         self.rollout
             .conversation_items
             .values()
@@ -796,9 +807,9 @@ impl TraceReducer {
     }
 }
 
-fn extend_unique(items: &mut Vec<String>, new_items: Vec<String>) {
+fn extend_unique<T: PartialEq>(items: &mut Vec<T>, new_items: Vec<T>) {
     for item in new_items {
-        if !items.iter().any(|existing| existing == &item) {
+        if !items.contains(&item) {
             items.push(item);
         }
     }

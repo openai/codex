@@ -1107,7 +1107,7 @@ fn inter_agent_message(author: &str, recipient: &str, content: &str) -> serde_js
     })
 }
 
-fn target_conversation_item_id(anchor: &TraceAnchor) -> &String {
+fn target_conversation_item_id(anchor: &TraceAnchor) -> &crate::ConversationItemId {
     let TraceAnchor::ConversationItem { item_id } = anchor else {
         panic!("expected conversation item target");
     };

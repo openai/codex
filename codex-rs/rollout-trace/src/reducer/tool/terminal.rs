@@ -286,7 +286,7 @@ impl TraceReducer {
                     status: ExecutionStatus::Running,
                 },
             });
-        push_unique(&mut session.operation_ids, operation_id);
+        push_unique(&mut session.operation_ids, &operation.operation_id);
         operation.terminal_id = Some(terminal_id.clone());
         self.process_ids_by_terminal
             .insert(terminal_id.clone(), process_id.to_string());

@@ -4,6 +4,7 @@ use anyhow::bail;
 
 use super::TraceReducer;
 use crate::model::CodeModeRuntimeToolId;
+use crate::model::ConversationItemId;
 use crate::model::ConversationItemKind;
 use crate::model::ExecutionStatus;
 use crate::model::ExecutionWindow;
@@ -343,7 +344,7 @@ impl TraceReducer {
     /// reverse links without duplicating matching logic.
     pub(super) fn attach_model_visible_tool_item(
         &mut self,
-        item_id: &str,
+        item_id: &ConversationItemId,
         call_id: Option<&str>,
         kind: &ConversationItemKind,
     ) -> Result<()> {
@@ -449,7 +450,7 @@ impl TraceReducer {
         thread_id: &str,
         call_id: &str,
         kinds: &[ConversationItemKind],
-    ) -> Vec<String> {
+    ) -> Vec<ConversationItemId> {
         // A late tool-start event must link outputs in history order, not map-key order.
         self.rollout.threads[thread_id]
             .conversation_item_ids
@@ -460,7 +461,11 @@ impl TraceReducer {
             .collect::<Vec<_>>()
     }
 
-    fn add_tool_call_item(&mut self, tool_call_id: &ToolCallId, item_id: &str) -> Result<()> {
+    fn add_tool_call_item(
+        &mut self,
+        tool_call_id: &ToolCallId,
+        item_id: &ConversationItemId,
+    ) -> Result<()> {
         let Some(tool_call) = self.rollout.tool_calls.get_mut(tool_call_id) else {
             bail!("tool call {tool_call_id} disappeared during conversation linking");
         };
@@ -468,7 +473,11 @@ impl TraceReducer {
         Ok(())
     }
 
-    fn add_tool_output_item(&mut self, tool_call_id: &ToolCallId, item_id: &str) -> Result<()> {
+    fn add_tool_output_item(
+        &mut self,
+        tool_call_id: &ToolCallId,
+        item_id: &ConversationItemId,
+    ) -> Result<()> {
         let Some(tool_call) = self.rollout.tool_calls.get_mut(tool_call_id) else {
             bail!("tool call {tool_call_id} disappeared during output linking");
         };
@@ -511,8 +520,8 @@ impl TraceReducer {
     }
 }
 
-fn push_unique(items: &mut Vec<String>, item_id: &str) {
-    if !items.iter().any(|existing| existing == item_id) {
-        items.push(item_id.to_string());
+fn push_unique<T: PartialEq + Clone>(items: &mut Vec<T>, item_id: &T) {
+    if !items.contains(item_id) {
+        items.push(item_id.clone());
     }
 }

@@ -325,7 +325,7 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     assert_eq!(rollout.tool_calls["no-cell"].started_code_cell_id, None);
     assert_eq!(
         cell.output_item_ids,
-        vec!["conversation_item:9", "conversation_item:12"]
+        [9, 12].map(crate::ConversationItemId::from_ordinal)
     );
     assert_eq!(
         (

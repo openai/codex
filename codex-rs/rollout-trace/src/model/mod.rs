@@ -26,8 +26,6 @@ pub type AgentThreadId = String;
 pub type AgentPath = String;
 /// Runtime submission/activation UUID. This is not a chat turn.
 pub type CodexTurnId = String;
-/// Reduced transcript item ID assigned by the trace reducer.
-pub type ConversationItemId = String;
 /// Local ID for one outbound upstream inference request.
 pub type InferenceCallId = String;
 /// Globally unique ID for one concrete MCP backend request.
@@ -50,6 +48,23 @@ pub type CompactionRequestId = String;
 pub type EdgeId = String;
 /// Reducer-owned ID for request/log correlation metadata.
 pub type CorrelationId = String;
+
+// Ordinals identify nodes in the reduced transcript. Responses item IDs come from the wire.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConversationItemId(String);
+
+impl ConversationItemId {
+    pub(crate) fn from_ordinal(ordinal: u64) -> Self {
+        Self(format!("conversation_item:{ordinal}"))
+    }
+}
+
+impl std::fmt::Display for ConversationItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// Whether the recorder sealed the bundle and captured all referenced payload bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
