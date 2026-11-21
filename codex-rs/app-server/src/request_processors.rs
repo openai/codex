@@ -623,8 +623,11 @@ use token_usage_replay::send_thread_token_usage_update_to_connection;
 
 pub(crate) fn apply_live_thread_settings(
     thread: &mut Thread,
+    loaded_thread: &CodexThread,
     config_snapshot: &ThreadConfigSnapshot,
 ) {
+    thread.daybreak_program_propagation_enrolled =
+        Some(loaded_thread.daybreak_program_propagation_enrolled());
     thread.model = Some(config_snapshot.model.clone());
     thread.reasoning_effort = config_snapshot.reasoning_effort.clone();
     thread.environments = Some(

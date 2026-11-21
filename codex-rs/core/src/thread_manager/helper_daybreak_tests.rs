@@ -144,6 +144,7 @@ async fn paused_helpers(
     let mut config = test_config().await;
     config.codex_home = home.abs();
     config.cwd = home.abs();
+    config.sqlite = codex_state::SqliteConfig::new_for_testing(home.abs());
     config.agent_max_depth = 2;
     config.model_provider.supports_websockets = false;
     config.model_provider.base_url = Some("http://127.0.0.1:9/v1".to_owned());
@@ -178,6 +179,46 @@ async fn paused_helpers(
         .extensions = Arc::new(extensions.build());
 
     (config, manager, turns)
+}
+
+#[test_case::test_case(false; "enrolled root")]
+#[test_case::test_case(true; "opted out root")]
+#[tokio::test]
+async fn root_opt_out_controls_native_helper_inheritance(prevent: bool) -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let (config, manager, mut turns) = paused_helpers(home.path(), /*programs*/ None).await;
+    let root = manager
+        .start_thread(StartThreadOptions {
+            prevent_daybreak_program_propagation_enrollment: prevent,
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await?;
+    assert!(root.thread.enabled(Feature::DaybreakProgramPropagation));
+    assert_eq!(
+        root.thread.daybreak_program_propagation_enrolled(),
+        !prevent
+    );
+    save_choice(&root.thread, /*enabled*/ true).await;
+    root.thread
+        .start_or_steer_turn(TurnInputRequest::user_input(text()))
+        .await?;
+    let root_turn = admitted_turn(&mut turns, &root.thread).await;
+    let child = spawn_child(
+        &manager,
+        &config,
+        &root.thread,
+        &root_turn,
+        SpawnProgramSource::ParentTurn,
+    )
+    .await?;
+    assert_eq!(child.daybreak_program_propagation_enrolled(), !prevent);
+    let child_turn = admitted_turn(&mut turns, &child).await;
+    let expected = (!prevent).then_some(SavedDaybreakChoice::On);
+    assert_eq!(saved(child.thread_extension_data()), expected);
+    assert_eq!(saved(&child_turn.extension_data), expected);
+    child.shutdown_and_wait().await?;
+    root.thread.shutdown_and_wait().await?;
+    Ok(())
 }
 
 #[test_case::test_case(Some(false), None, None; "saved off")]

@@ -1300,6 +1300,13 @@ impl CodexThread {
         &self.startup_metadata
     }
 
+    /// Whether this live thread joined the Daybreak propagation experiment at startup.
+    pub fn daybreak_program_propagation_enrolled(&self) -> bool {
+        self.thread_extension_data()
+            .get::<crate::agent::helper_daybreak::Enrollment>()
+            .is_some()
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         !self.io.tx_sub.is_closed()
     }

@@ -293,6 +293,10 @@ pub struct Thread {
     /// Saved Daybreak choice, independent of turn execution. Null if unset.
     #[experimental("thread.daybreakEnabled")]
     pub daybreak_enabled: Option<bool>,
+    /// Whether the live thread joined the Daybreak propagation experiment at startup.
+    /// Null when only stored metadata is available. Older servers can omit this field.
+    #[experimental("thread.daybreakProgramPropagationEnrolled")]
+    pub daybreak_program_propagation_enrolled: Option<bool>,
     /// Only populated on `thread/resume`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
@@ -342,6 +346,7 @@ struct ThreadCompatibility {
     git_info: Option<GitInfo>,
     name: Option<String>,
     daybreak_enabled: Option<bool>,
+    daybreak_program_propagation_enrolled: Option<bool>,
     turns: Vec<Turn>,
 }
 
@@ -384,6 +389,7 @@ impl<'de> Deserialize<'de> for Thread {
             git_info: thread.git_info,
             name: thread.name,
             daybreak_enabled: thread.daybreak_enabled,
+            daybreak_program_propagation_enrolled: thread.daybreak_program_propagation_enrolled,
             turns: thread.turns,
         })
     }

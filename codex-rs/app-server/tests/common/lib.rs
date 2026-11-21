@@ -59,6 +59,36 @@ pub use test_app_server::DEFAULT_CLIENT_NAME;
 pub use test_app_server::TestAppServer;
 pub use test_app_server::TestAppServerBuilder;
 
+pub const CLEARED_OPENAI_AUTH_ENV: &[(&str, Option<&str>)] = &[
+    (codex_login::OPENAI_API_KEY_ENV_VAR, None),
+    (codex_login::CODEX_API_KEY_ENV_VAR, None),
+    (codex_login::CODEX_ACCESS_TOKEN_ENV_VAR, None),
+    (
+        codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR,
+        None,
+    ),
+    (
+        codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+        None,
+    ),
+    (
+        codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_SOURCE_ENV_VAR,
+        None,
+    ),
+    (
+        codex_protocol::shell_environment::OPENAI_SPIFFE_AUDIENCE_ENV_VAR,
+        None,
+    ),
+    (
+        codex_protocol::shell_environment::OPENAI_SPIFFE_ID_ENV_VAR,
+        None,
+    ),
+    (
+        codex_protocol::shell_environment::OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR,
+        None,
+    ),
+];
+
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;
     let codex_response = serde_json::from_value(value)?;

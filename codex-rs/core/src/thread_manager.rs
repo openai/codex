@@ -358,6 +358,8 @@ pub enum PromptCacheKey {
 
 pub struct StartThreadOptions {
     pub config: Config,
+    /// Opt out of root enrollment unless managed policy requires propagation.
+    pub prevent_daybreak_program_propagation_enrollment: bool,
     /// Trusted host country for the initial thread settings.
     pub request_country: codex_protocol::RequestCountry,
     /// Request-body cache key policy for this thread and its children. Hosts must reapply it on cold resume.
@@ -457,6 +459,7 @@ impl StartThreadOptions {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            prevent_daybreak_program_propagation_enrollment: false,
             request_country: codex_protocol::RequestCountry::default(),
             prompt_cache_key: PromptCacheKey::default(),
             thread_instructions_provider: None,
@@ -2647,6 +2650,7 @@ impl ThreadManagerState {
         };
         let StartThreadOptions {
             mut config,
+            prevent_daybreak_program_propagation_enrollment,
             request_country,
             prompt_cache_key,
             thread_instructions_provider,
@@ -2670,6 +2674,9 @@ impl ThreadManagerState {
             mut reserved_thread_id,
             disabled_plugin_ids,
         } = options;
+        if prevent_daybreak_program_propagation_enrollment {
+            thread_extension_init.insert(crate::agent::helper_daybreak::PreventRootEnrollment);
+        }
         if resume_preparation.is_some()
             && (config.ephemeral || !matches!(&initial_history, InitialHistory::Resumed(_)))
         {
