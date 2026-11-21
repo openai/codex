@@ -613,7 +613,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
     expected_token_limit: usize,
 ) {
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -698,7 +698,7 @@ fn mcp_audio_producer_limit_is_transient_until_history_admission(file_backed_too
 #[test]
 fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -728,7 +728,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     );
 
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -922,7 +922,7 @@ fn test_invocation(
         tracker: Arc::new(tokio::sync::Mutex::new(
             crate::turn_diff_tracker::TurnDiffTracker::new(),
         )),
-        call_id: call_id.to_string(),
+        call_id: call_id.into(),
         tool_name,
         source: crate::tools::context::ToolCallSource::Direct,
         native_call: None,

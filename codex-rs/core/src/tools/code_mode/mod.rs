@@ -23,6 +23,7 @@ use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_tool_call_id::ToolCallId;
 use futures::future::join_all;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
@@ -354,7 +355,7 @@ fn submit_nested_tool(
     step_context: Arc<StepContext>,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
-    call_id: String,
+    call_id: ToolCallId,
     cancellation_token: CancellationToken,
 ) -> Result<
     impl std::future::Future<Output = Result<JsonValue, FunctionCallError>> + Send + 'static,
@@ -419,7 +420,7 @@ fn submit_nested_tool(
         .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::ChildStarted {
             thread_id: session.thread_id.to_string(),
             turn_id: step_context.turn.sub_id.clone(),
-            call_id: call.call_id.clone(),
+            call_id: call.call_id.to_string(),
             cell_id: cell_id.to_string(),
         });
     let result = tool_runtime.handle_tool_call_with_source(

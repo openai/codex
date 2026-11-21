@@ -22,7 +22,7 @@ impl ToolCallAnalytics {
             turn_id: invocation.turn.sub_id.clone(),
             item: CollabAgentToolCallItem {
                 // Activity and analytics must use the same ID for turn-count deduplication.
-                id: invocation.call_id.clone(),
+                id: invocation.call_id.to_string(),
                 tool,
                 status: CollabAgentToolCallStatus::Interrupted,
                 sender_thread_id: invocation.session.thread_id,

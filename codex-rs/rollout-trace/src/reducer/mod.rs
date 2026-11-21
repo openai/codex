@@ -18,6 +18,7 @@ use crate::bundle::TRACE_MANIFEST_SCHEMA_VERSION;
 use crate::bundle::TraceBundleManifest;
 use crate::model::ExecutionStatus;
 use crate::model::RolloutTrace;
+use crate::model::ToolCallId;
 use crate::shard::PayloadReader;
 
 use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
@@ -263,7 +264,7 @@ struct TraceReducer {
     /// Legacy collaboration events and automatic agent results lack a source-to-item ID.
     pending_agent_interaction_edges: Vec<PendingAgentInteractionEdge>,
     /// V2 tool activity and the recipient's history item can arrive in either order.
-    native_tool_deliveries: BTreeMap<String, tool::NativeToolDelivery>,
+    native_tool_deliveries: BTreeMap<ToolCallId, tool::NativeToolDelivery>,
 }
 
 impl TraceReducer {

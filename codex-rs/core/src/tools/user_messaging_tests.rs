@@ -55,7 +55,7 @@ fn capture_keeps_the_first_confirmed_rewritten_message(budgeting: ContextBudgeti
 
 fn messaging_result(name: &str, input: Value, success: bool) -> AnyToolResult {
     AnyToolResult {
-        call_id: "message-call".to_owned(),
+        call_id: "message-call".into(),
         payload: ToolPayload::Function {
             arguments: r#"{"text":"Original question before hooks"}"#.to_owned(),
         },

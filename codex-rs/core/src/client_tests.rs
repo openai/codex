@@ -579,7 +579,7 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
     for id in ["first", "second"] {
         let call = ToolCall {
             tool_name: codex_tools::ToolName::plain("mcp__apps__read"),
-            call_id: id.to_string(),
+            call_id: id.into(),
             payload: ToolPayload::Function {
                 arguments: json!({"query": id}).to_string(),
             },

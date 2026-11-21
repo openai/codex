@@ -27,6 +27,7 @@ use crate::model::TerminalOperationKind;
 use crate::model::TerminalRequest;
 use crate::model::TerminalResult;
 use crate::model::TerminalSession;
+use crate::model::ToolCallId;
 use crate::model::ToolCallKind;
 use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
@@ -43,7 +44,7 @@ impl TraceReducer {
         seq: RawEventSeq,
         wall_time_unix_ms: i64,
         thread_id: &str,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         kind: &ToolCallKind,
         invocation_payload: Option<&RawPayloadRef>,
     ) -> Result<Option<TerminalOperationId>> {
@@ -86,7 +87,7 @@ impl TraceReducer {
         seq: RawEventSeq,
         wall_time_unix_ms: i64,
         thread_id: &str,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         kind: &ToolCallKind,
         runtime_payload: &RawPayloadRef,
     ) -> Result<Option<TerminalOperationId>> {
@@ -132,7 +133,7 @@ impl TraceReducer {
             TerminalOperation {
                 operation_id: operation_id.clone(),
                 terminal_id: None,
-                tool_call_id: start.tool_call_id.to_string(),
+                tool_call_id: start.tool_call_id.clone(),
                 kind: start.operation_kind,
                 execution: ExecutionWindow {
                     started_at_unix_ms: start.wall_time_unix_ms,
@@ -296,8 +297,8 @@ impl TraceReducer {
     /// Replaces the provisional handle-based join with the runtime's actual target.
     pub(in crate::reducer) fn resolve_stdin_target(
         &mut self,
-        tool_call_id: &str,
-        exec_tool_call_id: &str,
+        tool_call_id: &ToolCallId,
+        exec_tool_call_id: &ToolCallId,
     ) -> Result<()> {
         let stdin = self
             .rollout
@@ -358,7 +359,7 @@ impl TraceReducer {
     /// and output item ids let viewers jump between transcript and terminal timelines.
     pub(in crate::reducer) fn sync_terminal_model_observation(
         &mut self,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
     ) -> Result<()> {
         let Some(tool_call) = self.rollout.tool_calls.get(tool_call_id) else {
             bail!("tool call {tool_call_id} disappeared during terminal observation linking");
@@ -423,7 +424,7 @@ struct TerminalOperationStart<'a> {
     seq: RawEventSeq,
     wall_time_unix_ms: i64,
     thread_id: &'a str,
-    tool_call_id: &'a str,
+    tool_call_id: &'a ToolCallId,
     operation_kind: TerminalOperationKind,
     raw_payload: &'a RawPayloadRef,
     request: ParsedTerminalRequest,

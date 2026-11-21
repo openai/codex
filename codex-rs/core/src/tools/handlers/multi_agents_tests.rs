@@ -112,7 +112,7 @@ fn invocation(
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         tool_name: codex_tools::ToolName::plain(tool_name),
         source: crate::tools::context::ToolCallSource::Direct,
         payload,

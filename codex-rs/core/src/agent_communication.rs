@@ -6,6 +6,7 @@ use codex_extension_api::MessageLifecycleContributor;
 use codex_extension_api::MessageLifecycleInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_tool_call_id::ToolCallId;
 use serde::Deserialize;
 use serde::Serialize;
 use std::borrow::Cow;
@@ -46,7 +47,7 @@ impl AgentCommunicationKind {
 pub(crate) struct AgentCommunicationContext {
     pub(crate) kind: AgentCommunicationKind,
     pub(crate) sender_thread_id: ThreadId,
-    pub(crate) source_tool_call_id: Option<String>,
+    pub(crate) source_tool_call_id: Option<ToolCallId>,
 }
 
 impl AgentCommunicationContext {
@@ -177,14 +178,14 @@ struct MessagePublication {
 /// Clones follow one logical delivery through queues and share its consumption state.
 #[derive(Clone)]
 pub(crate) struct MessageDelivery {
-    pub(crate) source_tool_call_id: Option<String>,
+    pub(crate) source_tool_call_id: Option<ToolCallId>,
     publication: Option<Arc<Mutex<Option<MessagePublication>>>>,
 }
 
 impl MessageDelivery {
     pub(crate) fn publish(
         sender: ThreadId,
-        source_tool_call_id: Option<String>,
+        source_tool_call_id: Option<ToolCallId>,
         observers: &[Arc<dyn MessageLifecycleContributor>],
         unconfirmed_results: Option<&Arc<AtomicUsize>>,
     ) -> Option<Self> {

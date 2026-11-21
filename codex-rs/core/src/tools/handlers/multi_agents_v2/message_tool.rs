@@ -94,7 +94,7 @@ pub(super) async fn handle_message_string_tool(
         SubAgentActivityItem {
             model: None,
             reasoning_effort: None,
-            id: call_id,
+            id: call_id.into(),
             agent_thread_id: receiver_thread_id,
             agent_path: receiver_agent_path,
             kind: SubAgentActivityKind::Interacted,

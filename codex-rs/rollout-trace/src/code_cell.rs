@@ -15,6 +15,7 @@ use crate::model::AgentThreadId;
 use crate::model::CodeCellRuntimeStatus;
 use crate::model::CodexTurnId;
 use crate::model::ModelVisibleCallId;
+use crate::model::ToolCallId;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
@@ -123,14 +124,14 @@ impl CodeCellTraceContext {
 
     /// Records a host-confirmed wait target before the handler returns. A missing cell
     /// or rejected argument has no such observation. This does not imply caller delivery.
-    pub fn record_wait_target(&self, tool_call_id: &str) {
+    pub fn record_wait_target(&self, tool_call_id: &ToolCallId) {
         let CodeCellTraceContextState::Enabled(context) = &self.state else {
             return;
         };
         if let Err(err) = context.writer.enqueue_event(
             RawTraceEventContext::turn(&context.thread_id, &context.codex_turn_id),
             RawTraceEventPayload::CodeCellWaitTargetResolved {
-                tool_call_id: tool_call_id.to_owned(),
+                tool_call_id: tool_call_id.clone(),
                 runtime_cell_id: context.runtime_cell_id.clone(),
             },
         ) {

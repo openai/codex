@@ -419,7 +419,7 @@ fn intercepted_exec_records_patch_without_a_terminal() -> anyhow::Result<()> {
     let dispatch = trace.start_tool_dispatch_trace(|| Some(ToolDispatchInvocation {
         thread_id: thread_id.to_string(),
         codex_turn_id: "turn-1".to_string(),
-        tool_call_id: "patch-call".to_string(),
+        tool_call_id: "patch-call".into(),
         tool_name: "exec_command".to_string(),
         tool_namespace: None,
         requester: ToolDispatchRequester::Model {

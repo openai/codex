@@ -83,7 +83,7 @@ impl ToolExecutor<ToolInvocation> for SendMessageToUserAsyncHandler {
 
             let item = TurnItem::AgentMessage(AgentMessageItem {
                 moderation: None,
-                id: call_id,
+                id: call_id.into(),
                 content: vec![AgentMessageContent::Text {
                     text: message.to_string(),
                 }],

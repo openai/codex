@@ -155,7 +155,7 @@ impl ExecCommandHandler {
             session.clone(),
             step_context.clone(),
             cancellation_token,
-            call_id.clone(),
+            call_id.to_string(),
         );
         let turn_environment = selected_executor(&environments, &step_context.environments)?;
         let parsed =

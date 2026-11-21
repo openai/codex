@@ -3119,6 +3119,7 @@ dependencies = [
  "codex-thread-context-ids",
  "codex-thread-context-ids-test-support",
  "codex-thread-store",
+ "codex-tool-call-id",
  "codex-tools",
  "codex-user-input",
  "codex-utils-absolute-path",
@@ -4972,6 +4973,7 @@ dependencies = [
  "anyhow",
  "codex-code-mode",
  "codex-protocol",
+ "codex-tool-call-id",
  "http 1.4.0",
  "pretty_assertions",
  "serde",
@@ -5270,6 +5272,13 @@ dependencies = [
  "tracing",
  "uuid",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "codex-tool-call-id"
+version = "0.0.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

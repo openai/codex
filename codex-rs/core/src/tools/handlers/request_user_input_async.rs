@@ -130,7 +130,7 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputAsyncHandler {
 
             let item = TurnItem::AgentMessage(AgentMessageItem {
                 moderation: None,
-                id: call_id,
+                id: call_id.into(),
                 content: vec![AgentMessageContent::Text {
                     text: messages.join("\n\n"),
                 }],

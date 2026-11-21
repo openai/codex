@@ -33,6 +33,7 @@ use codex_protocol::models::ToolResultMetadata;
 use codex_protocol::models::executed_tool_call_metadata_bytes;
 use codex_protocol::models::normalize_executed_tool_call_completeness;
 use codex_protocol::openai_models::ToolMode;
+use codex_tool_call_id::ToolCallId;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
@@ -266,7 +267,7 @@ struct ExecutedToolCallRecorderState {
     // Keep nested IDs separate so this conservative filter cannot change existing completeness.
     seen_nested_ids: SeenIds,
     can_prove_wait_completion: bool,
-    pending_wrapper_origins: HashSet<String>,
+    pending_wrapper_origins: HashSet<ToolCallId>,
 }
 
 /// Keep each output's calls and completion marker together through replay and pruning.
@@ -278,9 +279,9 @@ struct RetainedToolCalls {
     cell_id: Option<String>,
     runtime_cell_id: Option<CellId>,
     // Invocation IDs stay local and are retained only with their original output's calls.
-    call_index_by_id: HashMap<String, usize>,
+    call_index_by_id: HashMap<ToolCallId, usize>,
     // Track newly backfilled metadata separately from pre-existing observations.
-    truncated_call_index_by_id: HashMap<String, usize>,
+    truncated_call_index_by_id: HashMap<ToolCallId, usize>,
     late_truncated_indices: HashSet<usize>,
     result_metadata_updated: bool,
 }
@@ -319,7 +320,7 @@ enum CellCompletion {
 #[derive(Default)]
 struct RecordedCell {
     output_item_id: Option<ResponseItemId>,
-    pending_calls: IndexMap<String, ExecutedToolCall>,
+    pending_calls: IndexMap<ToolCallId, ExecutedToolCall>,
     completion: CellCompletion,
     originating_call_id: Option<String>,
     truncated_metadata_binding_valid: bool,
@@ -784,7 +785,7 @@ impl ExecutedToolCalls {
     pub(crate) fn record_accepted_result(
         &self,
         source: &ToolCallSource,
-        call_id: &str,
+        call_id: &ToolCallId,
         result: &dyn ToolOutput,
     ) {
         if !matches!(source, ToolCallSource::CodeMode { .. }) {
@@ -841,7 +842,7 @@ impl ExecutedToolCalls {
     fn record_nested_tool_call(
         &self,
         cell_id: CellId,
-        call_id: String,
+        call_id: ToolCallId,
         call: ExecutedToolCall,
         original_bytes: usize,
     ) {
@@ -906,7 +907,7 @@ impl ExecutedToolCalls {
     fn record_result_metadata(
         &self,
         source: &ToolCallSource,
-        call_id: &str,
+        call_id: &ToolCallId,
         metadata: ToolResultMetadata,
     ) -> bool {
         let ToolCallSource::CodeMode { cell_id, .. } = source else {

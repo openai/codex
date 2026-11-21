@@ -17,6 +17,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ToolResultMetadata;
 use codex_protocol::models::function_call_output_content_items_to_text;
+use codex_tool_call_id::ToolCallId;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
 use codex_utils_audio::estimate_tool_audio_tokens;
@@ -118,7 +119,7 @@ pub struct ToolInvocation {
     pub(crate) step_context: Arc<StepContext>,
     pub cancellation_token: CancellationToken,
     pub tracker: SharedTurnDiffTracker,
-    pub call_id: String,
+    pub call_id: ToolCallId,
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
@@ -157,7 +158,7 @@ impl ToolInvocation {
             .find_map(|item| match item {
                 ResponseItem::FunctionCall { id, call_id, .. }
                 | ResponseItem::CustomToolCall { id, call_id, .. }
-                    if call_id == &self.call_id =>
+                    if call_id == self.call_id.as_str() =>
                 {
                     id.clone()
                 }

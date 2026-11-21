@@ -87,8 +87,12 @@ impl WriteStdinHandler {
             ));
         };
         let args = WriteStdinArgs::parse(&payload)?;
-        let context =
-            UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
+        let context = UnifiedExecContext::new(
+            session.clone(),
+            step_context,
+            cancellation_token,
+            call_id.into(),
+        );
         let response = session
             .services
             .unified_exec_manager

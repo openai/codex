@@ -212,7 +212,7 @@ impl ViewImageHandler {
         }
 
         let item = TurnItem::ImageView(ImageViewItem {
-            id: call_id,
+            id: call_id.into(),
             path: path_uri,
         });
         session.emit_turn_item_started(turn.as_ref(), &item).await;
@@ -413,7 +413,7 @@ mod tests {
                 turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-view-image".to_string(),
+                call_id: "call-view-image".into(),
                 tool_name: codex_tools::ToolName::plain("view_image"),
                 source: ToolCallSource::Direct,
                 native_call: None,
@@ -445,7 +445,7 @@ mod tests {
                 turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-view-image".to_string(),
+                call_id: "call-view-image".into(),
                 tool_name: codex_tools::ToolName::plain("view_image"),
                 source: ToolCallSource::Direct,
                 native_call: None,
@@ -490,7 +490,7 @@ mod tests {
                 turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-view-image".to_string(),
+                call_id: "call-view-image".into(),
                 tool_name: codex_tools::ToolName::plain("view_image"),
                 source: ToolCallSource::Direct,
                 native_call: None,
@@ -530,7 +530,7 @@ mod tests {
                 turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-view-image".to_string(),
+                call_id: "call-view-image".into(),
                 tool_name: codex_tools::ToolName::plain("view_image"),
                 source: ToolCallSource::CodeMode {
                     cell_id: "cell-1".to_string(),

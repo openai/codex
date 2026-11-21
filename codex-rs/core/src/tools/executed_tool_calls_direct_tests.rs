@@ -445,7 +445,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
     let call = ToolCall {
         tool_name: codex_tools::ToolName::plain("test_tool"),
-        call_id: "direct".to_string(),
+        call_id: "direct".into(),
         payload: ToolPayload::Function {
             arguments: json!({ "argument": "kept" }).to_string(),
         },
@@ -524,7 +524,7 @@ async fn direct_recording_preserves_encoded_arguments_in_history() {
     assert!(wire_bytes > 8 * 1024);
     let call = ToolCall {
         tool_name: codex_tools::ToolName::plain("test_tool"),
-        call_id: "direct".to_string(),
+        call_id: "direct".into(),
         payload: ToolPayload::Function {
             arguments: invalid_json.clone(),
         },

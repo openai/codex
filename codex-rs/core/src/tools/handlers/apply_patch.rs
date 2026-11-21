@@ -329,7 +329,7 @@ impl ApplyPatchHandler {
             session,
             step_context,
             cancellation_token,
-            call_id,
+            call_id: call_id.into(),
             tool_name,
         };
         let content = execute_prepared_patch(request, Some(&tracker), tool_ctx).await?;
@@ -410,7 +410,7 @@ impl CoreToolRuntime for ApplyPatchHandler {
         Some(PostToolUsePayload {
             tool_cwd: result.post_tool_use_cwd(),
             tool_name: HookToolName::apply_patch(),
-            tool_use_id: invocation.call_id.clone(),
+            tool_use_id: invocation.call_id.to_string(),
             tool_input: serde_json::json!({
                 "command": apply_patch_payload_command(&invocation.payload)?,
             }),

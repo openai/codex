@@ -87,7 +87,7 @@ fn code_cell_lifecycle_links_nested_tools_and_outputs_without_inferring_legacy_w
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "nested-tool-1".to_string(),
+            tool_call_id: "nested-tool-1".into(),
             model_visible_call_id: None,
             code_mode_runtime_tool_id: Some("tool-1".to_string()),
             requester: RawToolCallRequester::CodeCell {
@@ -105,7 +105,7 @@ fn code_cell_lifecycle_links_nested_tools_and_outputs_without_inferring_legacy_w
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "nested-tool-1".to_string(),
+            tool_call_id: "nested-tool-1".into(),
             status: ExecutionStatus::Completed,
             result_payload: None,
         },
@@ -138,7 +138,7 @@ fn code_cell_lifecycle_links_nested_tools_and_outputs_without_inferring_legacy_w
     writer.append_with_context(
         trace_context("turn-2"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "wait-tool-1".to_string(),
+            tool_call_id: "wait-tool-1".into(),
             model_visible_call_id: Some("wait-call".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -186,7 +186,10 @@ fn code_cell_lifecycle_links_nested_tools_and_outputs_without_inferring_legacy_w
     assert_eq!(cell.runtime_status, CodeCellRuntimeStatus::Completed);
     assert_eq!(cell.execution.status, ExecutionStatus::Completed);
     assert_eq!(cell.runtime_cell_id, Some("1".to_string()));
-    assert_eq!(cell.nested_tool_call_ids, vec!["nested-tool-1"]);
+    assert_eq!(
+        cell.nested_tool_call_ids,
+        vec![crate::ToolCallId::from("nested-tool-1")]
+    );
     // The legacy request alone does not establish that the host resolved a target.
     assert!(cell.wait_tool_call_ids.is_empty());
     assert_eq!(cell.output_item_ids, vec![output_item_id.clone()]);
@@ -489,7 +492,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
             pending_dispatches.push(dispatch);
             if wait_id == "confirmed" {
                 crate::CodeCellTraceContext::enabled(Arc::clone(&writer), thread_id, turn_id, "1")
-                    .record_wait_target(wait_id);
+                    .record_wait_target(&wait_id.into());
             }
         }
         let response = writer.write_json_payload(
@@ -513,7 +516,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
         if turn_id == "turn-resumed" {
             // The pre-resume wait is confirmed after the new cell has reused its handle.
             crate::CodeCellTraceContext::enabled(Arc::clone(&writer), thread_id, "turn-child", "1")
-                .record_wait_target("late");
+                .record_wait_target(&"late".into());
         }
         writer.append_with_context(
             trace_context_for_thread(thread_id, turn_id),
@@ -550,7 +553,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow:
     );
     assert_eq!(
         rollout.code_cells[&child_cell_id].wait_tool_call_ids,
-        ["confirmed"]
+        [crate::ToolCallId::from("confirmed")]
     );
     assert!(
         rollout.code_cells[&root_cell_id]

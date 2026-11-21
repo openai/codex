@@ -14,6 +14,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_tool_call_id::ToolCallId;
 use codex_utils_output_truncation::with_serialization_allowance;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
@@ -320,7 +321,7 @@ impl CodeModeSessionDelegate for CodeModeCellDelegate {
         cancellation_token: CancellationToken,
     ) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
-            let call_id = format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4());
+            let call_id = ToolCallId::from(format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()));
             call_trace::received(
                 self.broker.thread_id,
                 &invocation.tool_name,
@@ -446,7 +447,7 @@ impl CoreTurnHost {
         &self,
         invocation: CodeModeNestedToolCall,
         step_context: Arc<StepContext>,
-        call_id: String,
+        call_id: ToolCallId,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<JsonValue, String>> + Send + 'static {
         let invocation = submit_nested_tool(

@@ -4830,7 +4830,7 @@ impl Session {
                     communication
                         .delivery
                         .as_ref()
-                        .and_then(|d| d.source_tool_call_id.as_deref()),
+                        .and_then(|d| d.source_tool_call_id.as_ref()),
                 );
         }
         if let Some(delivery) = delivery.take() {

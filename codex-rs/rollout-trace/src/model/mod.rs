@@ -1,7 +1,8 @@
 //! Reduced rollout trace model.
 //!
 //! These types describe the deterministic replay output. They intentionally
-//! separate model-visible conversation from runtime/debug objects.
+//! separate model-visible conversation from runtime/debug objects. [`ToolCallId`]
+//! identifies a runtime tool invocation, including nested calls made by Code Mode.
 
 use std::collections::BTreeMap;
 
@@ -14,6 +15,7 @@ mod conversation;
 mod runtime;
 mod session;
 
+pub use codex_tool_call_id::ToolCallId;
 pub use conversation::*;
 pub use runtime::*;
 pub use session::*;
@@ -30,8 +32,6 @@ pub type ConversationItemId = String;
 pub type InferenceCallId = String;
 /// Globally unique ID for one concrete MCP backend request.
 pub type McpCallId = String;
-/// Reducer-owned ID for one runtime tool-call object.
-pub type ToolCallId = String;
 /// Responses `call_id` / custom-tool call ID visible in inference payloads.
 pub type ModelVisibleCallId = String;
 /// Tool invocation ID assigned inside the code-mode JavaScript runtime.

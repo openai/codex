@@ -98,7 +98,7 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
     recorder.record_tool_call(
         &ToolCall {
             tool_name: ToolName::plain("nested_tool"),
-            call_id: "nested".to_string(),
+            call_id: "nested".into(),
             payload: ToolPayload::Function {
                 arguments: "{}".to_string(),
             },

@@ -477,7 +477,9 @@ impl TraceReducer {
             // ownership can be proven.
             return Ok(());
         };
-        push_unique(&mut cell.nested_tool_call_ids, tool_call_id);
+        if !cell.nested_tool_call_ids.contains(tool_call_id) {
+            cell.nested_tool_call_ids.push(tool_call_id.clone());
+        }
         Ok(())
     }
 

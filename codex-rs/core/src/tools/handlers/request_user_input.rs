@@ -85,7 +85,7 @@ impl RequestUserInputHandler {
         };
         let questions = args.questions.clone();
         let accepted = session
-            .request_user_input(turn.as_ref(), call_id.clone(), args)
+            .request_user_input(turn.as_ref(), call_id.to_string(), args)
             .await
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
@@ -136,7 +136,7 @@ impl RequestUserInputHandler {
                     .record_retained_context(RetainedContextEvent::VerifiedAnswer {
                         answer: VerifiedAnswer {
                             turn_id: turn.sub_id.clone(),
-                            call_id,
+                            call_id: call_id.into(),
                             questions: user_input,
                         },
                         acceptance_order: Some(accepted.acceptance_order),

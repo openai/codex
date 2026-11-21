@@ -5,6 +5,7 @@ use codex_analytics::CodeModeToolCallFact;
 use codex_analytics::CodeModeToolCallStatus;
 use codex_analytics::TurnAnalyticsMetadata;
 use codex_protocol::ThreadId;
+use codex_tool_call_id::ToolCallId;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Span;
@@ -14,7 +15,7 @@ pub(super) struct CodeModeToolCallGuard {
     thread_id: String,
     turn_id: String,
     turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
-    call_id: String,
+    call_id: ToolCallId,
     pub(super) cell_id: Option<String>,
     tool_name: &'static str,
     started_at_ms: u64,
@@ -28,7 +29,7 @@ impl CodeModeToolCallGuard {
         session: &crate::session::session::Session,
         turn_id: String,
         turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
-        call_id: String,
+        call_id: ToolCallId,
         tool_name: &'static str,
         handler_span: Span,
     ) -> Self {
@@ -111,7 +112,7 @@ impl Drop for CodeModeToolCallGuard {
                 thread_id: self.thread_id.clone(),
                 turn_id: self.turn_id.clone(),
                 turn_metadata: self.turn_metadata.clone(),
-                call_id: self.call_id.clone(),
+                call_id: self.call_id.to_string(),
                 cell_id: self.cell_id.clone(),
                 tool_name: self.tool_name.to_string(),
                 started_at_ms: self.started_at_ms,
@@ -123,13 +124,13 @@ impl Drop for CodeModeToolCallGuard {
 
 pub(super) struct NestedToolDispatchTrace {
     thread_id: ThreadId,
-    pub(super) call_id: String,
+    pub(super) call_id: ToolCallId,
     pub(super) interruption: Option<DispatchInterruption>,
     pub(super) span: Span,
 }
 
 impl NestedToolDispatchTrace {
-    pub(super) fn new(thread_id: ThreadId, call_id: String) -> Self {
+    pub(super) fn new(thread_id: ThreadId, call_id: ToolCallId) -> Self {
         Self {
             thread_id,
             call_id,

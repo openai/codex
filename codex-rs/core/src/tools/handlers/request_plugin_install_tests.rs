@@ -54,7 +54,7 @@ async fn request_plugin_install_rejects_restricted_threads(presentation: ToolSug
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
-            call_id: "call-1".to_string(),
+            call_id: "call-1".into(),
             tool_name: codex_tools::ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME),
             source: crate::tools::context::ToolCallSource::Direct,
             native_call: None,

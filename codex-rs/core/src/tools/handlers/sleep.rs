@@ -101,7 +101,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
 
             let started = Instant::now();
             let item = TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
-                id: call_id,
+                id: call_id.into(),
                 duration_ms: args.duration_ms,
             }));
             session.emit_turn_item_started(turn.as_ref(), &item).await;

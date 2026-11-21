@@ -19,6 +19,7 @@ use crate::model::ConversationRole;
 use crate::model::InteractionEdge;
 use crate::model::InteractionEdgeKind;
 use crate::model::ProducerRef;
+use crate::model::ToolCallId;
 use crate::model::ToolCallKind;
 use crate::model::TraceAnchor;
 use crate::payload::RawPayloadRef;
@@ -69,7 +70,7 @@ impl TraceReducer {
     /// Starts a multi-agent edge from a runtime begin payload, when the tool kind supports one.
     pub(super) fn start_agent_interaction_from_runtime(
         &mut self,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
         if !runtime_payload.is_complete() {
@@ -130,7 +131,7 @@ impl TraceReducer {
     pub(super) fn end_agent_interaction_from_runtime(
         &mut self,
         wall_time_unix_ms: i64,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
         let kind = self.rollout.tool_calls[tool_call_id].kind.clone();
@@ -191,7 +192,7 @@ impl TraceReducer {
     fn end_sub_agent_activity(
         &mut self,
         wall_time_unix_ms: i64,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         tool_kind: &ToolCallKind,
         payload: &SubAgentActivityEvent,
     ) -> Result<()> {
@@ -202,7 +203,7 @@ impl TraceReducer {
                 ToolCallKind::AssignAgentTask | ToolCallKind::SendMessage,
                 SubAgentActivityKind::Interacted,
             ) => {
-                self.native_tool_delivery(tool_call_id.to_owned(), target_thread_id)?
+                self.native_tool_delivery(tool_call_id.clone(), target_thread_id)?
                     .activity_at_unix_ms = Some(wall_time_unix_ms);
                 Ok(())
             }
@@ -222,7 +223,7 @@ impl TraceReducer {
 
     fn native_tool_delivery(
         &mut self,
-        call_id: String,
+        call_id: ToolCallId,
         receiver: String,
     ) -> Result<&mut NativeToolDelivery> {
         match self.native_tool_deliveries.entry(call_id) {
@@ -240,7 +241,7 @@ impl TraceReducer {
 
     pub(in crate::reducer) fn record_agent_message_target(
         &mut self,
-        call_id: String,
+        call_id: ToolCallId,
         receiver: String,
         item_id: String,
     ) -> Result<()> {
@@ -348,7 +349,7 @@ impl TraceReducer {
     /// Adds the canonical tool result payload to an already reduced multi-agent edge.
     pub(super) fn attach_agent_interaction_tool_result(
         &mut self,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         result_payload: Option<&RawPayloadRef>,
     ) -> Result<()> {
         let Some(result_payload) = result_payload else {
@@ -387,7 +388,7 @@ impl TraceReducer {
     fn end_spawn_agent_interaction(
         &mut self,
         wall_time_unix_ms: i64,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         payload: &CollabAgentSpawnEndEvent,
     ) -> Result<()> {
         let Some(child_thread_id) = payload.new_thread_id else {
@@ -402,7 +403,7 @@ impl TraceReducer {
             edge_id,
             kind: InteractionEdgeKind::SpawnAgent,
             source: TraceAnchor::ToolCall {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
             },
             target_thread_id: child_thread_id.clone(),
             message_author,
@@ -417,7 +418,7 @@ impl TraceReducer {
     fn end_message_agent_interaction(
         &mut self,
         wall_time_unix_ms: i64,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         edge_kind: InteractionEdgeKind,
         payload: &CollabAgentInteractionEndEvent,
     ) -> Result<()> {
@@ -432,7 +433,7 @@ impl TraceReducer {
 
     fn queue_message_agent_interaction(
         &mut self,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         kind: InteractionEdgeKind,
         target_thread_id: String,
         message_content: String,
@@ -444,7 +445,7 @@ impl TraceReducer {
             edge_id: tool_edge_id(tool_call_id),
             kind,
             source: TraceAnchor::ToolCall {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
             },
             target_thread_id,
             message_author,
@@ -456,7 +457,7 @@ impl TraceReducer {
         })
     }
 
-    fn agent_tool_payload_ids(&self, tool_call_id: &str) -> Result<Vec<String>> {
+    fn agent_tool_payload_ids(&self, tool_call_id: &ToolCallId) -> Result<Vec<String>> {
         let tool_call =
             self.rollout.tool_calls.get(tool_call_id).with_context(|| {
                 format!("agent edge referenced unknown tool call {tool_call_id}")
@@ -476,7 +477,7 @@ impl TraceReducer {
 
     fn upsert_close_agent_interaction(
         &mut self,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         target_thread_id: String,
         ended_at_unix_ms: Option<i64>,
     ) -> Result<()> {
@@ -498,7 +499,7 @@ impl TraceReducer {
             edge_id: tool_edge_id(tool_call_id),
             kind: InteractionEdgeKind::CloseAgent,
             source: TraceAnchor::ToolCall {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
             },
             target: TraceAnchor::Thread {
                 thread_id: target_thread_id,
@@ -803,11 +804,11 @@ fn extend_unique(items: &mut Vec<String>, new_items: Vec<String>) {
     }
 }
 
-fn tool_edge_id(tool_call_id: &str) -> String {
+fn tool_edge_id(tool_call_id: &ToolCallId) -> String {
     format!("edge:tool:{tool_call_id}")
 }
 
-fn tool_call_source_matches(anchor: &TraceAnchor, tool_call_id: &str) -> bool {
+fn tool_call_source_matches(anchor: &TraceAnchor, tool_call_id: &ToolCallId) -> bool {
     matches!(anchor, TraceAnchor::ToolCall { tool_call_id: source } if source == tool_call_id)
 }
 

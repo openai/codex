@@ -231,7 +231,7 @@ impl CodeModeExecuteHandler {
                 .execute(
                     session,
                     step_context,
-                    call_id,
+                    call_id.into(),
                     originating_call,
                     input,
                     &mut telemetry,

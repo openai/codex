@@ -248,7 +248,7 @@ pub(crate) async fn review_tool_call(
                 other => CodexErr::Fatal(format!("Guardian assessment failed: {other:?}")),
             })?;
         Ok(GuardianReviewResult {
-            call_id: invocation.call_id,
+            call_id: invocation.call_id.into(),
             assessment,
         })
     };

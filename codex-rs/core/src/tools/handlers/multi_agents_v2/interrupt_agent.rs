@@ -73,7 +73,7 @@ async fn handle_interrupt_agent(
         SubAgentActivityItem {
             model: None,
             reasoning_effort: None,
-            id: call_id,
+            id: call_id.into(),
             agent_thread_id: agent_id,
             agent_path,
             kind: SubAgentActivityKind::Interrupted,

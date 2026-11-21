@@ -44,6 +44,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
 use codex_rollout_trace::ExecutionStatus;
 use codex_shell_command::parse_command::parse_shell_script;
+use codex_tool_call_id::ToolCallId;
 use codex_tools::FunctionsNamespaceFunctionPrefixes;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
@@ -325,7 +326,7 @@ pub(crate) trait ToolArgumentDiffConsumer: Send {
 }
 
 pub(crate) struct AnyToolResult {
-    pub(crate) call_id: String,
+    pub(crate) call_id: ToolCallId,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
@@ -1239,7 +1240,7 @@ pub(crate) async fn apply_pre_tool_use(
     let outcome = run_pre_tool_use_hooks(
         &invocation.session,
         &invocation.step_context,
-        invocation.call_id.clone(),
+        invocation.call_id.to_string(),
         &payload.tool_name,
         &payload.tool_input,
         cwd,

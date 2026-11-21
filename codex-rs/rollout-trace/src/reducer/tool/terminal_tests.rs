@@ -80,7 +80,7 @@ fn check_exec_terminal_result(
     let _tool_start = writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "tool-1".to_string(),
+            tool_call_id: "tool-1".into(),
             model_visible_call_id: Some("call-1".to_string()),
             code_mode_runtime_tool_id: None,
             requester: crate::raw_event::RawToolCallRequester::Model,
@@ -104,7 +104,7 @@ fn check_exec_terminal_result(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
             kind: ToolCallKind::ExecCommand,
-            tool_call_id: "tool-1".to_string(),
+            tool_call_id: "tool-1".into(),
             runtime_payload: runtime_start_payload,
         },
     )?;
@@ -131,7 +131,7 @@ fn check_exec_terminal_result(
     let runtime_end = writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "tool-1".to_string(),
+            tool_call_id: "tool-1".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: runtime_end_payload,
         },
@@ -152,7 +152,7 @@ fn check_exec_terminal_result(
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "tool-1".to_string(),
+            tool_call_id: "tool-1".into(),
             status: ExecutionStatus::Completed,
             result_payload: Some(result_payload),
         },
@@ -199,7 +199,7 @@ fn check_exec_terminal_result(
         TerminalOperation {
             operation_id: operation_id.clone(),
             terminal_id: Some("terminal_session:terminal_operation:1".to_string()),
-            tool_call_id: "tool-1".to_string(),
+            tool_call_id: "tool-1".into(),
             kind: TerminalOperationKind::ExecCommand,
             execution: ExecutionWindow {
                 started_at_unix_ms: runtime_start.wall_time_unix_ms,
@@ -295,13 +295,13 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
             writer.append_with_context(
                 trace_context("turn-1"),
                 RawTraceEventPayload::ToolCallRuntimeEnded {
-                    tool_call_id: "tool-0".to_string(),
+                    tool_call_id: "tool-0".into(),
                     status: ExecutionStatus::Completed,
                     runtime_payload: response,
                 },
             )?;
         }
-        let tool_call_id = format!("tool-{index}");
+        let tool_call_id = crate::ToolCallId::from(format!("tool-{index}"));
         writer.append_with_context(
             trace_context_for_thread(thread, turn),
             RawTraceEventPayload::ToolCallStarted {
@@ -369,7 +369,7 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
         TerminalOperation {
             operation_id: "terminal_operation:6".to_string(),
             terminal_id: Some("terminal_session:terminal_operation:5".to_string()),
-            tool_call_id: "tool-5".to_string(),
+            tool_call_id: "tool-5".into(),
             kind: TerminalOperationKind::WriteStdin,
             execution: ExecutionWindow {
                 started_at_unix_ms: runtime_start.wall_time_unix_ms,
@@ -394,8 +394,8 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::StdinTargetResolved {
-            tool_call_id: "tool-2".to_string(),
-            exec_tool_call_id: "tool-4".to_string(),
+            tool_call_id: "tool-2".into(),
+            exec_tool_call_id: "tool-4".into(),
         },
     )?;
     let mut expected = rollout;
@@ -447,7 +447,7 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
     let tool_start = writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "tool-stdin".to_string(),
+            tool_call_id: "tool-stdin".into(),
             model_visible_call_id: Some("call-stdin".to_string()),
             code_mode_runtime_tool_id: None,
             requester: crate::raw_event::RawToolCallRequester::Model,
@@ -472,7 +472,7 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
     let tool_end = writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "tool-stdin".to_string(),
+            tool_call_id: "tool-stdin".into(),
             status: ExecutionStatus::Completed,
             result_payload: Some(response_payload),
         },
@@ -496,7 +496,7 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
         TerminalOperation {
             operation_id: operation_id.clone(),
             terminal_id: Some("terminal_session:terminal_operation:1".to_string()),
-            tool_call_id: "tool-stdin".to_string(),
+            tool_call_id: "tool-stdin".into(),
             kind: TerminalOperationKind::WriteStdin,
             execution: ExecutionWindow {
                 started_at_unix_ms: tool_start.wall_time_unix_ms,
@@ -553,7 +553,7 @@ fn invalid_write_stdin_arguments_remain_failed_tool_calls() -> anyhow::Result<()
             ToolDispatchInvocation {
                 thread_id: ROOT_THREAD_ID.to_string(),
                 codex_turn_id: "turn-1".to_string(),
-                tool_call_id: "call-stdin".to_string(),
+                tool_call_id: "call-stdin".into(),
                 tool_name: "write_stdin".to_string(),
                 tool_namespace: None,
                 requester: ToolDispatchRequester::Model {
@@ -712,7 +712,7 @@ fn replay_write_stdin_result(
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "tool-stdin".to_string(),
+            tool_call_id: "tool-stdin".into(),
             model_visible_call_id: None,
             code_mode_runtime_tool_id: Some("runtime-tool-1".to_string()),
             requester: crate::raw_event::RawToolCallRequester::CodeCell {
@@ -728,7 +728,7 @@ fn replay_write_stdin_result(
         RawPayloadKind::ToolResult,
         &response,
         move |response_payload| RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "tool-stdin".to_string(),
+            tool_call_id: "tool-stdin".into(),
             status,
             result_payload: Some(response_payload),
         },

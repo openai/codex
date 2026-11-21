@@ -97,6 +97,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_tool_call_id::ToolCallId;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -161,7 +162,7 @@ pub(crate) async fn handle_mcp_tool_call(
     sess: Arc<Session>,
     step_context: &Arc<StepContext>,
     cancellation_token: &CancellationToken,
-    call_id: String,
+    call_id: &ToolCallId,
     originating_call: Option<ToolCallOrigin>,
     advertised_tool: &ToolInfo,
     prepared_call: anyhow::Result<PreparedMcpCall>,
@@ -226,7 +227,7 @@ pub(crate) async fn handle_mcp_tool_call(
             let result = notify_mcp_tool_call_skip(
                 sess.as_ref(),
                 turn_context.as_ref(),
-                &call_id,
+                call_id,
                 invocation,
                 item_metadata,
                 format!("{error:#}"),
@@ -246,7 +247,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
             turn_context.as_ref(),
-            &call_id,
+            call_id,
             invocation,
             item_metadata.clone(),
             "MCP tool call blocked by app configuration".to_string(),
@@ -272,7 +273,7 @@ pub(crate) async fn handle_mcp_tool_call(
     };
     let requested_reviewer = sess.mcp_requested_reviewer(&step_context.settings).await;
     let approval_context = sess.register_mcp_tool_approval_metadata(
-        &call_id,
+        call_id,
         prepared_call.server_key(),
         &invocation,
         metadata,
@@ -284,7 +285,7 @@ pub(crate) async fn handle_mcp_tool_call(
     notify_mcp_tool_call_started(
         sess.as_ref(),
         turn_context.as_ref(),
-        &call_id,
+        call_id,
         invocation.clone(),
         item_metadata.clone(),
     )
@@ -294,7 +295,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &sess,
         step_context,
         cancellation_token,
-        &call_id,
+        call_id,
         &invocation,
         &invocation_tool_name,
         &hook_tool_name,
@@ -319,7 +320,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 return handle_approved_mcp_tool_call(
                     &sess,
                     step_context.as_ref(),
-                    &call_id,
+                    call_id,
                     originating_call.as_ref(),
                     invocation,
                     prepared_call,
@@ -338,7 +339,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    &call_id,
+                    call_id,
                     invocation,
                     item_metadata.clone(),
                     rejection,
@@ -350,7 +351,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    &call_id,
+                    call_id,
                     invocation,
                     item_metadata.clone(),
                     ResolvedModelMessages::from_model(turn_context.model_info())
@@ -379,7 +380,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    &call_id,
+                    call_id,
                     invocation,
                     item_metadata.clone(),
                     message,
@@ -412,7 +413,7 @@ pub(crate) async fn handle_mcp_tool_call(
     handle_approved_mcp_tool_call(
         &sess,
         step_context.as_ref(),
-        &call_id,
+        call_id,
         originating_call.as_ref(),
         invocation,
         prepared_call,
@@ -484,7 +485,7 @@ impl McpToolCallItemMetadata {
 async fn handle_approved_mcp_tool_call(
     sess: &Arc<Session>,
     step_context: &StepContext,
-    call_id: &str,
+    call_id: &ToolCallId,
     originating_call: Option<&ToolCallOrigin>,
     invocation: McpInvocation,
     prepared_call: PreparedMcpCall,
@@ -2881,7 +2882,7 @@ fn requires_mcp_tool_approval_for_mode(
 async fn notify_mcp_tool_call_skip(
     sess: &Session,
     turn_context: &TurnContext,
-    call_id: &str,
+    call_id: &ToolCallId,
     invocation: McpInvocation,
     item_metadata: McpToolCallItemMetadata,
     message: String,

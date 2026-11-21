@@ -275,7 +275,7 @@ impl ThreadTraceContext {
                 kind,
                 payload,
             } => {
-                let tool_call_id = tool_call_id.to_owned();
+                let tool_call_id = ToolCallId::from(tool_call_id);
                 let _ = context.writer.event_with_payload(
                     envelope,
                     RawPayloadKind::ToolRuntimeEvent,
@@ -292,7 +292,7 @@ impl ThreadTraceContext {
                 status,
                 payload,
             } => {
-                let tool_call_id = tool_call_id.to_owned();
+                let tool_call_id = ToolCallId::from(tool_call_id);
                 let _ = context.writer.event_with_payload(
                     envelope,
                     RawPayloadKind::ToolRuntimeEvent,
@@ -312,7 +312,7 @@ impl ThreadTraceContext {
     pub fn record_mcp_tool_result(
         &self,
         codex_turn_id: &str,
-        tool_call_id: &str,
+        tool_call_id: &ToolCallId,
         result: &Result<CallToolResult, String>,
     ) {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
@@ -322,7 +322,7 @@ impl ThreadTraceContext {
         struct Payload<'a> {
             result: &'a Result<CallToolResult, String>,
         }
-        let tool_call_id = tool_call_id.to_owned();
+        let tool_call_id = tool_call_id.clone();
         let status = if result.is_ok() {
             ExecutionStatus::Completed
         } else {
@@ -345,7 +345,7 @@ impl ThreadTraceContext {
         &self,
         default_turn_id: &str,
         item: &ResponseItem,
-        source_tool_call_id: Option<&str>,
+        source_tool_call_id: Option<&ToolCallId>,
     ) {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return;
@@ -353,7 +353,7 @@ impl ThreadTraceContext {
         let Some(item_id) = item.id().map(ToString::to_string) else {
             return;
         };
-        let source_tool_call_id = source_tool_call_id.map(str::to_owned);
+        let source_tool_call_id = source_tool_call_id.cloned();
         let accepted = move |agent_message_payload, tool_output_payload| {
             RawTraceEventPayload::HistoryItemAccepted {
                 item_id,
@@ -401,8 +401,8 @@ impl ThreadTraceContext {
         context.append_with_context_best_effort(
             codex_turn_id.to_string(),
             RawTraceEventPayload::StdinTargetResolved {
-                tool_call_id: tool_call_id.to_string(),
-                exec_tool_call_id: exec_tool_call_id.to_string(),
+                tool_call_id: tool_call_id.into(),
+                exec_tool_call_id: exec_tool_call_id.into(),
             },
         );
     }
@@ -564,14 +564,14 @@ impl ThreadTraceContext {
     /// Dispatch-level tool IDs remain compact and UI-friendly. This UUID is
     /// deliberately separate: it is only for cross-process log joins where a
     /// rollout-local counter would collide across samples.
-    pub fn start_mcp_call_trace(&self, tool_call_id: impl Into<ToolCallId>) -> McpCallTraceContext {
+    pub fn start_mcp_call_trace(&self, tool_call_id: &ToolCallId) -> McpCallTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return McpCallTraceContext::disabled();
         };
         let mcp_call_id = Uuid::new_v4().to_string();
         let trace = McpCallTraceContext::enabled(mcp_call_id.clone());
         context.append_best_effort(RawTraceEventPayload::McpToolCallCorrelationAssigned {
-            tool_call_id: tool_call_id.into(),
+            tool_call_id: tool_call_id.clone(),
             mcp_call_id,
         });
         trace

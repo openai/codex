@@ -60,7 +60,7 @@ fn mcp_calls_keep_callable_identity_and_classify_the_backend() -> anyhow::Result
             ToolDispatchInvocation {
                 thread_id: ROOT_THREAD_ID.to_string(),
                 codex_turn_id: "turn-1".to_string(),
-                tool_call_id: "call-mcp".to_string(),
+                tool_call_id: "call-mcp".into(),
                 tool_name: tool_name.to_string(),
                 tool_namespace: Some(namespace.to_string()),
                 requester: ToolDispatchRequester::CodeCell {
@@ -96,7 +96,7 @@ fn mcp_calls_keep_callable_identity_and_classify_the_backend() -> anyhow::Result
         )?;
         writer.append(RawTraceEventPayload::ToolCallRuntimeStarted {
             kind: expected.kind.clone(),
-            tool_call_id: "call-mcp".to_string(),
+            tool_call_id: "call-mcp".into(),
             runtime_payload: begin.clone(),
         })?;
         expected.raw_runtime_payload_ids.push(begin.raw_payload_id);
@@ -107,7 +107,7 @@ fn mcp_calls_keep_callable_identity_and_classify_the_backend() -> anyhow::Result
         // The producer emits the runtime begin before assigning its MCP
         // correlation ID, even when the callable name matches a built-in.
         writer.append(RawTraceEventPayload::McpToolCallCorrelationAssigned {
-            tool_call_id: "call-mcp".to_string(),
+            tool_call_id: "call-mcp".into(),
             mcp_call_id: "mcp-correlation-1".to_string(),
         })?;
         expected.mcp_call_id = Some("mcp-correlation-1".to_string());
@@ -120,7 +120,7 @@ fn mcp_calls_keep_callable_identity_and_classify_the_backend() -> anyhow::Result
             }),
         )?;
         writer.append(RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-mcp".to_string(),
+            tool_call_id: "call-mcp".into(),
             status: crate::ExecutionStatus::Completed,
             runtime_payload: end.clone(),
         })?;

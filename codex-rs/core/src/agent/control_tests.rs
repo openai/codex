@@ -1818,7 +1818,7 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
                 step_context: issuing_step,
                 cancellation_token: CancellationToken::new(),
                 tracker: Default::default(),
-                call_id: "queue-only-cold-load".to_string(),
+                call_id: "queue-only-cold-load".into(),
                 tool_name: codex_tools::ToolName::plain("send_message"),
                 source: ToolCallSource::DirectPlaintextMessage,
                 payload: ToolPayload::Function {

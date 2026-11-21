@@ -231,7 +231,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         .find(|name| {
             router.tool_supports_parallel(&ToolCall {
                 tool_name: ToolName::plain(*name),
-                call_id: "call-parallel-tool".to_string(),
+                call_id: "call-parallel-tool".into(),
                 payload: ToolPayload::Function {
                     arguments: "{}".to_string(),
                 },
@@ -250,7 +250,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
 
     assert!(!router.tool_supports_parallel(&ToolCall {
         tool_name: ToolName::namespaced("mcp__server__", parallel_tool_name),
-        call_id: "call-namespaced-tool".to_string(),
+        call_id: "call-namespaced-tool".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -287,7 +287,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         call.tool_name,
         ToolName::namespaced("mcp__codex_apps__calendar", tool_name)
     );
-    assert_eq!(call.call_id, "call-namespace");
+    assert_eq!(call.call_id.as_str(), "call-namespace");
     assert_eq!(call.encrypted_function_args, Some(Vec::new()));
     assert_eq!(call.direct_source(), ToolCallSource::Direct);
     match call.payload {
@@ -325,7 +325,7 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
         call,
         ToolCall {
             tool_name: ToolName::namespaced("mcp__python", tool_name),
-            call_id: "call-namespace".to_string(),
+            call_id: "call-namespace".into(),
             payload: ToolPayload::Custom {
                 input: "print('hello')".to_string(),
             },
@@ -432,7 +432,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 
     let call = ToolCall {
         tool_name: ToolName::namespaced("mcp__echo__", "query_with_delay"),
-        call_id: "call-handler".to_string(),
+        call_id: "call-handler".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -449,7 +449,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
-        call_id: "call-other-server".to_string(),
+        call_id: "call-other-server".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -466,7 +466,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 
     let hidden_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hidden_echo__", "query_with_delay"),
-        call_id: "call-hidden".to_string(),
+        call_id: "call-hidden".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -478,7 +478,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 
     let nested_only_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__nested_echo__", "query_with_delay"),
-        call_id: "call-nested-only-server".to_string(),
+        call_id: "call-nested-only-server".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -504,7 +504,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 
     assert!(!router.tool_supports_parallel(&ToolCall {
         tool_name: ToolName::plain("web_search"),
-        call_id: "call-web-search".to_string(),
+        call_id: "call-web-search".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },

@@ -395,7 +395,7 @@ fn test_invocation_with_payload(
         turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-        call_id: call_id.to_string(),
+        call_id: call_id.into(),
         tool_name,
         source,
         payload,

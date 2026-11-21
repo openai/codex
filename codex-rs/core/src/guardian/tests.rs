@@ -2733,7 +2733,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         tracker: Arc::new(tokio::sync::Mutex::new(
             crate::turn_diff_tracker::TurnDiffTracker::new(),
         )),
-        call_id: "action".to_owned(),
+        call_id: "action".into(),
         tool_name: codex_tools::ToolName::namespaced("team", "send_message"),
         source: crate::tools::context::ToolCallSource::Direct,
         native_call: Some(native_call),

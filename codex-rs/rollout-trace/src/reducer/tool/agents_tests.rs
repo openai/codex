@@ -119,7 +119,7 @@ fn spawn_runtime_payload_targets_delivered_child_message() -> anyhow::Result<()>
     assert_eq!(
         edge.source,
         TraceAnchor::ToolCall {
-            tool_call_id: "call-spawn".to_string()
+            tool_call_id: "call-spawn".into()
         }
     );
     let target_item_id = target_conversation_item_id(&edge.target);
@@ -164,7 +164,7 @@ fn spawn_runtime_payload_falls_back_to_child_thread_without_delivery_item() -> a
     assert_eq!(
         edge.source,
         TraceAnchor::ToolCall {
-            tool_call_id: "call-spawn".to_string()
+            tool_call_id: "call-spawn".into()
         }
     );
     assert_eq!(
@@ -208,7 +208,7 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-spawn-v2".to_string(),
+            tool_call_id: "call-spawn-v2".into(),
             model_visible_call_id: Some("call-spawn-v2".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -234,7 +234,7 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-spawn-v2".to_string(),
+            tool_call_id: "call-spawn-v2".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: activity_payload.clone(),
         },
@@ -388,7 +388,7 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-send".to_string(),
+            tool_call_id: "call-send".into(),
             model_visible_call_id: Some("call-send".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -415,7 +415,7 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
             kind: ToolCallKind::SendMessage,
-            tool_call_id: "call-send".to_string(),
+            tool_call_id: "call-send".into(),
             runtime_payload: begin_payload,
         },
     )?;
@@ -432,7 +432,7 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-send".to_string(),
+            tool_call_id: "call-send".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: end_payload,
         },
@@ -462,7 +462,7 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
     assert_eq!(
         edge.source,
         TraceAnchor::ToolCall {
-            tool_call_id: "call-send".to_string()
+            tool_call_id: "call-send".into()
         }
     );
     let target_item_id = target_conversation_item_id(&edge.target);
@@ -495,7 +495,7 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-send-v2".to_string(),
+            tool_call_id: "call-send-v2".into(),
             model_visible_call_id: Some("call-send-v2".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -554,7 +554,7 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-send-v2".to_string(),
+            tool_call_id: "call-send-v2".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: activity_payload.clone(),
         },
@@ -617,7 +617,7 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-followup-v2".to_string(),
+            tool_call_id: "call-followup-v2".into(),
             model_visible_call_id: Some("call-followup-v2".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -643,7 +643,7 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-followup-v2".to_string(),
+            tool_call_id: "call-followup-v2".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: activity_payload.clone(),
         },
@@ -727,7 +727,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-close".to_string(),
+            tool_call_id: "call-close".into(),
             model_visible_call_id: Some("call-close".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -752,7 +752,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
             kind: ToolCallKind::CloseAgent,
-            tool_call_id: "call-close".to_string(),
+            tool_call_id: "call-close".into(),
             runtime_payload: begin_payload.clone(),
         },
     )?;
@@ -770,7 +770,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-close".to_string(),
+            tool_call_id: "call-close".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: end_payload.clone(),
         },
@@ -782,7 +782,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "call-close".to_string(),
+            tool_call_id: "call-close".into(),
             status: ExecutionStatus::Completed,
             result_payload: Some(result_payload.clone()),
         },
@@ -798,7 +798,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
     assert_eq!(
         edge.source,
         TraceAnchor::ToolCall {
-            tool_call_id: "call-close".to_string()
+            tool_call_id: "call-close".into()
         }
     );
     assert_eq!(
@@ -1025,7 +1025,7 @@ fn append_spawn_agent_tool_lifecycle(
     writer.append_with_context(
         trace_context_for_agent(turn_id),
         RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "call-spawn".to_string(),
+            tool_call_id: "call-spawn".into(),
             model_visible_call_id: Some("call-spawn".to_string()),
             code_mode_runtime_tool_id: None,
             requester: RawToolCallRequester::Model,
@@ -1051,7 +1051,7 @@ fn append_spawn_agent_tool_lifecycle(
         trace_context_for_agent(turn_id),
         RawTraceEventPayload::ToolCallRuntimeStarted {
             kind: ToolCallKind::SpawnAgent,
-            tool_call_id: "call-spawn".to_string(),
+            tool_call_id: "call-spawn".into(),
             runtime_payload: begin.clone(),
         },
     )?;
@@ -1071,7 +1071,7 @@ fn append_spawn_agent_tool_lifecycle(
     writer.append_with_context(
         trace_context_for_agent(turn_id),
         RawTraceEventPayload::ToolCallRuntimeEnded {
-            tool_call_id: "call-spawn".to_string(),
+            tool_call_id: "call-spawn".into(),
             status: ExecutionStatus::Completed,
             runtime_payload: end.clone(),
         },
@@ -1084,7 +1084,7 @@ fn append_spawn_agent_tool_lifecycle(
     writer.append_with_context(
         trace_context_for_agent(turn_id),
         RawTraceEventPayload::ToolCallEnded {
-            tool_call_id: "call-spawn".to_string(),
+            tool_call_id: "call-spawn".into(),
             status: ExecutionStatus::Completed,
             result_payload: Some(result.clone()),
         },
