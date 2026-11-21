@@ -112,6 +112,11 @@ pub struct PermissionsInstructions {
 }
 
 impl PermissionsInstructions {
+    /// Returns true when the permissions body has no non-whitespace text.
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+
     /// Composes a permission fragment from resolved messages and caller-supplied facts.
     /// Paths are used verbatim; this constructor does not inspect the filesystem or environment.
     fn from_resolved(

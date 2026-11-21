@@ -193,6 +193,65 @@ fn renders_only_newly_approved_prefixes() {
     );
 }
 
+#[test_case::test_case(/*per_environment*/ false; "unscoped")]
+#[test_case::test_case(/*per_environment*/ true; "scoped")]
+fn initially_blank_permissions_preserve_saved_prefix_updates(per_environment: bool) {
+    use super::super::WorldState;
+
+    let mut model = model_info_from_slug("test-model");
+    model.model_messages = Some(ModelMessages {
+        approvals: Some(ApprovalMessages {
+            never: Some(String::new()),
+            ..Default::default()
+        }),
+        permissions: Some(PermissionMessages {
+            read_only: Some(" \t ".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let approval_context = ApprovalPromptContext::new(
+        ApprovalsReviewer::User,
+        ResolvedModelMessages::from_model(&model),
+    );
+    let blank = PermissionDescription::new(
+        &PermissionProfile::read_only(),
+        AskForApproval::Never,
+        approval_context,
+        &Policy::empty(),
+        Path::new("/workspace"),
+        /*paths*/ None,
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let mut with_prefix = Policy::empty();
+    with_prefix
+        .add_prefix_rule(&["touch".to_string()], Decision::Allow)
+        .expect("test prefix should be valid");
+
+    let state = |policy: &Policy| {
+        let mut world_state = WorldState::default();
+        world_state.add_section(PermissionsState::new(
+            BTreeMap::from([(per_environment.then(|| "A".to_string()), blank.clone())]),
+            policy,
+            approval_context,
+            per_environment,
+        ));
+        world_state
+    };
+
+    let (checkpoint, initial) = state(&Policy::empty()).render_full();
+    assert!(initial.is_empty());
+    let (_, updates) = state(&with_prefix).render_history_fragment_diff(Some(&checkpoint), &[]);
+    assert_eq!(
+        updates
+            .into_iter()
+            .map(|fragment| fragment.render().expect_text())
+            .collect::<Vec<_>>(),
+        ["Approved command prefix saved:\n- [\"touch\"]"],
+    );
+}
+
 #[test]
 fn legacy_snapshot_deserializes_and_only_suppresses_matching_full_permissions() {
     use super::super::WorldState;

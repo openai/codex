@@ -126,6 +126,12 @@ impl PermissionsState {
             descriptions,
         }
     }
+
+    fn has_instructions(&self) -> bool {
+        self.descriptions
+            .values()
+            .any(|description| !description.instructions.is_empty())
+    }
 }
 
 impl WorldStateSection for PermissionsState {
@@ -136,8 +142,9 @@ impl WorldStateSection for PermissionsState {
         role == "developer" && PermissionsInstructions::matches_text(text)
     }
 
-    fn has_retained_fragment_matcher() -> bool {
-        true
+    fn has_current_retained_fragment_matcher(&self) -> bool {
+        // Initially blank instructions can have a checkpoint without a fragment.
+        self.has_instructions()
     }
 
     fn matches_retained_fragment(role: &str, text: &str) -> bool {
@@ -154,6 +161,9 @@ impl WorldStateSection for PermissionsState {
             return (None, Vec::new());
         }
         let current = self.snapshot.clone();
+        if matches!(previous, PreviousSectionState::Absent) && !self.has_instructions() {
+            return (Some(current), Vec::new());
+        }
         if let PermissionsSnapshot::Scoped {
             approved_command_prefixes,
             ..
