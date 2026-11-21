@@ -2592,6 +2592,10 @@ async fn slash_keymap_invalid_args_show_usage() {
 #[tokio::test]
 async fn copy_shortcut_can_be_remapped() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let ctrl_v_pastes_text = cfg!(windows)
+        || (cfg!(target_os = "linux")
+            && !crate::clipboard_copy::is_ssh_session()
+            && !crate::clipboard_copy::is_wsl_session());
     for (code, modifiers) in [
         (KeyCode::Char('v'), KeyModifiers::CONTROL),
         (KeyCode::Char('V'), KeyModifiers::CONTROL),
@@ -2605,7 +2609,7 @@ async fn copy_shortcut_can_be_remapped() {
         assert_matches!(
             chat.handle_key_event(paste),
             crate::chatwidget::KeyEventAction::PasteImage { text_fallback, .. }
-                if text_fallback == (cfg!(windows) && modifiers == KeyModifiers::CONTROL)
+                if text_fallback == (ctrl_v_pastes_text && modifiers == KeyModifiers::CONTROL)
                     .then_some(code)
         );
         chat.handle_key_event(KeyEvent {

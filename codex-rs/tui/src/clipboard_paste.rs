@@ -31,8 +31,15 @@ pub(crate) fn persist_pasted_image(
 pub enum PasteImageError {
     ClipboardUnavailable(String),
     NoImage(String),
+    ImageReadFailed(String),
     EncodeFailed(String),
     IoError(String),
+}
+
+impl PasteImageError {
+    pub(crate) fn allows_text_fallback(&self) -> bool {
+        matches!(self, Self::NoImage(_) | Self::ImageReadFailed(_))
+    }
 }
 
 impl std::fmt::Display for PasteImageError {
@@ -40,6 +47,7 @@ impl std::fmt::Display for PasteImageError {
         match self {
             PasteImageError::ClipboardUnavailable(msg) => write!(f, "clipboard unavailable: {msg}"),
             PasteImageError::NoImage(msg) => write!(f, "no image on clipboard: {msg}"),
+            PasteImageError::ImageReadFailed(msg) => write!(f, "could not read image: {msg}"),
             PasteImageError::EncodeFailed(msg) => write!(f, "could not encode image: {msg}"),
             PasteImageError::IoError(msg) => write!(f, "io error: {msg}"),
         }
@@ -119,7 +127,18 @@ fn read_clipboard_image(
 
     let _span = tracing::debug_span!("get_image").entered();
     let bitmap = clipboard.get_image().map_err(|e| {
-        if cfg!(windows) && !matches!(e, arboard::Error::ContentNotAvailable) {
+        // X11 owners such as xclip can answer a PNG request with a text type,
+        // which arboard reports as Unknown. A malformed PNG can also coexist with text.
+        if cfg!(target_os = "linux")
+            && matches!(
+                e,
+                arboard::Error::Unknown { .. } | arboard::Error::ConversionFailure
+            )
+        {
+            PasteImageError::ImageReadFailed(e.to_string())
+        } else if cfg!(any(windows, target_os = "linux"))
+            && !matches!(e, arboard::Error::ContentNotAvailable)
+        {
             PasteImageError::ClipboardUnavailable(e.to_string())
         } else {
             PasteImageError::NoImage(e.to_string())
@@ -177,7 +196,12 @@ fn try_wsl_clipboard_fallback(
     use PasteImageError::ClipboardUnavailable;
     use PasteImageError::NoImage;
 
-    if !is_probably_wsl() || !matches!(error, ClipboardUnavailable(_) | NoImage(_)) {
+    if !is_probably_wsl()
+        || !matches!(
+            error,
+            ClipboardUnavailable(_) | NoImage(_) | PasteImageError::ImageReadFailed(_)
+        )
+    {
         return Err(error.clone());
     }
 

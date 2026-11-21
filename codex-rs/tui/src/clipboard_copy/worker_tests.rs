@@ -33,7 +33,12 @@ async fn cloud_config_completion_does_not_wait_for_the_clipboard() {
             },
         )
         .unwrap();
-    app.start_clipboard_text_paste(&mut tui, PasteSource::Clipboard, Some(KeyCode::Char('v')));
+    app.start_clipboard_text_paste(
+        &mut tui,
+        PasteSource::Clipboard,
+        Some(KeyCode::Char('v')),
+        /*image_error*/ None,
+    );
     assert!(tui.clipboard.is_busy());
 
     tokio::time::timeout(
@@ -369,6 +374,8 @@ async fn right_click_paste_uses_normal_input_and_discards_stale_reads() {
         (None, "disable", "draft "),
         (Some(ctrl_v), "none", "draft café\nsecond line\n"),
         (Some(shift_insert), "none", "draft café\nsecond line\n"),
+        (Some(ctrl_v), "submit", "draft café\nsecond line\n"),
+        (Some(ctrl_v), "queue", "draft café\nsecond line\n"),
         (Some(ctrl_v), "native", "draft native"),
         (Some(shift_insert), "edit", "replacement"),
         (Some(ctrl_v), "click", "draft "),
@@ -384,10 +391,15 @@ async fn right_click_paste_uses_normal_input_and_discards_stale_reads() {
         };
         app.chat_widget.apply_external_edit("draft ".into());
         // Cover a read still running, and a completed read awaiting its Draw.
-        let read_completed = shortcut == Some(ctrl_v) && change == "none";
+        let read_completed = shortcut == Some(ctrl_v) && matches!(change, "none" | "queue");
         if shortcut.is_some() {
             // Enter at the NoImage fallback, independently of the host clipboard.
-            app.start_clipboard_text_paste(&mut tui, PasteSource::Clipboard, shortcut);
+            app.start_clipboard_text_paste(
+                &mut tui,
+                PasteSource::Clipboard,
+                shortcut,
+                /*image_error*/ None,
+            );
         } else {
             app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(click))
                 .await
@@ -449,7 +461,41 @@ async fn right_click_paste_uses_normal_input_and_discards_stale_reads() {
             .await
             .unwrap();
         }
-        if change == "native" {
+        if matches!(change, "submit" | "queue") {
+            let code = if change == "submit" {
+                KeyCode::Enter
+            } else {
+                KeyCode::Tab
+            };
+            for kind in [
+                KeyEventKind::Press,
+                KeyEventKind::Repeat,
+                KeyEventKind::Release,
+            ] {
+                app.handle_tui_event(
+                    &mut tui,
+                    &mut server,
+                    TuiEvent::Key(KeyEvent {
+                        kind,
+                        ..code.into()
+                    }),
+                )
+                .await
+                .unwrap();
+            }
+            assert_eq!(app.chat_widget.composer_text_with_pending(), "draft ");
+            if change == "submit" {
+                insta::assert_snapshot!(
+                    "pending_clipboard_submit",
+                    crate::chatwidget::tests::helpers::normalize_snapshot_paths(
+                        crate::chatwidget::tests::helpers::render_bottom_popup(
+                            &app.chat_widget,
+                            /*width*/ 80
+                        )
+                    )
+                );
+            }
+        } else if change == "native" {
             app.handle_tui_event(&mut tui, &mut server, TuiEvent::Paste("native".into()))
                 .await
                 .unwrap();
@@ -578,7 +624,12 @@ async fn cloud_handoff_keeps_an_owned_clipboard_read_until_completion_or_input()
         let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
         if shortcut.is_some() {
             // Start at the Windows NoImage fallback without accessing the host clipboard.
-            app.start_clipboard_text_paste(&mut tui, PasteSource::Clipboard, shortcut);
+            app.start_clipboard_text_paste(
+                &mut tui,
+                PasteSource::Clipboard,
+                shortcut,
+                /*image_error*/ None,
+            );
         } else {
             events_tx
                 .send(TuiEvent::Key(KeyCode::Char('x').into()))

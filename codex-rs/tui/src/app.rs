@@ -956,6 +956,9 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         self.refresh_link_hover(tui)?;
+        if self.guard_pending_paste_submission(tui, &event) {
+            return Ok(AppRunControl::Continue);
+        }
         self.invalidate_right_click_paste(&event);
         self.finish_clipboard(tui, &event);
         // Clipboard reads started by the composer already have a validated target.

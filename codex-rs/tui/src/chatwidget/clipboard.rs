@@ -44,8 +44,11 @@ impl ChatWidget {
         if suppressed {
             return Some(KeyEventAction::None);
         }
-        let text_fallback = (cfg!(windows)
-            && (key.modifiers == KeyModifiers::CONTROL || shift_insert))
+        let local_linux = cfg!(target_os = "linux")
+            && !crate::clipboard_copy::is_ssh_session()
+            && !crate::clipboard_copy::is_wsl_session();
+        let text_fallback = (shift_insert
+            || (key.modifiers == KeyModifiers::CONTROL && (cfg!(windows) || local_linux)))
             .then_some(key.code);
         if text_fallback.is_some() && context == ClipboardPasteContext::Composer {
             self.bottom_pane.prepare_composer_clipboard_paste();
@@ -65,7 +68,9 @@ impl ChatWidget {
         self.suppress_image_paste_until = Instant::now() + IMAGE_PASTE_REPEAT_WINDOW;
         if context == ClipboardPasteContext::DraftHandoff
             && text_fallback.is_some()
-            && matches!(&result, Err(PasteImageError::NoImage(_)))
+            && result
+                .as_ref()
+                .is_err_and(PasteImageError::allows_text_fallback)
         {
             // Settle typing before capturing the asynchronous text target.
             self.bottom_pane.prepare_composer_clipboard_paste();
@@ -79,6 +84,15 @@ impl ChatWidget {
         );
         self.attach_image(path, context);
         Ok(())
+    }
+
+    pub(crate) fn show_paste_pending(&mut self) {
+        self.bottom_pane.show_footer_flash(
+            "Paste pending. Review the draft before sending."
+                .dim()
+                .into(),
+            Duration::from_secs(/*secs*/ 3),
+        );
     }
 
     pub(super) fn show_clipboard_flash(&mut self, result: &CopyResult) {

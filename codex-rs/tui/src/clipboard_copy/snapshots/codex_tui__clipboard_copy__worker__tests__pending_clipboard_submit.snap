@@ -1,0 +1,8 @@
+---
+source: tui/src/clipboard_copy/worker_tests.rs
+expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80))"
+---
+› draft
+
+  GPT-5.6-Sol default · /tmp/project
+  Paste pending. Review the draft before sending.

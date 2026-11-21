@@ -1,10 +1,11 @@
-//! Clipboard text paste from Windows shortcuts, right-click, or X11 middle-click PRIMARY.
+//! Clipboard text paste from keyboard shortcuts, right-click, or X11 middle-click PRIMARY.
 //! The policy also reports why a configured mode is unavailable in this terminal.
 //! Existing selection handlers run first. Only a draw may deliver a read, so real input
 //! invalidates pending paste before completion and is never replaced by clipboard text.
-//! Releasing or pressing another paste shortcut does not cancel its pending paste.
+//! Submit and queue keys wait for a fresh press after a pending draft paste.
 
 use super::*;
+use crate::bottom_pane::ClipboardPasteTarget;
 use crate::clipboard_copy::worker::PasteSource;
 use crate::transcript_mode::TranscriptMode;
 use crate::tui::VscodeDetection;
@@ -14,9 +15,10 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 
 pub(super) struct PendingPaste {
-    target: (Option<ThreadId>, crate::bottom_pane::ClipboardPasteTarget),
+    target: (Option<ThreadId>, ClipboardPasteTarget),
     source: PasteSource,
     shortcut: Option<KeyCode>,
+    image_error: Option<String>,
     pub(super) request: Arc<()>,
 }
 
@@ -82,7 +84,7 @@ impl App {
         tui: &tui::Tui,
         source: PasteSource,
         shortcut: Option<KeyCode>,
-    ) -> Option<(Option<ThreadId>, crate::bottom_pane::ClipboardPasteTarget)> {
+    ) -> Option<(Option<ThreadId>, ClipboardPasteTarget)> {
         let allowed = shortcut.is_some()
             || match source {
                 PasteSource::Clipboard => {
@@ -137,7 +139,9 @@ impl App {
         {
             return;
         }
-        self.start_clipboard_text_paste(tui, source, /*shortcut*/ None);
+        self.start_clipboard_text_paste(
+            tui, source, /*shortcut*/ None, /*image_error*/ None,
+        );
     }
 
     pub(crate) fn start_clipboard_text_paste(
@@ -145,6 +149,7 @@ impl App {
         tui: &mut tui::Tui,
         source: PasteSource,
         shortcut: Option<KeyCode>,
+        image_error: Option<String>,
     ) {
         let Some(target) = self.right_click_paste_target(tui, source, shortcut) else {
             return;
@@ -155,13 +160,45 @@ impl App {
                     target,
                     source,
                     shortcut,
+                    image_error,
                     request,
                 });
                 tui.frame_requester().schedule_frame();
             }
-            Ok(None) => {}
-            Err(error) => self.chat_widget.add_error_message(error),
+            Ok(None) => {
+                if let Some(error) = image_error {
+                    self.chat_widget.add_error_message(error);
+                }
+            }
+            Err(error) => self
+                .chat_widget
+                .add_error_message(image_error.unwrap_or(error)),
         }
+    }
+
+    /// Never submit unseen clipboard text or send the draft without it.
+    pub(super) fn guard_pending_paste_submission(
+        &mut self,
+        tui: &tui::Tui,
+        event: &TuiEvent,
+    ) -> bool {
+        let (Some(pending), TuiEvent::Key(key)) = (&self.pending_right_click_paste, event) else {
+            return false;
+        };
+        let composer = &self.keymap.composer;
+        if !(composer.submit.is_pressed(*key) || composer.queue.is_pressed(*key))
+            || !matches!(pending.target.1, ClipboardPasteTarget::Draft(..))
+            || self
+                .right_click_paste_target(tui, pending.source, pending.shortcut)
+                .as_ref()
+                != Some(&pending.target)
+        {
+            return false;
+        }
+        if key.kind == KeyEventKind::Press {
+            self.chat_widget.show_paste_pending();
+        }
+        true
     }
 
     /// Invalidate before polling, even when the worker has already completed.
@@ -182,16 +219,13 @@ impl App {
                             || (mouse.kind == MouseEventKind::Down(button)
                                 && mouse.modifiers.is_empty())))
             }
+            TuiEvent::Key(key) if key.kind == KeyEventKind::Release => true,
             TuiEvent::Key(key) => {
                 pending.shortcut.is_some()
                     && match key.code {
-                        KeyCode::Insert => {
-                            key.kind == KeyEventKind::Release
-                                || key.modifiers == KeyModifiers::SHIFT
-                        }
+                        KeyCode::Insert => key.modifiers == KeyModifiers::SHIFT,
                         KeyCode::Char(c) if c.eq_ignore_ascii_case(&'v') => {
-                            key.kind == KeyEventKind::Release
-                                || key.modifiers == KeyModifiers::CONTROL
+                            key.modifiers == KeyModifiers::CONTROL
                         }
                         _ => false,
                     }
@@ -226,15 +260,19 @@ impl App {
         let Some(result) = tui.clipboard.take_text_result() else {
             return event;
         };
-        self.pending_right_click_paste = None;
+        let image_error = self
+            .pending_right_click_paste
+            .take()
+            .and_then(|paste| paste.image_error);
         match result {
             Ok(text) if !text.is_empty() => {
                 tui.frame_requester().schedule_frame();
                 TuiEvent::Paste(text)
             }
-            Ok(_) => event,
-            Err(error) => {
-                self.chat_widget.add_error_message(error);
+            result => {
+                if let Some(error) = image_error.or_else(|| result.err()) {
+                    self.chat_widget.add_error_message(error);
+                }
                 event
             }
         }
