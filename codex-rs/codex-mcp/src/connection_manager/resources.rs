@@ -231,6 +231,9 @@ impl McpConnectionSet {
             .connection
             .client()
             .await
+            .inspect_err(
+                |_| tracing::error!(server = %key, "MCP resource operation failed during startup"),
+            )
             .context("failed to get client")?;
         Ok((client, view.tool_timeout))
     }

@@ -14,6 +14,7 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
+use tracing::warn;
 
 use super::McpConnectionSet;
 use super::catalog_telemetry::emit_binding_catalog;
@@ -412,6 +413,11 @@ impl McpConnectionSet {
                     && !(accepts_cached_catalog
                         && self.required_servers.binary_search(server_name).is_ok())
                 {
+                    if let Some(warning_emitted) = &view.connection.client.startup_warning_emitted
+                        && !warning_emitted.swap(true, Ordering::Relaxed)
+                    {
+                        warn!(target: "codex_mcp_startup", server_name = ?server_name.name(), reason = "startup still pending; omitted from this turn", "MCP server unavailable");
+                    }
                     return None;
                 }
                 let Ok(mut client) = view.connection.client().await else {
@@ -590,6 +596,9 @@ impl McpConnectionSet {
             .connection
             .client()
             .await
+            .inspect_err(
+                |_| tracing::error!(server = ?server_name, "MCP tool call failed during startup"),
+            )
             .with_context(|| format!("Could not start MCP server `{server_name}`"))?;
         client.tool_timeout = view.tool_timeout;
         let snapshot = client.tool_catalog.read(Arc::new).await;

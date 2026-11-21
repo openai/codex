@@ -1863,7 +1863,13 @@ impl RmcpClient {
         {
             Ok(result) => Ok(result),
             Err(error) if Self::is_session_expired_404(&error) => {
-                self.reinitialize_after_session_expiry(&service).await?;
+                self.reinitialize_after_session_expiry(&service)
+                    .await
+                    .inspect_err(|_| {
+                        if let TransportRecipe::StreamableHttp { server_name, .. } = &self.transport_recipe {
+                            tracing::error!(server = ?server_name, operation = label, "MCP operation failed during session recovery");
+                        }
+                    })?;
                 let recovered_service = self.service().await?;
                 Self::run_service_operation_with_transient_retries(
                     recovered_service,

@@ -111,9 +111,9 @@ fn retryable_initialize_error(context: &'static str) -> rmcp::service::ClientIni
             "streamable_http",
             TypeId::of::<()>(),
             Box::new(StreamableHttpError::Client(
-                StreamableHttpClientAdapterError::HttpRequest(ExecServerError::HttpRequest(
-                    "error sending request for url".to_string(),
-                )),
+                StreamableHttpClientAdapterError::HandshakeHttpRequest(
+                    ExecServerError::HttpRequest("error sending request for url".to_string()),
+                ),
             )),
         ),
         context: context.into(),

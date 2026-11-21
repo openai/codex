@@ -114,6 +114,8 @@ pub(crate) enum StreamableHttpClientAdapterError {
     SessionExpired404,
     #[error(transparent)]
     HttpRequest(#[from] ExecServerError),
+    #[error(transparent)]
+    HandshakeHttpRequest(ExecServerError),
     #[error("invalid HTTP header: {0}")]
     Header(String),
     #[error("MCP response body exceeds {maximum_bytes} bytes")]
@@ -221,11 +223,11 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         } else {
             self.redirect_policy(&headers)
         };
-        let timeout_ms = if matches!(
+        let is_handshake_request = matches!(
             mcp_method.as_deref(),
             Some("initialize" | "notifications/initialized")
-        ) || mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE)
-        {
+        ) || is_discovery_request;
+        let timeout_ms = if is_handshake_request {
             self.initialize_deadline
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -291,9 +293,12 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                     has_session_id,
                     has_authorization_header,
                 );
-                return Err(StreamableHttpError::Client(
-                    StreamableHttpClientAdapterError::from(error),
-                ));
+                let error = if is_handshake_request {
+                    StreamableHttpClientAdapterError::HandshakeHttpRequest(error)
+                } else {
+                    StreamableHttpClientAdapterError::HttpRequest(error)
+                };
+                return Err(StreamableHttpError::Client(error));
             }
         };
 

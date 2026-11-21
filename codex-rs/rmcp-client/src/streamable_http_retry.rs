@@ -155,17 +155,20 @@ impl RmcpClient {
             StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
                 codex_api::AuthError::Transient(_),
             )) => true,
-            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
-                ExecServerError::HttpRequest(_),
-            )) => true,
-            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
-                ExecServerError::Server { code, message },
-            )) => {
-                *code == JSON_RPC_INTERNAL_ERROR_CODE && message.starts_with("http/request failed:")
-            }
-            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
-                ExecServerError::Protocol(message),
-            )) => message.starts_with("http response stream `") && message.contains("` failed:"),
+            StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::HttpRequest(error)
+                | StreamableHttpClientAdapterError::HandshakeHttpRequest(error),
+            ) => match error {
+                ExecServerError::HttpRequest(_) => true,
+                ExecServerError::Server { code, message } => {
+                    *code == JSON_RPC_INTERNAL_ERROR_CODE
+                        && message.starts_with("http/request failed:")
+                }
+                ExecServerError::Protocol(message) => {
+                    message.starts_with("http response stream `") && message.contains("` failed:")
+                }
+                _ => false,
+            },
             StreamableHttpError::UnexpectedServerResponse(message) => {
                 is_retryable_unexpected_server_response(message.as_ref())
             }

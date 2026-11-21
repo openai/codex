@@ -299,6 +299,7 @@ struct ManagedClientStartup {
     catalog_item_limit: usize,
     cancel_token: CancellationToken,
     startup_complete: Arc<AtomicBool>,
+    startup_warning_emitted: Option<Arc<AtomicBool>>,
     server_capabilities: Arc<StdMutex<Option<serde_json::Value>>>,
 }
 
@@ -335,6 +336,7 @@ impl ManagedClientStartup {
             catalog_item_limit,
             cancel_token,
             startup_complete,
+            startup_warning_emitted,
             server_capabilities,
         } = self.clone();
         let server_name = server_key.name().to_owned();
@@ -437,9 +439,46 @@ impl ManagedClientStartup {
                     Err(StartupOutcomeError::Cancelled)
                 }
             };
-            // Log once per startup attempt, including discovery without startup notifications.
-            if let Err(StartupOutcomeError::Failed { error, .. }) = &outcome {
-                warn!(server_name, %error, "MCP server startup failed");
+            // HTTP startup and the optional grace deadline share one warning gate.
+            if let Err(StartupOutcomeError::Failed {
+                error: detail,
+                is_authentication_required,
+                ..
+            }) = &outcome
+            {
+                if let Some(warning_emitted) = startup_warning_emitted {
+                    let status = detail
+                        .split_once("unexpected server response: HTTP ")
+                        .and_then(|(_, response)| response.split_once(':'))
+                        .and_then(|(status, _)| status.parse::<u16>().ok());
+                    let reason = if *is_authentication_required {
+                        "authentication required; sign in to the MCP server"
+                    } else if status == Some(403) {
+                        "HTTP 403 Forbidden"
+                    } else if status == Some(404) {
+                        "HTTP 404 Not Found"
+                    } else if status.is_some() {
+                        "HTTP response error"
+                    } else if detail.contains("certificate") {
+                        "TLS certificate error"
+                    } else if detail.contains("dns error") {
+                        "DNS lookup failed"
+                    } else if detail.contains("Connection refused") {
+                        "connection refused"
+                    } else if detail.contains("http/request failed") {
+                        "HTTP request failed"
+                    } else if detail.contains("timed out") {
+                        "startup timed out"
+                    } else {
+                        "initialization failed"
+                    };
+                    // Transport errors may contain credentials in the endpoint URL.
+                    if !warning_emitted.swap(true, Ordering::Relaxed) {
+                        warn!(target: "codex_mcp_startup", server_name = ?server_name, reason, "MCP server unavailable");
+                    }
+                } else {
+                    warn!(server_name, error = %detail, "MCP server startup failed");
+                }
             }
             if outcome.is_ok()
                 && let Some(refresh_start) = refresh_start
@@ -472,6 +511,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
     pub(crate) tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
     pub(crate) startup_complete: Arc<AtomicBool>,
+    pub(crate) startup_warning_emitted: Option<Arc<AtomicBool>>,
     pub(crate) startup_reconnect: Option<Arc<CodexAppsStartupReconnect>>,
     pub(crate) connection_slot: Option<Arc<ConnectionSlot>>,
     pub(crate) cancel_token: CancellationToken,
@@ -519,6 +559,11 @@ impl AsyncManagedClient {
             None
         };
         let startup_complete = Arc::new(AtomicBool::new(false));
+        let startup_warning_emitted = matches!(
+            server.config().transport,
+            McpServerTransportConfig::StreamableHttp { .. }
+        )
+        .then(|| Arc::new(AtomicBool::new(false)));
         let server_capabilities = Arc::new(StdMutex::new(None));
         let ema_auth = ema_auth
             .filter(|_| matches!(server.config().auth, McpServerAuth::EmaAuth))
@@ -565,6 +610,7 @@ impl AsyncManagedClient {
             catalog_item_limit,
             cancel_token: cancel_token.clone(),
             startup_complete: Arc::clone(&startup_complete),
+            startup_warning_emitted: startup_warning_emitted.clone(),
             server_capabilities: Arc::clone(&server_capabilities),
         });
         let (client, connection_slot) = if let Some((pool, key)) = connection_pool {
@@ -632,6 +678,7 @@ impl AsyncManagedClient {
             codex_apps_tools_cache_context,
             tool_catalog_cache_context: advertised_catalog,
             startup_complete,
+            startup_warning_emitted,
             startup_reconnect,
             connection_slot,
             cancel_token,
