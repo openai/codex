@@ -3742,7 +3742,7 @@ async fn try_run_sampling_request(
                 response_id,
                 token_usage,
                 usage_metadata,
-                reasoning_removals: _,
+                reasoning_removals,
                 end_turn,
             } => {
                 let retry_prompt = resampling.finish_response(end_turn, token_usage.is_some());
@@ -3754,6 +3754,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
+                sess.state.lock().await.last_sampling_cot_removed =
+                    reasoning_removals.as_ref().map(|counts| !counts.is_empty());
                 response_completed = true;
                 sess.services
                     .analytics_events_client

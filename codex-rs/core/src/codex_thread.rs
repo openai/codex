@@ -1319,6 +1319,12 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    /// Whether the latest completed sampling request in this live context reported a removal.
+    /// Returns None before sampling or when that response omitted the report.
+    pub async fn last_sampling_cot_removed(&self) -> Option<bool> {
+        self.session.last_sampling_cot_removed().await
+    }
+
     /// Selects a local feedback rollout without materializing an untouched thread.
     pub async fn feedback_rollout_path(&self) -> ThreadStoreResult<Option<PathBuf>> {
         match self.session.live_thread() {

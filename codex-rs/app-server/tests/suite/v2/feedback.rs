@@ -12,6 +12,104 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 #[tokio::test]
+async fn feedback_reports_cot_removal_from_latest_completed_sampling_request() -> Result<()> {
+    use core_test_support::responses;
+
+    let server = responses::start_mock_server().await;
+    let removed =
+        json!([{"type":"reasoning", "id":"rs-1", "action":"removed", "reason":"prefix_mismatch"}]);
+    let streams = [
+        ("drop", Some(removed.clone())),
+        ("replayed", Some(removed.clone())),
+        ("tool", Some(removed.clone())),
+        ("clean", Some(json!([]))),
+        ("unreported", None),
+        ("before_compaction", Some(removed.clone())),
+        ("summary", Some(removed.clone())),
+        ("after", Some(removed)),
+    ]
+    .into_iter()
+    .map(|(id, transformations)| {
+        let mut completed = responses::ev_completed(id);
+        if let Some(transformations) = transformations {
+            completed["response"]["input_transformations"] = transformations;
+        }
+        // The tool call and clean final response belong to the same user turn.
+        let output = if id == "tool" {
+            responses::ev_function_call("call", "unknown_test_tool", "{}")
+        } else {
+            responses::ev_assistant_message(&format!("msg-{id}"), id)
+        };
+        responses::sse(vec![output, completed])
+    })
+    .collect();
+    responses::mount_sse_sequence(&server, streams).await;
+    let home = tempfile::tempdir()?;
+    app_test_support::MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    app_test_support::write_models_cache(home.path()).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(Default::default()).await?.thread;
+    for (step, expected) in [
+        ("drop", Some("true")),
+        ("replayed", Some("true")),
+        ("tool_then_clean", Some("false")),
+        ("unreported", None),
+        ("before_compaction", Some("true")),
+        ("compact", None),
+        ("after", Some("true")),
+        ("resume", None),
+    ] {
+        let mut params = json!({"threadId": thread.id});
+        let method = match step {
+            "compact" => "thread/compact/start",
+            "resume" => {
+                app.shutdown_gracefully().await?;
+                app = TestAppServer::builder()
+                    .with_codex_home(home.path())
+                    .build_initialized()
+                    .await?;
+                "thread/resume"
+            }
+            text => {
+                params["input"] = json!([{"type": "text", "text": text}]);
+                "turn/start"
+            }
+        };
+        let id = app.send_raw_request(method, Some(params)).await?;
+        app.read_response::<serde_json::Value>(id).await?;
+        if matches!(method, "turn/start" | "thread/compact/start") {
+            app.read_stream_until_notification_message("turn/completed")
+                .await?;
+        }
+
+        let destination = home.path().join(format!("{step}.zip"));
+        let id = app
+            .send_raw_request(
+                "feedback/save",
+                Some(json!({
+                    "classification": "bad_result",
+                    "threadId": thread.id,
+                    "tags": {"cot_removed": "untrusted"},
+                    "savePath": destination,
+                })),
+            )
+            .await?;
+        app.read_response::<serde_json::Value>(id).await?;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(destination)?)?;
+        let report: serde_json::Value = serde_json::from_reader(archive.by_name("report.json")?)?;
+        assert_eq!(
+            report["tags"].get("cot_removed").cloned(),
+            expected.map(serde_json::Value::from),
+            "after {step}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Result<()> {
     let proxy = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_uri = format!("http://{}", proxy.local_addr()?);

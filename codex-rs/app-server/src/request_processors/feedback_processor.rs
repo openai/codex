@@ -128,6 +128,13 @@ impl FeedbackRequestProcessor {
 
         let http_client_factory = self.config.http_client_factory();
         let auth = self.auth_manager.auth_cached();
+        upload_tags.remove("cot_removed");
+        if let Some(id) = conversation_id
+            && let Ok(thread) = self.thread_manager.get_thread(id).await
+            && let Some(removed) = thread.last_sampling_cot_removed().await
+        {
+            upload_tags.insert("cot_removed".to_string(), removed.to_string());
+        }
         let turn_metadata = if let Some(conversation_id) = conversation_id
             && let Some(rollout_path) = self
                 .resolve_rollout_path(conversation_id, self.state_db.as_ref(), save_path.as_ref())

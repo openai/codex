@@ -475,13 +475,15 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
     .await?;
     let codex = &harness.test().codex;
     let rollout_path = codex.rollout_path().context("rollout path")?;
+    let mut sample =
+        responses::ev_completed_with_tokens("before-compact", /*total_tokens*/ 500);
+    sample["response"]["input_transformations"] = json!([{
+        "type": "reasoning", "id": "rs-1", "action": "removed", "reason": "prefix_mismatch",
+    }]);
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
         vec![
-            sse(vec![responses::ev_completed_with_tokens(
-                "before-compact",
-                /*total_tokens*/ 500,
-            )]),
+            sse(vec![sample]),
             sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -539,6 +541,11 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
             .count(),
         1,
         "the accepted prompt should be saved exactly once after compaction fails"
+    );
+    assert_eq!(
+        codex.last_sampling_cot_removed().await,
+        Some(true),
+        "a failed compaction should preserve the last sampling report",
     );
     codex.shutdown_and_wait().await?;
 

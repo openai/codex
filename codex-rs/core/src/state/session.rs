@@ -109,6 +109,7 @@ pub(crate) struct SessionState {
     pub(crate) restored_turn_routing: Option<(String, Vec<String>)>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
+    pub(crate) last_sampling_cot_removed: Option<bool>,
     pub(crate) async_compaction: crate::session::async_compaction::AsyncCompactionState,
     /// Original request effort for the current model while configuration updates remain active.
     pub(crate) reasoning_effort_pin: ReasoningEffortPin,
@@ -155,6 +156,7 @@ impl SessionState {
             history_reset: CancellationToken::new(),
             latest_rate_limits: None,
             latest_token_usage_record: None,
+            last_sampling_cot_removed: None,
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
@@ -229,6 +231,7 @@ impl SessionState {
         reference_context_item: Option<TurnContextItem>,
         replacement: HistoryReplacement,
     ) {
+        self.last_sampling_cot_removed = None;
         let invalidate_reviews = match replacement {
             HistoryReplacement::Compaction {
                 reviewer_compaction_hash,
