@@ -517,7 +517,7 @@ impl ChatWidget {
             active_permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
-            /*summary*/ None,
+            crate::app_server_session::reasoning_summary_from_config(&self.config),
             service_tier,
             /*final_output_json_schema*/ None,
             collaboration_mode,

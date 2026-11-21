@@ -56,12 +56,15 @@ pub(super) fn startup_config_cwd<'a>(
     config: &'a Config,
     app_server: &'a AppServerSession,
     app_server_target: &AppServerTarget,
+    resumed_cwd: Option<&'a Path>,
 ) -> &'a Path {
     match app_server_target {
         AppServerTarget::Embedded | AppServerTarget::LocalDaemon { .. } => config.cwd.as_path(),
-        AppServerTarget::Remote { .. } | AppServerTarget::Cloud => {
-            app_server.remote_cwd_override().unwrap_or(Path::new("."))
-        }
+        AppServerTarget::Remote { .. } => app_server
+            .remote_cwd_override()
+            .or(resumed_cwd)
+            .unwrap_or(Path::new(".")),
+        AppServerTarget::Cloud => app_server.remote_cwd_override().unwrap_or(Path::new(".")),
     }
 }
 
@@ -395,7 +398,11 @@ impl App {
                 config.model_reasoning_effort = None;
             }
         }
-        let cwd = startup_config_cwd(&config, &app_server, &app_server_target)
+        let resumed_cwd = match &session_selection {
+            SessionSelection::Resume(target) => target.cwd.as_deref(),
+            _ => None,
+        };
+        let cwd = startup_config_cwd(&config, &app_server, &app_server_target, resumed_cwd)
             .display()
             .to_string();
         let startup_config = match startup_draft
@@ -463,6 +470,13 @@ impl App {
                 }
             },
         };
+        if let Some(defaults) = startup_config.as_ref() {
+            super::new_session::overlay_reasoning_summary(
+                &mut config,
+                &defaults.config,
+                &cli_kv_overrides,
+            );
+        }
         launch_choices.apply_projectless_approval_policy(
             startup_defaults.approval_policy,
             bootstrap.allowed_approval_policies.as_deref(),

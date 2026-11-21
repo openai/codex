@@ -321,6 +321,11 @@ impl App {
             .await
             {
                 Ok(Some(defaults)) => {
+                    super::new_session::overlay_reasoning_summary(
+                        &mut config,
+                        &defaults.config,
+                        &self.cli_kv_overrides,
+                    );
                     crate::projectless::apply_defaults(
                         &mut config,
                         &self.harness_overrides,

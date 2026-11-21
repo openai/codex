@@ -22,12 +22,38 @@ pub(crate) fn has_launch_setting(
             .is_some_and(|layer| {
                 matches!(
                     layer.name,
-                    ConfigLayerSource::User {
-                        profile: Some(_),
-                        ..
-                    }
+                    ConfigLayerSource::SessionFlags
+                        | ConfigLayerSource::User {
+                            profile: Some(_),
+                            ..
+                        }
                 )
             })
+}
+
+pub(super) fn overlay_reasoning_summary(
+    config: &mut Config,
+    defaults: &codex_app_server_protocol::Config,
+    cli_kv_overrides: &[(String, TomlValue)],
+) {
+    if !has_launch_setting(config, cli_kv_overrides, "model_reasoning_summary") {
+        config.model_reasoning_summary = defaults.model_reasoning_summary;
+    }
+    if let Some(providers) = defaults
+        .additional
+        .get("model_providers")
+        .and_then(serde_json::Value::as_object)
+    {
+        let built_in =
+            codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None);
+        for (id, definition) in providers {
+            if !built_in.contains_key(id)
+                && let Ok(provider) = serde_json::from_value(definition.clone())
+            {
+                config.model_providers.insert(id.clone(), provider);
+            }
+        }
+    }
 }
 
 pub(super) fn overlay_new_session_defaults(
@@ -42,6 +68,7 @@ pub(super) fn overlay_new_session_defaults(
     if !has_launch_setting(config, cli_kv_overrides, "model_reasoning_effort") {
         config.model_reasoning_effort = defaults.model_reasoning_effort.clone();
     }
+    overlay_reasoning_summary(config, defaults, cli_kv_overrides);
     if harness_overrides.service_tier.is_none()
         && !has_launch_setting(config, cli_kv_overrides, "service_tier")
     {

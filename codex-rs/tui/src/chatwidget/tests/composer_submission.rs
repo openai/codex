@@ -670,7 +670,10 @@ async fn submission_preserves_text_elements_and_local_images() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
+        Op::UserTurn { items, summary, .. } => {
+            assert_eq!(summary, None);
+            items
+        }
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
     assert_eq!(items.len(), 2);
@@ -964,7 +967,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
-        model_provider_id: "test-provider".to_string(),
+        model_provider_id: "openai".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
@@ -1001,7 +1004,10 @@ async fn enter_with_only_remote_images_submits_user_turn() {
             detail: None,
         }]
     );
-    assert_eq!(summary, None);
+    assert_eq!(
+        summary,
+        Some(codex_protocol::config_types::ReasoningSummary::Auto)
+    );
     assert!(chat.remote_image_urls().is_empty());
 
     let mut user_cell = None;
