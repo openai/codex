@@ -109,11 +109,9 @@ impl App {
                 {
                     return Ok(AppRunControl::Exit(reason));
                 }
-                if self.active_thread_id == Some(thread_id)
-                    && self
-                        .chat_widget
-                        .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                        .is_some()
+                if !self.agents_overview.workspace.is_open()
+                    && self.active_thread_id == Some(thread_id)
+                    && self.overview_selected_index().is_some()
                 {
                     if let Ok(mut state) = self.agents_overview.view_state.lock() {
                         state.completion = Some(crate::bottom_pane::ViewCompletion::Accepted);
@@ -137,11 +135,7 @@ impl App {
     }
 
     pub(super) fn add_session_picker_error(&mut self, message: String) {
-        if self
-            .chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-            .is_some()
-        {
+        if self.overview_selected_index().is_some() {
             self.chat_widget.show_selection_view(SelectionViewParams {
                 title: Some("Unable to resume session".to_string()),
                 subtitle: Some(message.clone()),

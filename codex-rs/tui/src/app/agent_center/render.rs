@@ -177,12 +177,17 @@ impl Renderable for AgentsOverviewView {
             );
             tabs.width = tabs.width.saturating_sub(hint_width + 2);
         }
-        render_filled_tab_bar(
+        let targets = render_filled_tab_bar(
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
             state.status_filter,
             tabs,
             buf,
         );
+        if self.dock_focused == Some(false)
+            && let Some((_, tab)) = targets.iter().find(|(id, _)| *id == state.status_filter)
+        {
+            buf.set_style(*tab, crate::style::quiet_workspace_style());
+        }
         line(
             "─"
                 .repeat(usize::from(area.width.saturating_sub(/*rhs*/ 4)))

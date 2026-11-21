@@ -30,11 +30,7 @@ impl App {
         title: Option<&'static str>,
         message: String,
     ) {
-        if self
-            .chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-            .is_some()
-        {
+        if self.overview_selected_index().is_some() {
             let items = vec![SelectionItem {
                 name: "Return to command center".to_string(),
                 dismiss_on_select: true,

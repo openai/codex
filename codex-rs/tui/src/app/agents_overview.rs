@@ -41,6 +41,7 @@ pub(crate) const AGENTS_OVERVIEW_VIEW_ID: &str = "agents-overview";
 
 #[derive(Default)]
 pub(super) struct AgentsOverviewState {
+    pub(super) workspace: super::conversation_workspace::Workspace,
     /// Missing metadata records a local resume until the next metadata refresh.
     pub(super) threads: HashMap<ThreadId, Option<Thread>>,
     /// Identifies the query that populated the cached search results.
@@ -137,18 +138,43 @@ impl Drop for AgentsOverviewState {
 }
 
 impl App {
+    /// Read the selected row from its host, even while a dialog has focus.
+    pub(super) fn overview_selected_index(&self) -> Option<usize> {
+        let workspace = &self.agents_overview.workspace;
+        if workspace.is_open() {
+            return workspace.selected_index();
+        }
+        self.chat_widget
+            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+    }
+
+    pub(super) fn overview_selected_thread_id(&self) -> Option<ThreadId> {
+        let index = self.overview_selected_index()?;
+        self.agents_overview.visible_thread_ids.get(index).copied()
+    }
+
+    pub(super) fn agents_overview_has_focus(&self) -> bool {
+        self.workspace_center_owns_input()
+            || self.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID)
+    }
+
     pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
-        let threads = self
-            .agents_overview
-            .threads
-            .values()
-            .flatten()
-            .cloned()
-            .collect();
-        let selected_thread_id = self.agents_overview.selection_after_removal.take();
+        let dock = self.local_settings.workspace_enabled(&self.config);
+        let overview = &mut self.agents_overview;
+        let threads = overview.threads.values().flatten().cloned().collect();
+        let selected_thread_id = overview.selection_after_removal.take().or_else(|| {
+            let index = overview.workspace.selected_index()?;
+            overview.visible_thread_ids.get(index).copied()
+        });
         let view = self.agents_overview_view(threads, selected_thread_id);
         self.agents_overview.visible_thread_ids = view.thread_ids();
-        self.chat_widget.show_bottom_pane_view(Box::new(view));
+        if dock {
+            self.agents_overview.workspace.replace_view(view);
+            self.agents_overview.workspace.focus_center();
+            self.chat_widget.request_redraw();
+        } else {
+            self.chat_widget.show_bottom_pane_view(Box::new(view));
+        }
         if self.reconnect.offline {
             self.reconnect.presentation = reconnect::ReconnectPresentation::Overview;
             let mut state = self
@@ -379,10 +405,7 @@ impl App {
         if self.agents_overview.active_refresh.is_some() || self.reconnect.offline {
             return;
         }
-        let visible = self
-            .chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-            .is_some();
+        let visible = self.overview_selected_index().is_some();
         if let Some((backend_id, handle)) = self
             .agents_overview
             .pending_refresh_backends
@@ -485,10 +508,7 @@ impl App {
     }
 
     pub(super) fn repaint_agents_overview(&mut self) {
-        let Some(selected) = self
-            .chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-        else {
+        let Some(selected) = self.overview_selected_index() else {
             return;
         };
         let previous_thread_id = self
@@ -535,10 +555,7 @@ impl App {
             .selected_index()
             .and_then(|index| self.agents_overview.visible_thread_ids.get(index).copied());
         if (previous_thread_id.is_none() || previous_thread_id != next_thread_id)
-            && self
-                .chat_widget
-                .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
-                .is_some()
+            && self.agents_overview_has_focus()
         {
             self.cancel_pending_key_chord();
         }
@@ -557,8 +574,13 @@ impl App {
             state.rename_target = None;
             state.input.set_text_clearing_elements("");
         }
-        self.chat_widget
-            .replace_bottom_pane_view_if_present(AGENTS_OVERVIEW_VIEW_ID, Box::new(view));
+        if self.agents_overview.workspace.is_open() {
+            self.agents_overview.workspace.replace_view(view);
+            self.chat_widget.request_redraw();
+        } else {
+            self.chat_widget
+                .replace_bottom_pane_view_if_present(AGENTS_OVERVIEW_VIEW_ID, Box::new(view));
+        }
     }
 
     pub(super) fn agents_overview_view(
@@ -744,6 +766,14 @@ impl App {
         .await
     }
 
+    fn redraw_during_task_attach(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.agents_overview.workspace.is_open() {
+            self.refresh_owned_transcript(tui)
+        } else {
+            loading::draw(tui).map_err(Into::into)
+        }
+    }
+
     async fn attach_agents_overview_thread(
         &mut self,
         tui: &mut tui::Tui,
@@ -761,7 +791,9 @@ impl App {
         {
             self.cancel_cloud_inventory_refresh(app_server).await;
             // Keep the displayed read-only snapshot frozen; R explicitly retries attachment.
-            if let Ok(mut state) = self.agents_overview.view_state.lock() {
+            if !self.agents_overview.workspace.is_open()
+                && let Ok(mut state) = self.agents_overview.view_state.lock()
+            {
                 state.completion = Some(crate::bottom_pane::ViewCompletion::Accepted);
             }
             self.chat_widget.pre_draw_tick();
@@ -770,7 +802,7 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
-        if startup_draft.is_none() {
+        if startup_draft.is_none() && !self.agents_overview.workspace.is_open() {
             loading::draw(tui)?;
         }
         let mut restored_blank_session = false;
@@ -922,9 +954,9 @@ impl App {
                     Err(control) => return Ok(control),
                 }
             }
-            // Folder selection and trust prompts can replace or clear the loading frame.
+            // Folder selection and trust prompts can replace or clear the current frame.
             if startup_draft.is_none() {
-                loading::draw(tui)?;
+                self.redraw_during_task_attach(tui)?;
             }
             let baseline_approval = resume_config.permissions.approval_policy.value();
             let baseline_reviewer = resume_config.approvals_reviewer;
@@ -1123,10 +1155,6 @@ impl App {
             if !is_new_session && !restored_blank_session {
                 self.agents_overview.blank_sessions.remove(&root_thread_id);
             }
-            // Replacing the widget clears the terminal before the remaining server requests.
-            if startup_draft.is_none() {
-                loading::draw(tui)?;
-            }
             if let Some(error) = provider_error {
                 self.chat_widget
                     .show_provider_error(error, /*rejected_message_id*/ None);
@@ -1144,6 +1172,10 @@ impl App {
             if let Some(notice) = history_notice {
                 self.chat_widget
                     .add_info_message(notice.to_string(), /*hint*/ None);
+            }
+            // Widget replacement clears the terminal. Paint the destination before further waits.
+            if startup_draft.is_none() {
+                self.redraw_during_task_attach(tui)?;
             }
             let mut destination_config = self.chat_widget.config_ref().clone();
             if self.app_server_target.uses_remote_workspace() {

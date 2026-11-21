@@ -165,11 +165,7 @@ async fn external_writer_view_opens_agents_with_left() -> Result<()> {
         )
         .await?;
 
-        assert!(
-            app.chat_widget
-                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                .is_some()
-        );
+        assert!(app.agents_overview_has_focus());
         assert_eq!(
             app.chat_widget.composer_text_with_pending(),
             "Retained draft"

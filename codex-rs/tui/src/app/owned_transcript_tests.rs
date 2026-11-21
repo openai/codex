@@ -86,6 +86,7 @@ async fn external_writer_escape_returns_to_command_center_without_editing() -> R
         (false, false, true),
     ] {
         let mut app = crate::app::test_support::make_test_app().await;
+        crate::app::test_support::use_modal_agents_overview(&mut app);
         attach_thread(&mut app, ThreadId::new());
         app.transcript_cells = vec![user_cell("First prompt"), user_cell("Second prompt")];
         app.app_server_target = AppServerTarget::Remote {
@@ -670,11 +671,16 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
     let frames = tui.frame_requester();
     let mut painted = Default::default();
     tui.draw(outer.height, |frame| {
-        for cell in &mut frame.buffer.content {
-            cell.set_char('·');
+        // Paint the side margins before the conversation and the rows below it afterward.
+        let viewport = frame.area();
+        for pos in viewport.positions().filter(|pos| pos.y < area.bottom()) {
+            frame.buffer[pos].set_char('·');
         }
-        let prepared = app.prepare_conversation(frame.area(), Some(area), &frames);
+        let prepared = app.prepare_conversation(viewport, Some(area), &frames);
         painted = app.paint_conversation(frame, &prepared);
+        for pos in viewport.positions().filter(|pos| pos.y >= area.bottom()) {
+            frame.buffer[pos].set_char('·');
+        }
         frame
             .image_placements
             .push(crate::transcript_image::ImagePlacement {
@@ -804,6 +810,18 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         ),
         (false, true, "preserved draft".to_string()),
     );
+    // A replacement conversation starts at full width and drops the previous pane's image.
+    let init = app.chatwidget_init_for_forked_or_resumed_thread(
+        &mut tui,
+        app.config.clone(),
+        /*initial_user_message*/ None,
+    );
+    app.replace_chat_widget(ChatWidget::new_with_app_event(init));
+    assert_eq!(
+        app.render_owned_transcript(&mut tui, outer)?.width,
+        outer.width
+    );
+    assert!(presented(&tui).is_empty());
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

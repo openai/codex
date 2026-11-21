@@ -1007,3 +1007,231 @@ async fn live_center_show_more_navigation_search_and_loading() {
     );
     insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Show more matches");
 }
+
+#[tokio::test]
+async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Result<()> {
+    use crate::app::owned_transcript::tests::attach_thread;
+    use crate::app::owned_transcript::tests::buffer_text;
+
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    app.local_settings.tui.animations = false;
+    let wide = Size::new(/*width*/ 90, /*height*/ 14);
+    let mut tui = crate::tui::test_support::make_test_tui_with_size(wide)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.config.features.enable(Feature::TuiWorkspace)?;
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+    let id = ThreadId::from_u128(/*value*/ 12);
+    attach_thread(&mut app, id);
+    let mut title = "Investigate retry";
+    let mut task = overview_thread(
+        id,
+        /*parent_thread_id*/ None,
+        title,
+        ThreadStatus::Idle,
+    );
+    task.git_info = Some(codex_app_server_protocol::GitInfo {
+        branch: Some("retry-fix".into()),
+        sha: None,
+        origin_url: None,
+    });
+    task.updated_at = 4_000_000_000;
+    app.agents_overview.threads.insert(id, Some(task));
+    app.agents_overview
+        .pins_by_backend
+        .insert(server.backend_id(), Some(vec![id]));
+    let rows = (0..40)
+        .map(|i| format!("Response row {i}").into())
+        .collect();
+    app.transcript_cells
+        .push(Arc::new(history_cell::PlainHistoryCell::new(rows)));
+    let paste = TuiEvent::Paste("Keep this draft".into());
+    app.handle_tui_event(&mut tui, &mut server, paste).await?;
+
+    app.render_chat_widget_frame(&mut tui, wide)?;
+    app.transcript_view
+        .scroll(&app.transcript_cells, /*rows*/ -10);
+    app.render_chat_widget_frame(&mut tui, wide)?;
+    let before = buffer_text(tui.terminal.previous_buffer());
+    let first = before.lines().next().unwrap().trim();
+    assert!(first.starts_with("Response row"));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Keep this draft"
+    );
+
+    let narrow = Size::new(50, 14);
+    let mut screens = Vec::new();
+    let mut wide_styles = Vec::new();
+    for (label, size, center_focused) in [
+        ("Wide Command Center", wide, true),
+        ("Wide conversation", wide, false),
+        ("Narrow conversation", narrow, false),
+        ("Narrow Command Center", narrow, true),
+        ("Restored dock", wide, true),
+    ] {
+        tui.terminal.resize(size)?;
+        if center_focused && !app.workspace_center_owns_input() {
+            Box::pin(app.handle_event(&mut tui, &mut server, AppEvent::OpenAgentsOverview)).await?;
+        } else if !center_focused && app.workspace_center_owns_input() {
+            let click = crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: wide.width - 1,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            };
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(click))
+                .await?;
+        }
+        if size == wide && !center_focused {
+            title = "Investigate retry again";
+            let renamed = ServerNotification::ThreadNameUpdated(ThreadNameUpdatedNotification {
+                thread_id: id.to_string(),
+                thread_name: Some(title.into()),
+            });
+            app.handle_app_server_event(
+                &server,
+                AppServerEvent::ServerNotification(Box::new(renamed)),
+            )
+            .await;
+        }
+        tui.screen_size_for_event(&TuiEvent::Resize(size))?;
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (230, 230, 230),
+                bg: (20, 20, 20),
+            },
+            || app.render_chat_widget_frame(&mut tui, size),
+        )?;
+        let buffer = tui.terminal.previous_buffer();
+        let screen = buffer_text(buffer);
+        assert_eq!(app.workspace_center_owns_input(), center_focused, "{label}");
+        if size == wide && wide_styles.len() < 2 {
+            wide_styles.push([title, "All 1", "Keep this draft"].map(|text| {
+                let (row, prefix) = screen
+                    .lines()
+                    .enumerate()
+                    .find_map(|(row, line)| Some((row, line.split_once(text)?.0)))
+                    .expect("visible task, filter and draft");
+                buffer[(prefix.chars().count() as u16, row as u16)].style()
+            }));
+        }
+        if matches!(label, "Wide Command Center" | "Narrow Command Center") {
+            let screen = normalize_agent_center_snapshot(screen);
+            screens.push(format!("{label}\n{screen}"));
+        }
+    }
+    let [center, conversation] = wide_styles.as_slice() else {
+        panic!("expected both wide focus states");
+    };
+    for (center_style, conversation_style) in center.iter().zip(conversation) {
+        assert_ne!(center_style, conversation_style);
+    }
+    assert_ne!(center[2].fg, conversation[2].fg);
+    assert_ne!(center[2].bg, conversation[2].bg);
+
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Tab.into()))
+        .await?;
+    app.render_chat_widget_frame(&mut tui, wide)?;
+    assert!(buffer_text(tui.terminal.previous_buffer()).contains("No matching tasks"));
+    insta::assert_snapshot!("workspace_responsive_focus", screens.join("\n\n"));
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Paste("ignored".into()))
+        .await?;
+    for key in [KeyCode::BackTab, KeyCode::Enter] {
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))
+            .await?;
+    }
+    let selected = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| {
+            matches!(event, AppEvent::SelectAgentsOverviewThread { thread_id } if *thread_id == id)
+        })
+        .expect("Enter selects the displayed task");
+    Box::pin(app.handle_event(&mut tui, &mut server, selected)).await?;
+    let bottom = app.render_chat_widget_frame(&mut tui, wide)?;
+    let screen = buffer_text(tui.terminal.previous_buffer());
+    assert!(screen.contains(title));
+    assert!(screen.lines().next().unwrap().ends_with(first));
+    assert!(bottom.contains(tui.terminal.last_known_cursor_pos));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Keep this draft"
+    );
+
+    Box::pin(app.handle_event(&mut tui, &mut server, AppEvent::OpenAgentsOverview)).await?;
+    app.sidebar_mut().show(
+        crate::app::sidebar::SidebarContent::Chooser,
+        crate::app::sidebar::PaneFocus::Sidebar,
+    );
+    let three_panes = Size::new(185, 18);
+    let combined = crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let center = app.conversation_frame.command_center.unwrap();
+    let side = app.conversation_frame.panel_area().unwrap();
+    let middle = app.conversation_area(Rect::new(0, 0, 185, 18));
+    assert!(center.right() <= middle.x && middle.right() <= side.x && !middle.is_empty());
+    let labels = ["Agent command center", "Keep this draft", "Open in sidebar"].map(|label| {
+        combined
+            .lines()
+            .find_map(|line| line.find(label))
+            .map(|_| label)
+    });
+    insta::assert_snapshot!(format!("{labels:?}"),@"[Some(\"Agent command center\"), Some(\"Keep this draft\"), Some(\"Open in sidebar\")]");
+    let divider = app
+        .conversation_frame
+        .divider_area()
+        .expect("right divider");
+    let mouse = |kind, column| {
+        TuiEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row: divider.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    use crossterm::event::MouseButton::Left;
+    use crossterm::event::MouseEventKind::Down;
+    use crossterm::event::MouseEventKind::Drag;
+    tui.screen_size_for_event(&TuiEvent::Resize(three_panes))?;
+    app.handle_tui_event(&mut tui, &mut server, mouse(Down(Left), divider.x))
+        .await?;
+    app.handle_tui_event(&mut tui, &mut server, mouse(Drag(Left), divider.x - 6))
+        .await?;
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let preview = app
+        .conversation_frame
+        .divider_area()
+        .expect("right divider");
+    assert_eq!(preview.x, divider.x - 6);
+
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    let selected = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| {
+            matches!(event, AppEvent::SelectAgentsOverviewThread { thread_id } if *thread_id == id)
+        })
+        .expect("Enter selects the displayed task with the chooser open");
+    Box::pin(app.handle_event(&mut tui, &mut server, selected)).await?;
+    assert_eq!(
+        app.panel_focus(),
+        Some(crate::app::sidebar::PaneFocus::Main)
+    );
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Paste("!".into()))
+        .await?;
+    assert!(app.chat_widget.composer_text_with_pending().contains('!'));
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Backspace.into()),
+    )
+    .await?;
+
+    app.open_agents_overview(&server);
+    app.sidebar_mut().hide();
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+        .await?;
+    tui.screen_size_for_event(&TuiEvent::Resize(wide))?;
+    app.render_chat_widget_frame(&mut tui, wide)?;
+    assert_eq!(buffer_text(tui.terminal.previous_buffer()), before);
+
+    server.shutdown().await?;
+    Ok(())
+}

@@ -22,12 +22,9 @@ impl App {
         if self.focused_sidebar_chooser(tui) {
             return false;
         }
-        let rename_active = self
-            .chat_widget
-            .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
-            .is_some();
+        let overview_owns_input = self.agents_overview_has_focus();
         let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        let insert_escape = if rename_active {
+        let insert_escape = if overview_owns_input {
             let state = self
                 .agents_overview
                 .view_state
@@ -50,11 +47,11 @@ impl App {
             && (key_event.modifiers == KeyModifiers::ALT
                 || key_event.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT))
             // ChatWidget's fixed image-paste shortcut is not in the configurable keymap.
-            && !(!rename_active
+            && !(!overview_owns_input
                 && key_event.kind == KeyEventKind::Press
                 && matches!(key_event.code, KeyCode::Char('v' | 'V')))
             // Empty-draft agent navigation also has fixed legacy-terminal fallbacks.
-            && !(!rename_active
+            && !(!overview_owns_input
                 && self.chat_widget.composer_text_with_pending().is_empty()
                 && (previous_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)
                     || next_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)))
@@ -97,7 +94,10 @@ impl App {
         if let Some(overlay) = &mut self.overlay {
             overlay.set_keymap_bindings(&self.keymap);
         }
-        if self.overlay.is_none() && self.chat_widget.handle_quick_dial_menu(key_event) {
+        if self.overlay.is_none()
+            && !self.workspace_center_owns_input()
+            && self.chat_widget.handle_quick_dial_menu(key_event)
+        {
             return None;
         }
         let contexts = self.key_chord_contexts(tui);
@@ -127,6 +127,7 @@ impl App {
                     },
                 )))
             && !select_mode_chord
+            && !self.workspace_center_owns_input()
         {
             let close = tui.is_owned_screen()
                 && self.overlay.is_none()
@@ -285,6 +286,12 @@ impl App {
     }
 
     pub(super) fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        if self.workspace_center_owns_input()
+            && let Some(view) = &self.agents_overview.workspace.view
+        {
+            use crate::bottom_pane::BottomPaneView;
+            return view.keymap_contexts().with_voice_toggle(&self.keymap);
+        }
         use crate::keymap::KeymapContext;
         use crate::keymap::KeymapContextSet;
 
@@ -348,6 +355,28 @@ impl App {
             contexts
         };
         contexts.with_voice_toggle(&self.keymap)
+    }
+
+    pub(super) fn voice_toggle_pressed(&self, key: KeyEvent) -> bool {
+        key.kind == KeyEventKind::Press
+            && self
+                .active_keymap_contexts()
+                .contains_action(crate::keymap::KeymapActionId {
+                    context: crate::keymap::KeymapContext::Chat,
+                    action: "toggle_voice",
+                })
+            && self.keymap.chat.toggle_voice.is_pressed(key)
+    }
+
+    pub(super) fn handle_voice_toggle_key(&mut self, tui: &mut tui::Tui, key: KeyEvent) -> bool {
+        if !self.voice_toggle_pressed(key) {
+            return false;
+        }
+        self.cancel_transcript_browsing(tui);
+        if !self.chat_widget.handle_startup_submission_key(key) {
+            self.control_voice(crate::app_event::VoiceControl::Toggle);
+        }
+        true
     }
 
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {

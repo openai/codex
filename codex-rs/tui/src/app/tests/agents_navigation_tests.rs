@@ -41,7 +41,7 @@ async fn agents_navigation_opens_the_command_center_on_every_target() -> Result<
         let event = events.try_recv()?;
         assert_matches!(event, AppEvent::OpenAgentsOverview);
         app.handle_event(&mut tui, &mut app_server, event).await?;
-        assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+        assert!(app.agents_overview_has_focus());
         app_server.shutdown().await?;
     }
     Ok(())
@@ -50,6 +50,7 @@ async fn agents_navigation_opens_the_command_center_on_every_target() -> Result<
 #[tokio::test]
 async fn externally_archived_thread_keeps_advertised_agents_navigation() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    crate::app::test_support::use_modal_agents_overview(&mut app);
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = start_config_write_test_app_server(&app).await?;
     app.app_server_target = AppServerTarget::LocalDaemon {
@@ -167,7 +168,7 @@ async fn provider_error_opens_command_center_with_left() -> Result<()> {
             TuiEvent::Key(KeyCode::Left.into()),
         )
         .await?;
-        assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+        assert!(app.agents_overview_has_focus());
         assert_eq!(
             app.chat_widget.composer_text_with_pending(),
             "Retained draft"

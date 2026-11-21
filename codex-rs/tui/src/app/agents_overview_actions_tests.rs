@@ -17,6 +17,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn pin_action_updates_shared_section_state() -> Result<()> {
     let mut app = make_test_app().await;
+    crate::app::test_support::use_modal_agents_overview(&mut app);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
@@ -364,6 +365,7 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
             for filtered in [false, true] {
                 let (mut app, mut rx, _op_rx) =
                     crate::app::tests::make_test_app_with_channels().await;
+                crate::app::test_support::use_modal_agents_overview(&mut app);
                 let mut app_server =
                     crate::start_embedded_app_server_for_picker(&app.config).await?;
                 let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -1009,6 +1011,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         };
         let (mut app, mut rx, _op_rx) =
             Box::pin(crate::app::tests::make_test_app_with_channels()).await;
+        crate::app::test_support::use_modal_agents_overview(&mut app);
         let (release, gate) = tokio::sync::oneshot::channel();
         let (server, _completions) = start_streaming_sse_server(vec![vec![
             StreamingSseChunk {

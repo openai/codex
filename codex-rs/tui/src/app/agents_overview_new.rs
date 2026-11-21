@@ -245,6 +245,9 @@ impl App {
                     "Could not open the new session.",
                 );
             }
+        } else if self.agents_overview.workspace.is_open() {
+            self.focus_workspace_composer(tui);
+            self.repaint_agents_overview();
         }
         Ok(control)
     }

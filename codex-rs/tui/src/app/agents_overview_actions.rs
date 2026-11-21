@@ -8,6 +8,7 @@ use crate::app_event::AgentsOverviewAction;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::backend_id::BackendId;
+use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::ChatWidget;
@@ -71,18 +72,31 @@ async fn run_lifecycle_modal<T>(
                 if matches!(&event, tui::TuiEvent::Paste(_) | tui::TuiEvent::FocusLost) {
                     app.cancel_pending_key_chord();
                 }
-                let dashboard_active = app.chat_widget
+                let dock_owns_input = app.workspace_center_owns_input();
+                let dashboard_active = dock_owns_input || app.chat_widget
                     .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
                     .is_some();
                 match event {
                     tui::TuiEvent::Key(key) if dashboard_active => {
                         if let Some(key) = app.route_key_chord_event(tui, key) {
-                            app.chat_widget.handle_key_event_with_activation_key(key, app.routed_key_activation);
+                            if dock_owns_input {
+                                if let Some(view) = &mut app.agents_overview.workspace.view {
+                                    view.handle_key_event(key);
+                                }
+                            } else {
+                                app.chat_widget.handle_key_event_with_activation_key(key, app.routed_key_activation);
+                            }
                         }
                         tui.frame_requester().schedule_frame();
                     }
                     tui::TuiEvent::Paste(text) if dashboard_active => {
-                        app.chat_widget.handle_paste(text);
+                        if dock_owns_input {
+                            if let Some(view) = &mut app.agents_overview.workspace.view {
+                                view.handle_paste(text);
+                            }
+                        } else {
+                            app.chat_widget.handle_paste(text);
+                        }
                         tui.frame_requester().schedule_frame();
                     }
                     tui::TuiEvent::Key(_) | tui::TuiEvent::Paste(_) | tui::TuiEvent::FocusLost | tui::TuiEvent::Mouse(_) => {}
@@ -399,14 +413,10 @@ impl App {
             self.cancel_agents_overview_refresh(app_server.backend_id());
         }
         if detach_primary {
-            self.agents_overview.selection_after_removal =
-                self.agents_overview.selection_after_removal.or_else(|| {
-                    self.chat_widget
-                        .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                        .and_then(|index| {
-                            self.agents_overview.visible_thread_ids.get(index).copied()
-                        })
-                });
+            self.agents_overview.selection_after_removal = self
+                .agents_overview
+                .selection_after_removal
+                .or_else(|| self.overview_selected_thread_id());
             self.reset_for_thread_switch(tui)?;
             self.pending_thread_switch_resets += 1;
             self.app_event_tx

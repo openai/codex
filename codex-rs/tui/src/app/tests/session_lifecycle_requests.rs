@@ -2360,7 +2360,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
             app.chat_widget.composer_text_with_pending(),
             "Retained on failure"
         );
-        assert!(!app.chat_widget.has_active_view());
+        assert!(!app.agents_overview_has_focus());
 
         let resumed = server
             .resume_thread(
@@ -2413,7 +2413,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
         );
         assert_eq!(app.active_thread_id, Some(thread_id));
         assert!(app.side_threads.contains_key(&side_id));
-        assert!(!app.chat_widget.has_active_view());
+        assert!(!app.agents_overview_has_focus());
         assert_eq!(recorded_params(&requests, "thread/delete").len(), 1);
         let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         app.app_event_tx = AppEventSender::new(tx);
@@ -2454,7 +2454,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
             (None, None, None)
         );
         assert!(app.chat_widget.composer_is_empty());
-        assert!(app.chat_widget.has_active_view());
+        assert!(app.agents_overview_has_focus());
         assert_eq!(
             recorded_params(&requests, "thread/delete"),
             vec![
@@ -2626,7 +2626,7 @@ async fn embedded_archive_completes_after_opening_command_center() -> Result<()>
     let (_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
     app.active_thread_id = Some(thread_id);
     Box::pin(app.archive_current_thread(&mut tui, &mut server)).await?;
-    assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+    assert!(app.agents_overview_has_focus());
     assert_matches!(
         app.saved_openings.next_event(&mut events).await,
         Some(AppEvent::ArchiveFinished { thread_id: id, result: Ok(()), .. }) if id == thread_id
@@ -2694,7 +2694,7 @@ async fn archive_opens_command_center_before_the_server_replies() -> Result<()> 
                 .expect("the confirmation must not wait for the archive RPC")?,
             AppRunControl::Continue
         );
-        assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+        assert!(app.agents_overview_has_focus());
         assert_eq!(app.current_displayed_thread_id(), None);
         assert_eq!(app.agents_overview.visible_thread_ids, [other_id]);
         assert_eq!(
@@ -2990,13 +2990,7 @@ async fn archive_current_thread_returns_to_agents() -> Result<()> {
             recorded_params(&requests, "thread/archive"),
             vec![serde_json::json!({"threadId": thread_id.to_string()})]
         );
-        assert!(
-            app.chat_widget
-                .selected_index_for_present_view(
-                    crate::app::agents_overview::AGENTS_OVERVIEW_VIEW_ID
-                )
-                .is_some()
-        );
+        assert!(app.agents_overview_has_focus());
         server.shutdown().await?;
         proxy.await??;
     }
@@ -6844,6 +6838,7 @@ async fn external_writer_escape_preserves_snapshot_and_explicit_quits() -> Resul
         AppServerTarget::Remote { endpoint },
     ] {
         let (mut app, _codex_home) = make_history_test_app().await?;
+        crate::app::test_support::use_modal_agents_overview(&mut app);
         let thread_id =
             create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "owned elsewhere")?;
         let (mut server, requests, proxy) = start_recording_app_server(

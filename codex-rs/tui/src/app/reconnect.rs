@@ -319,14 +319,8 @@ impl App {
                 .selected_index_for_active_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
                 .is_some()
                 || (self.current_displayed_thread_id().is_none()
-                    && self
-                        .chat_widget
-                        .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
-                        .is_some())
+                    && self.overview_selected_index().is_some())
             {
-                if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                    state.connection_notice = Some("Reconnecting — agent list is stale");
-                }
                 ReconnectPresentation::Overview
             } else {
                 if !self
@@ -340,6 +334,12 @@ impl App {
                 }
                 ReconnectPresentation::Conversation
             };
+            if (self.agents_overview.workspace.is_open()
+                || self.reconnect.presentation == ReconnectPresentation::Overview)
+                && let Ok(mut state) = self.agents_overview.view_state.lock()
+            {
+                state.connection_notice = Some("Reconnecting — agent list is stale");
+            }
             if preserve_startup_input {
                 // Draining admission never reopens. Wait for this connection to close before
                 // reconnecting, then give the ordinary startup path one more attempt.
@@ -409,10 +409,7 @@ impl App {
             archived_thread,
         } = connected;
         session.model_provider_override = self.harness_overrides.model_provider.clone();
-        let selected = self
-            .chat_widget
-            .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
-            .and_then(|index| self.agents_overview.visible_thread_ids.get(index).copied());
+        let selected = self.overview_selected_thread_id();
         let displayed = self.reconnect_thread_id();
         let mut input = self.chat_widget.capture_thread_input_state();
         if let Some(input) = input.as_mut() {
@@ -644,7 +641,9 @@ impl App {
         // A hidden overview performs this discovery when it is next opened.
         self.reset_agents_overview_discovery(app_server.backend_id());
         self.backend_registry.connect(app_server);
-        if self.reconnect.presentation == ReconnectPresentation::Overview {
+        if self.agents_overview.workspace.is_open() {
+            self.repaint_agents_overview();
+        } else if self.reconnect.presentation == ReconnectPresentation::Overview {
             let threads = self
                 .agents_overview
                 .threads
@@ -675,7 +674,9 @@ impl App {
             self.app_event_tx
                 .send(AppEvent::RefreshConfigReasoningSummary);
         }
-        if self.reconnect.presentation == ReconnectPresentation::Overview {
+        if self.agents_overview.workspace.is_open()
+            || self.reconnect.presentation == ReconnectPresentation::Overview
+        {
             self.refresh_agents_overview_threads(app_server);
         }
         self.chat_widget.forget_inherited_quota_provider();

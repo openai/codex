@@ -282,11 +282,7 @@ impl App {
             if options.cancel == Some(crate::onboarding::TrustCancelAction::CurrentTask) {
                 return Err(AppRunControl::Continue);
             }
-            if self
-                .chat_widget
-                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                .is_none()
-            {
+            if self.overview_selected_index().is_none() {
                 self.open_agents_overview(app_server);
             }
             return Err(AppRunControl::Continue);

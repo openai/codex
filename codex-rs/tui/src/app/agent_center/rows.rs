@@ -67,6 +67,11 @@ impl AgentsOverviewView {
             );
             return;
         }
+        let selected_style = if self.dock_focused == Some(false) {
+            crate::style::quiet_workspace_style()
+        } else {
+            selection_style()
+        };
         let entries = self.center_rows(&indices, state.grouping);
         let selected = entries
             .iter()
@@ -112,7 +117,7 @@ impl AgentsOverviewView {
                     let rect = row(viewport, offset as u16, /*height*/ 1);
                     let selected = self.selected == usize::MAX;
                     let style = if selected {
-                        selection_style()
+                        selected_style
                     } else {
                         Style::default()
                     };
@@ -196,7 +201,7 @@ impl AgentsOverviewView {
                 continue;
             }
             let style = if index == self.selected {
-                selection_style()
+                selected_style
             } else {
                 Style::default()
             };

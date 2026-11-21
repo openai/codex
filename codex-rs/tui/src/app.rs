@@ -28,6 +28,7 @@ use crate::app_server_session::app_server_rate_limit_snapshots;
 use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApplyPatchApprovalRequest;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::ExecApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpElicitationApprovalRequest;
@@ -230,6 +231,7 @@ mod composer_hints;
 mod config_panel;
 mod config_persistence;
 mod connector_mentions;
+mod conversation_workspace;
 mod daemon_menu;
 mod daybreak;
 mod empty_state_policy;
@@ -1001,6 +1003,36 @@ impl App {
         {
             return Ok(AppRunControl::Continue);
         }
+        if self.workspace_center_owns_input() {
+            match &event {
+                TuiEvent::Key(key) => {
+                    self.handle_workspace_key(tui, *key);
+                    if !self.agents_overview.workspace.is_open() {
+                        self.cancel_cloud_inventory_refresh(app_server).await;
+                        if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview
+                        {
+                            self.reconnect.presentation =
+                                reconnect::ReconnectPresentation::Conversation;
+                        }
+                    }
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::Paste(text) if !composer_paste => {
+                    self.cancel_pending_key_chord();
+                    if let Some(view) = &mut self.agents_overview.workspace.view {
+                        view.handle_paste(text.clone());
+                    }
+                    tui.frame_requester().schedule_frame();
+                    return Ok(AppRunControl::Continue);
+                }
+                _ => {}
+            }
+        }
+        if let TuiEvent::Mouse(mouse) = &event
+            && self.handle_workspace_mouse(tui, *mouse)
+        {
+            return Ok(AppRunControl::Continue);
+        }
         if matches!(&event, TuiEvent::Key(_))
             && self.handle_composer_copy_event(tui, &event, |tui, text| {
                 tui.copy_transcript_selection(text, crate::clipboard_copy::CopyFormat::PlainText)
@@ -1153,7 +1185,7 @@ impl App {
             if let Some(current) = side_pane::layout(self, tui, size.into())
                 && current.passive_thread == painted.passive_thread
                 && let Some(peer) = self.current_displayed_thread_id()
-                && painted.passive.union(painted.focused) == Rect::from(size)
+                && painted.passive.union(painted.focused) == self.workspace_chat_area(size.into())
             {
                 let painted_area = painted.passive;
                 if let Some(link) = self.transcript_link_at(*press) {
@@ -1203,20 +1235,10 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         self.cancel_primed_browsing_for_event(&event);
-        let voice_toggle = |app: &Self, key: KeyEvent| {
-            key.kind == KeyEventKind::Press
-                && app
-                    .active_keymap_contexts()
-                    .contains_action(crate::keymap::KeymapActionId {
-                        context: crate::keymap::KeymapContext::Chat,
-                        action: "toggle_voice",
-                    })
-                && app.keymap.chat.toggle_voice.is_pressed(key)
-        };
         // Transcript interactions consume otherwise-unhandled keys; let enabled voice controls
         // reach App.
         if !matches!(&event, TuiEvent::Key(key)
-            if voice_toggle(self, *key)
+            if self.voice_toggle_pressed(*key)
                 && (!self.transcript_view.owns_interaction_key(*key)
                     || self.transcript_view.is_select_mode()))
             && !composer_paste
@@ -1247,12 +1269,8 @@ impl App {
             }
         }
         if let TuiEvent::Key(key_event) = &event
-            && voice_toggle(self, *key_event)
+            && self.handle_voice_toggle_key(tui, *key_event)
         {
-            self.cancel_transcript_browsing(tui);
-            if !self.chat_widget.handle_startup_submission_key(*key_event) {
-                self.control_voice(crate::app_event::VoiceControl::Toggle);
-            }
             return Ok(AppRunControl::Continue);
         }
         if let TuiEvent::Key(key_event) = &event
@@ -1439,6 +1457,7 @@ impl App {
             let visible = self.current_displayed_thread_id().filter(|&id| {
                 tui.is_terminal_focused()
                     && !self.conversation_frame.panel_covers_transcript()
+                    && !self.conversation_area(screen_size.into()).is_empty()
                     && matches!(self.overlay, None | Some(Overlay::Transcript(_)))
                     && self.chat_widget.no_modal_or_popup_active()
                     && self.initial_history_replay_buffer.is_none()

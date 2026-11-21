@@ -136,7 +136,13 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
         next_cloud_page(commands, /*cursor*/ None).await
     };
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    crate::app::test_support::enable_side_retention(&mut app)?;
+    tui.set_owned_screen(/*owned*/ true)?;
     for key in [KeyCode::Esc, KeyCode::Enter] {
+        if key == KeyCode::Enter {
+            // Escape closes the dock. Selection closes the original modal.
+            crate::app::test_support::use_modal_agents_overview(&mut app);
+        }
         app.open_agents_overview(&cloud);
         let held_list = tokio::time::timeout(timeout, next_list(&mut commands)).await?;
         Box::pin(app.handle_tui_event(&mut tui, &mut cloud, TuiEvent::Key(key.into()))).await?;
@@ -157,7 +163,7 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
             .await??;
         }
         assert!(held_list.response.is_closed());
-        assert!(!app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+        assert!(app.overview_selected_index().is_none());
     }
 
     // The previous archive was observed, but its unarchive notification was missed.

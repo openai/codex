@@ -3,7 +3,6 @@
 //! pending billing results and disabled capability state.
 
 use super::App;
-use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::background_requests::THREAD_USAGE_FETCH_TIMEOUT;
 use super::background_requests::fetch_thread_usage;
 use crate::app_event::AppEvent;
@@ -62,12 +61,7 @@ impl App {
         {
             return;
         }
-        let Some(thread_id) = self
-            .chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-            .and_then(|index| self.agents_overview.visible_thread_ids.get(index))
-            .copied()
-        else {
+        let Some(thread_id) = self.overview_selected_thread_id() else {
             return;
         };
         let owner = app_server.backend_id();
