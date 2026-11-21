@@ -8,12 +8,12 @@ expression: "panel_text(&app, &tui)"
   c       Main composer                            [       Select transcript
   s       Hide sidebar                             p       Presets ›
   t       Open in sidebar                          -       Hide pane
-                                                   z       Zoom pane
-  Move                                             ⇧h      Divider left
-  ← / h        Pane left                           ⇧l      Divider right
-  ⇧tab / ↑ / k Previous tab                        =       Equal widths
-  tab / ↓ / j  Next tab                            r       Resize panes
-                                                   ,       Minimum width
+  a       Command Center                           z       Zoom pane
+                                                   ⇧h      Divider left
+  Move                                             ⇧l      Divider right
+  ← / h        Pane left                           =       Equal widths
+  ⇧tab / ↑ / k Previous tab                        r       Resize panes
+  tab / ↓ / j  Next tab                            ,       Minimum width
                                                    .       Maximum width
                                                    w       Close tab
 

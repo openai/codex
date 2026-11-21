@@ -6,10 +6,10 @@ Wide Command Center
   Agent command center  Group: Pr…  │ Response row 22
    All 1   Needs you 0           ›  │ Response row 23
   ────────────────────────────────  │ Response row 24
-      Tasks                         │ Response row 25
+                                    │ Response row 25
   Pinned  1                         │ Response row 26
   › ○ Investigate retry             │ Response row 27
-                                    │ Response row 28
+      Ready · retry-fix             │ Response row 28
                                     │ Response row 29
                                     │                ↓ Back to bottom · esc
                                     │

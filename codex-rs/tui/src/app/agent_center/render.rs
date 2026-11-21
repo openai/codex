@@ -129,7 +129,8 @@ impl Renderable for AgentsOverviewView {
         let inset =
             |area: Rect| area.inner(Margin::new(/*horizontal*/ 2, /*vertical*/ 0));
         let footer_hints = self.center_footer_hints();
-        let state = self.state();
+        let mut state = self.state();
+        state.row_hits.clear();
         let filter_keys = if state.editing_metadata() {
             String::new()
         } else {

@@ -138,7 +138,8 @@ impl App {
                 (close
                     && action.context == crate::keymap::KeymapContext::Pager
                     && action.action == "close_transcript")
-                    || (action.is_side_pane() && contexts.contains_action(action))
+                    || ((action.is_side_pane() || action.action == "open_agents")
+                        && contexts.contains_action(action))
             };
             let chord = match self.key_chord_matcher.clone().advance(
                 key_event,
@@ -167,6 +168,12 @@ impl App {
             }
         }
         let was_pending = self.key_chord_matcher.is_pending();
+        if !was_pending
+            && self.workspace_center_owns_input()
+            && self.agents_overview_binding_matches(key_event)
+        {
+            return Some(key_event);
+        }
         if !was_pending
             && contexts.is_warnings()
             && (crate::key_hint::plain(KeyCode::Char('k')).is_press(key_event)
@@ -252,6 +259,19 @@ impl App {
         if !self.conversation_focus_available(tui) {
             return contexts;
         }
+        if self.workspace_center_owns_input()
+            && self
+                .agents_overview
+                .workspace
+                .view
+                .as_ref()
+                .is_some_and(|view| !view.owns_nested_input())
+        {
+            return contexts.with_pane_directions().with_main_composer_focus();
+        }
+        if self.workspace_center_owns_input() {
+            return contexts;
+        }
         if self.focused_sidebar_chooser(tui) {
             let contexts = KeymapContextSet::focused_sidebar_chooser();
             return if self.can_nudge_side_width(tui) {
@@ -283,6 +303,15 @@ impl App {
         } else {
             contexts
         }
+    }
+
+    pub(super) fn agents_overview_binding_matches(&self, key: KeyEvent) -> bool {
+        keymap_action_ids()
+            .filter(|id| id.context == crate::keymap::KeymapContext::Agents)
+            .any(|id| {
+                bindings_for_action(&self.keymap, id.context.config_name(), id.action)
+                    .is_some_and(|bindings| bindings.is_pressed(key))
+            })
     }
 
     pub(super) fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {

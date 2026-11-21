@@ -1006,7 +1006,7 @@ impl App {
         if self.workspace_center_owns_input() {
             match &event {
                 TuiEvent::Key(key) => {
-                    self.handle_workspace_key(tui, *key);
+                    Box::pin(self.handle_workspace_key(tui, app_server, *key)).await;
                     if !self.agents_overview.workspace.is_open() {
                         self.cancel_cloud_inventory_refresh(app_server).await;
                         if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview

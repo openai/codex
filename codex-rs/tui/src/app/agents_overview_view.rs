@@ -160,8 +160,16 @@ pub(super) fn directory_group_key(cwd: &Path, worktrees_enabled: bool) -> PathBu
         .unwrap_or_else(|| cwd.to_path_buf())
 }
 
+/// The item painted under the pointer, identified across task-list refreshes.
+#[derive(Clone, Copy)]
+enum RowTarget {
+    Thread(ThreadId),
+    ShowMore,
+}
+
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
+    row_hits: Vec<(RowTarget, Rect)>,
     scroll: usize,
     page_height: usize,
     status_filter: usize,

@@ -118,7 +118,7 @@ macro_rules! define_keymap_actions {
 define_keymap_actions! {
     global "Global" {
         change_host [MultiBackend] => "Change where a new conversation runs.",
-        focus_main_composer [Workspace] => "Focus the main conversation composer.",
+        focus_main_composer [Workspace] => "Focus the main conversation composer. A matching Agents binding takes priority in Command Center.",
         focus_sidebar_tabs [Workspace] => "Open the sidebar tab chooser.",
         focus_sidebar_content [Workspace] => "Focus the side conversation, or hide it when already focused.",
         hide_pane [Workspace] => "Hide the focused sidebar pane.",
@@ -134,7 +134,7 @@ define_keymap_actions! {
         move_divider_left [Workspace] => "Move the divider left when the side pane has focus.",
         move_divider_right [Workspace] => "Move the divider right when the side pane has focus.",
         toggle_pane_zoom [Workspace] => "Zoom or restore the focused pane.",
-        open_agents => "Open the agent command center.",
+        open_agents => "Open and focus Command Center. A matching Agents binding takes priority there.",
         open_transcript => "Open the transcript overlay.",
         find_transcript => "Find text in the full transcript.",
         // Keep the new warnings action out of shared-config writes until older strict readers

@@ -58,6 +58,7 @@ pub(in crate::keymap) fn register(
         (Global, "sidebar_down", Char('j'), "j"),
         (Pager, "mark_markdown", Char('v'), "v"),
         (Global, "choose_cloud_environment", Char('e'), "e"),
+        (Global, "open_agents", Char('a'), "a"),
     ] {
         if remaining == 0 {
             break;
@@ -66,7 +67,7 @@ pub(in crate::keymap) fn register(
             context,
             action: name,
         };
-        if (!workspace && action.is_side_pane())
+        if (!workspace && (action.is_side_pane() || name == "open_agents"))
             || !matches!(
                 super::configured_binding_for_action(keymap, action),
                 Some(None)

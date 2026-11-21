@@ -275,12 +275,17 @@ impl App {
             pane.sync_agent_rows(&self.agent_navigation);
         }
         let viewport: Rect = screen_size.into();
-        let (center, available) =
-            if caller_inset.is_none() && self.agents_overview.workspace.is_open() {
-                self.workspace_areas(viewport)
-            } else {
-                (None, Some(viewport))
-            };
+        let workspace = &mut self.agents_overview.workspace;
+        let fraction = workspace.motion.advance(
+            workspace.is_open(),
+            (self.local_settings.tui.animations && viewport.width >= 86).then(|| frames.clone()),
+        );
+        workspace.fraction = Some(fraction);
+        let (center, available) = if caller_inset.is_none() && fraction > 0.0 {
+            self.workspace_areas(viewport)
+        } else {
+            (None, Some(viewport))
+        };
         self.conversation_frame.command_center = center;
         let content = available.unwrap_or_default();
         let layout = available.and_then(|area| sidebar::paint_layout(self, tui, area));

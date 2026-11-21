@@ -2387,7 +2387,8 @@ async fn new_session_selects_its_task_when_the_open_dock_receives_the_row() -> R
     insta::assert_snapshot!(selected_title, @"› ○ Untitled task");
 
     app.open_agents_overview(&server);
-    app.handle_workspace_key(&mut tui, KeyCode::Down.into());
+    app.handle_workspace_key(&mut tui, &mut server, KeyCode::Down.into())
+        .await;
     assert_eq!(app.overview_selected_thread_id(), Some(previous_id));
     app.focus_workspace_composer(&mut tui);
     app.repaint_agents_overview();

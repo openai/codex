@@ -24,7 +24,9 @@ impl App {
         {
             return pending.guide(&self.keymap.chords, |_| true);
         }
-        let side = self.sidebar_has_focus();
+        let center = self.workspace_center_owns_input();
+        let center_open = self.agents_overview.workspace.is_open();
+        let side = !center && self.sidebar_has_focus();
         let can_switch = self.panel_focus().is_some() || self.switchable_side_child().is_some();
         let can_size = super::side_pane::split_layout(self, tui, area).is_some();
         let can_resize = can_size && side && self.zoomed_thread.is_none();
@@ -35,7 +37,7 @@ impl App {
         ];
         for (action, keys) in pending.actions(&self.keymap.chords) {
             let (group, label) = match action.action {
-                "focus_command_center" => (0, "Command Center"),
+                "open_agents" => (0, "Command Center"),
                 "focus_main_composer" => (0, "Main composer"),
                 "focus_sidebar_tabs" => (0, "Open in sidebar"),
                 "focus_sidebar_content" if side => (0, "Hide sidebar"),
@@ -58,8 +60,12 @@ impl App {
                 "sidebar_up" => (1, "Previous tab"),
                 "sidebar_down" => (1, "Next tab"),
                 "hide_pane" if side => (2, "Hide pane"),
-                "focus_pane_left" if side && can_switch => (1, "Pane left"),
-                "focus_pane_right" if !side && can_switch && self.open_pane_focus().is_some() => {
+                "focus_pane_left" if (side && can_switch) || (!center && !side && center_open) => {
+                    (1, "Pane left")
+                }
+                "focus_pane_right"
+                    if center || (!side && can_switch && self.open_pane_focus().is_some()) =>
+                {
                     (1, "Pane right")
                 }
                 "hide_pane" | "focus_pane_left" | "focus_pane_right" => continue,
@@ -74,7 +80,13 @@ impl App {
             let key = keys.join(" / ").fg(crate::style::accent_color());
             groups[group].1.push((key, label.replace('_', " ")));
         }
-        let origin = if side { "Sidebar" } else { "Conversation" };
+        let origin = if center {
+            "Command Center"
+        } else if side {
+            "Sidebar"
+        } else {
+            "Conversation"
+        };
         Some(ShortcutHud::leader(
             format!("{} · {origin}", pending.prefix.display_label()),
             groups

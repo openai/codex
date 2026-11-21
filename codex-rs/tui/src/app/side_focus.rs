@@ -687,6 +687,31 @@ impl App {
         key: KeyEvent,
     ) -> bool {
         let bindings = &self.keymap.app;
+        let focus_center = bindings.open_agents.is_pressed(key)
+            && self.local_settings.workspace_enabled(&self.config);
+        let left_from_main = bindings.focus_pane_left.is_pressed(key)
+            && self.agents_overview.workspace.is_open()
+            && !self.sidebar_has_focus();
+        if (focus_center || left_from_main) && self.conversation_focus_available(tui) {
+            if key.kind == KeyEventKind::Press {
+                if focus_center {
+                    self.open_agents_overview(app_server);
+                } else {
+                    self.agents_overview.workspace.focus_center();
+                }
+                let activation = self
+                    .routed_key_activation
+                    .take()
+                    .unwrap_or_else(|| KeyBinding::from_event(key));
+                self.chat_widget.suppress_current_view_key_until_release(
+                    activation,
+                    Instant::now(),
+                    ActivationKeySuppression::ViewTransition,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            return true;
+        }
         let panel_focus = self.panel_focus();
         let document = if panel_focus == Some(PaneFocus::Sidebar) {
             self.sidebar()
@@ -896,7 +921,7 @@ impl App {
         true
     }
 
-    async fn focus_main_composer(
+    pub(super) async fn focus_main_composer(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,

@@ -4,17 +4,22 @@
 use super::App;
 use super::agents_overview_view::AgentsOverviewView;
 use super::sidebar::PaneFocus;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::render::renderable::Renderable;
 use crate::tui::Tui;
+use std::time::Instant;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use ratatui::layout::Constraint;
@@ -40,6 +45,10 @@ pub(super) struct Workspace {
     pub(super) view: Option<AgentsOverviewView>,
     /// None while the dock is closed.
     focus: Option<Pane>,
+    pub(super) motion: super::pane_motion::PaneMotion,
+    pub(super) fraction: Option<f64>,
+    width: Option<u16>,
+    divider_drag_viewport: Option<Rect>,
 }
 
 impl Workspace {
@@ -73,7 +82,13 @@ impl App {
     }
 
     pub(super) fn workspace_chat_area(&self, viewport: Rect) -> Rect {
-        if self.agents_overview.workspace.is_open() {
+        if self.agents_overview.workspace.is_open()
+            || self
+                .agents_overview
+                .workspace
+                .fraction
+                .is_some_and(|fraction| fraction > 0.0)
+        {
             self.workspace_areas(viewport).1.unwrap_or_default()
         } else {
             viewport
@@ -83,7 +98,16 @@ impl App {
     pub(super) fn workspace_areas(&self, viewport: Rect) -> (Option<Rect>, Option<Rect>) {
         if viewport.width >= MIN_SPLIT_WIDTH {
             let [center, _, conversation] = Layout::horizontal([
-                Constraint::Length(CENTER_WIDTH),
+                Constraint::Length(
+                    (f64::from(
+                        self.agents_overview
+                            .workspace
+                            .width
+                            .unwrap_or(CENTER_WIDTH)
+                            .min(viewport.width.saturating_sub(MIN_CHAT_WIDTH + GUTTER_WIDTH)),
+                    ) * self.agents_overview.workspace.fraction.unwrap_or(1.0))
+                    .round() as u16,
+                ),
                 Constraint::Length(GUTTER_WIDTH),
                 Constraint::Min(MIN_CHAT_WIDTH),
             ])
@@ -114,7 +138,12 @@ impl App {
         self.cancel_pending_key_chord();
     }
 
-    pub(super) fn handle_workspace_key(&mut self, tui: &mut Tui, mut key: KeyEvent) {
+    pub(super) async fn handle_workspace_key(
+        &mut self,
+        tui: &mut Tui,
+        app_server: &mut AppServerSession,
+        mut key: KeyEvent,
+    ) {
         if self.should_recover_vim_insert_escape(tui, key)
             && let Some(view) = &mut self.agents_overview.workspace.view
         {
@@ -126,6 +155,47 @@ impl App {
         };
         if self.handle_voice_toggle_key(tui, key) {
             return;
+        }
+        if self
+            .agents_overview
+            .workspace
+            .view
+            .as_ref()
+            .is_some_and(|view| !view.owns_nested_input())
+            && !self.agents_overview_binding_matches(key)
+        {
+            let bindings = &self.keymap.app;
+            let main = bindings.focus_main_composer.is_pressed(key);
+            if main || bindings.focus_pane_right.is_pressed(key) {
+                if key.kind == crossterm::event::KeyEventKind::Press
+                    && self
+                        .agents_overview
+                        .workspace
+                        .view
+                        .as_ref()
+                        .is_some_and(|view| view.can_return_to_chat)
+                {
+                    let activation = self
+                        .routed_key_activation
+                        .take()
+                        .unwrap_or_else(|| KeyBinding::from_event(key));
+                    if main && let Err(err) = self.focus_main_composer(tui, app_server).await {
+                        self.chat_widget.add_error_message(err.to_string());
+                        return;
+                    }
+                    self.focus_workspace_composer(tui);
+                    self.chat_widget.suppress_current_view_key_until_release(
+                        activation,
+                        Instant::now(),
+                        ActivationKeySuppression::ViewTransition,
+                    );
+                    tui.frame_requester().schedule_frame();
+                }
+                return;
+            }
+            if bindings.open_agents.is_pressed(key) || bindings.focus_pane_left.is_pressed(key) {
+                return;
+            }
         }
         let Some(view) = &mut self.agents_overview.workspace.view else {
             return;
@@ -145,6 +215,7 @@ impl App {
             }
             if view.is_complete() {
                 self.agents_overview.workspace.focus = None;
+                self.agents_overview.workspace.divider_drag_viewport = None;
                 self.focus_workspace_composer(tui);
                 self.conversation_frame = Default::default();
             }
@@ -157,10 +228,39 @@ impl App {
             || self.overlay.is_some()
             || self.chat_widget.has_active_view()
         {
+            self.agents_overview.workspace.divider_drag_viewport = None;
             return false;
         }
         let viewport: Rect = tui.terminal.last_known_screen_size.into();
         let (center, conversation) = self.workspace_areas(viewport);
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            self.agents_overview.workspace.divider_drag_viewport = None;
+        }
+        if let Some(center) = center
+            && conversation.is_some()
+            && mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
+            && mouse.column == center.right()
+        {
+            self.agents_overview.workspace.divider_drag_viewport = Some(viewport);
+            return true;
+        }
+        if matches!(
+            mouse.kind,
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        ) && self.agents_overview.workspace.divider_drag_viewport.take() == Some(viewport)
+        {
+            let max = viewport
+                .width
+                .saturating_sub(MIN_CHAT_WIDTH + GUTTER_WIDTH)
+                .max(24);
+            self.agents_overview.workspace.width =
+                Some(mouse.column.saturating_sub(viewport.x).clamp(24, max));
+            if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
+                self.agents_overview.workspace.divider_drag_viewport = Some(viewport);
+            }
+            tui.frame_requester().schedule_frame();
+            return true;
+        }
         let center_was_focused = self.agents_overview.workspace.focus == Some(Pane::Center);
         // The press chose the owner. Let its selection finish even outside its pane.
         if matches!(mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
@@ -173,6 +273,11 @@ impl App {
             if pressed {
                 self.agents_overview.workspace.focus_center();
                 self.cancel_pending_key_chord();
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                    && let Some(view) = &mut self.agents_overview.workspace.view
+                {
+                    view.click_row(point);
+                }
                 tui.frame_requester().schedule_frame();
             }
             return true;

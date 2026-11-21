@@ -2,7 +2,7 @@
 //! Full titles use the flexible column; metadata drops at narrow widths.
 //! The final cell stays blank inside the full-width selection highlight.
 
-use super::navigation::CenterRow;
+use super::navigation::TaskListRow;
 use super::render::line;
 use super::render::row;
 use super::*;
@@ -75,15 +75,11 @@ impl AgentsOverviewView {
         let entries = self.center_rows(&indices, state.grouping);
         let selected = entries
             .iter()
-            .position(|row| match row {
-                CenterRow::Task(index) => *index == self.selected,
-                CenterRow::ShowMore => self.selected == usize::MAX,
-                _ => false,
-            })
+            .position(|row| row.selection_index() == Some(self.selected))
             .unwrap_or_default();
         let padding = u16::from(area.height >= 3);
         let viewport = row(area, padding, area.height - padding * 2);
-        if padding > 0 {
+        if padding > 0 && self.dock_focused.is_none() {
             let (title, status, updated) = columns(row(area, /*offset*/ 0, /*height*/ 1));
             line("Tasks".dim(), title, buf);
             line("Status".dim(), status, buf);
@@ -98,36 +94,65 @@ impl AgentsOverviewView {
         if selected < start {
             start = if height > 1
                 && selected > 0
-                && matches!(entries[selected - 1], CenterRow::Group(_))
+                && matches!(entries[selected - 1], TaskListRow::Group(_))
             {
                 selected - 1
             } else {
                 selected
             };
         }
-        if selected >= start + height {
-            start = selected.saturating_add(/*rhs*/ 1).saturating_sub(height);
+        let last_selected_row =
+            if height > 1 && matches!(entries.get(selected + 1), Some(TaskListRow::Context(_))) {
+                selected + 1
+            } else {
+                selected
+            };
+        if last_selected_row >= start + height {
+            start = last_selected_row.saturating_add(1).saturating_sub(height);
         }
         state.scroll = start;
         for (offset, entry) in entries.iter().skip(start).take(height).enumerate() {
+            let rect = row(viewport, offset as u16, /*height*/ 1);
+            let background = Rect {
+                width: row_width,
+                ..rect
+            };
             let index = match entry {
-                CenterRow::Group(index) | CenterRow::Task(index) => *index,
-                CenterRow::Gap => continue,
-                CenterRow::ShowMore => {
-                    let rect = row(viewport, offset as u16, /*height*/ 1);
+                TaskListRow::Group(index) | TaskListRow::Task(index) => *index,
+                TaskListRow::Context(index) => {
+                    let task = &self.rows[*index];
+                    state
+                        .row_hits
+                        .push((RowTarget::Thread(task.thread_id), background));
+                    let style = if *index == self.selected {
+                        selected_style
+                    } else {
+                        Style::default().dim()
+                    };
+                    buf.set_style(background, style);
+                    let (status, _) = Self::status(task);
+                    let branch = task
+                        .thread
+                        .git_info
+                        .as_ref()
+                        .and_then(|git| git.branch.as_deref());
+                    let detail = match branch {
+                        Some(branch) => format!("    {status} · {branch}"),
+                        None => format!("    {status}"),
+                    };
+                    line(Line::from(detail).style(style), rect, buf);
+                    continue;
+                }
+                TaskListRow::Gap => continue,
+                TaskListRow::ShowMore => {
+                    state.row_hits.push((RowTarget::ShowMore, background));
                     let selected = self.selected == usize::MAX;
                     let style = if selected {
                         selected_style
                     } else {
                         Style::default()
                     };
-                    buf.set_style(
-                        Rect {
-                            width: row_width,
-                            ..rect
-                        },
-                        style,
-                    );
+                    buf.set_style(background, style);
                     let label = if let Some(search) = &state.history {
                         if search.loading {
                             "Searching history…"
@@ -153,8 +178,7 @@ impl AgentsOverviewView {
                 }
             };
             let task = &self.rows[index];
-            let rect = row(viewport, offset as u16, /*height*/ 1);
-            if matches!(entry, CenterRow::Group(_)) {
+            if matches!(entry, TaskListRow::Group(_)) {
                 let group = match state.grouping {
                     AgentsOverviewGrouping::Status => task.group.label().to_owned(),
                     _ if self.is_pinned(index) => "Pinned".to_owned(),
@@ -200,18 +224,15 @@ impl AgentsOverviewView {
                 line(format!("{group}  {count}").dim(), rect, buf);
                 continue;
             }
+            state
+                .row_hits
+                .push((RowTarget::Thread(task.thread_id), background));
             let style = if index == self.selected {
                 selected_style
             } else {
                 Style::default()
             };
-            buf.set_style(
-                Rect {
-                    width: row_width,
-                    ..rect
-                },
-                style,
-            );
+            buf.set_style(background, style);
             let (status, mut dot) = Self::status(task);
             let idle = matches!(
                 task.group,

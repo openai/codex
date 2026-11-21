@@ -2,7 +2,7 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-Focus Main Composer | leader c (ctrl-x c) | Global focus_main_composer Focus Main Composer Focus the main conversation composer. leader c (ctrl-x c) Default
+Focus Main Composer | leader c (ctrl-x c) | Global focus_main_composer Focus Main Composer Focus the main conversation composer. A matching Agents binding takes priority in Command Center. leader c (ctrl-x c) Default
 Focus Sidebar Tabs | leader t (ctrl-x t) | Global focus_sidebar_tabs Focus Sidebar Tabs Open the sidebar tab chooser. leader t (ctrl-x t) Default
 Focus Sidebar Content | leader s (ctrl-x s) | Global focus_sidebar_content Focus Sidebar Content Focus the side conversation, or hide it when already focused. leader s (ctrl-x s) Default
 Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default

@@ -8,9 +8,9 @@ expression: "panel_text(&app, &tui)"
   c       Main composer                            [       Select transcript
   s       Sidebar content                          p       Presets ›
   t       Open in sidebar                          z       Zoom pane
-                                                   =       Equal widths
-  Move                                             r       Resize panes
-  → / l   Pane right                               ,       Minimum width
-                                                   .       Maximum width
+  a       Command Center                           =       Equal widths
+                                                   r       Resize panes
+  Move                                             ,       Minimum width
+  → / l   Pane right                               .       Maximum width
 
   Esc cancel
