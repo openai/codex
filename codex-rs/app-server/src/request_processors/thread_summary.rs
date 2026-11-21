@@ -299,6 +299,7 @@ pub(crate) fn summary_to_thread(
         git_info,
         name: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: None,
         turns: Vec::new(),
     }
 }

@@ -16,6 +16,9 @@ pub(crate) enum Enrollment {
     NativeHelper,
 }
 
+/// Request that a speculative root opt out of the propagation experiment.
+pub(crate) struct PreventRootEnrollment;
+
 /// The saved choice and the account under which the choice was observed.
 #[derive(Clone, Debug)]
 pub(crate) struct SavedIntent {

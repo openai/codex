@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::CLEARED_OPENAI_AUTH_ENV;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
@@ -25,13 +26,23 @@ use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition;
 use codex_app_server_protocol::TextRange;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -92,6 +103,148 @@ async fn start_thread_with_model(
         ..Default::default()
     })
     .await
+}
+
+#[tokio::test]
+async fn thread_start_reports_actual_daybreak_enrollment() -> Result<()> {
+    #[derive(Debug)]
+    enum Policy {
+        Enabled,
+        Required,
+        Disabled,
+    }
+
+    let responses = create_mock_responses_server_repeating_assistant("Done").await;
+    for policy in [Policy::Enabled, Policy::Required, Policy::Disabled] {
+        let codex_home = TempDir::new()?;
+        let enabled = !matches!(policy, Policy::Disabled);
+        create_config_toml(
+            codex_home.path(),
+            &responses.uri(),
+            "thread_unload_delay_secs = 0",
+            &format!("[features]\ndaybreak_program_propagation = {enabled}"),
+        )?;
+        if matches!(policy, Policy::Required) {
+            std::fs::write(
+                codex_home.path().join("requirements.toml"),
+                "[features]\ndaybreak_program_propagation = true\n",
+            )?;
+        }
+        let mut server = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .with_env_overrides(CLEARED_OPENAI_AUTH_ENV)
+            .with_env_overrides(&[("CODEX_SQLITE_HOME", None)])
+            .build_initialized()
+            .await?;
+        let cases: &[(Option<bool>, bool)] = match policy {
+            Policy::Enabled => &[(None, true), (Some(false), false), (Some(true), true)],
+            Policy::Required => &[(Some(false), true)],
+            Policy::Disabled => &[(Some(true), false)],
+        };
+        for &(requested, expected) in cases {
+            let started = server
+                .start_thread(ThreadStartParams {
+                    thread_source: Some(ThreadSource::User),
+                    daybreak_program_propagation_enrolled: requested,
+                    ..Default::default()
+                })
+                .await?;
+            assert_eq!(
+                started.thread.daybreak_program_propagation_enrolled,
+                Some(expected),
+                "policy {policy:?}, requested {requested:?}"
+            );
+            if !matches!(policy, Policy::Enabled) || requested.is_none() {
+                continue;
+            }
+            let thread_id = started.thread.id;
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                server.start_turn_and_wait_for_completion(TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    input: vec![V2UserInput::Text {
+                        text: "hello".into(),
+                        text_elements: vec![],
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .await??;
+
+            let read = |request_id| ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: false,
+                },
+            };
+            let resume = |request_id| ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id: thread_id.clone(),
+                    ..Default::default()
+                },
+            };
+            let live: ThreadReadResponse = server.request(read).await?;
+            assert_eq!(
+                live.thread.daybreak_program_propagation_enrolled,
+                Some(expected)
+            );
+            let updated: ThreadMetadataUpdateResponse = server
+                .request(|request_id| ClientRequest::ThreadMetadataUpdate {
+                    request_id,
+                    params: ThreadMetadataUpdateParams {
+                        thread_id: thread_id.clone(),
+                        project_id: None,
+                        git_info: None,
+                        daybreak_enabled: Some(true),
+                    },
+                })
+                .await?;
+            assert_eq!(
+                updated.thread.daybreak_program_propagation_enrolled,
+                Some(expected)
+            );
+            let resumed: ThreadResumeResponse = server.request(resume).await?;
+            assert_eq!(
+                resumed.thread.daybreak_program_propagation_enrolled,
+                Some(expected)
+            );
+            let list_id = server
+                .send_raw_request("thread/list", Some(json!({})))
+                .await?;
+            let list: ThreadListResponse =
+                timeout(DEFAULT_READ_TIMEOUT, server.read_response(list_id)).await??;
+            let listed = list
+                .data
+                .iter()
+                .find(|thread| thread.id == thread_id)
+                .context("started thread absent from list")?;
+            assert_eq!(listed.daybreak_program_propagation_enrolled, Some(expected));
+
+            let _: ThreadUnsubscribeResponse = server
+                .request(|request_id| ClientRequest::ThreadUnsubscribe {
+                    request_id,
+                    params: ThreadUnsubscribeParams {
+                        thread_id: thread_id.clone(),
+                    },
+                })
+                .await?;
+            let _: ThreadClosedNotification = timeout(
+                DEFAULT_READ_TIMEOUT,
+                server.read_notification("thread/closed"),
+            )
+            .await??;
+            let stored: ThreadReadResponse = server.request(read).await?;
+            assert_eq!(stored.thread.daybreak_program_propagation_enrolled, None);
+            let cold: ThreadResumeResponse = server.request(resume).await?;
+            assert_eq!(
+                cold.thread.daybreak_program_propagation_enrolled,
+                Some(false)
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
