@@ -393,14 +393,17 @@ pub enum NetworkDomainPermissionToml {
 }
 
 impl NetworkDomainPermissionToml {
-    /// Unsupported patterns retain their exact spelling. They can never compare equal
-    /// to a valid selector and disappear when two published declarations are combined.
-    pub(crate) fn pattern_identity(self, pattern: &str) -> Result<String, String> {
+    pub(crate) fn canonical_pattern(self, pattern: &str) -> anyhow::Result<String> {
         match self {
             Self::Allow => codex_network_proxy::canonical_allow_pattern(pattern),
             Self::Deny => codex_network_proxy::canonical_deny_pattern(pattern),
         }
-        .map_err(|_| pattern.to_owned())
+    }
+
+    /// Unsupported patterns compare only by their exact spelling.
+    pub(crate) fn pattern_identity(self, pattern: &str) -> Result<String, String> {
+        self.canonical_pattern(pattern)
+            .map_err(|_| pattern.to_owned())
     }
 }
 
@@ -473,6 +476,16 @@ pub struct NetworkRequirementsToml {
 }
 
 impl NetworkRequirementsToml {
+    pub(crate) fn validate_domain_patterns(&self) -> anyhow::Result<()> {
+        for (pattern, rule) in self.domains.iter().flat_map(|domains| &domains.entries) {
+            rule.canonical_pattern(pattern)?;
+        }
+        for pattern in self.review_domains.iter().flatten() {
+            codex_network_proxy::canonical_review_pattern(pattern)?;
+        }
+        Ok(())
+    }
+
     /// Compare the selector identities used by the proxy without modifying the published
     /// representation. Keep allow and deny contributions distinct, including shadowed grants.
     pub(crate) fn describes_same_policy(&self, other: &Self) -> bool {
@@ -612,9 +625,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
     }
 }
 
-/// Legacy list normalization is intentionally lossy: explicit empty legacy
-/// lists are treated as unset when converted to the canonical network
-/// permission shape.
+/// Empty legacy domain lists contribute no keyed rules.
 fn legacy_domain_permissions_from_lists(
     allowed_domains: Option<Vec<String>>,
     denied_domains: Option<Vec<String>>,

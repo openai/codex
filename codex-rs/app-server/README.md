@@ -417,7 +417,16 @@ enabled = true
 
 Codex reads `[network_proxy]` and its alias `[experimental_network]` as
 `[permissions.network]` within each source before merging managed requirements.
-Across sources, use the same surface (legacy or nested). Use at most one top-level spelling per layer.
+Choose the merge operation with the domain syntax under either table name:
+`allowed_domains` and `denied_domains` each replace the previous list of that kind.
+A host in both surviving lists is denied, including when a keyed grant appears between the lists. Use `[permissions.network.domains]` (or
+the legacy table's `domains` map) for per-host updates. Source priority decides
+a shared selector; unrelated keyed rules survive a nonempty list replacement.
+A surviving `allowed_domains = []` clears lower managed grants. An empty domain
+map contributes no updates. Neither operation changes `managed_allowed_domains_only`.
+When layering mirrored declarations, use the same domain operation in both copies.
+Use the same network table spelling across sources when specifying Unix socket paths.
+Use at most one top-level spelling per layer.
 If a layer also sets `[permissions.network]`, both tables must describe the same policy.
 `configRequirements/read` returns the result in `requirements.network`.
 

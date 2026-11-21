@@ -891,6 +891,7 @@ fn network_maps_use_regular_toml_merge() {
 "example.com" = "deny"
 "low.example.com" = "deny"
 "internal.example.com" = "allow"
+"PROTECTED.TEST." = "deny"
 
 [experimental_network.unix_sockets]
 "/tmp/shared.sock" = "deny"
@@ -906,6 +907,7 @@ fn network_maps_use_regular_toml_merge() {
 "example.com" = "allow"
 "high.example.com" = "allow"
 "internal.example.com" = "deny"
+"protected.test" = "allow"
 
 [experimental_network.unix_sockets]
 "/tmp/shared.sock" = "allow"
@@ -926,6 +928,8 @@ fn network_maps_use_regular_toml_merge() {
 "high.example.com" = "allow"
 "internal.example.com" = "deny"
 "low.example.com" = "deny"
+"PROTECTED.TEST." = "deny"
+"protected.test" = "allow"
 
 [permissions.network.unix_sockets]
 "/tmp/admin.sock" = "deny"
@@ -989,28 +993,124 @@ fn network_aliases_merge_with_layer_precedence_and_sources() {
 }
 
 #[test]
-fn permissions_network_conflicts_with_top_level_network_across_layers() {
-    for table in ["network_proxy", "experimental_network"] {
-        for (root_first, root_values) in [(true, "enabled = true"), (false, "")] {
-            let root = layer("root", "Root", &format!("[{table}]\n{root_values}"));
-            let permissions = layer(
-                "permissions",
-                "Permissions",
-                "[permissions.network]\nenabled = true",
-            );
-            let root_source = root.source.clone();
-            let permissions_source = permissions.source.clone();
-            let layers = if root_first {
-                vec![root, permissions]
-            } else {
-                vec![permissions, root]
-            };
-            let err = compose_requirements_for_hostname(layers, /*hostname*/ None)
-                .expect_err("network requirement surfaces must not coexist")
-                .to_string();
-            assert!(err.contains(&root_source.to_string()), "{err}");
-            assert!(err.contains(&permissions_source.to_string()), "{err}");
-        }
+fn list_replacements_preserve_unrelated_keyed_hosts() {
+    let old = "allowed_domains = ['old.test']\ndenied_domains = ['retired.test']";
+    let mirror = format!("[network_proxy]\n{old}\n[permissions.network]\n{old}");
+    let cloud = "[permissions.network]\ndangerously_allow_all_unix_sockets = true";
+    let device =
+        "[experimental_network]\nallowed_domains = ['new.test']\ndenied_domains = ['shared.test']";
+    for (domains, allowed) in [
+        ("{}", "['new.test']"),
+        (
+            "{ 'cloud.test' = 'allow', 'shared.test' = 'allow', 'NEW.TEST.' = 'deny' }",
+            "['cloud.test', 'new.test']",
+        ),
+    ] {
+        let update = format!("{cloud}\ndomains = {domains}");
+        let merged = compose(vec![
+            layer("old", "Old", &mirror),
+            layer("cloud", "Cloud", &update),
+            layer("device", "Device", device),
+        ]);
+        let expected = expected_requirements(format!(
+            "{cloud}\nallowed_domains = {allowed}\ndenied_domains = ['shared.test']"
+        ));
+        assert_eq!(merged.unwrap(), Some(expected), "{domains}");
+    }
+}
+
+#[test]
+fn only_a_surviving_empty_allowlist_clears_keyed_grants() {
+    let deny = "[network_proxy.domains]\n'a.test' = 'deny'";
+    let grant =
+        "[permissions.network.domains]\n'a.test' = 'allow'\n'B.TEST.' = 'allow'\n'b.test' = 'deny'";
+    let clear =
+        "[network_proxy]\nallowed_domains = []\n[permissions.network]\nallowed_domains = []";
+    let mut layers = vec![
+        layer("deny", "Deny", deny),
+        layer("grant", "Grant", grant),
+        layer("clear", "Clear", clear),
+    ];
+    let cleared =
+        expected_requirements("[permissions.network]\ndenied_domains = ['a.test', 'b.test']");
+    assert_eq!(compose(layers.clone()).unwrap(), Some(cleared));
+
+    let replacement = "[network_proxy]\nallowed_domains = ['new.test']\ndenied_domains = []";
+    layers.push(layer("replacement", "Replacement", replacement));
+    let replaced = expected_requirements(
+        "[permissions.network]\nallowed_domains = ['a.test', 'B.TEST.', 'new.test']\ndenied_domains = ['b.test']",
+    );
+    assert_eq!(compose(layers).unwrap(), Some(replaced));
+}
+
+#[test]
+fn wildcard_ports_revoke_local_exceptions_and_respect_the_surviving_deny_list() {
+    let deny = "[network_proxy]\ndenied_domains = ['127.0.0.1']";
+    let grants = "[permissions.network.domains]\n'127.0.0.1' = 'allow'\n'localhost' = 'allow'\n'::1' = 'allow'";
+    let wildcards = "[network_proxy]\nallowed_domains = ['127.0.0.1:*', 'localhost:*', '[::01]:*']";
+    let merged = compose(vec![
+        layer("deny", "Deny", deny),
+        layer("grants", "Grants", grants),
+        layer("wildcards", "Wildcards", wildcards),
+    ]);
+    let expected = expected_requirements(
+        "[permissions.network]\nallowed_domains = ['127.0.0.1:*', 'localhost:*', '[::1]:*', '[::01]:*']\ndenied_domains = ['127.0.0.1']",
+    );
+    assert_eq!(merged.unwrap(), Some(expected));
+}
+
+#[test]
+fn ipv6_grants_and_denials_preserve_published_spellings() {
+    let low = "[network_proxy.domains]\n'2001:db8::1' = 'allow'\n'2001:db8::2' = 'deny'";
+    let grant = "[network_proxy.domains]\n'[2001:db8::2]' = 'allow'";
+    let high = "[permissions.network.domains]\n'2001:0db8::1' = 'allow'\n'2001:0db8::2' = 'deny'";
+    let merged = compose(vec![
+        layer("low", "Low", low),
+        layer("grant", "Grant", grant),
+        layer("high", "High", high),
+    ]);
+    let expected = expected_requirements(
+        "[permissions.network]\nallowed_domains = ['2001:db8::1', '2001:0db8::1', '[2001:db8::2]']\ndenied_domains = ['2001:db8::2', '2001:0db8::2']",
+    );
+    assert_eq!(merged.unwrap(), Some(expected));
+}
+
+#[test]
+fn layered_mirrors_must_agree_on_replacements_and_the_effective_allowlist() {
+    let policy = "[permissions.network]\nallowed_domains = ['a.test']\ndenied_domains = ['b.test']";
+    let cloud = layer("cloud", "Cloud", policy);
+    for (legacy, nested) in [
+        ("", "allowed_domains = []"),
+        ("", "denied_domains = []"),
+        ("allowed_domains = ['c.test']", "domains.'c.test' = 'allow'"),
+        (
+            "denied_domains = ['a.test']",
+            "denied_domains = ['A.TEST.']",
+        ),
+    ] {
+        let device = format!("[network_proxy]\n{legacy}\n[permissions.network]\n{nested}");
+        let error =
+            compose(vec![cloud.clone(), layer("device", "Device", &device)]).expect_err(&device);
+        assert!(error.to_string().contains("Device"), "{error}");
+    }
+}
+
+#[test]
+fn mixed_network_tables_reject_socket_path_rules() {
+    let cloud = layer("cloud", "Cloud", "[network_proxy]");
+    for device in [
+        "[permissions.network.unix_sockets]\n'/tmp/managed.sock' = 'deny'",
+        "[experimental_network]\n[permissions.network]\nallow_unix_sockets = []",
+    ] {
+        let error =
+            compose(vec![cloud.clone(), layer("device", "Device", device)]).expect_err(device);
+        let message = error.to_string();
+        assert!(
+            message.contains("Unix socket path rules")
+                && message.contains("Device")
+                && message.contains("Cloud"),
+            "{error}"
+        );
     }
 }
 
@@ -1058,7 +1158,11 @@ fn network_surfaces_in_one_layer_must_agree() {
         for fields in ["", "allowed_domains = []", "description = 'device policy'"] {
             let entry = layer("device", "Device", &format!("[{table}]\n{fields}"));
             let expected = Sourced::new(
-                crate::NetworkRequirementsToml::default(),
+                crate::NetworkRequirementsToml {
+                    domains: (fields == "allowed_domains = []")
+                        .then(crate::NetworkDomainPermissionsToml::default),
+                    ..Default::default()
+                },
                 entry.source.clone(),
             );
             assert_eq!(

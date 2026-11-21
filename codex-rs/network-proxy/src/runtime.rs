@@ -285,6 +285,7 @@ pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     /// Belongs to this proxy; config retains omission for launches on other executors.
     pub(crate) local_binding_policy: LocalBindingPolicy,
+    standalone: bool,
     pub(crate) proxy_private_ips_via_upstream: bool,
     pub(crate) tcp_upstream_proxy: Option<crate::TcpUpstreamProxy>,
     reloader: Arc<dyn ConfigReloader>,
@@ -327,6 +328,7 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             local_binding_policy: self.local_binding_policy,
+            standalone: self.standalone,
             proxy_private_ips_via_upstream: self.proxy_private_ips_via_upstream,
             tcp_upstream_proxy: self.tcp_upstream_proxy.clone(),
             reloader: self.reloader.clone(),
@@ -408,6 +410,14 @@ impl NetworkProxyState {
         Ok(proxy_state)
     }
 
+    /// A standalone policy may narrow a wildcard ceiling to an explicit local grant.
+    pub fn from_standalone_config(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+        Self {
+            standalone: true,
+            ..Self::with_reloader(state, reloader)
+        }
+    }
+
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
         Self::with_reloader_and_audit_metadata(
             state,
@@ -460,6 +470,7 @@ impl NetworkProxyState {
             local_aws_signers: Arc::new(std::sync::RwLock::new(state.local_aws_signers())),
             state: Arc::new(RwLock::new(state)),
             local_binding_policy,
+            standalone: false,
             proxy_private_ips_via_upstream: false,
             tcp_upstream_proxy: None,
             reloader,
@@ -878,9 +889,30 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, review_set, allow_set, allow_local_binding, allowed_domains) = {
+        let host_str = host.as_str();
+        let local_literal = crate::policy::is_local_literal(host_str);
+        let (deny_set, review_set, allow_set, allow_local_binding, explicit_local_allow) = {
             let guard = self.state.read().await;
-            let allowed_domains = guard.config.allowed_domains();
+            let explicitly_allows_host =
+                |rules: &[String]| is_explicit_local_allowlisted(rules, &host);
+            // An attached executor can tighten local binding. An explicit local grant
+            // must still be permitted by the controller's fixed allowlist.
+            let standalone_subset = self.standalone
+                && allow_local_binding.is_none()
+                && guard.constraints.allowlist_expansion_enabled.is_none();
+            let explicit_local_allow = local_literal
+                && guard
+                    .config
+                    .allowed_domains()
+                    .as_deref()
+                    .is_some_and(explicitly_allows_host)
+                && (standalone_subset
+                    || guard.constraints.allowlist_expansion_enabled == Some(true)
+                    || guard
+                        .constraints
+                        .allowed_domains
+                        .as_deref()
+                        .is_none_or(explicitly_allows_host));
             (
                 guard.deny_set.clone(),
                 guard.review_set.clone(),
@@ -889,12 +921,9 @@ impl NetworkProxyState {
                 allow_local_binding
                     .unwrap_or_else(|| self.local_binding_policy.resolve(&guard.config))
                     && guard.config.allow_local_binding != Some(false),
-                allowed_domains,
+                explicit_local_allow,
             )
         };
-        let allowed_domains = allowed_domains.unwrap_or_default();
-
-        let host_str = host.as_str();
 
         // Decision order matters:
         //  1) explicit deny always wins
@@ -921,8 +950,8 @@ impl NetworkProxyState {
             // request. Explicit local/loopback literals are allowed only when explicitly
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
-            if crate::policy::is_local_literal(host_str) {
-                if !is_explicit_local_allowlisted(&allowed_domains, &host) {
+            if local_literal {
+                if !explicit_local_allow {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
             } else if is_authorized
@@ -1974,6 +2003,51 @@ mod tests {
         assert_eq!(
             state.host_blocked("localhost", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Allowed
+        );
+
+        // An attached executor can disable local binding after narrowing a managed wildcard.
+        let config = NetworkProxyConfig {
+            enabled: true,
+            allow_local_binding: Some(true),
+            ..network_settings(&["localhost"], &[])
+        };
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(strings(&["**.localhost"])),
+            ..Default::default()
+        };
+        let standalone = crate::StaticNetworkProxyConfig {
+            network: NetworkProxyConfig {
+                allow_local_binding: Some(false),
+                ..config.clone()
+            },
+            constraints: constraints.clone(),
+        };
+        let standalone = NetworkProxyState::from_standalone_config(
+            standalone.build_state(crate::Platform::native()).unwrap(),
+            Arc::new(NoopReloader),
+        );
+        assert_eq!(
+            standalone
+                .host_blocked("localhost", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+        let state = NetworkProxyState::with_reloader(
+            build_config_state(config, constraints, crate::Platform::native()).unwrap(),
+            Arc::new(NoopReloader),
+        );
+        assert_eq!(
+            state
+                .host_blocked_with_local_binding(
+                    "localhost",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ Some(false),
+                    HostAuthorization::RequireAllowlist,
+                )
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal),
         );
     }
 

@@ -86,7 +86,10 @@ async fn main() -> Result<()> {
     let reloader = Arc::new(StaticConfigReloader {
         state: config_state.clone(),
     });
-    let state = Arc::new(NetworkProxyState::with_reloader(config_state, reloader));
+    let state = Arc::new(NetworkProxyState::from_standalone_config(
+        config_state,
+        reloader,
+    ));
     NetworkProxy::builder()
         .state(state)
         .managed_by_codex(/*managed_by_codex*/ false)

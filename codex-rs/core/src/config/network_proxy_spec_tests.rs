@@ -767,10 +767,10 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     let mut config = NetworkProxyConfig::default();
     config.set_denied_domains(vec!["blocked.example.com".to_string()]);
     let requirements = NetworkConstraints {
-        domains: Some(domain_permissions([(
-            "managed-blocked.example.com",
-            NetworkDomainPermissionToml::Deny,
-        )])),
+        domains: Some(domain_permissions([
+            ("2001:DB8::1", NetworkDomainPermissionToml::Allow),
+            ("2001:0db8::1", NetworkDomainPermissionToml::Deny),
+        ])),
         ..Default::default()
     };
 
@@ -784,13 +784,14 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     assert_eq!(
         spec.config.denied_domains(),
         Some(vec![
-            "managed-blocked.example.com".to_string(),
+            "2001:DB8::1".to_string(),
+            "2001:0db8::1".to_string(),
             "blocked.example.com".to_string()
         ])
     );
     assert_eq!(
         spec.constraints.denied_domains,
-        Some(vec!["managed-blocked.example.com".to_string()])
+        Some(vec!["2001:0db8::1".to_string(), "2001:DB8::1".to_string()])
     );
     assert_eq!(spec.constraints.denylist_expansion_enabled, Some(true));
 }
