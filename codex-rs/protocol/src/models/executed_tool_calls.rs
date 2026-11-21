@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use codex_utils_string::serialized_json_bytes;
 use codex_utils_string::to_json_string_bounded;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -32,8 +33,7 @@ fn executed_tool_call_metadata_field_bytes(
         tool_calls_complete: metadata.tool_calls_complete,
         ..Default::default()
     };
-    let mut bytes =
-        serde_json::to_vec(&fields).map_or(usize::MAX, |fields| fields.len().saturating_sub(2));
+    let mut bytes = serialized_json_bytes(&fields).map_or(usize::MAX, |len| len.saturating_sub(2));
     if metadata.executed_tool_calls.is_some() {
         bytes = bytes
             .saturating_add(usize::from(bytes > 0))
@@ -61,9 +61,7 @@ pub fn executed_tool_call_metadata_bytes(item: &ResponseItem) -> usize {
         .executed_tool_calls
         .as_ref()
         .map_or(0, |calls| {
-            serde_json::to_vec(calls)
-                .map(|calls| calls.len())
-                .unwrap_or(usize::MAX)
+            serialized_json_bytes(calls).unwrap_or(usize::MAX)
         })
         .saturating_add(executed_tool_call_metadata_field_bytes(metadata))
 }
