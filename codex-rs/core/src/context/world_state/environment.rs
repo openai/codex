@@ -18,6 +18,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
 use codex_protocol::protocol::NetworkAccess;
+use codex_utils_output_truncation::ErrorContextBudget;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -594,26 +595,20 @@ fn environment_states(
                 network_access: None,
             });
     }
-    // Bound the additional model context even when many selected environments fail.
-    const MAX_ERROR_BYTES: usize = 256;
-    const MAX_TOTAL_ERROR_BYTES: usize = 512;
-    let mut remaining_error_bytes = MAX_TOTAL_ERROR_BYTES;
+    let mut error_budget = ErrorContextBudget::default();
     for environment in &snapshot.environments {
         if let TurnEnvironmentState::Failed {
             selection, error, ..
         } = environment
         {
-            let detail = error
-                [..error.floor_char_boundary(remaining_error_bytes.min(MAX_ERROR_BYTES))]
-                .to_string();
-            remaining_error_bytes -= detail.len();
+            let detail = error_budget.take(error);
             environments.insert(
                 selection.environment_id.clone(),
                 EnvironmentState {
                     cwd: selection.cwd.clone(),
                     status: EnvironmentStatus::Failed,
                     shell: None,
-                    error: (!detail.is_empty()).then_some(detail),
+                    error: (!detail.is_empty()).then(|| detail.to_owned()),
                     is_primary: false,
                     filesystem: None,
                     network_access: None,

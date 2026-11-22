@@ -3,6 +3,7 @@ use codex_tools::JsonToolOutput;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_output_truncation::ErrorContextBudget;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -170,10 +171,8 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
 
 impl CoreToolRuntime for WaitForEnvironmentHandler {}
 
-// Keep failure output small while preserving a UTF-8 boundary.
 fn environment_failure(environment_id: &str, error: &str) -> FunctionCallError {
-    const MAX_ERROR_BYTES: usize = 256;
-    let reason = &error[..error.floor_char_boundary(MAX_ERROR_BYTES)];
+    let reason = ErrorContextBudget::default().take(error);
     FunctionCallError::RespondToModel(format!(
         "Environment `{environment_id}` failed to start: {reason}"
     ))

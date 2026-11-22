@@ -1,4 +1,4 @@
-//! Shared byte/token truncation for tool and exec output.
+//! Shared byte/token truncation for model-visible error details, tool output, and exec output.
 
 use std::borrow::Cow;
 
@@ -13,9 +13,37 @@ pub use codex_utils_string::approx_bytes_for_tokens;
 pub use codex_utils_string::approx_token_count;
 pub use codex_utils_string::approx_tokens_from_byte_count;
 use codex_utils_string::plan_token_truncation;
+use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::truncate_middle_chars;
 
 pub use codex_protocol::protocol::TruncationPolicy;
+
+/// Bounds error details in a single context fragment or tool result.
+/// Limits apply to the raw UTF-8 text before escaping or adding markup.
+pub struct ErrorContextBudget {
+    remaining_bytes: usize,
+}
+
+impl ErrorContextBudget {
+    const MAX_DETAIL_BYTES: usize = 256;
+    const MAX_TOTAL_BYTES: usize = 512;
+
+    /// Charge only the returned prefix so later errors can use any leftover bytes.
+    pub fn take<'a>(&mut self, error: &'a str) -> &'a str {
+        let prefix =
+            take_bytes_at_char_boundary(error, self.remaining_bytes.min(Self::MAX_DETAIL_BYTES));
+        self.remaining_bytes -= prefix.len();
+        prefix
+    }
+}
+
+impl Default for ErrorContextBudget {
+    fn default() -> Self {
+        Self {
+            remaining_bytes: Self::MAX_TOTAL_BYTES,
+        }
+    }
+}
 
 /// Adds the existing 20% allowance for serialization and headers.
 /// Saved history budgets already include this allowance.

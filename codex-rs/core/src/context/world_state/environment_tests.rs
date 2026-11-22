@@ -467,9 +467,12 @@ fn failure_context_is_escaped_incremental_and_cleared_on_recovery() -> Result<()
 fn failure_context_limits_total_detail_bytes_at_utf8_boundaries() {
     use codex_protocol::protocol::EnvironmentConfigState;
     use codex_protocol::protocol::TurnEnvironmentSelection;
+    let long_error = "界".repeat(300);
     let snapshot = TurnEnvironmentSnapshot {
-        environments: (0..4)
-            .map(|index| TurnEnvironmentState::Failed {
+        environments: [long_error.as_str(), &long_error, &long_error, "abc", "d"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, error)| TurnEnvironmentState::Failed {
                 required_skills: Vec::new(),
                 selection: TurnEnvironmentSelection {
                     selected_capability_roots: Default::default(),
@@ -478,7 +481,7 @@ fn failure_context_limits_total_detail_bytes_at_utf8_boundaries() {
                     workspace_roots: Vec::new(),
                     config: EnvironmentConfigState::FromThread,
                 },
-                error: "界".repeat(300),
+                error: error.to_owned(),
             })
             .collect(),
     };
@@ -494,6 +497,7 @@ fn failure_context_limits_total_detail_bytes_at_utf8_boundaries() {
             Some(truncated.as_str()),
             Some(truncated.as_str()),
             None,
+            Some("ab"),
             None
         ]
     );
