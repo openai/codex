@@ -684,6 +684,28 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
 }
 
 #[test]
+fn resume_shows_loading_until_connection_fails() -> Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let home = tempfile::tempdir_in("/tmp")?;
+    write_test_config(home.path(), workspace.path())?;
+    let socket = home.path().join("server.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket)?;
+    let endpoint = format!("unix://{}", socket.display());
+    let mut terminal = PtyCodex::start_cli(
+        workspace.path(),
+        home,
+        &["resume", "--no-alt-screen", "--remote", &endpoint],
+    )?;
+    terminal.wait_for_screen("Loading sessions…")?;
+    insta::assert_snapshot!(terminal.screen_contents(), @"Loading sessions…");
+    drop(listener);
+    ensure!(!terminal.child.wait()?.success());
+    terminal.wait_for_screen("Error:")?;
+    ensure!(terminal.screen_contents().starts_with("Error:"));
+    Ok(())
+}
+
+#[test]
 fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
     let workspace = tempfile::tempdir()?;
     let home = tempfile::tempdir()?;

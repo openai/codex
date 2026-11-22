@@ -151,7 +151,8 @@ impl StartupDraftPump {
                         && StartupCancelled::matches(&error))
                 {
                     if StartupCancelled::matches(&error)
-                        && let Err(clear_error) = tui.terminal.clear()
+                        && !tui.terminal.viewport_area.is_empty()
+                        && let Err(clear_error) = tui.draw(/*height*/ 0, |_| {})
                     {
                         tracing::warn!(
                             error = %clear_error,

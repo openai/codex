@@ -4178,6 +4178,14 @@ fn format_timestamp(ts: DateTime<Utc>, clock_format: ClockFormat) -> String {
     .to_string()
 }
 
+pub(crate) fn loading_sessions_line() -> Line<'static> {
+    Line::from(
+        "Loading sessions…"
+            .set_style(secondary_text_style())
+            .italic(),
+    )
+}
+
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
@@ -4202,12 +4210,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 
     if state.pagination.is_loading() {
         if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
-            return vec![
-                "Loading sessions…"
-                    .set_style(secondary_text_style())
-                    .italic(),
-            ]
-            .into();
+            return loading_sessions_line();
         }
         return vec![
             "Loading older sessions…"
