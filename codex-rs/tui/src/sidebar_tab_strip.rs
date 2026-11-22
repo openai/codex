@@ -19,6 +19,7 @@ pub(crate) enum SidebarTab {
 
 /// Adjacent tabs have one unpainted, noninteractive terminal column between them.
 const TAB_GAP: u16 = 1;
+const CLOSE_WIDTH: u16 = 3;
 const MIN_TAB_WIDTH: u16 = 12;
 const MAX_TAB_WIDTH: u16 = 22;
 
@@ -64,6 +65,9 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
             let space = available - 2 * gutter;
             let width = space.min(preferred);
             let count = usize::from((space + TAB_GAP) / (width + TAB_GAP)).min(self.ids.len());
+            // Use spare space for the extra close cells without reducing the number of tabs.
+            let room_per_tab = (space + TAB_GAP) / count as u16 - TAB_GAP;
+            let width = (width + CLOSE_WIDTH - 1).min(room_per_tab);
             let start = self
                 .selected_index()
                 .map_or(0, |index| (index + 1).saturating_sub(count));
@@ -80,7 +84,7 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
             }
             let mut x = gutter;
             for &id in &self.ids[start..end] {
-                let close = u16::from(width >= 3);
+                let close = CLOSE_WIDTH * u16::from(width > CLOSE_WIDTH);
                 let label = width - close;
                 targets.push((TabTarget::Tab(id), rect(x, label)));
                 if close > 0 {
@@ -133,32 +137,19 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         let targets = self.strip_targets(area);
         for &(target, rect) in &targets {
             let hovered = pointer.is_some_and(|point| rect.contains(point));
-            let quiet = if hovered { hover } else { rest };
+            let tab_style = |id| match (
+                Some(id) == self.selected && selected_state != TabState::Absent,
+                hovered,
+            ) {
+                (true, true) => crate::style::hover_style(selected_style),
+                (true, false) => selected_style,
+                (false, true) => hover,
+                (false, false) => rest,
+            };
             match target {
-                TabTarget::Tab(id) => {
-                    let tab_style =
-                        if Some(id) == self.selected && selected_state != TabState::Absent {
-                            if hovered {
-                                crate::style::hover_style(selected_style)
-                            } else {
-                                selected_style
-                            }
-                        } else {
-                            quiet
-                        };
-                    paint(id, rect, tab_style, buf);
-                }
+                TabTarget::Tab(id) => paint(id, rect, tab_style(id), buf),
                 TabTarget::Close(id) => {
-                    let close = if Some(id) == self.selected && selected_state != TabState::Absent {
-                        if hovered {
-                            crate::style::hover_style(selected_style)
-                        } else {
-                            selected_style
-                        }
-                    } else {
-                        quiet
-                    };
-                    Line::from("×").style(close).render(rect, buf);
+                    Line::from(" × ").style(tab_style(id)).render(rect, buf);
                 }
                 TabTarget::Overflow { glyph, .. } => {
                     let arrow = if hovered {

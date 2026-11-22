@@ -5394,7 +5394,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
     insta::assert_snapshot!(
         header.split_inclusive('×').take(2).collect::<String>(),
-        @" ☁️  Investigate…×  ☁️  Fix cache   ×"
+        @" ☁️  Investigate… ×   ☁️  Fix cache    ×"
     );
     keys!(prefix, chooser_key);
     let frame = side_frame(&mut app, &mut tui, even)?;
@@ -5582,7 +5582,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .collect::<Vec<_>>()
             .try_into()
             .expect("both side-chat tabs are visible");
-        assert_eq!(selected.x, inactive.right() + 2);
+        assert_eq!(selected.x, inactive.right() + 4);
         assert_eq!(inactive.width, selected.width);
         let [inactive, selected] = [inactive, selected].map(|area| area.x + 1);
         for (state, column, row, palette, redraw) in [
@@ -5680,11 +5680,17 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let close_x = (chooser.x..chooser.right())
         .rfind(|&x| tui.terminal.previous_buffer()[(x, chooser.y)].symbol() == "×")
         .expect("close button on the second tab");
+    let hover = mouse(MouseEventKind::Moved, close_x - 1, chooser.y);
+    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, hover)).await?;
+    side_frame(&mut app, &mut tui, even)?;
+    let buffer = tui.terminal.previous_buffer();
+    let style = |x| buffer[(x, chooser.y)].style();
+    assert_eq!([close_x - 1, close_x + 1].map(style), [style(close_x); 2]);
     for kind in [down, release] {
         boxed_future!(app.handle_tui_event(
             &mut tui,
             &mut app_server,
-            mouse(kind, close_x, chooser.y)
+            mouse(kind, close_x + 1, chooser.y)
         ))
         .await?;
     }
@@ -5704,7 +5710,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         boxed_future!(app.handle_tui_event(
             &mut tui,
             &mut app_server,
-            mouse(kind, close_x - 1, chooser.y)
+            mouse(kind, close_x - 2, chooser.y)
         ))
         .await?;
     }
@@ -5730,7 +5736,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         boxed_future!(app.handle_tui_event(
             &mut tui,
             &mut app_server,
-            mouse(kind, close_x, chooser.y)
+            mouse(kind, close_x - 1, chooser.y)
         ))
         .await?;
     }

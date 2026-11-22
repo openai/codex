@@ -464,7 +464,7 @@ async fn document_preview_scenario() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(preview, @"
-    guide.md      ×  main.rs       ×                              +
+    guide.md       ×   main.rs        ×                           +
     3 let value = 3;                                               ↑
     ↑/↓ read · f3 find · Tab link · f8 select · Esc clear highlight
     ");
@@ -649,7 +649,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹  fe…eA/g…md×  fe…eB/g…md×   +");
+    insta::assert_snapshot!(narrow_labels, @"‹  f…eA/g…d ×   f…eB/g…d ×    +");
     let long_file = "Before the fold.\n\n".repeat(24);
     for directory in ["feature-alpha-build", "feature-beta-build"] {
         std::fs::create_dir_all(dir.path().join(directory))?;
@@ -676,7 +676,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹  1:f…ld/g…d×  2:f…ld/g…d×   +");
+    insta::assert_snapshot!(narrow_labels, @"‹  1:f…d/…d ×   2:f…d/…d ×    +");
     // If resolution itself fails, there is no new tab in which to show the path.
     let tab_count = app.sidebar().unwrap().documents.len();
     app.open_document(

@@ -2,7 +2,7 @@
 source: tui/src/app/sidebar_open_in_codex_tests.rs
 expression: sidebar.trim_end()
 ---
- PLAN.md   ×                         +
+ PLAN.md    ×                        +
  Snapshot · Enter to open live
  Use the sidebar.                     ↑
 
