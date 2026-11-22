@@ -116,6 +116,12 @@ fn eligible_devices<D>(
     })
 }
 
+// CPAL reads whole periods from a two-period ALSA ring. With 3840 frames,
+// 4096-frame cycles leave at most 3584 unread and 4800-frame cycles leave
+// at most 2880. Both fit on the next cycle. Smaller periods lose samples
+// on at least one of these steady graphs. One period holds four 20 ms Opus packets.
+const LINUX_48K_PERIOD: u32 = 3840;
+
 const MAX_CAPTURE_AGE: Duration = Duration::from_secs(/*secs*/ 1);
 
 pub(super) struct Devices {
@@ -334,12 +340,13 @@ fn bounded_stream_config(
     if min > max {
         return Err(io::Error::other("unsupported audio callback size range"));
     }
-    // ALSA allocates two periods. A 20 ms ring can be smaller than one PipeWire
-    // graph cycle (e.g. 2048 frames at 48 kHz), silently losing capture samples
-    // every cycle. Give Linux a bounded 100 ms ring instead, while retaining
-    // 10 ms callbacks elsewhere and rejecting incompatible device ranges below.
     let periods_per_second = if cfg!(target_os = "linux") { 20 } else { 100 };
-    let frames = (config.sample_rate / periods_per_second).clamp(min, max);
+    let target = if cfg!(target_os = "linux") && config.sample_rate == 48_000 {
+        LINUX_48K_PERIOD
+    } else {
+        config.sample_rate / periods_per_second
+    };
+    let frames = target.clamp(min, max);
     let callback_duration =
         Duration::from_secs_f64(f64::from(frames) / f64::from(config.sample_rate));
     // Backends may deliver smaller callbacks than requested. Packing makes queue

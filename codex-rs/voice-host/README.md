@@ -30,7 +30,8 @@ begins. After unmute, capture waits for a following callback's device timestamp
 and rejects buffers captured before that cutoff, including buffers crossing it.
 This can discard speech onset; it relies on backend timestamp estimates and does
 not establish a precise physical mute boundary.
-Both streams request roughly 10 ms callbacks within the device's supported range
+On Linux both streams target 80 ms at 48 kHz and 50 ms at other rates.
+Other platforms target 10 ms. Both stay within the device's supported range
 and the 8,192-frame queue budget. Unknown or incompatible ranges are rejected;
 there is no fallback to an unbounded default. Backends may deliver smaller
 callbacks than requested, so capture and rendered references pack samples into

@@ -86,7 +86,7 @@ fn unexpected_flush_cancels_a_blocked_speaker_write() {
     let sink = Sink::new(port.writer());
     sink.set_state(gst::State::Playing).unwrap();
     let capacity = if cfg!(target_os = "linux") {
-        4_800
+        crate::devices::playback::LINUX_48K_LIMIT as usize
     } else {
         1_920
     };

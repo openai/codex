@@ -80,7 +80,7 @@ fn callback_configuration_fits_supported_range_and_actual_queue() {
         (384_000, 1, 16, 16, 16),
         (96_000, 1, 15, 15, 15),
         (48_000, 1, 128, 128, 128),
-        (48_000, 2_048, 16_384, 2_048, 2_400),
+        (48_000, 2_048, 16_384, 2_048, 3_840),
         (384_000, 6_016, 16_384, 6_016, 8_192),
     ] {
         let frames = if cfg!(target_os = "linux") {
@@ -146,11 +146,26 @@ fn pipewire_graph_cycles_support_capture_and_playback() {
     let start = Instant::now();
     let mut available = 0;
     let mut packets = Vec::new();
-    // Model measured 2048-frame graph cycles and ALSA's two-period ring.
-    // Packing and encoding must sustain 20 ms packets despite this cadence.
-    for cycle in 1..=48 {
-        available = (available + 2_048).min(2 * period);
-        let now = start + Duration::from_secs_f64(f64::from(cycle * 2_048) / 48_000.0);
+    // Include previously working 4800- and 3600-frame cycles, a switch to 4096
+    // with samples still unread, and 2048 frames resampled from 44.1 kHz.
+    let mut elapsed_frames = 0;
+    let resampled = (2_048_u32 * 48_000).div_ceil(44_100);
+    let cycles = [
+        (4_800, 4),
+        (2_048, 15),
+        (512, 5),
+        (4_096, 15),
+        (3_600, 16),
+        (resampled, 12),
+    ];
+    for quantum in cycles
+        .into_iter()
+        .flat_map(|(q, n)| std::iter::repeat_n(q, n))
+    {
+        available += quantum;
+        assert!(available <= 2 * period, "overrun at {quantum} frames");
+        elapsed_frames += quantum;
+        let now = start + Duration::from_secs_f64(f64::from(elapsed_frames) / 48_000.0);
         while available >= period {
             let captured = now - Duration::from_secs_f64(f64::from(available) / 48_000.0);
             packer.discard_capture_gap(captured, /*rate*/ 48_000.0);
@@ -171,16 +186,18 @@ fn pipewire_graph_cycles_support_capture_and_playback() {
     }
     assert!(packets.len() >= 90, "capture starved Opus");
 
-    // Queue a full output callback without racing the producer.
+    // Every fifteenth 4096-frame cycle needs two full periods from 20 ms packets.
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
     buffers.serviced.store(true, Ordering::Release);
     let port = PlaybackPort::new(buffers.clone(), /*rate*/ 48_000);
     let writer = port.writer();
-    let bytes = 0.25_f32.to_le_bytes().repeat(period as usize);
-    for chunk in bytes.chunks(BLOCK * 4) {
-        assert_eq!(writer.write(chunk).unwrap(), chunk.len());
+    let burst = 2 * period as usize;
+    let packet = 0.25_f32.to_le_bytes().repeat(960);
+    let mut bytes = 0;
+    while bytes < burst * 4 {
+        bytes += writer.write(&packet[bytes % packet.len()..]).unwrap();
     }
-    let mut output = vec![0.0_f32; period as usize];
+    let mut output = vec![0.0_f32; burst];
     render_output(
         &mut output,
         /*channels*/ 1,
@@ -189,7 +206,7 @@ fn pipewire_graph_cycles_support_capture_and_playback() {
         &buffers,
         &mut OutputState::default(),
     );
-    assert_eq!(output, vec![0.25; period as usize]);
+    assert_eq!(output, vec![0.25; burst]);
 }
 
 #[test]

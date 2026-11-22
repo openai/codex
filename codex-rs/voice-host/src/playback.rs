@@ -11,6 +11,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+// Leave room for the block crossing the two-period boundary. Splitting
+// writes as callbacks free individual samples can exhaust queue slots.
+pub(super) const LINUX_48K_LIMIT: u32 = 2 * super::LINUX_48K_PERIOD + BLOCK as u32 - 1;
+
 pub(super) struct PlaybackState {
     pub(super) producer: Mutex<()>,
     buffers: Arc<Buffers>,
@@ -78,13 +82,16 @@ impl PlaybackWriter {
             .producer
             .lock()
             .map_err(|_| "speaker writer failed")?;
-        let deadline = Instant::now() + Duration::from_millis(/*millis*/ 100);
         let buffers = &self.state.buffers;
-        // Linux requests 50 ms callbacks; retain two callbacks of audio so a
-        // callback can fill without racing the producer. Keep the queue cap.
         let windows_per_second = if cfg!(target_os = "linux") { 10 } else { 25 };
-        let limit = (self.state.rate / windows_per_second)
-            .min((BLOCK * buffers.playback.capacity()) as u32);
+        let (budget, wait_ms) = if cfg!(target_os = "linux") && self.state.rate == 48_000 {
+            // Allow two periods when sub-period cycles delay the next callback.
+            (LINUX_48K_LIMIT, 2 * u64::from(super::LINUX_48K_PERIOD) / 48)
+        } else {
+            (self.state.rate / windows_per_second, 100)
+        };
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let limit = budget.min((BLOCK * buffers.playback.capacity()) as u32);
         loop {
             if self.epoch % 2 == 1
                 || buffers.speaker.load(Ordering::Acquire) != self.epoch
