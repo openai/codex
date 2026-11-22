@@ -183,6 +183,11 @@ mod imp {
                 if buffer.len() >= max_bytes || Instant::now() >= deadline {
                     return Ok(());
                 }
+                // A launcher sharing stdin can clear O_NONBLOCK on our duplicate.
+                // Check readiness before every read, including after a partial reply.
+                if !self.poll_readable(Duration::ZERO)? {
+                    return Ok(());
+                }
 
                 let bytes_to_read = chunk.len().min(max_bytes.saturating_sub(buffer.len()));
                 let count = unsafe {
@@ -218,12 +223,8 @@ mod imp {
             };
             let deadline = Instant::now() + timeout;
             loop {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Ok(false);
-                }
                 let timeout_ms = deadline
-                    .saturating_duration_since(now)
+                    .saturating_duration_since(Instant::now())
                     .as_millis()
                     .min(libc::c_int::MAX as u128) as libc::c_int;
                 let result = unsafe {
@@ -238,6 +239,9 @@ mod imp {
                 let err = io::Error::last_os_error();
                 if err.kind() != io::ErrorKind::Interrupted {
                     return Err(err);
+                }
+                if Instant::now() >= deadline {
+                    return Ok(false);
                 }
             }
         }

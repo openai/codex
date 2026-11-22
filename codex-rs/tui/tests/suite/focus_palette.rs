@@ -30,6 +30,36 @@ mod gov_cloud_guidance;
 mod tui_mode_picker;
 
 #[test]
+fn startup_finishes_when_launcher_restores_blocking_input() -> Result<()> {
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex_home = tempfile::tempdir()?;
+    write_test_config(codex_home.path(), &repo_root)?;
+    let mut terminal = PtyCodex::start(&repo_root, codex_home, &[])?;
+
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while !contains_bytes(&terminal.output, b"\x1b[6n") {
+        terminal.ensure_running()?;
+        ensure!(Instant::now() < deadline, "missing startup cursor query");
+        terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+    }
+
+    // The launcher shares stdin's file status flags. Answer only the cursor query
+    // so the probe must time out after reading the reply without another keystroke.
+    let fd = terminal.slave.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    terminal.write_input(b"\x1b[1;1R")?;
+    while !terminal.screen_contains("OpenAI Codex") {
+        terminal.ensure_running()?;
+        ensure!(Instant::now() < deadline, "startup hung on blocking input");
+        terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+    }
+    Ok(())
+}
+
+#[test]
 fn focus_gained_with_unanswered_palette_queries_preserves_immediate_input() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempfile::tempdir()?;
