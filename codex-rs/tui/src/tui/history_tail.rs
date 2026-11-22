@@ -28,14 +28,7 @@ impl Tui {
         replacement: &[HyperlinkLine],
         wrap_policy: HistoryLineWrapPolicy,
     ) -> io::Result<bool> {
-        let screen_size = self.terminal.last_known_screen_size;
-        Self::flush_pending_history_lines(
-            &mut self.terminal,
-            &mut self.pending_history_lines,
-            &mut self.retained_images,
-            self.scrollback,
-            screen_size,
-        )?;
+        self.flush_history_before_draw()?;
         let mode = self.scrollback.history_insertion_mode(wrap_policy);
         let replaced = replace_visible_terminal_history_tail(
             &mut self.terminal,

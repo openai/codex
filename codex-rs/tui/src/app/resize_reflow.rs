@@ -290,23 +290,6 @@ impl App {
         );
     }
 
-    fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if tui.is_owned_screen() || tui.has_deferred_thread_switch_clear() {
-            return Ok(());
-        }
-        if tui.is_alt_screen_active() {
-            tui.terminal.clear_visible_screen()?;
-        } else {
-            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
-        }
-        let mut area = tui.terminal.viewport_area;
-        if area.y > 0 {
-            area.y = 0;
-            tui.terminal.set_viewport_area(area);
-        }
-        Ok(())
-    }
-
     /// Finish stream consolidation by repairing any resize work that happened during streaming.
     ///
     /// This is called after agent-message stream cells have either been replaced by an
@@ -457,7 +440,13 @@ impl App {
             tui.terminal.last_known_screen_size,
             &tui.frame_requester(),
         );
-        if should_rebuild_transcript {
+        if should_rebuild_transcript && tui.has_deferred_replay_clear() {
+            // The live tail may already be gone. Replace its queued replay at the
+            // new width in this frame, without waiting for the resize debounce.
+            if !self.transcript_cells.is_empty() {
+                self.transcript_reflow.schedule_immediate();
+            }
+        } else if should_rebuild_transcript {
             // Resize-sensitive history inserts queued before this frame may be wrapped for the old
             // viewport or targeted at rows no longer visible. Drop them and let resize reflow
             // rebuild from transcript cells.
@@ -543,17 +532,8 @@ impl App {
         let reflowed_lines = reflow_result.lines;
         let reflowed_rows = reflowed_lines.len();
 
-        // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
-        tui.clear_pending_history_lines();
-        self.clear_terminal_for_resize_replay(tui)?;
-
         self.deferred_history_lines.clear();
-        if !reflowed_lines.is_empty() {
-            tui.insert_history_hyperlink_lines_with_wrap_policy(
-                reflowed_lines,
-                self.history_line_wrap_policy(),
-            );
-        }
+        tui.queue_history_replay(reflowed_lines, self.history_line_wrap_policy());
         self.last_rendered_history_tail = self
             .native_history
             .replayable_cells(&self.transcript_cells)
@@ -635,16 +615,8 @@ impl App {
             self.render_transcript_lines_for_reflow(width).lines
         };
 
-        tui.clear_pending_history_lines();
-        self.clear_terminal_for_resize_replay(tui)?;
-
         self.deferred_history_lines.clear();
-        if !reflowed_lines.is_empty() {
-            tui.insert_history_hyperlink_lines_with_wrap_policy(
-                reflowed_lines,
-                self.history_line_wrap_policy(),
-            );
-        }
+        tui.queue_history_replay(reflowed_lines, self.history_line_wrap_policy());
 
         Ok(())
     }

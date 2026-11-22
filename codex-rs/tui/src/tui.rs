@@ -735,6 +735,12 @@ pub(crate) fn tmux_fullscreen_image_base() -> Option<u32> {
         .map(std::num::NonZeroU32::get)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeferredClear {
+    ThreadSwitch,
+    Replay,
+}
+
 pub struct Tui {
     pub(crate) link_hover: link_pointer::LinkHover,
     frame_requester: FrameRequester,
@@ -745,7 +751,7 @@ pub struct Tui {
     pub(crate) terminal_size_tags: crate::terminal_size_telemetry::LaunchTags,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<PendingHistoryLines>,
-    clear_thread_switch_on_draw: bool,
+    clear_on_draw: Option<DeferredClear>,
     screen_size: ScreenSizePolicy,
     ambient_pet_image_state: crate::pets::PetImageRenderState,
     pet_picker_preview_image_state: crate::pets::PetImageRenderState,
@@ -828,7 +834,7 @@ impl Tui {
             terminal_size_tags: Vec::new(),
             terminal,
             pending_history_lines: vec![],
-            clear_thread_switch_on_draw: false,
+            clear_on_draw: None,
             screen_size: ScreenSizePolicy::default(),
             ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
             pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
@@ -1208,6 +1214,28 @@ impl Tui {
         Box::pin(stream)
     }
 
+    /// Overlays and in-place history edits can flush a replay before the scheduled draw.
+    fn flush_history_before_draw(&mut self) -> Result<()> {
+        let flush = |tui: &mut Self| {
+            let screen_size = tui.terminal.last_known_screen_size;
+            Self::flush_pending_history_lines(
+                &mut tui.terminal,
+                &mut tui.pending_history_lines,
+                &mut tui.retained_images,
+                tui.scrollback,
+                screen_size,
+            )
+        };
+        if self.has_deferred_replay_clear() {
+            stdout().sync_update(|_| {
+                self.apply_deferred_clear()?;
+                flush(self)
+            })?
+        } else {
+            flush(self)
+        }
+    }
+
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
@@ -1216,14 +1244,7 @@ impl Tui {
         }
         // History queued before opening an overlay belongs to the inline transcript.
         // Flush before switching screens or expanding an inline overlay's viewport.
-        let screen_size = self.terminal.last_known_screen_size;
-        Self::flush_pending_history_lines(
-            &mut self.terminal,
-            &mut self.pending_history_lines,
-            &mut self.retained_images,
-            self.scrollback,
-            screen_size,
-        )?;
+        self.flush_history_before_draw()?;
         if !self.alt_screen_enabled {
             return Ok(());
         }
@@ -1334,33 +1355,71 @@ impl Tui {
 
     pub fn clear_pending_history_lines(&mut self) {
         self.pending_history_lines.clear();
+        if self.has_deferred_replay_clear() {
+            self.clear_on_draw = None;
+        }
     }
 
     pub(crate) fn clear_for_thread_switch(&mut self) -> Result<()> {
-        self.clear_thread_switch_on_draw = false;
+        self.clear_on_draw = None;
         if self.is_alt_screen_active() {
             self.leave_alt_screen()?;
         }
         if self.is_owned_screen() {
             self.terminal.clear()?;
         } else {
+            self.clear_for_replay()?;
+        }
+        Ok(())
+    }
+
+    fn clear_for_replay(&mut self) -> Result<()> {
+        if self.is_alt_screen_active() {
+            self.terminal.clear_visible_screen()?;
+        } else {
             self.terminal.clear_scrollback_and_visible_screen_ansi()?;
-            let mut area = self.terminal.viewport_area;
-            if area.y > 0 {
-                area.y = 0;
-                self.terminal.set_viewport_area(area);
-            }
+        }
+        let mut area = self.terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            self.terminal.set_viewport_area(area);
         }
         Ok(())
     }
 
     /// Keep the current frame visible until the next synchronized draw.
     pub(crate) fn defer_thread_switch_clear(&mut self) {
-        self.clear_thread_switch_on_draw = true;
+        self.clear_on_draw = Some(DeferredClear::ThreadSwitch);
     }
 
     pub(crate) fn has_deferred_thread_switch_clear(&self) -> bool {
-        self.clear_thread_switch_on_draw
+        self.clear_on_draw == Some(DeferredClear::ThreadSwitch)
+    }
+
+    /// Replace queued inserts and clear the screen when the replay is painted.
+    /// An empty replay still clears rows removed by rollback.
+    pub(crate) fn queue_history_replay(
+        &mut self,
+        lines: Vec<HyperlinkLine>,
+        wrap_policy: HistoryLineWrapPolicy,
+    ) {
+        self.pending_history_lines.clear();
+        if !self.has_deferred_thread_switch_clear() {
+            self.clear_on_draw = Some(DeferredClear::Replay);
+        }
+        self.insert_history_hyperlink_lines_with_wrap_policy(lines, wrap_policy);
+    }
+
+    pub(crate) fn has_deferred_replay_clear(&self) -> bool {
+        self.clear_on_draw == Some(DeferredClear::Replay)
+    }
+
+    fn apply_deferred_clear(&mut self) -> Result<()> {
+        match self.clear_on_draw.take() {
+            Some(DeferredClear::ThreadSwitch) => self.clear_for_thread_switch(),
+            Some(DeferredClear::Replay) => self.clear_for_replay(),
+            None => Ok(()),
+        }
     }
 
     /// Resize the inline viewport for the resize-reflow path.
@@ -1520,17 +1579,11 @@ impl Tui {
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                self.terminal.invalidate_cursor_state();
-                prepared.apply(
-                    &mut self.terminal,
-                    screen_size,
-                    self.owned_screen,
-                    self.mouse_capture.captures_mouse(self.owned_screen),
-                )?;
+                prepared.apply(self, screen_size)?;
             }
 
-            if self.clear_thread_switch_on_draw {
-                self.clear_for_thread_switch()?;
+            if self.clear_on_draw.is_some() {
+                self.apply_deferred_clear()?;
                 pending_viewport_area = None;
             }
             if self.owned_screen && !self.is_alt_screen_active() {
@@ -1679,18 +1732,10 @@ impl Tui {
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                self.terminal.invalidate_cursor_state();
-                prepared.apply(
-                    &mut self.terminal,
-                    screen_size,
-                    self.owned_screen,
-                    self.mouse_capture.captures_mouse(self.owned_screen),
-                )?;
+                prepared.apply(self, screen_size)?;
             }
 
-            if self.clear_thread_switch_on_draw {
-                self.clear_for_thread_switch()?;
-            }
+            self.apply_deferred_clear()?;
             if self.owned_screen && !self.is_alt_screen_active() {
                 self.enter_alt_screen()?;
             }

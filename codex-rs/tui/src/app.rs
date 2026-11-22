@@ -1132,12 +1132,19 @@ impl App {
                 .start_queued_model_document(tui, app_server, screen_size.width)
                 .await;
         }
-        if !matches!(
-            &event,
-            TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost
-        ) {
+        // Reflow and paint must agree on width. Final inserts still use the last
+        // painted width until consolidation completes. Offline sessions drop those events.
+        let defer_inline_draw = draws_history
+            && self.overlay.is_none()
+            && !self.reconnect.offline
+            && !tui.is_owned_screen()
+            && self.chat_widget.has_pending_stream_consolidation()
+            && !self.chat_widget.has_active_modal();
+        if draws_history {
             self.expire_pending_key_chord(tui);
-            self.handle_draw_pre_render(tui, screen_size)?;
+            if !defer_inline_draw {
+                self.handle_draw_pre_render(tui, screen_size)?;
+            }
         }
 
         let dismiss_chord = match &event {
@@ -1381,6 +1388,11 @@ impl App {
             _ => {}
         }
 
+        if defer_inline_draw {
+            tui.defer_screen_size(screen_size);
+            tui.frame_requester().schedule_frame();
+            return Ok(AppRunControl::Continue);
+        }
         if self.overlay.is_some() {
             let _ = self
                 .handle_backtrack_overlay_event(tui, app_server, event)

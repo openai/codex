@@ -123,12 +123,7 @@ async fn owned_screen_lifecycle_child() {
         .leave(tui.terminal.backend_mut())
         .expect("suspend static pager");
     super::job_control::PreparedResumeAction::RestoreAltScreen
-        .apply(
-            &mut tui.terminal,
-            Size::new(/*width*/ 80, /*height*/ 24),
-            /*owned*/ false,
-            tui.mouse_capture.captures_mouse(/*owned_screen*/ false),
-        )
+        .apply(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))
         .expect("resume static pager");
     pager
         .handle_event(
@@ -173,12 +168,7 @@ async fn owned_screen_lifecycle_child() {
         .expect("suspend screen");
     let resumed = Size::new(/*width*/ 100, /*height*/ 30);
     super::job_control::PreparedResumeAction::RestoreAltScreen
-        .apply(
-            &mut tui.terminal,
-            resumed,
-            /*owned*/ true,
-            /*capture_mouse*/ true,
-        )
+        .apply(&mut tui, resumed)
         .expect("resume owned screen");
     assert_eq!(
         (
@@ -205,6 +195,14 @@ async fn owned_screen_lifecycle_child() {
     tui.set_owned_screen(/*owned*/ false)
         .expect("release session screen");
     assert_eq!(tui.terminal.viewport_area, inline);
+
+    // Resuming inline must still purge the old rows before replaying history.
+    tui.queue_history_replay(Vec::new(), super::HistoryLineWrapPolicy::PreWrap);
+    super::job_control::PreparedResumeAction::RealignViewport(Rect::default())
+        .apply(&mut tui, resumed)
+        .expect("resume inline");
+    tui.apply_deferred_clear().expect("clear before replay");
+    assert_eq!(tui.terminal.viewport_area, Rect { y: 0, ..inline });
 
     // A fresh fullscreen launch defers terminal entry until its first frame.
     tui.terminal.tmux_kitty_image_base = Some(0x80_0100);

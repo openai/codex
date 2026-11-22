@@ -637,7 +637,7 @@ pub(super) fn handle_model_verification(
     );
 }
 
-pub(super) fn handle_agent_message_delta(chat: &mut ChatWidget, delta: impl Into<String>) {
+pub(crate) fn handle_agent_message_delta(chat: &mut ChatWidget, delta: impl Into<String>) {
     chat.handle_server_notification(
         ServerNotification::AgentMessageDelta(
             codex_app_server_protocol::AgentMessageDeltaNotification {
@@ -1087,7 +1087,7 @@ pub(super) fn terminal_interaction(
     );
 }
 
-pub(super) fn complete_assistant_message(
+pub(crate) fn complete_assistant_message(
     chat: &mut ChatWidget,
     item_id: &str,
     text: &str,
