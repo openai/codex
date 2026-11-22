@@ -1,13 +1,13 @@
 ---
 source: tui/src/app/agents_overview_actions_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 80)"
+expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, 80))"
 ---
   Agent command center  Group: Project  g
    All 1   Needs you 0   Working 0   Ready 1   Inactive 0
   ────────────────────────────────────────────────────────────────────────────
-      Tasks                                            Status         Updated
+      Tasks                                                   Status  Updated
   /tmp/project  1
-  › ○ Current task                                     Ready           2m ago
+  › ○ Current task                                            Ready    2m ago
 
 
       Archive “Current task”?

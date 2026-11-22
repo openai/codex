@@ -8,7 +8,7 @@ expression: normalize_agent_center_snapshot(&cached)
 "      Tasks                                           │ Task details                            "
 "  /tmp/project  1                                     │                                         "
 "  › ○ Review parser                                   │ Review parser                           "
-"                                                      │ ○ Ready                                 "
+"      Ready                                           │ ○ Ready                                 "
 "                                                      │                                         "
 "                                                      │ Model: Unknown                          "
 "                                                      │ Reasoning: Unknown                      "

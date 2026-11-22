@@ -8,17 +8,17 @@ expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_disp
       Tasks                                               │ Task details
   Unknown  1                                              │
   › ○ Legacy task                                         │ Legacy task
-                                                          │ ○ Ready
-  model-a  2                                              │
-    ○ Recent task                                         │ Model: Unknown
-    ○ Older task                                          │ Reasoning: Unknown
+      Ready                                               │ ○ Ready
                                                           │
-  model-b  1                                              │ Project
-    ○ Other model                                         │ /tmp/project
+  model-a  2                                              │ Model: Unknown
+    ○ Recent task                                         │ Reasoning: Unknown
+      Ready                                               │
+    ○ Older task                                          │ Project
+      Ready                                               │ /tmp/project
                                                           │
-                                                          │ Prompt
-                                                          │ Legacy task
-                                                          │
+  model-b  1                                              │ Prompt
+    ○ Other model                                         │ Legacy task
+      Ready                                               │
                                                           │
                                                           │
                                                           │

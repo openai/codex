@@ -1401,7 +1401,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 }
 
 #[tokio::test]
-async fn agents_overview_details_show_available_attention_without_expanding_rows() -> Result<()> {
+async fn agents_overview_details_show_available_attention() -> Result<()> {
     let mut app = make_test_app_with_chat().await;
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let [root, failed_agent, child, unloaded] = std::array::from_fn(|_| ThreadId::new());

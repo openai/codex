@@ -8,7 +8,7 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
       Tasks                                           │ Task details
   /tmp/project  1                                     │
   › ● Check startup performance                       │ Check startup performance
-                                                      │ ● Working
+      Working                                         │ ● Working
                                                       │
                                                       │ Model: Unknown
                                                       │ Reasoning: Unknown

@@ -172,6 +172,7 @@ pub(super) struct AgentsOverviewViewState {
     row_hits: Vec<(RowTarget, Rect)>,
     scroll: usize,
     page_height: usize,
+    list_width: u16,
     status_filter: usize,
     help: bool,
     pub(super) input: TextArea,

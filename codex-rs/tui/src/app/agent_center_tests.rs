@@ -471,7 +471,9 @@ async fn live_center_pages_visible_rows_without_wrapping() {
                 );
                 thread.updated_at -= index as i64;
                 if index >= 10 {
-                    thread.cwd = test_path_buf("/tmp/second-project").abs().into();
+                    thread.cwd = test_path_buf(&format!("/tmp/second-project-{index:02}"))
+                        .abs()
+                        .into();
                 }
                 thread
             })
@@ -498,10 +500,17 @@ async fn live_center_pages_visible_rows_without_wrapping() {
         assert!(view.selected_index().unwrap() < page_down);
         view.handle_key_event(KeyCode::PageUp.into());
         assert_eq!(view.rows[view.selected_index().unwrap()].thread_id, first);
-        // Repeated pages eventually reach the last filtered task and stay there.
+        // Page through a dense group followed by one-task groups in both layouts.
+        let mut pages = screen(&view, /*width*/ 110, /*height*/ 18);
         for _ in 0..count {
             view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
-            screen(&view, /*width*/ 110, /*height*/ 18);
+            pages.push_str(&screen(&view, /*width*/ 110, /*height*/ 18));
+        }
+        for index in 0..count {
+            assert!(
+                pages.contains(&format!("Paging task {index:02}")),
+                "skipped task {index} paging down"
+            );
         }
         let last = view.rows[view.selected_index().unwrap()].thread_id;
         view.handle_key_event(KeyCode::PageDown.into());
@@ -509,13 +518,56 @@ async fn live_center_pages_visible_rows_without_wrapping() {
             (last, view.rows[view.selected_index().unwrap()].thread_id),
             (ThreadId::from_u128(100 + count - 1), last)
         );
-        view.handle_key_event(KeyCode::Down.into());
-        assert!(
-            screen(&view, /*width*/ 110, /*height*/ 18)
-                .lines()
-                .any(|line| line.trim_start().starts_with("/tmp/project"))
-        );
+        let mut pages = screen(&view, /*width*/ 48, /*height*/ 18);
+        for _ in 0..count {
+            view.handle_key_event(KeyCode::PageUp.into());
+            pages.push_str(&screen(&view, /*width*/ 48, /*height*/ 18));
+        }
+        assert_eq!(view.rows[view.selected_index().unwrap()].thread_id, first);
+        for index in 0..count {
+            assert!(
+                pages.contains(&format!("Paging task {index:02}")),
+                "skipped task {index} paging up"
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn live_center_pages_full_task_rows_and_restores_the_first_heading() {
+    let app = make_test_app().await;
+    let ids = (100..130).map(ThreadId::from_u128).collect::<Vec<_>>();
+    let threads = ids
+        .iter()
+        .enumerate()
+        .map(|(index, &id)| {
+            let mut thread = overview_thread(
+                id,
+                /*parent_thread_id*/ None,
+                &format!("Paging task {}", index + 1),
+                ThreadStatus::Idle,
+            );
+            thread.updated_at -= index as i64;
+            thread
+        })
+        .collect::<Vec<_>>();
+    let selected = |view: &AgentsOverviewView| view.rows[view.selected_index().unwrap()].thread_id;
+    let mut view = app.agents_overview_view(threads.clone(), Some(ids[9]));
+    let first_page = screen(&view, /*width*/ 80, /*height*/ 16);
+    assert!(first_page.contains("Paging task 1 "));
+    assert!(first_page.contains("Paging task 10 "));
+    for expected in [ids[19], ids[29]] {
+        view.handle_key_event(KeyCode::PageDown.into());
+        assert_eq!(selected(&view), expected);
+    }
+
+    let mut view = app.agents_overview_view(threads, Some(ids[0]));
+    let initial = screen(&view, /*width*/ 80, /*height*/ 16);
+    view.handle_key_event(KeyCode::PageDown.into());
+    assert!(screen(&view, /*width*/ 80, /*height*/ 16).contains('↑'));
+    view.handle_key_event(KeyCode::PageUp.into());
+    assert_eq!(selected(&view), ids[0]);
+    assert_eq!(screen(&view, /*width*/ 80, /*height*/ 16), initial);
 }
 
 #[tokio::test]

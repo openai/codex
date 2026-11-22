@@ -5,18 +5,18 @@ expression: "age.replace_all(&rendered, \" [age]\")"
   Agent command center  Group: Project  g
    All 10   Needs you 0   Working 0   Ready 0   Inactive 10
   ────────────────────────────────────────────────────────────────────────────
-      Tasks                                            Status         Updated
+      Tasks                                                Status     Updated
   /  10
-  › ○ Task 12                                          Inactive [age]
-    ○ Task 11                                          Inactive [age]
-    ○ Task 10                                          Inactive [age]
-    ○ Task 9                                           Inactive [age]
-    ○ Task 8                                           Inactive [age]
-    ○ Task 7                                           Inactive [age]
-    ○ Task 6                                           Inactive [age]
-    ○ Task 5                                           Inactive [age]
-    ○ Task 4                                           Inactive [age]
-    ○ Task 3                                           Inactive [age]
+  › ○ Task 12                                              Inactive [age]
+    ○ Task 11                                              Inactive [age]
+    ○ Task 10                                              Inactive [age]
+    ○ Task 9                                               Inactive [age]
+    ○ Task 8                                               Inactive [age]
+    ○ Task 7                                               Inactive [age]
+    ○ Task 6                                               Inactive [age]
+    ○ Task 5                                               Inactive [age]
+    ○ Task 4                                               Inactive [age]
+    ○ Task 3                                               Inactive [age]
 
       Show more
 

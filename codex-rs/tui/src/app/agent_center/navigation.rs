@@ -3,6 +3,10 @@
 
 use super::*;
 use ratatui::layout::Position;
+use std::ops::Range;
+
+// The list leaves one column of padding at its right edge.
+pub(super) const STATUS_COLUMNS_MIN_WIDTH: u16 = 57;
 
 pub(super) enum TaskListRow {
     Group(usize),
@@ -27,11 +31,34 @@ impl TaskListRow {
     }
 }
 
+pub(super) fn visible_page(
+    entries: &[TaskListRow],
+    selected_index: usize,
+    state: &mut AgentsOverviewViewState,
+) -> (usize, Range<usize>) {
+    let selected = entries
+        .iter()
+        .position(|row| row.selection_index() == Some(selected_index))
+        .unwrap_or_default();
+    let height = state.page_height.max(1);
+    let mut start = state.scroll.min(entries.len().saturating_sub(height));
+    if selected <= start {
+        start = selected;
+        if height > 1 && selected > 0 && matches!(entries[selected - 1], TaskListRow::Group(_)) {
+            start -= 1;
+        }
+    }
+    let context = height > 1 && matches!(entries.get(selected + 1), Some(TaskListRow::Context(_)));
+    start = start.max((selected + 1 + usize::from(context)).saturating_sub(height));
+    state.scroll = start;
+    (selected, start..(start + height).min(entries.len()))
+}
+
 impl AgentsOverviewView {
     pub(super) fn center_rows(
         &self,
         indices: &[usize],
-        grouping: AgentsOverviewGrouping,
+        state: &AgentsOverviewViewState,
     ) -> Vec<TaskListRow> {
         let mut entries = Vec::new();
         let mut previous = None;
@@ -41,14 +68,14 @@ impl AgentsOverviewView {
                 entries.push(TaskListRow::ShowMore);
                 continue;
             }
-            if previous.is_none_or(|previous| !self.same_group(grouping, previous, index)) {
+            if previous.is_none_or(|previous| !self.same_group(state.grouping, previous, index)) {
                 if previous.is_some() {
                     entries.push(TaskListRow::Gap);
                 }
                 entries.push(TaskListRow::Group(index));
             }
             entries.push(TaskListRow::Task(index));
-            if self.dock_focused.is_some() {
+            if state.list_width < STATUS_COLUMNS_MIN_WIDTH && state.page_height > 1 {
                 entries.push(TaskListRow::Context(index));
             }
             previous = Some(index);
@@ -64,7 +91,7 @@ impl AgentsOverviewView {
             return;
         }
         let indices = self.selectable_indices();
-        let entries = self.center_rows(&indices, self.state().grouping);
+        let entries = self.center_rows(&indices, &self.state());
         let mut sections = Vec::new();
         let mut current = None;
         for row in entries {
@@ -129,43 +156,47 @@ impl AgentsOverviewView {
         if state.rename_target.is_some() || indices.is_empty() {
             return;
         }
-        let forward = action == ListAction::PageDown;
-        let entries = self.center_rows(&indices, state.grouping);
-        let tasks = entries
+        let entries = self.center_rows(&indices, &state);
+        let (selected, page) = visible_page(&entries, self.selected, &mut state);
+        let page_size = entries[page.clone()]
             .iter()
-            .enumerate()
-            .filter_map(|(position, row)| Some((position, row.selection_index()?)))
-            .collect::<Vec<_>>();
-        let current = tasks
-            .iter()
-            .find(|(_, index)| *index == self.selected)
-            .map(|(position, _)| *position)
-            .unwrap_or(tasks[0].0);
-        let height = state.page_height.max(/*other*/ 1);
-        let target = if forward {
-            current.saturating_add(height)
+            .filter_map(TaskListRow::selection_index)
+            .count()
+            .max(1);
+        let next = if action == ListAction::PageDown {
+            let end = (page.end + page.len()).min(entries.len());
+            // Keep a task's detail row with it when the next page ends at its title.
+            let end = end - usize::from(matches!(entries.get(end), Some(TaskListRow::Context(_))));
+            entries[selected + 1..end]
+                .iter()
+                .filter_map(TaskListRow::selection_index)
+                .take(page_size)
+                .last()
+                .or_else(|| entries[end..].iter().find_map(TaskListRow::selection_index))
         } else {
-            current.saturating_sub(height)
+            // Leave one row of overlap in case the destination needs its heading.
+            let start = page
+                .start
+                .saturating_sub(state.page_height.saturating_sub(1));
+            entries[start..selected]
+                .iter()
+                .rev()
+                .filter_map(TaskListRow::selection_index)
+                .take(page_size)
+                .last()
+                .or_else(|| {
+                    entries[..start]
+                        .iter()
+                        .rev()
+                        .find_map(TaskListRow::selection_index)
+                })
         };
-        let selected = if forward {
-            tasks
-                .partition_point(|(position, _)| *position < target)
-                .min(tasks.len() - 1)
-        } else {
-            tasks
-                .partition_point(|(position, _)| *position <= target)
-                .saturating_sub(1)
-        };
-        let selected = tasks[selected].1;
-        let scroll = state.scroll;
-        state.scroll = (if forward {
-            scroll.saturating_add(height)
-        } else {
-            scroll.saturating_sub(height)
-        })
-        .min(entries.len().saturating_sub(height));
-        drop(state);
-        self.selected = selected;
-        self.state().show_more_selected = selected == usize::MAX;
+        if let Some(next) = next {
+            // A second page key may arrive before we paint this selection.
+            visible_page(&entries, next, &mut state);
+            state.show_more_selected = next == usize::MAX;
+            drop(state);
+            self.selected = next;
+        }
     }
 }

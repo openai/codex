@@ -9,17 +9,17 @@ Initial display:
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Working
-  Working  3                                              │
-    ● Bravo                                               │ Model: Unknown
-    ● Charlie                                             │ Reasoning: Unknown
-  › ● Alpha                                               │
-                                                          │ Project
-  Ready  1                                                │ /tmp/project
-    ○ Ready task                                          │
-                                                          │ Prompt
-                                                          │ Alpha
+      Error                                               │ ● Working
                                                           │
+  Working  3                                              │ Model: Unknown
+    ● Bravo                                               │ Reasoning: Unknown
+      Working                                             │
+    ● Charlie                                             │ Project
+      Working                                             │ /tmp/project
+  › ● Alpha                                               │
+      Working                                             │ Prompt
+                                                          │ Alpha
+  ↓                                                       │
   ? help  esc back  ↑/↓ move  enter open  n new
 
 After subagents fail under Alpha and Ready task:
@@ -29,15 +29,15 @@ After subagents fail under Alpha and Ready task:
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Working
-  Working  3                                              │
-    ● 📌  Charlie                                          │ Model: Unknown
-  › ● Alpha                                               │ Reasoning: Unknown
-    ● Bravo                                               │
-                                                          │ Project
-  Ready  1                                                │ /tmp/project
-    ○ 📌  Ready task                                       │
-                                                          │ Prompt
-                                                          │ Progress update 3
+      Error                                               │ ● Working
                                                           │
+  Working  3                                              │ Model: Unknown
+    ● 📌  Charlie                                          │ Reasoning: Unknown
+      Working                                             │
+  › ● Alpha                                               │ Project
+      Working                                             │ /tmp/project
+    ● Bravo                                               │
+      Working                                             │ Prompt
+                                                          │ Progress update 3
+  ↓                                                       │
   ? help  esc back  ↑/↓ move  enter open  n new
