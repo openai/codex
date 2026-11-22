@@ -180,15 +180,17 @@ impl App {
         }
         let resumed_thread = if matches!(target, AppServerTarget::LocalDaemon { .. }) {
             Some(
-                app_server
-                    .thread_read(target_session.thread_id, /*include_turns*/ false)
-                    .await
-                    .map_err(|error| {
-                        self.add_session_picker_error(format!(
-                            "Unable to check resumed folder: {error}"
-                        ));
-                        AppRunControl::Continue
-                    })?,
+                self.wait_for_opening_task(
+                    tui,
+                    app_server.thread_read(target_session.thread_id, /*include_turns*/ false),
+                )
+                .await
+                .map_err(|error| {
+                    self.add_session_picker_error(format!(
+                        "Unable to check resumed folder: {error}"
+                    ));
+                    AppRunControl::Continue
+                })?,
             )
         } else {
             None

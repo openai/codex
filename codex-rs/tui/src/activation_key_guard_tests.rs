@@ -27,6 +27,13 @@ fn suppresses_activation_until_release_and_bounds_legacy_presses() {
     ));
     assert!(!guard.is_active());
 
+    let mut guard = ActivationKeyGuard::new_at(key, start, /*reported_repeats_only*/ true);
+    let modal_visible = start + Duration::from_secs(/*secs*/ 5);
+    guard.extend_for_protected_view(modal_visible);
+    assert!(guard.consume_at(key, KeyEventKind::Press, modal_visible));
+    assert!(guard.consume_at(key, KeyEventKind::Release, modal_visible));
+    assert!(!guard.consume_at(key, KeyEventKind::Press, modal_visible));
+
     let mut guard = ActivationKeyGuard::new_at(
         key_hint::plain(KeyCode::BackTab),
         start,

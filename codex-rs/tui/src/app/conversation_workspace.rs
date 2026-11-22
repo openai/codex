@@ -211,6 +211,18 @@ impl App {
                         .send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 }
             } else {
+                // The destination widget inherits this guard, including during a slow resume.
+                if self.keymap.list.action_for(key) == Some(crate::keymap::ListAction::Accept) {
+                    let activation = self
+                        .routed_key_activation
+                        .take()
+                        .unwrap_or_else(|| crate::key_hint::KeyBinding::from_event(key));
+                    self.chat_widget.suppress_current_view_key_until_release(
+                        activation,
+                        std::time::Instant::now(),
+                        crate::activation_key_guard::ActivationKeySuppression::ReportedRepeats,
+                    );
+                }
                 view.handle_key_event(key);
             }
             if view.is_complete() {
@@ -305,6 +317,7 @@ impl App {
         frame: &mut crate::custom_terminal::Frame<'_>,
         center: Rect,
         conversation: Option<Rect>,
+        frames: &crate::tui::FrameRequester,
     ) {
         let center_focused = self.workspace_center_owns_input();
         frame
@@ -316,6 +329,12 @@ impl App {
         let area = center;
         if let Some(view) = &mut self.agents_overview.workspace.view {
             view.dock_focused = conversation.map(|_| center_focused);
+            view.dock_motion = Some((
+                crate::motion::MotionMode::from_animations_enabled(
+                    self.local_settings.tui.animations,
+                ),
+                frames.clone(),
+            ));
             view.render(area, frame.buffer);
             if center_focused {
                 frame.cursor_position = view.cursor_pos(area).map(Into::into);

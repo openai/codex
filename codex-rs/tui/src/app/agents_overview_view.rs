@@ -66,6 +66,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
+use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -167,6 +168,12 @@ enum RowTarget {
     ShowMore,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct OpeningTask {
+    pub(super) thread_id: ThreadId,
+    pub(super) started_at: Instant,
+}
+
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
     row_hits: Vec<(RowTarget, Rect)>,
@@ -180,7 +187,9 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) creating_worktree: bool,
     pub(super) refresh_failed: bool,
     pub(super) loading: bool,
+    pub(super) initial_discovery_started_at: Option<Instant>,
     pub(super) has_more: bool,
+    pub(super) opening_task: Option<OpeningTask>,
     show_more_selected: bool,
     pub(super) connection_notice: Option<&'static str>,
     /// Browse only while the server holds its lifecycle lock.
@@ -197,6 +206,11 @@ pub(super) struct AgentsOverviewViewState {
 }
 
 impl AgentsOverviewViewState {
+    pub(super) fn finish_loading(&mut self) {
+        self.loading = false;
+        self.initial_discovery_started_at = None;
+    }
+
     pub(super) fn set_rename_input(&mut self, text: &str, keymap: &RuntimeKeymap) {
         let mut input = TextArea::new_single_line();
         input.set_keymap_bindings(keymap);
@@ -236,6 +250,7 @@ impl AgentsOverviewViewState {
 }
 
 pub(super) struct AgentsOverviewView {
+    pub(super) dock_motion: Option<(crate::motion::MotionMode, crate::tui::FrameRequester)>,
     /// Some when shown beside the conversation. The value records keyboard focus.
     pub(super) dock_focused: Option<bool>,
     use_theme_colors: bool,
@@ -316,6 +331,7 @@ impl AgentsOverviewView {
             }
         }
         let mut view = Self {
+            dock_motion: None,
             dock_focused: None,
             editor_keymap: keymap.clone(),
             use_theme_colors,

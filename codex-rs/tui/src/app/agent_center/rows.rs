@@ -36,7 +36,12 @@ fn columns(area: Rect, widths: Option<(u16, u16)>) -> (Rect, Rect, Rect) {
 }
 
 impl AgentsOverviewView {
-    pub(super) fn render_center_rows(&self, area: Rect, buf: &mut Buffer) {
+    pub(super) fn render_center_rows(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        progress_in_footer: bool,
+    ) {
         let row_width = area.width;
         let area = Rect {
             width: row_width.saturating_sub(/*rhs*/ 1),
@@ -58,7 +63,11 @@ impl AgentsOverviewView {
                 } else if state.history.is_some() {
                     "No matching tasks"
                 } else if state.loading && self.rows.is_empty() {
-                    "Loading tasks…"
+                    if progress_in_footer {
+                        ""
+                    } else {
+                        "Loading tasks…"
+                    }
                 } else if state.refresh_failed {
                     "Could not load tasks"
                 } else if self.rows.is_empty() {
@@ -77,6 +86,16 @@ impl AgentsOverviewView {
         } else {
             selection_style()
         };
+        let opening = state.opening_task.map(|task| task.thread_id);
+        let status_for = |task: &AgentsOverviewRow| {
+            let (status, dot) = Self::status(task);
+            let label = if opening == Some(task.thread_id) {
+                "Opening…"
+            } else {
+                status
+            };
+            (label, dot)
+        };
         let entries = self.center_rows(&indices, &state);
         let reference = chrono::Utc::now();
         let age = |task: &AgentsOverviewRow| {
@@ -89,7 +108,7 @@ impl AgentsOverviewView {
             let mut status_width = "Status".width();
             let mut updated_width = "Updated".width();
             for task in indices.iter().filter_map(|&index| self.rows.get(index)) {
-                status_width = status_width.max(Self::status(task).0.width());
+                status_width = status_width.max(status_for(task).0.width());
                 updated_width = updated_width.max(age(task).width());
             }
             (status_width.min(11) as u16, updated_width.min(9) as u16)
@@ -124,7 +143,7 @@ impl AgentsOverviewView {
                         Style::default().dim()
                     };
                     buf.set_style(background, style);
-                    let (status, _) = Self::status(task);
+                    let (status, _) = status_for(task);
                     let branch = task
                         .thread
                         .git_info
@@ -227,7 +246,7 @@ impl AgentsOverviewView {
                 Style::default()
             };
             buf.set_style(background, style);
-            let (status, mut dot) = Self::status(task);
+            let (status, mut dot) = status_for(task);
             let idle = matches!(
                 task.group,
                 AgentsOverviewGroup::Ready | AgentsOverviewGroup::Finished

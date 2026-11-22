@@ -47,6 +47,7 @@ impl App {
 
     pub(super) async fn live_blank_session(
         &mut self,
+        tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
         thread: &codex_app_server_protocol::Thread,
@@ -62,7 +63,9 @@ impl App {
             codex_app_server_protocol::ThreadHistoryMode::Paginated
         ) && app_server.supports_paginated_history();
         let untouched = if paginated {
-            match app_server.thread_turns_page(thread_id, /*cursor*/ None, /*limit*/ 1).await {
+            let page =
+                app_server.thread_turns_page(thread_id, /*cursor*/ None, /*limit*/ 1);
+            match self.wait_for_opening_task(tui, page).await {
                 Ok(page) => Some(page.data.is_empty() && page.next_cursor.is_none()),
                 Err(error) if Self::can_fallback_from_include_turns_error(&error) => Some(true),
                 Err(error) if error.chain().any(|cause| matches!(
@@ -77,8 +80,11 @@ impl App {
         };
         let untouched = match untouched {
             Some(untouched) => untouched,
-            None => match app_server
-                .thread_read(thread_id, /*include_turns*/ true)
+            None => match self
+                .wait_for_opening_task(
+                    tui,
+                    app_server.thread_read(thread_id, /*include_turns*/ true),
+                )
                 .await
             {
                 Ok(thread) => {
@@ -145,11 +151,14 @@ impl App {
         let live_blank = if matches!(source, ResumeSource::Backend(_))
             && self.backend_registry.owner(thread_id) == Some(app_server.backend_id())
             && self.agents_overview.blank_sessions.contains_key(&thread_id)
-            && let Ok(thread) = app_server
-                .thread_read(thread_id, /*include_turns*/ false)
+            && let Ok(thread) = self
+                .wait_for_opening_task(
+                    tui,
+                    app_server.thread_read(thread_id, /*include_turns*/ false),
+                )
                 .await
         {
-            self.live_blank_session(app_server, thread_id, &thread)
+            self.live_blank_session(tui, app_server, thread_id, &thread)
                 .await
         } else {
             None
@@ -158,15 +167,14 @@ impl App {
         let resumed = match live_blank {
             Some(thread) => Ok(thread),
             None => {
-                app_server
-                    .resume_thread_for_navigation(
-                        &local_settings,
-                        resume_config.clone(),
-                        thread_id,
-                        model_settings,
-                        permission_overrides,
-                    )
-                    .await
+                let resume = crate::boxed_future!(app_server.resume_thread_for_navigation(
+                    &local_settings,
+                    resume_config.clone(),
+                    thread_id,
+                    model_settings,
+                    permission_overrides,
+                ));
+                self.wait_for_opening_task(tui, resume).await
             }
         };
         let mut history_notice = None;
@@ -178,14 +186,12 @@ impl App {
                     || crate::app_server_session::model_provider_error(&err).is_some() =>
             {
                 provider_error = crate::app_server_session::model_provider_error(&err);
-                match app_server
-                    .read_thread_for_viewing(
-                        &resume_config,
-                        &local_settings,
-                        target_session.thread_id,
-                    )
-                    .await
-                {
+                let history = crate::boxed_future!(app_server.read_thread_for_viewing(
+                    &resume_config,
+                    &local_settings,
+                    target_session.thread_id,
+                ));
+                match self.wait_for_opening_task(tui, history).await {
                     Ok((thread, notice)) => {
                         history_notice = notice;
                         (thread, true)

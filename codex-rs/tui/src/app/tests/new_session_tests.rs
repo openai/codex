@@ -1246,8 +1246,8 @@ async fn backend_handoff_errors_are_snapshotted() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Result<()> {
-    let mut app = make_test_app().await;
-    let (source, source_requests, source_proxy) = start_recording_app_server(
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let (mut source, source_requests, source_proxy) = start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,
         /*failed_thread_name*/ None,
@@ -1276,19 +1276,53 @@ async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Res
         Vec::new(),
     )
     .await?;
-    let target = crate::resume_picker::SessionTarget {
-        backend_id: destination_id,
-        path: None,
-        thread_id: resumed_id,
-        cwd: Some(resumed.session.cwd.to_path_buf()),
-        history_mode: None,
-    };
+    let task = destination
+        .thread_read(resumed_id, /*include_turns*/ false)
+        .await?;
+    app.backend_registry
+        .register_started(destination_id, &resumed)?;
+    app.agents_overview
+        .threads
+        .insert(resumed_id, Some(task.clone()));
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
     app.local_settings.transcript_mode = tui.transcript_mode();
     app.config.features.enable(Feature::TuiWorkspace)?;
     app.open_agents_overview(&source);
     assert!(app.workspace_center_owns_input());
+    let view = app.agents_overview_view(vec![task], Some(resumed_id));
+    app.agents_overview.workspace.replace_view(view);
+    app.startup_protected_input_boundary = false;
+    app.local_settings.tui.animations = false;
+    boxed_future!(app.handle_workspace_key(&mut tui, &mut source, KeyCode::Enter.into())).await;
+    let target = loop {
+        match events.try_recv()? {
+            AppEvent::SelectAgentsOverviewThread { thread_id } => {
+                app.select_agents_overview_thread(&mut tui, &mut source, thread_id)
+                    .await?;
+            }
+            AppEvent::ResumeBackendSession(target) => break target,
+            _ => {}
+        }
+    };
+    let frame = buffer_text(tui.terminal.previous_buffer());
+    let footer = frame
+        .lines()
+        .last()
+        .unwrap()
+        .split('│')
+        .next()
+        .unwrap()
+        .trim();
+    insta::assert_snapshot!(footer, @"◌ Opening task…");
+    let approval = exec_approval_request(resumed_id, "turn", "call", /*approval_id*/ None);
+    let buffered = crate::app::app_server_requests::BufferedServerRequest::new(
+        approval,
+        &destination.request_handle(),
+    );
+    app.agents_overview
+        .dispatched_requests
+        .insert(resumed_id, vec![buffered]);
     let mut backends = BackendSessions::from_initial(source, vec![destination]);
     backends
         .settings
@@ -1309,6 +1343,22 @@ async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Res
     app.resume_backend_session(&mut tui, &mut backends, target)
         .await?;
 
+    assert!(app.finish_docked_task_opening(&tui, resumed_id));
+    assert!(app.startup_protected_input_boundary);
+    while let Ok(event) = app.active_thread_rx.as_mut().unwrap().try_recv() {
+        app.handle_thread_event_now(event);
+    }
+    assert!(app.chat_widget.has_active_modal());
+    // The modal input drain refreshes the guard before input routing resumes.
+    app.chat_widget
+        .protect_modal_from_held_activation_key(Instant::now());
+    assert!(
+        app.route_key_chord_event(&mut tui, KeyCode::Enter.into())
+            .is_none()
+    );
+    let held = KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat);
+    assert!(app.route_key_chord_event(&mut tui, held).is_none());
+    assert!(app.chat_widget.has_active_modal());
     assert!(app.agents_overview.workspace.is_open());
     assert!(!app.workspace_center_owns_input());
     assert_eq!(backends.displayed_owner(), destination_id);

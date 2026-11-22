@@ -182,7 +182,7 @@ impl App {
                 .view_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.loading = false;
+            state.finish_loading();
             state.connection_notice = Some(if self.reconnect.failed {
                 "Reconnect failed — agent list is stale; relaunch to retry"
             } else {
@@ -241,7 +241,7 @@ impl App {
                 .view_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.loading = false;
+            state.finish_loading();
             state.refresh_failed = self
                 .agents_overview
                 .refresh_failed_backends
@@ -476,7 +476,7 @@ impl App {
                 .view_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .loading = false;
+                .finish_loading();
         }
         overview
             .pending_refresh_backends
@@ -750,20 +750,24 @@ impl App {
                 ));
                 return Ok(AppRunControl::Continue);
             };
+            let target = SessionTarget {
+                backend_id: owner,
+                path: thread.path.clone(),
+                thread_id,
+                cwd: Some(thread.cwd.to_path_buf()),
+                history_mode: Some(thread.history_mode),
+            };
+            self.paint_docked_task_opening(tui, thread_id)?;
             self.app_event_tx
-                .send(AppEvent::ResumeBackendSession(SessionTarget {
-                    backend_id: owner,
-                    path: thread.path.clone(),
-                    thread_id,
-                    cwd: Some(thread.cwd.to_path_buf()),
-                    history_mode: Some(thread.history_mode),
-                }));
+                .send(AppEvent::ResumeBackendSession(target));
             return Ok(AppRunControl::Continue);
         }
-        Box::pin(self.attach_agents_overview_thread(
+        let result = crate::boxed_future!(self.attach_agents_overview_thread(
             tui, app_server, thread_id, /*started*/ None, /*startup_draft*/ None,
         ))
-        .await
+        .await;
+        self.finish_docked_task_opening(tui, thread_id);
+        result
     }
 
     fn redraw_during_task_attach(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -802,9 +806,14 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
-        if startup_draft.is_none() && !self.agents_overview.workspace.is_open() {
+        let docked_resume =
+            !is_new_session && self.agents_overview.workspace.is_open() && tui.is_owned_screen();
+        if docked_resume {
+            self.paint_docked_task_opening(tui, root_thread_id)?;
+        } else if startup_draft.is_none() && !self.agents_overview.workspace.is_open() {
             loading::draw(tui)?;
         }
+        let mut backfill_after_replay = false;
         let mut restored_blank_session = false;
         let mut resumed_mode = None;
         let mut provider_resume_checked = false;
@@ -867,13 +876,14 @@ impl App {
                     .insert(active_thread_id, input_state);
             }
 
-            let target_thread = match StartupDraftPump::run_with_optional_draft(
-                startup_draft.as_deref_mut(),
-                tui,
-                app_server.thread_read(root_thread_id, /*include_turns*/ false),
-            )
-            .await
-            {
+            let thread_read = app_server.thread_read(root_thread_id, /*include_turns*/ false);
+            let read_result = match startup_draft.as_deref_mut() {
+                Some(draft) => {
+                    StartupDraftPump::run_with_optional_draft(Some(draft), tui, thread_read).await
+                }
+                None => self.wait_for_opening_task(tui, thread_read).await,
+            };
+            let target_thread = match read_result {
                 Ok(thread) => thread,
                 Err(error) => {
                     self.add_agents_overview_error(format!(
@@ -1009,22 +1019,23 @@ impl App {
             let (resumed, read_only) = if let Some((_, started)) = started {
                 (started, None)
             } else if let Some(blank) = self
-                .live_blank_session(app_server, root_thread_id, &target_thread)
+                .live_blank_session(tui, app_server, root_thread_id, &target_thread)
                 .await
             {
                 restored_blank_session = true;
                 (blank, None)
             } else {
-                match app_server
-                    .resume_thread_with_permission_overrides(
+                // The progress loop holds the request while attaching the destination.
+                // Box the large resume future to keep the attach stack bounded.
+                let resume =
+                    crate::boxed_future!(app_server.resume_thread_with_permission_overrides(
                         &local_settings,
                         resume_config.clone(),
                         root_thread_id,
                         resume_model_settings,
                         self.resume_permission_overrides(&resume_config),
-                    )
-                    .await
-                {
+                    ));
+                match self.wait_for_opening_task(tui, resume).await {
                     Ok(resumed) => {
                         provider_resume_checked = true;
                         resumed_mode = Some(resumed.session.collaboration_mode.is_some());
@@ -1043,14 +1054,12 @@ impl App {
                         } else {
                             ReadOnlyThread::ExternalWriter
                         };
-                        match app_server
-                            .read_thread_for_viewing(
-                                &resume_config,
-                                &local_settings,
-                                root_thread_id,
-                            )
-                            .await
-                        {
+                        let history = crate::boxed_future!(app_server.read_thread_for_viewing(
+                            &resume_config,
+                            &local_settings,
+                            root_thread_id,
+                        ));
+                        match self.wait_for_opening_task(tui, history).await {
                             Ok((thread, notice)) => {
                                 history_notice = notice;
                                 (thread, Some(reason))
@@ -1140,13 +1149,13 @@ impl App {
             );
             self.file_search
                 .update_search_dir(self.config.cwd.to_path_buf());
-            if let Err(error) = self
-                .replace_chat_widget_with_app_server_thread(
+            if let Err(error) =
+                crate::boxed_future!(self.replace_chat_widget_with_app_server_thread(
                     tui,
                     resumed,
                     presentation,
                     /*initial_user_message*/ None,
-                )
+                ))
                 .await
             {
                 self.add_agents_overview_error(format!("Failed to attach to task: {error}"));
@@ -1173,8 +1182,8 @@ impl App {
                 self.chat_widget
                     .add_info_message(notice.to_string(), /*hint*/ None);
             }
-            // Widget replacement clears the terminal. Paint the destination before further waits.
-            if startup_draft.is_none() {
+            // The dock keeps the outgoing frame until replay has populated the destination.
+            if startup_draft.is_none() && !docked_resume {
                 self.redraw_during_task_attach(tui)?;
             }
             let mut destination_config = self.chat_widget.config_ref().clone();
@@ -1215,13 +1224,16 @@ impl App {
             }
             // A new session has no descendants. Scanning every loaded thread here
             // adds a serial round trip per agent before the composer can render.
-            if !is_new_session
-                && !self
+            if !is_new_session {
+                if docked_resume {
+                    backfill_after_replay = true;
+                } else if !self
                     .backfill_loaded_subagent_threads(app_server)
                     .await
                     .completed
-            {
-                self.backfill_loaded_subagent_threads(app_server).await;
+                {
+                    self.backfill_loaded_subagent_threads(app_server).await;
+                }
             }
             for thread_id in previous_thread_ids {
                 if previous_running_thread_ids.is_empty()
@@ -1245,8 +1257,7 @@ impl App {
         if self.current_displayed_thread_id() != Some(root_thread_id)
             || (self.thread_unavailable(root_thread_id) && !self.chat_widget.is_read_only_view())
         {
-            self.select_agent_thread(tui, app_server, root_thread_id)
-                .await?;
+            crate::boxed_future!(self.select_agent_thread(tui, app_server, root_thread_id)).await?;
         }
         if self.current_displayed_thread_id() == Some(root_thread_id) {
             self.remember_attached_host_project(app_server);
@@ -1279,6 +1290,12 @@ impl App {
                 .await;
         }
 
+        if backfill_after_replay {
+            self.app_event_tx.send(AppEvent::BackfillResumedSubagents {
+                thread_id: root_thread_id,
+                backend_id: app_server.backend_id(),
+            });
+        }
         Ok(AppRunControl::Continue)
     }
 

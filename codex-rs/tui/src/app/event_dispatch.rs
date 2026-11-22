@@ -3469,10 +3469,7 @@ impl App {
             AppEvent::SelectAgentsOverviewThread { thread_id }
                 if self.agents_overview.pending_archives.contains_key(&thread_id) => {}
             AppEvent::SelectAgentsOverviewThread { thread_id } => {
-                match self
-                    .select_agents_overview_thread(tui, app_server, thread_id)
-                    .await?
-                {
+                match crate::boxed_future!(self.select_agents_overview_thread(tui, app_server, thread_id)).await? {
                     AppRunControl::Continue
                         if self.primary_thread_id.is_none()
                             && self.overview_selected_index().is_none() => {
@@ -3486,6 +3483,25 @@ impl App {
                     }
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
+                }
+            }
+            AppEvent::BackfillResumedSubagents { thread_id, backend_id } => {
+                if self.primary_thread_id == Some(thread_id) && app_server.backend_id() == backend_id {
+                    // Earlier replay events have populated the destination's transcript.
+                    self.refresh_owned_transcript(tui)?;
+                    if !crate::boxed_future!(self.backfill_loaded_subagent_threads(app_server)).await.completed {
+                        crate::boxed_future!(self.backfill_loaded_subagent_threads(app_server)).await;
+                    }
+                    // The scan may outlast the press-only guard window.
+                    if self.startup_protected_input_boundary && self.chat_widget.has_active_modal() {
+                        self.discard_startup_modal_input(tui)?;
+                    }
+                    if !self.chat_widget.is_read_only_view() {
+                        // Backfill makes parked child requests eligible for replay.
+                        // The event loop paints and protects any newly opened modal.
+                        crate::boxed_future!(self.replay_agents_overview_requests(app_server, thread_id)).await;
+                    }
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::ForkAgentsOverviewThread { thread_id } => {
@@ -3502,7 +3518,7 @@ impl App {
                 }
                 // Attachment replay must not submit queued input on the source task.
                 self.chat_widget.fork_in_progress = true;
-                let control = self.select_agents_overview_thread(tui, app_server, thread_id).await;
+                let control = crate::boxed_future!(self.select_agents_overview_thread(tui, app_server, thread_id)).await;
                 if matches!(&control, Ok(AppRunControl::Continue))
                     && self.current_displayed_thread_id() == Some(thread_id)
                 {

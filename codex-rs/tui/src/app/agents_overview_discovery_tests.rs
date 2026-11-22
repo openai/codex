@@ -25,6 +25,76 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
+async fn deferred_subagent_backfill_replays_parked_request() -> Result<()> {
+    let mut app = make_test_app().await;
+    let root_id = ThreadId::new();
+    attach_thread(&mut app, root_id);
+    app.primary_thread_id = Some(root_id);
+    app.active_thread_id = Some(root_id);
+    let child_id = ThreadId::new();
+    let backend_id = BackendId::new();
+    let (mut cloud, mut commands, _events) =
+        overview_session_stub(backend_id, ThreadParamsMode::Cloud);
+    let child = overview_thread(child_id, Some(root_id), "Child task", ThreadStatus::Idle);
+    let request = ServerRequest::ToolRequestUserInput {
+        request_id: RequestId::Integer(42),
+        params: ToolRequestUserInputParams {
+            thread_id: child_id.to_string(),
+            turn_id: "turn".into(),
+            item_id: "question".into(),
+            questions: Vec::new(),
+            is_blocking: true,
+            auto_resolution_ms: None,
+        },
+    };
+    app.agents_overview.dispatched_requests.insert(
+        child_id,
+        vec![BufferedServerRequest::new(
+            request.clone(),
+            &cloud.request_handle(),
+        )],
+    );
+    app.replay_agents_overview_requests(&cloud, root_id).await;
+    assert!(
+        app.agents_overview
+            .dispatched_requests
+            .contains_key(&child_id)
+    );
+
+    let serve_backfill = async {
+        let list = commands.recv().await.expect("loaded thread list request");
+        assert!(matches!(list.operation, CloudOperation::Request(request)
+            if matches!(request.as_ref(), ClientRequest::ThreadLoadedList { .. })));
+        list.response
+            .send(Ok(Ok(json!({"data": [child_id], "nextCursor": null}))))
+            .unwrap();
+        let read = commands.recv().await.expect("child thread read request");
+        assert!(matches!(read.operation, CloudOperation::Request(request)
+            if matches!(request.as_ref(), ClientRequest::ThreadRead { params, .. }
+                if params.thread_id == child.id && !params.include_turns)));
+        read.response
+            .send(Ok(Ok(json!({"thread": child, "readState": null}))))
+            .unwrap();
+    };
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let backfill = crate::boxed_future!(app.handle_event(
+        &mut tui,
+        &mut cloud,
+        AppEvent::BackfillResumedSubagents {
+            thread_id: root_id,
+            backend_id
+        },
+    ));
+    let (result, ()) = tokio::join!(backfill, serve_backfill);
+    result?;
+    assert!(
+        app.pending_app_server_requests
+            .contains_server_request(&request)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn overview_refresh_grows_visible_history_and_preserves_the_show_more_cursor() {
     let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
     let handle = AppServerClient::Cloud(client).request_handle();
@@ -135,8 +205,10 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
             .unwrap();
         next_cloud_page(commands, /*cursor*/ None).await
     };
-    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let size = Size::new(/*width*/ 115, /*height*/ 12);
+    let mut tui = crate::tui::test_support::make_test_tui_with_size(size)?;
     crate::app::test_support::enable_side_retention(&mut app)?;
+    app.local_settings.tui.animations = false;
     tui.set_owned_screen(/*owned*/ true)?;
     for key in [KeyCode::Esc, KeyCode::Enter] {
         if key == KeyCode::Enter {
@@ -145,6 +217,27 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
         }
         app.open_agents_overview(&cloud);
         let held_list = tokio::time::timeout(timeout, next_list(&mut commands)).await?;
+        if key == KeyCode::Esc {
+            let frame = crate::app::test_support::side_frame(&mut app, &mut tui, size)?;
+            let screen = frame
+                .lines()
+                .filter_map(|row| row.split_once('│').map(|(left, _)| left.trim_end()))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .replace(&test_path_display("/tmp/project"), "/tmp/project");
+            insta::assert_snapshot!("initial_discovery_with_current_task", screen);
+            let view = app.agents_overview.workspace.view.as_ref().unwrap();
+            let footers = [30, 31].map(|width| {
+                super::command_center::screen(view, width, size.height)
+                    .lines()
+                    .last()
+                    .unwrap()
+                    .trim()
+                    .to_string()
+            });
+            assert_eq!(footers, ["◌ Loading tasks…", "◌ Loading additional tasks…"]);
+            assert_eq!(app.overview_selected_thread_id(), Some(thread_id));
+        }
         Box::pin(app.handle_tui_event(&mut tui, &mut cloud, TuiEvent::Key(key.into()))).await?;
         if key == KeyCode::Enter {
             tokio::time::timeout(timeout, async {
@@ -169,6 +262,7 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
     // The previous archive was observed, but its unarchive notification was missed.
     app.agents_overview.threads.remove(&thread_id);
     app.agents_overview.removed_threads.insert(thread_id);
+    crate::app::test_support::enable_side_retention(&mut app)?;
     app.open_agents_overview(&cloud);
     let reopened = tokio::time::timeout(timeout, next_list(&mut commands)).await?;
     let mut listed = current.clone();
@@ -210,7 +304,11 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
         )))
         .unwrap();
     finish_overview_refresh(&mut app, &cloud, &mut events).await;
-    assert!(app.chat_widget.active_view_is(AGENTS_OVERVIEW_VIEW_ID));
+    let screen = crate::app::test_support::side_frame(&mut app, &mut tui, size)?;
+    assert!(!screen.contains("Loading tasks"));
+    assert!(!screen.contains("Loading additional tasks"));
+    assert!(screen.contains("? help  esc back"));
+    assert_eq!(app.overview_selected_thread_id(), Some(thread_id));
     assert!(!app.agents_overview.refresh_failed_backends.contains(&owner));
     assert_eq!(
         app.agents_overview.threads[&thread_id],

@@ -417,6 +417,11 @@ pub(crate) enum AppEvent {
     SelectAgentsOverviewThread {
         thread_id: ThreadId,
     },
+    /// Refresh the resumed task's agent list after its transcript replay reaches the screen.
+    BackfillResumedSubagents {
+        thread_id: ThreadId,
+        backend_id: crate::backend_id::BackendId,
+    },
     /// Create an empty session in a worktree from the selected project's default branch.
     NewAgentsOverviewWorktree {
         backend_id: Option<crate::backend_id::BackendId>,

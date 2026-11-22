@@ -630,7 +630,10 @@ impl App {
             };
             let destination = backends.session_at_mut(destination_slot);
             self.cancel_cloud_inventory_refresh(destination).await;
-            let bootstrap = match destination.bootstrap(&settings.config).await {
+            let bootstrap = match self
+                .wait_for_opening_task(tui, destination.bootstrap(&settings.config))
+                .await
+            {
                 Ok(bootstrap) => bootstrap,
                 Err(error) => {
                     let message = format!("Failed to prepare the conversation: {error}");

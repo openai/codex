@@ -38,6 +38,8 @@ pub(crate) enum ReducedMotionIndicator {
     StaticBullet,
 }
 
+pub(crate) const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Show the current loading glyph immediately and schedule the next frame.
 pub(crate) fn loading_glyph(
     started_at: Instant,
@@ -55,7 +57,6 @@ pub(crate) fn loading_glyph_with_delay(
     mode: MotionMode,
     requester: &FrameRequester,
 ) -> &'static str {
-    const FRAME_DURATION: Duration = Duration::from_millis(100);
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     if mode == MotionMode::Reduced {
         return "◌";
@@ -65,8 +66,8 @@ pub(crate) fn loading_glyph_with_delay(
         requester.schedule_frame_in(delay - elapsed);
         return "";
     }
-    requester.schedule_frame_in(FRAME_DURATION);
-    let frame = elapsed.as_millis() / FRAME_DURATION.as_millis();
+    requester.schedule_frame_in(LOADING_FRAME_INTERVAL);
+    let frame = elapsed.as_millis() / LOADING_FRAME_INTERVAL.as_millis();
     FRAMES[usize::try_from(frame).unwrap_or_default() % FRAMES.len()]
 }
 

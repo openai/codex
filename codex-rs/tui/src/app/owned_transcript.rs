@@ -655,7 +655,7 @@ impl App {
                 super::link_hover::paint_hover_foreground(area, frame.buffer);
             }
             if let Some(center) = center {
-                self.paint_command_center(frame, center, available);
+                self.paint_command_center(frame, center, available, &frames);
             }
             self.paint_centered_dialog(frame);
         })?;

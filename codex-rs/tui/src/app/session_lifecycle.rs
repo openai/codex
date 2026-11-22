@@ -37,7 +37,7 @@ pub(super) enum ThreadAttachPresentation {
     /// A fresh thread whose startup composer is already visible.
     FreshWithDraft,
     SessionLineage,
-    /// A resume whose outgoing events were drained and terminal cleared before capture.
+    /// Outgoing events were drained and the terminal handoff prepared before capture.
     SessionLineageAfterClear,
 }
 
@@ -1009,10 +1009,13 @@ impl App {
                 .get(&self.side_pair_key(id)?)
                 .map(|side| side.parent_thread_id)
         };
+        let docked_resume = self.docked_task_opening(tui);
         let preserve_screen = retain_side_view
-            && side_parent(thread_id).is_some_and(|parent| {
-                self.chat_widget.thread_id().and_then(side_parent) == Some(parent)
-            });
+            && (docked_resume
+                || side_parent(thread_id).is_some_and(|parent| {
+                    self.chat_widget.thread_id().and_then(side_parent) == Some(parent)
+                }));
+        self.startup_protected_input_boundary |= docked_resume;
         let mut init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
@@ -1752,6 +1755,15 @@ impl App {
         self.refresh_transcript_document_links();
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
+        let docked_resume = matches!(
+            presentation,
+            ThreadAttachPresentation::SessionLineage
+                | ThreadAttachPresentation::SessionLineageAfterClear
+        ) && self.docked_task_opening(tui);
+        // Replayed approvals need the same first-frame input quarantine as startup.
+        self.startup_protected_input_boundary |= docked_resume;
+        let preserve_screen =
+            docked_resume || matches!(presentation, ThreadAttachPresentation::FreshWithDraft);
         let presentation = match presentation {
             ThreadAttachPresentation::FreshAfterClear => ThreadAttachPresentation::Fresh,
             ThreadAttachPresentation::SessionLineageAfterClear => {
@@ -1762,18 +1774,18 @@ impl App {
                 presentation
             }
             ThreadAttachPresentation::Fresh | ThreadAttachPresentation::SessionLineage => {
-                tui.clear_for_thread_switch()?;
+                if !docked_resume {
+                    tui.clear_for_thread_switch()?;
+                }
                 presentation
             }
         };
         self.pending_thread_switch_resets += 1;
-        self.app_event_tx.send(
-            if matches!(presentation, ThreadAttachPresentation::FreshWithDraft) {
-                AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
-            } else {
-                AppEvent::ResetTranscriptForThreadSwitch
-            },
-        );
+        self.app_event_tx.send(if preserve_screen {
+            AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
+        } else {
+            AppEvent::ResetTranscriptForThreadSwitch
+        });
         self.reset_thread_event_state().await;
         let mut init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
@@ -2028,8 +2040,10 @@ impl App {
         handoff: std::sync::Arc<()>,
     ) -> Result<std::sync::Arc<()>> {
         self.drain_outgoing_thread_events().await;
-        // Keep the outgoing receiver and session in place if the terminal clear fails.
-        if let Err(error) = tui.clear_for_thread_switch() {
+        // A docked open keeps the outgoing frame until the synchronized destination draw.
+        if !self.docked_task_opening(tui)
+            && let Err(error) = tui.clear_for_thread_switch()
+        {
             drop(handoff);
             self.chat_widget.maybe_send_next_queued_input();
             return Err(error.into());

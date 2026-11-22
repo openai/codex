@@ -116,6 +116,14 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn protect_modal_from_held_activation_key(&mut self, now: Instant) {
+        if !self.bottom_pane.reports_key_releases()
+            && let Some(guard) = &mut self.bottom_pane.view_transition_key_guard
+        {
+            guard.extend_for_protected_view(now);
+        }
+    }
+
     pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .consume_view_transition_key_event(key_event)

@@ -1149,6 +1149,7 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
         origin_url: None,
     });
     task.updated_at = 4_000_000_000;
+    app.agents_overview.initialized.insert(server.backend_id());
     app.agents_overview.threads.insert(id, Some(task));
     app.agents_overview
         .pins_by_backend

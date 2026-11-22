@@ -216,7 +216,11 @@ impl App {
     /// Keep a visible modal closed to input if the terminal has not settled yet. The next input
     /// event retries the drain instead of acting on the modal; server events can continue meanwhile.
     pub(super) fn discard_startup_modal_input(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        match tui.discard_pending_input_before_interactive_screen() {
+        let drained = tui.discard_pending_input_before_interactive_screen();
+        // A press-only terminal can report the held key again after the input drain.
+        self.chat_widget
+            .protect_modal_from_held_activation_key(Instant::now());
+        match drained {
             Ok(()) => self.startup_pending_protected_request = false,
             Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
                 self.startup_pending_protected_request = true;
@@ -1666,7 +1670,15 @@ See the Codex keymap documentation for supported actions and examples."
                             continue;
                         }
                         if let AppEvent::ResumeBackendSession(target) = event {
-                            match app.resume_backend_session(tui, &mut backends, target).await {
+                            let thread_id = target.thread_id;
+                            let result = app.resume_backend_session(tui, &mut backends, target).await;
+                            if app.finish_docked_task_opening(tui, thread_id)
+                                && app.chat_widget.has_active_modal()
+                                && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
+                            {
+                                break Err(err);
+                            }
+                            match result {
                                 Ok(AppRunControl::Continue) => continue,
                                 Ok(AppRunControl::Exit(reason)) => break Ok(reason),
                                 Err(error) => break Err(error),
