@@ -3554,18 +3554,26 @@ async fn malformed_untrusted_linked_worktree_does_not_read_root_hooks() -> std::
 }
 
 #[tokio::test]
-async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_config_toml()
+async fn linked_worktree_project_layers_skip_non_directory_base_config_and_inherit_nested_hooks()
 -> std::io::Result<()> {
     let tmp = tempdir()?;
     let repo_root = tmp.path().join("repo");
     let worktree_root = tmp.path().join("worktree");
+    let worktree_child = worktree_root.join("child");
 
-    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(worktree_child.join(".codex")).await?;
     write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    tokio::fs::write(repo_root.join(".codex"), "").await?;
     write_project_hook_config(
-        &repo_root.join(".codex"),
+        &worktree_root.join(".codex"),
+        Some("worktree-root"),
+        "echo worktree hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &repo_root.join("child/.codex"),
         /*foo*/ None,
-        "echo repo root hook",
+        "echo repo child hook",
     )
     .await?;
 
@@ -3579,7 +3587,7 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
     )
     .await?;
 
-    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_root)?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_child)?;
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
         &codex_home,
@@ -3594,16 +3602,20 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
         .layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
-    assert_eq!(project_layers.len(), 1);
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(
+        project_layers[1].config,
+        TomlValue::Table(toml::toml! { foo = "worktree-root" })
+    );
     assert_eq!(
         project_layers[0].hooks_config_folder(),
         Some(AbsolutePathBuf::from_absolute_path(
-            repo_root.join(".codex")
+            repo_root.join("child/.codex")
         )?)
     );
     assert_eq!(
         project_hook_command(project_layers[0]),
-        Some("echo repo root hook")
+        Some("echo repo child hook")
     );
 
     Ok(())

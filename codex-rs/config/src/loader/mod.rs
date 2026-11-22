@@ -2076,7 +2076,12 @@ async fn load_root_checkout_project_config(
                 };
                 parsed
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
                 TomlValue::Table(toml::map::Map::new())
             }
             Err(err) => {
