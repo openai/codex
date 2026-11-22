@@ -228,6 +228,24 @@ impl TextLayout {
         }
     }
 
+    pub(super) fn fenced_offsets(&self) -> Vec<usize> {
+        self.logical_sources()
+            .filter_map(|(start, origin)| {
+                origin
+                    .copy
+                    .as_ref()
+                    .is_some_and(|copy| copy.fenced_code || copy.code_source.is_some())
+                    .then_some(start)
+            })
+            .collect()
+    }
+
+    pub(super) fn is_fenced_range(offsets: &[usize], range: &Range<usize>) -> bool {
+        offsets
+            .get(offsets.partition_point(|offset| *offset < range.start))
+            .is_some_and(|offset| *offset <= range.end)
+    }
+
     /// Append a clipped interaction row outside the copied and searched source text.
     pub(super) fn with_disclosure_control(self, label: String) -> Self {
         let source_offset = self.text.len();

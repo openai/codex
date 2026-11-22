@@ -120,12 +120,13 @@ impl TranscriptView {
             let Some(layout) = self.layout(cells, index) else {
                 continue;
             };
-            let mut ranges = if self.mode == crate::history_cell::HistoryRenderMode::Raw
-                && !self.detailed
-                || user.is_some_and(|user| !user.uses_markdown())
-            {
-                literal_block_ranges(layout.text(), user)
+            let literal = self.mode == HistoryRenderMode::Raw && !self.detailed
+                || user.is_some_and(|user| !user.uses_markdown());
+            let mut fenced = Vec::new();
+            let mut ranges = if literal {
+                literal_block_ranges(layout.text(), user, &mut fenced)
             } else {
+                fenced = layout.fenced_offsets();
                 layout.copy_block_ranges()
             };
             let user_source = user
@@ -156,7 +157,9 @@ impl TranscriptView {
                 let mut codes = targets
                     .iter()
                     .filter_map(|target| match target {
-                        crate::markdown::CopyTarget::Code { content, .. } => Some(content),
+                        crate::markdown::CopyTarget::Code { content, .. } => {
+                            Some(Arc::clone(content))
+                        }
                         crate::markdown::CopyTarget::Quote(_) => None,
                     })
                     .collect::<Vec<_>>();
@@ -177,25 +180,14 @@ impl TranscriptView {
                         _ => {}
                     }
                 }
-                let normalized = |text: &str| {
-                    crate::markdown::normalize_markdown_for_rendering(text)
-                        .lines()
-                        .map(str::trim_end)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                        .trim()
-                        .to_owned()
-                };
+                let normalized = normalized;
                 for (range, label, payload) in &mut ranges {
-                    if *label == "Code block" {
+                    if *label == "Code block" && TextLayout::is_fenced_range(&fenced, range) {
                         // Match rendered text, not ordinal position: indented code and
                         // source-preserving tables need not have a fenced counterpart.
                         let displayed = payload.as_deref().unwrap_or(&layout.text()[range.clone()]);
-                        if let Some(at) = codes
-                            .iter()
-                            .position(|code| normalized(code) == normalized(displayed))
-                        {
-                            *payload = Some(codes.remove(at).to_string());
+                        if let Some(code) = take_matching_code(&mut codes, displayed) {
+                            *payload = Some(code.to_string());
                         }
                     } else if *label == "Blockquote"
                         && let Some(displayed) = payload.as_deref()
@@ -346,6 +338,24 @@ impl TranscriptView {
     }
 }
 
+pub(super) fn take_matching_code(codes: &mut Vec<Arc<str>>, displayed: &str) -> Option<Arc<str>> {
+    let displayed = normalized(displayed);
+    let at = codes
+        .iter()
+        .position(|code| normalized(code) == displayed)?;
+    Some(codes.remove(at))
+}
+
+pub(super) fn normalized(text: &str) -> String {
+    crate::markdown::normalize_markdown_for_rendering(text)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
+}
+
 fn is_response(cell: &Arc<dyn HistoryCell>) -> bool {
     cell.as_any().is::<AgentMarkdownCell>() || cell.as_any().is::<ProposedPlanCell>()
 }
@@ -353,13 +363,14 @@ fn is_response(cell: &Arc<dyn HistoryCell>) -> bool {
 fn literal_block_ranges(
     text: &str,
     user: Option<&UserHistoryCell>,
+    fenced: &mut Vec<usize>,
 ) -> Vec<(Range<usize>, &'static str, Option<String>)> {
     use pulldown_cmark::Event;
     use pulldown_cmark::Tag;
     use pulldown_cmark::TagEnd;
     let mut ranges = Vec::new();
     let mut depth = 0;
-    let mut code: Option<(Range<usize>, String)> = None;
+    let mut code = None;
     for (event, range) in pulldown_cmark::Parser::new(text).into_offset_iter() {
         match event {
             Event::Start(Tag::BlockQuote) => {
@@ -372,11 +383,11 @@ fn literal_block_ranges(
                 depth += 1;
             }
             Event::End(TagEnd::BlockQuote) => depth -= 1,
-            Event::Start(Tag::CodeBlock(_)) => {
-                code = Some((range.start..range.start, String::new()))
+            Event::Start(Tag::CodeBlock(kind)) => {
+                code = Some((range.start..range.start, String::new(), kind));
             }
             Event::Text(text) => {
-                if let Some((source, content)) = code.as_mut() {
+                if let Some((source, content, _)) = code.as_mut() {
                     content.push_str(&text);
                     if source.start == source.end {
                         source.start = range.start;
@@ -385,7 +396,12 @@ fn literal_block_ranges(
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
-                if let Some((range, content)) = code.take().filter(|(range, _)| !range.is_empty()) {
+                if let Some((range, content, kind)) =
+                    code.take().filter(|(range, _, _)| !range.is_empty())
+                {
+                    if matches!(kind, pulldown_cmark::CodeBlockKind::Fenced(_)) {
+                        fenced.push(range.start);
+                    }
                     ranges.push((range, "Code block", Some(content)));
                 }
             }

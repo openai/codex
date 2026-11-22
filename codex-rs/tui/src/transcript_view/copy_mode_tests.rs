@@ -321,7 +321,8 @@ fn rendered_mermaid_copies_source() {
 
 #[test]
 fn copy_source_survives_raw_rich_rendering_and_whitespace_normalization() {
-    let source = "Before\r\n\r\n```sh\r\necho x  \r\n  \r\n```\r\n\r\n> **quote**\r\n";
+    let source =
+        "Before\r\n\r\n    echo x\r\n\r\n```sh\r\necho x  \r\n  \r\n```\r\n\r\n> **quote**\r\n";
     let displayed = crate::git_action_directives::parse_assistant_markdown(source, Path::new("/"))
         .visible_markdown;
     for mode in [
@@ -528,7 +529,8 @@ fn copying_a_disabled_fenced_table_uses_the_original_body() {
         ..original
     });
     let body = "| Name | Value |\r\n|---|---|\r\n| alpha | beta |  \r\n";
-    let message = format!("Intro\r\n\r\n```md\r\n{body}```\r\n\r\n```sh\r\necho done\r\n```\r\n");
+    let bare = "| Name | Value |\n|---|---|\n| alpha | beta |";
+    let message = format!("{bare}\n\n```md\r\n{body}```\r\n\r\n```sh\r\necho done\r\n```\r\n");
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(crate::history_cell::new_user_prompt(
         message.clone(),
         Vec::new(),
@@ -536,12 +538,14 @@ fn copying_a_disabled_fenced_table_uses_the_original_body() {
         Vec::new(),
     ))];
     let mut view = TranscriptView::default();
-    let buffer = render(&mut view, &cells, /*width*/ 50, /*height*/ 12);
+    let buffer = render(&mut view, &cells, /*width*/ 50, /*height*/ 18);
     assert!(text(&buffer).contains("```md"));
     view.begin_copy_mode(&cells, /*guard*/ None);
     assert_eq!(payload(&mut view, &cells), "echo done\r\n");
     view.move_copy_target(&cells, KeyCode::Up);
     assert_eq!(payload(&mut view, &cells), body);
+    view.move_copy_target(&cells, KeyCode::Up);
+    assert_eq!(payload(&mut view, &cells), bare);
     view.move_copy_target(&cells, KeyCode::Up);
     assert_eq!(payload(&mut view, &cells), message.replace('\r', ""));
     preferences::init(original);

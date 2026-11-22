@@ -121,6 +121,7 @@ pub(crate) struct CopyLine {
     /// Restore the containing item when a multiline selection starts in its later paragraph.
     pub(crate) item_prefix: String,
     pub(crate) code: bool,
+    pub(crate) fenced_code: bool,
     /// Language of the displayed code, absent when the renderer replaces its body.
     pub(crate) code_language: Option<Arc<str>>,
     /// Source shared by rows when rendering replaces code with a diagram or table.

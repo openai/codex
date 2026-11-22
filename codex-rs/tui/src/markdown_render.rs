@@ -552,6 +552,7 @@ struct Writer<'a, 'policy> {
     last_task_marker_end: usize,
     in_paragraph: bool,
     in_code_block: bool,
+    fence_start: Option<usize>,
     code_block_lang: Option<String>,
     code_block_buffer: String,
     code_block_content: Range<usize>,
@@ -600,6 +601,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             last_task_marker_end: 0,
             in_paragraph: false,
             in_code_block: false,
+            fence_start: None,
             code_block_lang: None,
             code_block_buffer: String::new(),
             code_block_content: 0..0,
@@ -673,6 +675,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             }
             Event::Text(text) => {
                 if self.in_code_block {
+                    // A bare table preserved as code has no language and its text starts
+                    // at the block boundary. A real fence without a language starts its
+                    // text after the opener.
+                    if self.fence_start == Some(range.start) && self.code_block_lang.is_none() {
+                        self.fence_start = None;
+                    }
                     self.code_block_content.start = self.code_block_content.start.min(range.start);
                     self.code_block_content.end = range.end;
                 }
@@ -750,7 +758,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
                     CodeBlockKind::Indented => None,
                 };
-                self.start_codeblock(lang, indent)
+                let fence_start = lang.as_ref().map(|_| range.start);
+                self.start_codeblock(lang, indent);
+                self.fence_start = fence_start;
             }
             Tag::List(start) => {
                 if self.pending_marker_line
@@ -1281,6 +1291,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
         self.needs_newline = true;
         self.in_code_block = false;
+        self.fence_start = None;
         self.indent_stack.pop();
     }
 
@@ -2628,6 +2639,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         self.copy_line.continuation = self.copy_prefix(/*pending_marker_line*/ false);
         self.copy_line.item_prefix = self.copy_prefix(/*pending_marker_line*/ true);
         self.copy_line.code = self.in_code_block;
+        self.copy_line.fenced_code = self.fence_start.is_some();
         self.copy_line.code_source = self.transformed_code_source.clone();
         self.copy_line.quote_source = self.quote_sources.first().cloned();
         // Heading markers are already visible; retain them as Markdown syntax.
