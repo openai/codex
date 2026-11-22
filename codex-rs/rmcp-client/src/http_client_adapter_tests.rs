@@ -609,3 +609,102 @@ async fn automatic_event_stream_reconnect_refreshes_request_auth() -> anyhow::Re
     client.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn rejection_of_a_reply_cannot_answer_a_request_with_the_same_id() -> anyhow::Result<()> {
+    use std::sync::Arc;
+
+    use codex_exec_server::RouteAwareHttpClient;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use rmcp::model::JsonRpcMessage;
+    use rmcp::transport::streamable_http_client::StreamableHttpClient;
+    use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+
+    let rejection = json!({
+        "jsonrpc": "2.0", "id": 7,
+        "error": {"code": -32600, "message": "unknown request"},
+    });
+    let server = MockServer::start().await;
+    for (path, response) in [
+        (
+            "/reject",
+            ResponseTemplate::new(409).set_body_json(&rejection),
+        ),
+        (
+            "/json",
+            ResponseTemplate::new(200).set_body_json(&rejection),
+        ),
+        (
+            "/sse",
+            ResponseTemplate::new(200).set_body_raw(
+                format!("event: message\ndata: {rejection}\n\n"),
+                "text/event-stream",
+            ),
+        ),
+        ("/ack", ResponseTemplate::new(202)),
+        ("/empty", ResponseTemplate::new(204)),
+    ] {
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path(path))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+    }
+    let adapter = super::StreamableHttpClientAdapter::new(
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        HeaderMap::new(),
+        /*auth_provider*/ None,
+        /*has_configured_headers*/ false,
+        StreamableHttpRedirectMode::Legacy,
+        Default::default(),
+    );
+    let post = |path: &str, message| {
+        adapter.post_message(
+            format!("{}{path}", server.uri()).into(),
+            message,
+            Some("same-session".into()),
+            /*auth_token*/ None,
+            Default::default(),
+        )
+    };
+    let reply: rmcp::model::ClientJsonRpcMessage = serde_json::from_value(json!({
+        "jsonrpc": "2.0", "id": 7, "result": {"action": "accept"},
+    }))?;
+    // The two peers number their requests independently. Only a POST carrying
+    // our request may deliver the remote error to our pending request ID 7.
+    let (request, rejected, json, sse) = tokio::join!(
+        post(
+            "/reject",
+            serde_json::from_value(json!({
+                "jsonrpc": "2.0", "id": 7, "method": "ping",
+            }))?
+        ),
+        post("/reject", reply.clone()),
+        post("/json", reply.clone()),
+        post("/sse", reply.clone()),
+    );
+    let StreamableHttpPostResponse::Json(error @ JsonRpcMessage::Error(_), _) = request? else {
+        anyhow::bail!("request lost its JSON-RPC error");
+    };
+    assert_eq!(serde_json::to_value(error)?, rejection);
+    assert_eq!(
+        [rejected.is_err(), json.is_err(), sse.is_err()],
+        [true; 3],
+        "409 JSON, 200 JSON, and 200 SSE must not dispatch messages for a reply"
+    );
+    for path in ["/ack", "/empty"] {
+        assert!(matches!(
+            post(path, reply.clone()).await?,
+            StreamableHttpPostResponse::Accepted
+        ));
+    }
+    Ok(())
+}

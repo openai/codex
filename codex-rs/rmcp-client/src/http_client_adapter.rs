@@ -338,6 +338,21 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
 
+        // A reply answers the peer's request. A body returned to that POST
+        // must never resolve one of our own pending requests with the same ID.
+        if matches!(
+            message,
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
+        ) {
+            return Err(StreamableHttpError::UnexpectedServerResponse(
+                format!(
+                    "expected acknowledgement for MCP reply, got HTTP {}",
+                    response.status
+                )
+                .into(),
+            ));
+        }
+
         let content_type = response_header(&response.headers, CONTENT_TYPE);
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
         // rmcp can send a second sessionless probe after a correlated -32022.
