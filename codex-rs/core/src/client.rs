@@ -1992,10 +1992,8 @@ impl ModelClientSession {
         };
         let connection_key = ResponsesConnectionKey::new(&api_provider, auth_revision);
         let reset_reason = match self.websocket_session.connection.as_ref() {
-            // Reauthenticate before each runtime request; an open socket cannot prove liveness.
             Some(_)
-                if runtime_id.is_some()
-                    || self.websocket_session.responses_headers != *responses_headers
+                if self.websocket_session.responses_headers != *responses_headers
                     || self.websocket_session.connection_key.as_ref() != Some(&connection_key)
                     || self.websocket_session.runtime_id != runtime_id
                     || self.websocket_session.parent_routing_affinity
