@@ -285,6 +285,11 @@ fn default_owned_screen_entry_paints_before_sync_ends_and_exit_clears_inline_dra
             terminal.screen_contents()
         );
     }
+    terminal.read_output(Duration::ZERO)?;
+    ensure!(
+        !contains_bytes(&terminal.output, b"\x1b[0 q"),
+        "default session reset the host cursor shape"
+    );
     terminal.write_input(b"shell\n")?;
     let mut shell_input = [0; 6];
     terminal.slave.read_exact(&mut shell_input)?;
@@ -320,6 +325,10 @@ fn fullscreen_transcript_can_opt_out_to_terminal_scrollback() -> Result<()> {
             .windows(b"\x1b[?1049h".len())
             .any(|bytes| bytes == b"\x1b[?1049h"),
         "fullscreen opt-out entered the alternate screen"
+    );
+    ensure!(
+        !contains_bytes(&terminal.output, b"\x1b[0 q"),
+        "scrollback composer reset the host cursor shape"
     );
     Ok(())
 }

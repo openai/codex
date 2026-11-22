@@ -23,6 +23,8 @@
 // SOFTWARE.
 use std::io;
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::RestorePosition;
@@ -52,6 +54,9 @@ use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
 
 mod cursor;
+
+// Panic and handoff cleanup cannot access the Terminal. Only the stdout TUI sets this flag.
+pub(crate) static STDOUT_CURSOR_STYLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 #[path = "custom_terminal_test_support.rs"]
@@ -151,6 +156,9 @@ where
     pub hidden_cursor: bool,
     /// Last cursor style sent successfully, so ordinary redraws do not repaint its repair anchor.
     last_cursor_style: Option<SetCursorStyle>,
+    /// Once we set a shape, keep the existing reset behavior even across cache invalidation.
+    cursor_style_changed: bool,
+    pub(crate) tracks_stdout_cursor: bool,
     /// Area of the viewport
     pub viewport_area: Rect,
     /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.
@@ -172,7 +180,9 @@ where
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
         // Attempt to restore the cursor state
-        if let Err(err) = self.reset_cursor_style() {
+        if self.cursor_style_changed
+            && let Err(err) = self.reset_cursor_style()
+        {
             eprintln!("Failed to reset the cursor style: {err}");
         }
 
@@ -232,6 +242,8 @@ where
             current: 0,
             hidden_cursor: false,
             last_cursor_style: None,
+            cursor_style_changed: false,
+            tracks_stdout_cursor: false,
             viewport_area: Rect::new(
                 /*x*/ 0,
                 cursor_pos.y,
@@ -526,7 +538,9 @@ where
             None if !self.hidden_cursor => self.hide_cursor()?,
             None => {}
             Some(position) => {
-                self.set_cursor_style_with_repair(cursor_style)?;
+                if self.cursor_style_changed || cursor_style != SetCursorStyle::DefaultUserShape {
+                    self.set_cursor_style_with_repair(cursor_style)?;
+                }
                 self.set_cursor_position(position)?;
                 self.show_cursor()?;
             }
@@ -555,7 +569,17 @@ where
 
     /// Sets the visible terminal cursor style.
     pub fn set_cursor_style(&mut self, style: SetCursorStyle) -> io::Result<()> {
+        let first_override =
+            !self.cursor_style_changed && style != SetCursorStyle::DefaultUserShape;
+        // Publish the first override under the same stdout lock as panic cleanup.
+        let _lock = (first_override && self.tracks_stdout_cursor).then(|| io::stdout().lock());
         queue!(self.backend, style)?;
+        if first_override {
+            self.cursor_style_changed = true;
+            if self.tracks_stdout_cursor {
+                STDOUT_CURSOR_STYLED.store(true, Ordering::Relaxed);
+            }
+        }
         self.last_cursor_style = Some(style);
         Ok(())
     }

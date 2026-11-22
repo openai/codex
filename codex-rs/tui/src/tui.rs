@@ -380,11 +380,13 @@ fn restore_common(
     if let Err(err) = windows_console::restore_input_mode() {
         first_error.get_or_insert(err);
     }
-    if let Err(err) = execute!(
-        stdout(),
-        SetCursorStyle::DefaultUserShape,
-        crossterm::cursor::Show
-    ) {
+    let mut out = stdout().lock();
+    if custom_terminal::STDOUT_CURSOR_STYLED.load(Ordering::Relaxed)
+        && let Err(err) = crossterm::queue!(out, SetCursorStyle::DefaultUserShape)
+    {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = execute!(out, crossterm::cursor::Show) {
         first_error.get_or_insert(err);
     }
     match first_error {
@@ -509,6 +511,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
+    custom_terminal::STDOUT_CURSOR_STYLED.store(false, Ordering::Relaxed);
     let mut restore_guard = TerminalInitializationGuard { active: true };
     let tmux_options = set_modes()?;
 
@@ -790,10 +793,11 @@ impl Tui {
     }
 
     pub(crate) fn new(
-        terminal: Terminal,
+        mut terminal: Terminal,
         enhanced_keys_supported: bool,
         stderr_guard: terminal_stderr::TerminalStderrGuard,
     ) -> Self {
+        terminal.tracks_stdout_cursor = true;
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 

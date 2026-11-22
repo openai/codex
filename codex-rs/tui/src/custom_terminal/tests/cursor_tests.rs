@@ -71,6 +71,7 @@ fn terminal_draw_repaints_the_cursor_anchor_only_when_its_style_needs_restoring(
                 let buffer = frame.buffer_mut();
                 buffer.set_string(0, 0, "transcript", Style::default());
                 buffer.set_string(10, 1, marker, Style::default());
+                frame.set_cursor_style(SetCursorStyle::SteadyBar);
                 frame.set_cursor_position((4, 1));
             })
             .expect("draw");
@@ -98,6 +99,9 @@ fn terminal_draw_repairs_styled_anchor_on_cursor_only_frames() {
         /*x*/ 0, /*y*/ 1, /*width*/ 12, /*height*/ 1,
     );
     terminal.set_viewport_area(area);
+    terminal
+        .set_cursor_style(SetCursorStyle::SteadyBar)
+        .unwrap();
     let mut frames = Vec::new();
     let mut parser =
         vt100::Parser::new(/*rows*/ 2, /*cols*/ 12, /*scrollback_len*/ 0);
@@ -143,6 +147,9 @@ fn terminal_draw_repairs_owned_wide_hyperlink_after_skipped_glyphs() {
         /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 1,
     );
     terminal.set_viewport_area(area);
+    terminal
+        .set_cursor_style(SetCursorStyle::SteadyBar)
+        .unwrap();
     let mut frames = Vec::new();
     for _ in 0..2 {
         terminal.backend_mut().output.clear();
@@ -171,6 +178,9 @@ fn terminal_draw_repairs_single_column_without_scrolling() {
         /*x*/ 0, /*y*/ 0, /*width*/ 1, /*height*/ 1,
     );
     terminal.set_viewport_area(area);
+    terminal
+        .set_cursor_style(SetCursorStyle::SteadyBar)
+        .unwrap();
     let mut frames = Vec::new();
     let mut parser =
         vt100::Parser::new(/*rows*/ 1, /*cols*/ 1, /*scrollback_len*/ 1);
