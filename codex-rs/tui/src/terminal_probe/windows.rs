@@ -34,7 +34,9 @@ const WINDOWS_PROBE_READ_RECORDS: usize = 64;
 /// Windows Terminal and xterm.js can render a theme unrelated to ConPTY's console color table.
 /// Their OSC responses share the input queue with user input, so the probe preserves and restores
 /// the original console records without changing Windows' input-record mode.
-pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
+pub(crate) fn default_colors(
+    timeout: Duration,
+) -> io::Result<Option<crate::terminal_palette::DefaultColors>> {
     let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
         return Ok(None);
     };
@@ -47,7 +49,7 @@ pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColo
             background = ?colors.bg,
             "using Windows terminal OSC default colors"
         );
-        return Ok(Some(colors));
+        return Ok(Some(colors.into()));
     }
 
     // ConPTY's PseudoConsoleWindow can report itself as visible, but its palette does not
@@ -76,7 +78,7 @@ pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColo
             "using Windows console palette default colors"
         );
     }
-    Ok(colors)
+    Ok(colors.map(Into::into))
 }
 
 fn query_osc_default_colors(

@@ -26,7 +26,8 @@ mod windows_replay;
 /// Default wall-clock budget for each terminal probe or startup probe group.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 250);
 
-/// Default terminal foreground and background colors reported by OSC 10 and OSC 11.
+/// A complete foreground/background pair from the Windows probe or a test fixture.
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) struct DefaultColors {
     /// Default foreground color as an 8-bit RGB tuple.
@@ -47,10 +48,10 @@ fn alternate_scroll_report(input: &[u8]) -> Option<bool> {
 #[cfg(unix)]
 #[cfg_attr(test, allow(dead_code))]
 mod imp {
-    use super::DefaultColors;
     use super::parse_default_colors;
     use super::startup_replay::parse_startup_input;
     use super::terminal_identity;
+    use crate::terminal_palette::DefaultColors;
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::io;
@@ -265,14 +266,16 @@ mod imp {
 
     /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
     ///
-    /// Foreground and background are only useful as a pair for palette calculations, so a missing
-    /// response from either slot returns `Ok(None)`. Both queries are sent before reading so a
-    /// terminal that supports palette replies gets the full bounded window to return both values,
-    /// while unsupported terminals still pay one bounded wait instead of one wait per slot.
+    /// Wait for both replies, retaining a lone background when the probe ends.
     pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
         let mut tty = Tty::open()?;
         tty.write_all(b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
-        read_until(&mut tty, timeout, |buffer| parse_default_colors(buffer))
+        let mut colors = None;
+        read_until(&mut tty, timeout, |buffer| {
+            colors = parse_default_colors(buffer);
+            colors?.fg
+        })?;
+        Ok(colors)
     }
 
     /// Queries the terminal cursor position while normal input polling is paused.
@@ -435,7 +438,10 @@ mod imp {
         if probe.cursor_position.is_none() {
             probe.cursor_position = parse_cursor_position(buffer);
         }
-        if probe.default_colors.is_none() {
+        if probe
+            .default_colors
+            .is_none_or(|colors| colors.fg.is_none())
+        {
             probe.default_colors = parse_default_colors(buffer);
         }
         if probe.terminal_app_over_ssh.is_none() {
@@ -465,7 +471,9 @@ mod imp {
         keyboard_probe: StartupKeyboardEnhancementProbe,
     ) -> bool {
         probe.cursor_position.is_some()
-            && probe.default_colors.is_some()
+            && probe
+                .default_colors
+                .is_some_and(|colors| colors.fg.is_some())
             && probe.terminal_app_over_ssh.is_some()
             && (keyboard_probe == StartupKeyboardEnhancementProbe::Skip
                 || probe.keyboard_enhancement_supported.is_some())
@@ -716,10 +724,24 @@ mod imp {
                 kitty_graphics: false,
             };
             let mut saw_supported_keyboard = false;
+            let mut input =
+                b"\x1B[?1007;1$y\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B[?7u"
+                    .to_vec();
             update_startup_probe(
                 &mut probe,
                 &mut saw_supported_keyboard,
-                b"\x1B[?1007;1$y\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[?7u",
+                &input,
+                StartupKeyboardEnhancementProbe::Query,
+            );
+            assert!(!startup_probe_complete(
+                &probe,
+                StartupKeyboardEnhancementProbe::Query
+            ));
+            input.extend_from_slice(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\");
+            update_startup_probe(
+                &mut probe,
+                &mut saw_supported_keyboard,
+                &input,
                 StartupKeyboardEnhancementProbe::Query,
             );
 
@@ -729,7 +751,7 @@ mod imp {
                     alternate_scroll_enabled: Some(true),
                     cursor_position: Some(Position { x: 9, y: 19 }),
                     default_colors: Some(DefaultColors {
-                        fg: (238, 238, 238),
+                        fg: Some((238, 238, 238)),
                         bg: (17, 17, 17),
                     }),
                     keyboard_enhancement_supported: Some(true),
@@ -782,12 +804,12 @@ mod imp {
         }
 
         #[test]
-        fn missing_identity_remains_unknown_at_the_deadline() {
-            let mut tty = tty_with_buffered_input(b"\x1b[?1;2c");
-            let mut buffer = Vec::new();
+        fn startup_deadline_preserves_background_without_foreground_or_identity() {
+            let mut tty = tty_with_buffered_input(b"");
+            let mut buffer = b"\x1b[?1;2c\x1b]11;rgb:1b1b/1b1b/1b1b\x07".to_vec();
             let probe = read_startup_probe(
                 &mut tty,
-                Duration::from_millis(/*millis*/ 5),
+                Duration::ZERO,
                 StartupKeyboardEnhancementProbe::Skip,
                 /*query_identity*/ true,
                 /*probe_herdr*/ false,
@@ -795,6 +817,10 @@ mod imp {
             )
             .expect("finish within probe deadline");
             assert_eq!(probe.terminal_app_over_ssh, None);
+            let colors = probe.default_colors.expect("OSC 11 background");
+            assert_eq!(colors.fg, None);
+            let fill = crate::style::user_message_bg_rgb(colors.bg);
+            insta::assert_snapshot!(format!("{fill:?}"), @"(54, 54, 54)");
         }
 
         #[test]
@@ -822,7 +848,7 @@ mod imp {
                     alternate_scroll_enabled: Some(false),
                     cursor_position: Some(Position { x: 9, y: 19 }),
                     default_colors: Some(DefaultColors {
-                        fg: (238, 238, 238),
+                        fg: Some((238, 238, 238)),
                         bg: (17, 17, 17),
                     }),
                     keyboard_enhancement_supported: Some(true),
@@ -874,10 +900,10 @@ fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
 }
 
 #[cfg(any(unix, test))]
-fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
-    let fg = parse_osc_color(buffer, /*slot*/ 10)?;
+fn parse_default_colors(buffer: &[u8]) -> Option<crate::terminal_palette::DefaultColors> {
     let bg = parse_osc_color(buffer, /*slot*/ 11)?;
-    Some(DefaultColors { fg, bg })
+    let fg = parse_osc_color(buffer, /*slot*/ 10);
+    Some(crate::terminal_palette::DefaultColors { fg, bg })
 }
 
 #[cfg(any(unix, windows, test))]
@@ -934,6 +960,7 @@ pub(crate) use imp::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_palette::DefaultColors;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -965,14 +992,14 @@ mod tests {
         assert_eq!(
             parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:1111/1111/1111\x07"),
             Some(DefaultColors {
-                fg: (238, 238, 238),
+                fg: Some((238, 238, 238)),
                 bg: (17, 17, 17)
             })
         );
         assert_eq!(
             parse_default_colors(b"\x1B]11;rgb:1111/1111/1111\x07\x1B]10;rgb:eeee/eeee/eeee\x1B\\"),
             Some(DefaultColors {
-                fg: (238, 238, 238),
+                fg: Some((238, 238, 238)),
                 bg: (17, 17, 17)
             })
         );
@@ -1005,7 +1032,7 @@ mod tests {
                 b"typed\x1B]10;rgb:eeee/eeee/eeee\x1B\\noise\x1B]11;rgb:1111/1111/1111\x07"
             ),
             Some(DefaultColors {
-                fg: (238, 238, 238),
+                fg: Some((238, 238, 238)),
                 bg: (17, 17, 17),
             })
         );

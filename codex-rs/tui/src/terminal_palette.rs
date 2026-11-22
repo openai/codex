@@ -89,10 +89,20 @@ fn best_color_for_color_level(target: (u8, u8, u8), color_level: StdoutColorLeve
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DefaultColors {
-    fg: (u8, u8, u8),
-    bg: (u8, u8, u8),
+    pub(crate) fg: Option<(u8, u8, u8)>,
+    pub(crate) bg: (u8, u8, u8),
+}
+
+#[cfg(any(windows, test))]
+impl From<crate::terminal_probe::DefaultColors> for DefaultColors {
+    fn from(colors: crate::terminal_probe::DefaultColors) -> Self {
+        Self {
+            fg: Some(colors.fg),
+            bg: colors.bg,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,11 +127,12 @@ pub(crate) fn with_test_default_colors<T>(
     colors: impl Into<Option<crate::terminal_probe::DefaultColors>>,
     render: impl FnOnce() -> T,
 ) -> T {
+    with_test_palette(colors.into().map(DefaultColors::from), render)
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_palette<T>(colors: Option<DefaultColors>, render: impl FnOnce() -> T) -> T {
     TEST_DEFAULT_COLORS.with(|override_colors| {
-        let colors = colors.into().map(|colors| DefaultColors {
-            fg: colors.fg,
-            bg: colors.bg,
-        });
         let previous = override_colors.replace(Some(colors));
         let result = render();
         override_colors.set(previous);
@@ -130,7 +141,7 @@ pub(crate) fn with_test_default_colors<T>(
 }
 
 pub fn default_fg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.fg)
+    default_colors().and_then(|c| c.fg)
 }
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
@@ -138,9 +149,7 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
 }
 
 #[cfg(any(unix, windows))]
-pub(crate) fn set_default_colors_from_startup_probe(
-    colors: Option<crate::terminal_probe::DefaultColors>,
-) {
+pub(crate) fn set_default_colors_from_startup_probe(colors: Option<DefaultColors>) {
     imp::set_default_colors_from_startup_probe(colors);
 }
 
@@ -185,14 +194,9 @@ mod imp {
         cache.get_or_init_with(query_default_colors)
     }
 
-    pub(super) fn set_default_colors_from_startup_probe(
-        colors: Option<crate::terminal_probe::DefaultColors>,
-    ) {
+    pub(super) fn set_default_colors_from_startup_probe(colors: Option<DefaultColors>) {
         if let Ok(mut cache) = default_colors_cache().lock() {
-            cache.value = colors.map(|colors| DefaultColors {
-                fg: colors.fg,
-                bg: colors.bg,
-            });
+            cache.value = colors;
             cache.attempted = true;
         }
     }
@@ -206,10 +210,6 @@ mod imp {
         crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT)
             .ok()
             .flatten()
-            .map(|colors| DefaultColors {
-                fg: colors.fg,
-                bg: colors.bg,
-            })
     }
 }
 
@@ -222,10 +222,7 @@ mod imp {
     }
 
     #[cfg(any(unix, windows))]
-    pub(super) fn set_default_colors_from_startup_probe(
-        _colors: Option<crate::terminal_probe::DefaultColors>,
-    ) {
-    }
+    pub(super) fn set_default_colors_from_startup_probe(_colors: Option<DefaultColors>) {}
 }
 
 /// The subset of Xterm colors that are usually consistent across terminals.

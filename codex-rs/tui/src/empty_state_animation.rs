@@ -234,16 +234,14 @@ impl EmptyStateAnimation {
 
     fn paint_frame(&mut self, area: Rect, buffer: &mut Buffer, phase: f64, opacity: f32) {
         let background = terminal_palette::default_bg();
-        let color_level = if background.is_some() {
+        let foreground = terminal_palette::default_fg();
+        let color_level = if background.is_some() && foreground.is_some() {
             terminal_palette::effective_stdout_color_level()
         } else {
             terminal_palette::StdoutColorLevel::Unknown
         };
         let background = background.unwrap_or((15, 20, 37));
-        let light = Lighting::terminal(
-            terminal_palette::default_fg().unwrap_or((210, 221, 235)),
-            background,
-        );
+        let light = Lighting::terminal(foreground.unwrap_or((210, 221, 235)), background);
         let cells = self.renderer.get_or_insert_with(Renderer::default).frame(
             area.width,
             area.height,
