@@ -167,6 +167,116 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
 }
 
 #[tokio::test]
+async fn cloud_fresh_session_refreshes_account_without_project_config() -> Result<()> {
+    use crate::app::session_lifecycle::PreparedFreshSession;
+    use crate::app::session_lifecycle::ThreadAttachPresentation;
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::CloudClient;
+    use codex_app_server_client::CloudOperation;
+
+    // Either a pending provider change or a different resolved provider refreshes the account.
+    for (provider, provider_may_have_changed) in [("openai", true), ("cloud-provider", false)] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        app.app_server_target = AppServerTarget::Cloud;
+        app.local_settings.tui.show_tooltips = false;
+        *app.model_catalog.provider_write.lock().await = provider_may_have_changed;
+        let id = ThreadId::new();
+        let mut session = test_thread_session(id, app.config.cwd.to_path_buf());
+        session.model_provider_id = provider.into();
+        let prepared = PreparedFreshSession {
+            started: AppServerStartedThread {
+                session,
+                turns: Vec::new(),
+                blocks_direct_input: false,
+                task_tools_available: false,
+            },
+            config: app.config.clone(),
+            local_settings: app.local_settings.clone(),
+        };
+        let (client, mut commands, _server_events) = CloudClient::channel(/*capacity*/ 1);
+        let mut server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            AppServerClient::Cloud(client),
+            crate::ThreadParamsMode::Cloud,
+        );
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        while events.try_recv().is_ok() {}
+        let mut requests = Vec::new();
+        {
+            let mut adopt = Box::pin(app.adopt_fresh_session(
+                &mut tui,
+                &mut server,
+                prepared,
+                ThreadAttachPresentation::Fresh,
+                /*initial_user_message*/ None,
+                /*new_thread_name*/ None,
+            ));
+            loop {
+                tokio::select! {
+                    () = &mut adopt => break,
+                    command = commands.recv() => {
+                        let command = command.expect("account request");
+                        let CloudOperation::Request(request) = command.operation else {
+                            panic!("expected account/read");
+                        };
+                        requests.push(request.method_name().to_owned());
+                        let response = match *request {
+                            ClientRequest::GetAccount { .. } => Ok(serde_json::json!({
+                                "account": {
+                                    "type": "chatgpt",
+                                    "email": "user@example.com",
+                                    "planType": "pro",
+                                    "workspaceName": "Cloud workspace"
+                                },
+                                "requiresOpenaiAuth": true
+                            })),
+                            _ => Err(JSONRPCErrorError {
+                                code: -32601,
+                                message: format!("{} is not supported by the cloud backend yet.", request.method_name()),
+                                data: None,
+                            }),
+                        };
+                        command.response.send(Ok(response)).unwrap();
+                    }
+                }
+            }
+        }
+        assert_eq!(requests, ["account/read"]);
+        assert_eq!(app.active_thread_id, Some(id));
+        assert_eq!(
+            (
+                app.chat_widget.has_chatgpt_account(),
+                app.chat_widget.has_codex_backend_auth(),
+                app.chat_widget.requires_openai_auth,
+                app.chat_widget.current_plan_type(),
+            ),
+            (
+                true,
+                true,
+                true,
+                Some(codex_protocol::account::PlanType::Pro)
+            )
+        );
+        let history = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.display_lines(/*width*/ 1000)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(normalize_snapshot_paths(history).trim(), @"
+            >_ OpenAI Codex (v0.0.0)
+                 /tmp/project
+            ");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn new_session_on_same_provider_preserves_quota_and_pending_recovery() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;

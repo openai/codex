@@ -77,6 +77,11 @@ impl AppServerSession {
         session: &ThreadSessionState,
     ) -> Result<SessionAccount> {
         let response = self.read_account().await?;
+        // Cloud's account identifies the authenticated connection, independent of the thread's
+        // model provider. Cloud does not expose the project configuration used by app servers.
+        if self.thread_params_mode() == ThreadParamsMode::Cloud {
+            return Ok(response.into());
+        }
         // account/read resolves the server's non-project configuration. A thread can override it.
         let request_id = self.next_request_id();
         let defaults: EffectiveConfig = self
