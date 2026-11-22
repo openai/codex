@@ -666,7 +666,7 @@ impl App {
                     tui,
                     destination,
                     prepared,
-                    /*switched_backend*/ true,
+                    super::session_lifecycle::ResumeOrigin::BackendSwitch,
                 )
                 .await?;
             tui.frame_requester().schedule_frame();

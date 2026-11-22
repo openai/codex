@@ -234,6 +234,302 @@ async fn cloud_enter_recovers_drafts_from_server_receipts() -> Result<()> {
     Ok(())
 }
 
+async fn drive_automatic_recovery<F: std::future::Future>(
+    future: F,
+    commands: &mut tokio::sync::mpsc::Receiver<codex_app_server_client::CloudCommand>,
+) -> F::Output {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            value = &mut future => return value,
+            Some(command) = commands.recv() => {
+                let codex_app_server_client::CloudOperation::Request(request) = command.operation else {
+                    panic!("unexpected submission during automatic recovery");
+                };
+                let value = match *request {
+                    ClientRequest::ThreadLoadedList { .. } => serde_json::json!({"data":[],"nextCursor":null}),
+                    ClientRequest::ThreadGoalGet { .. } => serde_json::json!({"goal":null}),
+                    ClientRequest::ThreadUnsubscribe { .. } => serde_json::json!({"status":"unsubscribed"}),
+                    _ => panic!("unexpected request during automatic recovery"),
+                };
+                command.response.send(Ok(Ok(value))).unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn quiet_cloud_recovery_keeps_the_draft() -> Result<()> {
+    use codex_app_server_client::CLOUD_RECOVERY_NETWORK_BLOCKED;
+    use codex_app_server_client::CloudRecoverySignInChanged;
+    #[derive(Clone, Copy, PartialEq)]
+    enum HistoryCase {
+        Unchanged,
+        SwitchThread,
+        Changed,
+        RepeatedCursor,
+        ScanLimit,
+        DelayedHistory,
+        PersistentEmpty,
+        SignInChanged,
+        GenericServer,
+        InvalidRequest,
+        NetworkBlocked,
+    }
+    use HistoryCase::*;
+    for case in [
+        Unchanged,
+        SwitchThread,
+        Changed,
+        RepeatedCursor,
+        ScanLimit,
+        DelayedHistory,
+        PersistentEmpty,
+        SignInChanged,
+        GenericServer,
+        InvalidRequest,
+        NetworkBlocked,
+    ] {
+        let destination = (case == SwitchThread).then(ThreadId::new);
+        let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+        let id = ThreadId::new();
+        app.app_server_target = AppServerTarget::Cloud;
+        if case == ScanLimit {
+            app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
+        }
+        let saved_turns = if matches!(case, PersistentEmpty | ScanLimit) {
+            vec![test_turn("already-seen", TurnStatus::Completed, Vec::new())]
+        } else {
+            Vec::new()
+        };
+        app.enqueue_primary_thread_session(
+            test_thread_session(id, app.config.cwd.to_path_buf()),
+            saved_turns.clone(),
+        )
+        .await?;
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let mut server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            codex_app_server_client::AppServerClient::Cloud(client),
+            crate::ThreadParamsMode::Cloud,
+        );
+        app.chat_widget.thread_stream_disconnected = true;
+        app.chat_widget.apply_external_edit("queued prompt".into());
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+        app.chat_widget.apply_external_edit("unsent draft".into());
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tokio::time::pause();
+        app.start_cloud_resume(&server);
+        // Suspend after losing the connection. Only the recovery task wakes the UI.
+        let stalled = commands.recv().await.unwrap();
+        tokio::time::advance(Duration::from_secs(/*secs*/ 300)).await;
+        let mut attempt = app.reconnect.cloud_resume.take().unwrap();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(/*secs*/ 1), &mut attempt.task).await??;
+        assert!(stalled.response.is_closed());
+        app.finish_cloud_resume(&mut tui, &mut server, attempt, outcome)
+            .await?;
+        assert!(app.reconnect.cloud_resume.is_some());
+        assert!(app.chat_widget.thread_stream_disconnected);
+        let command = commands.recv().await.unwrap();
+        let codex_app_server_client::CloudOperation::ResumeDisconnectedThread {
+            release,
+            require_history,
+            ..
+        } = command.operation
+        else {
+            panic!("expected idle attachment")
+        };
+        assert!(!require_history);
+        let mut thread = crate::app::agents_overview::tests::overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Current",
+            ThreadStatus::Idle,
+        );
+        thread.cwd = app.config.cwd.clone().into();
+        thread.history_mode = ThreadHistoryMode::Paginated;
+        let response = serde_json::json!({"thread":thread,"model":"gpt-5.5","modelProvider":thread.model_provider,"cwd":thread.cwd,"approvalPolicy":"never","approvalsReviewer":"user","sandbox":{"type":"readOnly"}});
+        command.response.send(Ok(Ok(response))).unwrap();
+        let mut attempt = app.reconnect.cloud_resume.take().unwrap();
+        let mut reads = Vec::new();
+        let mut scanned = 0;
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut attempt.task => break outcome?,
+                Some(read) = commands.recv() => {
+                    let codex_app_server_client::CloudOperation::Request(request) = read.operation else {
+                        panic!("expected paginated recovery history");
+                    };
+                    let response = match *request {
+                        ClientRequest::ThreadTurnsList { .. } if case == ScanLimit => {
+                            reads.push("turns");
+                            serde_json::json!({"data": saved_turns, "nextCursor": null})
+                        }
+                        ClientRequest::ThreadTurnsList { .. } => {
+                            reads.push("turns");
+                            let turn = test_turn("missed", TurnStatus::Completed, Vec::new());
+                            serde_json::json!({
+                                "data": (case == Changed).then_some(turn).into_iter().collect::<Vec<_>>(),
+                                "nextCursor": (case == DelayedHistory && reads.len() == 1).then_some("projection-not-ready"),
+                            })
+                        }
+                        ClientRequest::ThreadItemsList { params, .. } if case == ScanLimit => {
+                            // Pages of hidden items still count against the scan budget.
+                            reads.push("items");
+                            scanned += params.limit.unwrap() as usize;
+                            serde_json::json!({"data": [], "nextCursor": scanned.to_string()})
+                        }
+                        ClientRequest::ThreadItemsList { .. } => {
+                            reads.push("items");
+                            let answer = ThreadItemPayload::UserMessage {
+                                id: "new-user-message".into(),
+                                client_id: Some("another-client".into()),
+                                content: vec![UserInput::Text { text: "Remote follow-up".into(), text_elements: Vec::new() }],
+                            };
+                            let row = serde_json::json!({"turnId":"missed","item":answer});
+                            serde_json::json!({
+                                "data": (case == Changed).then_some(row).into_iter().collect::<Vec<_>>(),
+                                "nextCursor": (case == RepeatedCursor).then_some("same-page"),
+                            })
+                        }
+                        _ => panic!("expected paginated recovery history"),
+                    };
+                    // Each page arrives promptly, but the full read takes over 15 seconds.
+                    tokio::time::advance(Duration::from_secs(/*secs*/ 10)).await;
+                    let server_error = |code, message| Ok(Err(codex_app_server_protocol::JSONRPCErrorError {
+                        code,
+                        message,
+                        data: None,
+                    }));
+                    let response = match (case, reads.len()) {
+                        (SignInChanged, 1) => Err(std::io::Error::other(CloudRecoverySignInChanged)),
+                        (GenericServer, 1) => server_error(-32000, CloudRecoverySignInChanged.to_string()),
+                        (InvalidRequest, 1) => server_error(-32602, "Recovery history request was rejected".into()),
+                        (NetworkBlocked, 1) => server_error(-32000, CLOUD_RECOVERY_NETWORK_BLOCKED.into()),
+                        _ => Ok(Ok(response)),
+                    };
+                    read.response.send(response).unwrap();
+                }
+            }
+        };
+        match case {
+            ScanLimit => {
+                assert_eq!(scanned, crate::app_server_session::HISTORY_ITEM_SCAN_LIMIT);
+                assert_eq!(reads.iter().filter(|&&read| read == "turns").count(), 1);
+            }
+            RepeatedCursor => assert_eq!(reads, ["turns", "items", "items"].repeat(3)),
+            PersistentEmpty => assert_eq!(reads, ["turns", "items"].repeat(3)),
+            SignInChanged | GenericServer | InvalidRequest | NetworkBlocked => {
+                assert_eq!(reads, ["turns"]);
+            }
+            DelayedHistory => assert_eq!(reads, ["turns", "items", "turns", "items"]),
+            Unchanged | SwitchThread | Changed => assert_eq!(reads, ["turns", "items"]),
+        }
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            ["queued prompt"]
+        );
+        assert!(
+            !std::iter::from_fn(|| ops.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
+        );
+        // The UI event handler must return even when the worker withholds its final ACK.
+        tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 1),
+            app.finish_cloud_resume(&mut tui, &mut server, attempt, outcome),
+        )
+        .await??;
+        let installed = if let Ok(ack) = release.await {
+            if let Some(side) = destination {
+                let mut session = test_thread_session(side, app.config.cwd.to_path_buf());
+                session.model_provider_id = app.chat_widget.quota_provider_id().to_owned();
+                app.ensure_thread_channel(side)
+                    .store
+                    .lock()
+                    .await
+                    .set_session(session, Vec::new());
+                app.side_threads.insert(side, SideThreadState::new(id));
+                let key = TuiEvent::Key(KeyCode::Backspace.into());
+                boxed_future!(app.handle_tui_event(&mut tui, &mut server, key)).await?;
+                assert_eq!(app.chat_widget.composer_text_with_pending(), "unsent draf");
+                assert_eq!(
+                    app.chat_widget.queued_user_message_texts(),
+                    ["queued prompt"]
+                );
+                let select = app.select_agent_thread(&mut tui, &mut server, side);
+                drive_automatic_recovery(select, &mut commands).await?;
+            }
+            ack.send(Ok(())).unwrap();
+            let mut attempt = app.reconnect.cloud_resume.take().unwrap();
+            let outcome = (&mut attempt.task).await?;
+            drive_automatic_recovery(
+                app.finish_cloud_resume(&mut tui, &mut server, attempt, outcome),
+                &mut commands,
+            )
+            .await?;
+            true
+        } else {
+            false
+        };
+        tokio::time::resume();
+        let must_reopen = !matches!(case, Unchanged | SwitchThread | Changed | DelayedHistory);
+        assert!(app.reconnect.cloud_resume.is_none());
+        assert!(commands.try_recv().is_err());
+        assert_eq!(installed, !must_reopen);
+        assert_eq!(app.chat_widget.thread_stream_disconnected, must_reopen);
+        let app_events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        let dispatched = app_events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+            .count();
+        let submitted = std::iter::from_fn(|| ops.try_recv().ok())
+            .filter(|op| matches!(op, Op::UserTurn { .. }))
+            .count()
+            + dispatched;
+        assert_eq!(
+            submitted,
+            usize::from(!must_reopen && destination.is_none())
+        );
+        if let Some(side) = destination {
+            assert_eq!(app.current_displayed_thread_id(), Some(side));
+            assert_eq!(app.chat_widget.thread_id(), Some(side));
+            continue;
+        }
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "unsent draft");
+        if must_reopen {
+            let rendered = app_events
+                .into_iter()
+                .filter_map(|event| match event {
+                    AppEvent::InsertHistoryCell(cell) => {
+                        Some(lines_to_single_string(&cell.display_lines(/*width*/ 120)))
+                    }
+                    _ => None,
+                })
+                .last()
+                .unwrap();
+            insta::allow_duplicates! {
+                match case {
+                    InvalidRequest => insta::assert_snapshot!(rendered, @"■ Recovery history request was rejected"),
+                    SignInChanged | GenericServer => insta::assert_snapshot!(rendered, @"■ Your cloud sign-in changed or expired. Sign in again to access this conversation."),
+                    NetworkBlocked => insta::assert_snapshot!(rendered, @"■ The current network policy blocks cloud reconnection."),
+                    RepeatedCursor | PersistentEmpty | ScanLimit => insta::assert_snapshot!(rendered, @"■ Cloud conversation history is unavailable. Sending is paused and your draft is saved here."),
+                    Unchanged | SwitchThread | Changed | DelayedHistory => unreachable!(),
+                }
+            }
+        }
+        let store = app.ensure_thread_channel(id).store.lock().await;
+        if case == Changed {
+            assert_eq!(store.turns.len(), 1);
+            assert_eq!(store.turns[0].id, "missed");
+        } else {
+            assert_eq!(store.turns, saved_turns);
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn cloud_async_question_reply_uses_cloud_admission() -> Result<()> {
     use codex_app_server_client::CloudOperation;

@@ -1470,6 +1470,13 @@ See the Codex keymap documentation for supported actions and examples."
                         break Err(err.into());
                     }
                 }
+                if app.reconnect.cloud_resume.as_ref().is_some_and(|resume| {
+                    resume.backend_id != displayed_owner
+                        || Some(resume.thread_id) != app.current_displayed_thread_id()
+                        || app.reconnect.offline
+                }) {
+                    app.reconnect.cloud_resume = None;
+                }
                 // Process archive completions before the picker can list or mutate those threads.
                 if app.pending_open_resume_picker && app.agents_overview.pending_archives.is_empty()
                 {
@@ -1561,7 +1568,14 @@ See the Codex keymap documentation for supported actions and examples."
                 // Replay queues history and operations. A buffered closure must not switch
                 // widgets before those app events have been applied.
                 let has_pending_app_events = !app_event_rx.is_empty();
+                // An installed stream can emit events before the install result is consumed.
+                // Apply the recovered history before accepting those events.
                 let paused_backend = ((app.reconnect.offline && !app.pending_startup_thread_start)
+                    || app
+                        .reconnect
+                        .cloud_resume
+                        .as_ref()
+                        .is_some_and(super::resume_preparation::CloudResume::installing)
                     || (app.awaiting_side_replay(tui) && has_pending_app_events)
                     || (!matches!(app.app_server_target, AppServerTarget::Embedded)
                         && has_pending_app_events))
@@ -1820,6 +1834,24 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
+                    result = async {
+                        match app.reconnect.cloud_resume.as_mut() {
+                            Some(resume) => (&mut resume.task).await,
+                            None => std::future::pending().await,
+                        }
+                    }, if app.reconnect.cloud_resume.is_some() && !has_pending_app_events => {
+                        let Some(attempt) = app.reconnect.cloud_resume.take() else { continue };
+                        let outcome = result.unwrap_or_else(|error| Err(error.into()));
+                        match Box::pin(app.finish_cloud_resume(
+                            tui,
+                            backends.session_at_mut(displayed_session),
+                            attempt,
+                            outcome,
+                        )).await {
+                            Ok(control) => control,
+                            Err(err) => break Err(err),
+                        }
+                    }
                     (reconnect_owner, result) = async { match reconnect.as_mut() { Some((owner, future)) => (*owner, future.await), None => std::future::pending().await } }, if reconnect.is_some() && !has_pending_app_events => {
                         reconnect = None;
                         match result {
@@ -1975,6 +2007,7 @@ See the Codex keymap documentation for supported actions and examples."
         };
         // Let the pending terminal poll unwind while the app server shuts down.
         tui.pause_events();
+        app.reconnect.cloud_resume = None;
         // Skip pending inference on exit. Give the fallback writes a bounded chance
         // to finish before closing the connections they use.
         if app.cloud_title_shutdown.send(()).is_ok()

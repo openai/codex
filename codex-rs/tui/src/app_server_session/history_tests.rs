@@ -63,6 +63,16 @@ async fn owned_initial_history_stops_after_viewport_or_scan_budget() {
         [Some(30), Some(100), None, Some(1), None],
     );
 
+    // Recovery remains bounded even when terminal scrollback is unlimited.
+    config.tui_fullscreen_transcript = false;
+    let recovery = HistoryLoadBudget::new(
+        HistoryHydrationScope::CloudRecovery,
+        Some(&config),
+        Some(&LocalSettings::from(&config)),
+        /*terminal_height*/ 10,
+    );
+    assert_eq!((recovery.rows, recovery.items), (budget.rows, budget.items));
+
     let complete = HistoryLoadBudget::new(
         HistoryHydrationScope::Complete,
         Some(&config),

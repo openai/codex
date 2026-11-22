@@ -126,6 +126,11 @@ impl App {
         destination: Option<ThreadId>,
     ) {
         app_server.task_search.cancel();
+        if self.reconnect.cloud_resume.as_ref().is_some_and(|resume| {
+            resume.backend_id == app_server.backend_id() && Some(resume.thread_id) != destination
+        }) {
+            self.reconnect.cloud_resume = None;
+        }
         let thread_ids: Vec<_> = self
             .thread_event_channels
             .iter()

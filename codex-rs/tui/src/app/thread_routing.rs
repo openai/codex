@@ -1136,11 +1136,51 @@ impl App {
     pub(super) async fn enqueue_thread_notification(
         &mut self,
         thread_id: ThreadId,
-        notification: ServerNotification,
+        mut notification: ServerNotification,
     ) -> Result<()> {
         self.deliver_background_voice_notification(thread_id, &notification);
         if self.abandoned_side_threads.contains(&thread_id) {
             return Ok(());
+        }
+        // Cloud attaches before reading history. The live stream can repeat events
+        // from the snapshot, including a completion that would release queued input.
+        if matches!(self.app_server_target, AppServerTarget::Cloud)
+            && matches!(
+                notification,
+                ServerNotification::TurnStarted(_)
+                    | ServerNotification::TurnCompleted(_)
+                    | ServerNotification::ItemCompleted(_)
+            )
+            && self.active_thread_id == Some(thread_id)
+            && let Some(channel) = self.thread_event_channels.get(&thread_id)
+            && channel.recovered_cloud_history
+        {
+            let store = channel.store.lock().await;
+            if store.turns.iter().any(|turn| match &mut notification {
+                ServerNotification::TurnStarted(event) => turn.id == event.turn.id,
+                ServerNotification::TurnCompleted(event) => {
+                    turn.id == event.turn.id
+                        && turn.status != TurnStatus::InProgress
+                        && turn.status == event.turn.status
+                }
+                ServerNotification::ItemCompleted(event) if turn.id == event.turn_id => {
+                    match &mut event.item.payload {
+                        ThreadItemPayload::UserMessage { .. } => {
+                            turn.items.iter().any(|item| item.id() == event.item.id())
+                        }
+                        ThreadItemPayload::AgentMessage { questions, .. }
+                            if turn.status != TurnStatus::InProgress =>
+                        {
+                            *questions = None;
+                            false
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }) {
+                return Ok(());
+            }
         }
         self.track_side_chat_title(thread_id, &notification);
         self.notice_sidebar_file_item(thread_id, &notification);

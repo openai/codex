@@ -5,7 +5,13 @@
 //! prepared result retains the connection identity and any provider error for read-only history.
 
 use super::*;
+use crate::app_server_session::HistoryHydrationScope;
+use crate::app_server_session::thread_blocks_direct_input;
+use crate::backend_id::BackendId;
+use codex_app_server_client::CloudRecoveryRelease;
 use codex_app_server_client::TypedRequestError;
+use std::io;
+use tokio_util::task::AbortOnDropHandle;
 
 /// Settings retained for a backend that is not currently displayed.
 #[derive(Clone)]
@@ -36,7 +42,342 @@ pub(super) struct PreparedResume {
     pub(super) provider_error: Option<codex_app_server_protocol::ModelProviderError>,
 }
 
+const CLOUD_REQUEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
+const REOPEN_CLOUD_THREAD: &str = "Cloud stream ended. Reopen the conversation to reconnect.";
+
+#[derive(Debug, thiserror::Error)]
+enum CloudHistoryCheck {
+    #[error("Cloud could not restore the reply stream in time. Your draft is still here.")]
+    LockTimedOut,
+    #[error(
+        "Cloud conversation history is unavailable. Sending is paused and your draft is saved here."
+    )]
+    Unavailable,
+}
+
+#[derive(PartialEq)]
+enum ResumePhase {
+    Preparing,
+    Installing,
+    InstallInterruptedByNavigation,
+}
+
+pub(super) struct CloudResume {
+    pub(super) backend_id: BackendId,
+    pub(super) thread_id: ThreadId,
+    store: Arc<Mutex<super::thread_events::ThreadEventStore>>,
+    _input_hold: Arc<()>,
+    phase: ResumePhase,
+    pub(super) task: AbortOnDropHandle<CloudResumeOutcome>,
+}
+
+impl CloudResume {
+    pub(super) fn installing(&self) -> bool {
+        self.phase != ResumePhase::Preparing
+    }
+}
+
+pub(super) type CloudResumeOutcome = Result<(
+    Box<(
+        AppServerStartedThread,
+        crate::app_server_session::AttachmentMetadata,
+    )>,
+    Option<CloudRecoveryRelease>,
+)>;
+
 impl App {
+    pub(super) fn start_cloud_resume(&mut self, app_server: &AppServerSession) {
+        let backend_id = app_server.backend_id();
+        let Some(thread_id) = self.current_displayed_thread_id() else {
+            return;
+        };
+        if self.reconnect.offline || self.reconnect.cloud_resume.is_some() {
+            return;
+        }
+        let (AppServerRequestHandle::Cloud(handle), Some(channel)) = (
+            app_server.request_handle(),
+            self.thread_event_channels.get(&thread_id),
+        ) else {
+            return;
+        };
+        if self.chat_widget.is_user_turn_pending_or_running() {
+            return;
+        }
+        if self.chat_widget.needs_question_answer_history() {
+            return;
+        }
+        let mut view = app_server.attachment_view(thread_id);
+        let config = self.config.clone();
+        let local_settings = self.local_settings.clone();
+        let store = Arc::clone(&channel.store);
+        self.reconnect.cloud_resume = Some(CloudResume {
+            backend_id,
+            thread_id,
+            store: Arc::clone(&store),
+            _input_hold: self.chat_widget.pause_input_for_resume_handoff(),
+            phase: ResumePhase::Preparing,
+            task: AbortOnDropHandle::new(tokio::spawn(async move {
+                let (session, latest, terminal, anchor, evidence) = {
+                    let store = tokio::time::timeout(CLOUD_REQUEST_TIMEOUT, store.lock())
+                        .await
+                        .map_err(|_| CloudHistoryCheck::LockTimedOut)?;
+                    let saved = store.turns.iter().flat_map(|turn| {
+                        turn.items.iter().map(move |item| {
+                            (
+                                item.id(),
+                                Some(item),
+                                item.completed_at_ms.is_some()
+                                    || (item.started_at_ms.is_none()
+                                        && turn.status == TurnStatus::Completed),
+                            )
+                        })
+                    });
+                    let live = store.buffer.iter().filter_map(|event| {
+                        let ThreadBufferedEvent::Notification(event) = event else {
+                            return None;
+                        };
+                        match event.as_ref() {
+                            ServerNotification::ItemStarted(n) => {
+                                Some((n.item.id(), Some(&n.item), false))
+                            }
+                            ServerNotification::ItemCompleted(n) => {
+                                Some((n.item.id(), Some(&n.item), true))
+                            }
+                            ServerNotification::AgentMessageDelta(n) => {
+                                Some((n.item_id.as_str(), None, false))
+                            }
+                            _ => None,
+                        }
+                    });
+                    let mut order = HashMap::new();
+                    let mut evidence = HashMap::new();
+                    let mut anchor = None;
+                    for (id, item, finished) in saved.chain(live) {
+                        let next = order.len();
+                        let rank = *order.entry(id.to_owned()).or_insert(next);
+                        let Some(item) = item else { continue };
+                        let reply = matches!(&item.payload, ThreadItemPayload::AgentMessage { .. });
+                        if reply || rank == next {
+                            anchor = anchor.max(Some((reply, rank, id)));
+                        }
+                        if reply && finished {
+                            evidence.insert(id.to_owned(), Some(item.clone()));
+                        } else if rank == next
+                            && matches!(&item.payload, ThreadItemPayload::UserMessage { .. })
+                        {
+                            evidence.insert(id.to_owned(), None);
+                        }
+                    }
+                    (
+                        store
+                            .session
+                            .clone()
+                            .ok_or_else(|| color_eyre::eyre::eyre!(REOPEN_CLOUD_THREAD))?,
+                        store.latest_turn_id.clone(),
+                        store.active_turn_id.is_none(),
+                        anchor.map(|(_, _, id)| id.to_owned()),
+                        evidence,
+                    )
+                };
+                let (response, release) = handle
+                    .resume_disconnected_thread(
+                        thread_id.to_string(),
+                        /*require_history*/ false,
+                        CLOUD_REQUEST_TIMEOUT,
+                    )
+                    .await?;
+                let Some(response) =
+                    response.filter(|r| r.thread.id == session.thread_id.to_string())
+                else {
+                    color_eyre::eyre::bail!(REOPEN_CLOUD_THREAD);
+                };
+                for delay_ms in [0, 500, 1000] {
+                    if delay_ms != 0 {
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                    // Each check starts at the newest saved turn; the client bounds each page.
+                    let mut thread = response.thread.clone();
+                    thread.turns.clear();
+                    view.hydrate_initial_thread_history(
+                        &mut thread,
+                        /*turn_cursor*/ None,
+                        /*item_cursor*/ None,
+                        Some(&config),
+                        Some(&local_settings),
+                        HistoryHydrationScope::CloudRecovery,
+                    )
+                    .await?;
+                    if !view.recovery_history_complete(thread_id) {
+                        // A remaining item cursor means we spent the scan budget.
+                        // Starting again at the newest item would repeat the same work.
+                        if view.has_older_history(thread_id) {
+                            break;
+                        }
+                        continue;
+                    }
+                    let turns = &mut thread.turns;
+                    if latest.as_ref().is_some_and(|id| {
+                        !turns.iter().any(|t| {
+                            &t.id == id && (!terminal || t.status != TurnStatus::InProgress)
+                        })
+                    }) {
+                        continue;
+                    }
+                    // A positively unfinished row cannot supersede a completion already shown.
+                    for item in turns.iter_mut().flat_map(|turn| &mut turn.items) {
+                        if item.started_at_ms.is_some()
+                            && item.completed_at_ms.is_none()
+                            && matches!(&item.payload, ThreadItemPayload::AgentMessage { .. })
+                            && let Some(Some(known)) = evidence.get(item.id())
+                        {
+                            item.clone_from(known);
+                        }
+                    }
+                    let loaded: HashMap<_, _> = turns
+                        .iter()
+                        .flat_map(Turn::item_payloads)
+                        .map(|item| (item.id(), item))
+                        .collect();
+                    if anchor
+                        .as_ref()
+                        .is_some_and(|id| !loaded.contains_key(id.as_str()))
+                        || evidence.iter().any(|(id, known)| match (known, loaded.get(id.as_str())) {
+                            (None, Some(_)) => false,
+                            (Some(known), Some(ThreadItemPayload::AgentMessage { text, .. })) => {
+                                matches!(&known.payload, ThreadItemPayload::AgentMessage {text: prior,..}
+                                    if prior != text && prior.starts_with(text.as_str()))
+                            }
+                            _ => true,
+                        })
+                    {
+                        continue;
+                    }
+                    let started = AppServerStartedThread {
+                        session,
+                        blocks_direct_input: thread_blocks_direct_input(&thread),
+                        turns: thread.turns,
+                        task_tools_available: view.task_tools_available(thread_id),
+                    };
+                    let resume = (started, view.take_attachment_metadata(thread_id));
+                    return Ok((Box::new(resume), Some(release)));
+                }
+                Err(CloudHistoryCheck::Unavailable.into())
+            })),
+        });
+    }
+
+    // Selecting a different attachment can close an in-progress install ACK.
+    // Keep its result until the selection succeeds in case the worker already committed it.
+    pub(super) fn interrupt_cloud_resume_for_navigation(&mut self) -> bool {
+        if let Some(attempt) = self.reconnect.cloud_resume.as_mut()
+            && attempt.installing()
+        {
+            attempt.phase = ResumePhase::InstallInterruptedByNavigation;
+            return false;
+        }
+        self.reconnect.cloud_resume.take().is_some()
+    }
+
+    pub(super) async fn finish_cloud_resume(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        mut attempt: CloudResume,
+        outcome: CloudResumeOutcome,
+    ) -> Result<AppRunControl> {
+        let backend_id = attempt.backend_id;
+        let thread_id = attempt.thread_id;
+        if app_server.backend_id() != backend_id
+            || self.current_displayed_thread_id() != Some(thread_id)
+            || self.chat_widget.thread_id() != Some(thread_id)
+            || !self.chat_widget.thread_stream_disconnected
+            || self.reconnect.offline
+            || self
+                .thread_event_channels
+                .get(&thread_id)
+                .is_none_or(|channel| {
+                    !Arc::ptr_eq(&attempt.store, &channel.store)
+                        || channel.backend_id.is_some_and(|owner| owner != backend_id)
+                })
+            || self
+                .backend_registry
+                .owner(thread_id)
+                .is_some_and(|owner| owner != backend_id)
+        {
+            return Ok(AppRunControl::Continue);
+        }
+
+        let result = match outcome {
+            Ok((resumed, Some(release))) => {
+                attempt.phase = ResumePhase::Installing;
+                attempt.task = AbortOnDropHandle::new(tokio::spawn(async move {
+                    release.install().await?;
+                    Ok((resumed, None))
+                }));
+                self.reconnect.cloud_resume = Some(attempt);
+                return Ok(AppRunControl::Continue);
+            }
+            Ok((resumed, None)) => Ok(*resumed),
+            Err(error) if attempt.installing() => Err(error
+                .downcast::<io::Error>()
+                .unwrap_or_else(|_| io::Error::other(REOPEN_CLOUD_THREAD))),
+            Err(error) => Err(match error.downcast::<TypedRequestError>() {
+                Ok(TypedRequestError::Transport { source, .. }) => source,
+                Ok(TypedRequestError::Server { source, .. }) => io::Error::other(source.message),
+                Ok(TypedRequestError::Deserialize { .. }) => io::Error::other(REOPEN_CLOUD_THREAD),
+                Err(error) => match error.downcast::<CloudHistoryCheck>() {
+                    Ok(reason) => io::Error::other(reason),
+                    Err(_) => io::Error::other(REOPEN_CLOUD_THREAD),
+                },
+            }),
+        };
+        let channel = self.ensure_thread_channel(thread_id);
+        channel.history_may_be_incomplete = true;
+        if let Err(error) = result {
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionAborted | io::ErrorKind::TimedOut
+            ) || (attempt.phase == ResumePhase::InstallInterruptedByNavigation
+                && error.kind() == io::ErrorKind::BrokenPipe)
+            {
+                // The worker backs off before the next Attach. Keep the draft and queue paused.
+                self.start_cloud_resume(app_server);
+            } else {
+                channel.mark_replay_only();
+                self.chat_widget.pause_unavailable_thread();
+                self.chat_widget.add_error_message(error.to_string());
+            }
+            return Ok(AppRunControl::Continue);
+        }
+        let (thread, metadata) = result?;
+        app_server
+            .install_attachment_metadata(thread_id, metadata, /*observed_receipt*/ false);
+        let accepted_model = self.chat_widget.cloud_picker_selection.clone();
+        let service_tier = self.chat_widget.configured_service_tier();
+        let control = self
+            .activate_prepared_session_from(
+                tui,
+                app_server,
+                PreparedResume {
+                    backend_id,
+                    config: self.config.clone(),
+                    local_settings: self.local_settings.clone(),
+                    thread,
+                    restored_blank_session: false,
+                    read_only: false,
+                    history_notice: None,
+                    provider_error: None,
+                },
+                super::session_lifecycle::ResumeOrigin::CloudRecovery,
+            )
+            .await?;
+        self.chat_widget.cloud_picker_selection = accepted_model;
+        self.chat_widget.set_service_tier(service_tier);
+        self.sync_active_thread_service_tier_to_cached_session()
+            .await;
+        Ok(control)
+    }
+
     pub(super) fn backend_settings(&self) -> BackendSettings {
         BackendSettings {
             config: self.config.clone(),

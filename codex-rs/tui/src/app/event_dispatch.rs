@@ -4557,6 +4557,7 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        self.reconnect.cloud_resume = None;
         for (request_id, (source, task)) in self.dynamic_tool_tasks.drain() {
             if ThreadId::from_string(&source)
                 .is_ok_and(|id| self.agents_overview.pending_archives.contains_key(&id))

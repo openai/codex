@@ -655,6 +655,7 @@ pub(super) struct ThreadEventChannel {
     pub(super) store: Arc<Mutex<ThreadEventStore>>,
     /// Live Attach restored delivery without reading the history from the gap.
     pub(super) history_may_be_incomplete: bool,
+    pub(super) recovered_cloud_history: bool,
     attachment: ThreadEventAttachment,
     pub(super) archived: bool,
 }
@@ -668,20 +669,24 @@ impl ThreadEventChannel {
             store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
             backend_id: None,
             history_may_be_incomplete: false,
+            recovered_cloud_history: false,
             attachment: ThreadEventAttachment::Live,
             archived: false,
         }
     }
 
     pub(super) fn mark_live(&mut self) {
+        self.recovered_cloud_history = false;
         self.attachment = ThreadEventAttachment::Live;
     }
 
     pub(super) fn mark_replay_only(&mut self) {
+        self.recovered_cloud_history = false;
         self.attachment = ThreadEventAttachment::ReplayOnly;
     }
 
     pub(super) fn mark_external_writer(&mut self) {
+        self.recovered_cloud_history = false;
         self.attachment = ThreadEventAttachment::ExternalWriter;
     }
 
@@ -704,6 +709,7 @@ impl ThreadEventChannel {
             ))),
             backend_id: None,
             history_may_be_incomplete: false,
+            recovered_cloud_history: false,
             attachment: ThreadEventAttachment::Live,
             archived: false,
         }

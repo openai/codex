@@ -28,6 +28,13 @@ use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use std::collections::HashSet;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResumeOrigin {
+    Manual,
+    BackendSwitch,
+    CloudRecovery,
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum ThreadAttachPresentation {
     /// A primary thread created by thread/start, without inherited history.
@@ -1380,6 +1387,7 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
+        let interrupted_recovery = self.interrupt_cloud_resume_for_navigation();
         let (session_start_source, mut draft) = match start {
             FreshSessionStart::NewConversation => (
                 None,
@@ -1400,6 +1408,7 @@ impl App {
         .await;
         match prepared {
             Ok(prepared) => {
+                self.reconnect.cloud_resume = None;
                 let presentation = if draft.is_some() {
                     ThreadAttachPresentation::FreshWithDraft
                 } else {
@@ -1417,6 +1426,9 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(err.to_string());
+                if interrupted_recovery {
+                    self.start_cloud_resume(app_server);
+                }
                 if let Some(message) = initial_user_message {
                     self.chat_widget.restore_user_message_to_composer(message);
                 }
@@ -1997,6 +2009,7 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
+        let interrupted_recovery = self.interrupt_cloud_resume_for_navigation();
         let prepared = match self
             .prepare_target_session(
                 tui,
@@ -2007,8 +2020,14 @@ impl App {
             .await
         {
             Ok(prepared) => prepared,
-            Err(control) => return Ok(control),
+            Err(control) => {
+                if interrupted_recovery {
+                    self.start_cloud_resume(app_server);
+                }
+                return Ok(control);
+            }
         };
+        self.reconnect.cloud_resume = None;
         self.activate_prepared_session(tui, app_server, prepared)
             .await
     }
@@ -2019,6 +2038,22 @@ impl App {
         app_server: &mut AppServerSession,
         prepared: super::resume_preparation::PreparedResume,
     ) -> Result<AppRunControl> {
+        crate::boxed_future!(self.activate_prepared_session_from(
+            tui,
+            app_server,
+            prepared,
+            ResumeOrigin::Manual
+        ))
+        .await
+    }
+
+    pub(super) async fn activate_prepared_session_from(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        prepared: super::resume_preparation::PreparedResume,
+        origin: ResumeOrigin,
+    ) -> Result<AppRunControl> {
         if prepared.backend_id != app_server.backend_id() {
             self.add_session_picker_error(
                 "This session belongs to a different backend. Open the session picker again."
@@ -2028,10 +2063,8 @@ impl App {
         }
         let handoff = self.chat_widget.pause_input_for_resume_handoff();
         let _handoff = self.prepare_resume_handoff(tui, handoff).await?;
-        self.activate_prepared_session_after_clear(
-            tui, app_server, prepared, /*switched_backend*/ false,
-        )
-        .await
+        self.activate_prepared_session_after_clear(tui, app_server, prepared, origin)
+            .await
     }
 
     pub(super) async fn prepare_resume_handoff(
@@ -2056,8 +2089,9 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         prepared: super::resume_preparation::PreparedResume,
-        switched_backend: bool,
+        origin: ResumeOrigin,
     ) -> Result<AppRunControl> {
+        let switched_backend = origin == ResumeOrigin::BackendSwitch;
         let super::resume_preparation::PreparedResume {
             backend_id,
             config: resume_config,
@@ -2080,8 +2114,13 @@ impl App {
         let same_thread =
             !switched_backend && self.chat_widget.thread_id() == Some(resumed_thread_id);
         let refreshing_history = same_thread
-            && !was_reconnecting
-            && owned_channel.is_some_and(|channel| channel.history_may_be_incomplete);
+            && owned_channel.is_some_and(|channel| {
+                if origin == ResumeOrigin::CloudRecovery {
+                    was_reconnecting || channel.history_may_be_incomplete
+                } else {
+                    !was_reconnecting && channel.history_may_be_incomplete
+                }
+            });
         let retained_input = (same_thread
             && owned_channel.is_some()
             && (refreshing_history
@@ -2142,8 +2181,9 @@ impl App {
             .await
         {
             Ok(()) => {
-                self.ensure_thread_channel(resumed_thread_id)
-                    .history_may_be_incomplete = false;
+                let channel = self.ensure_thread_channel(resumed_thread_id);
+                channel.history_may_be_incomplete = false;
+                channel.recovered_cloud_history = origin == ResumeOrigin::CloudRecovery;
                 self.remember_attached_host_project(app_server);
                 let resumed_turn_running = !read_only
                     && self
