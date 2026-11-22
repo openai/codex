@@ -158,6 +158,7 @@ impl ChatWidget {
                 });
                 self.note_stream_consolidation_queued();
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
+                    emitted_cells: controller.emitted_cells(),
                     phase,
                     interrupted_item,
                     source,

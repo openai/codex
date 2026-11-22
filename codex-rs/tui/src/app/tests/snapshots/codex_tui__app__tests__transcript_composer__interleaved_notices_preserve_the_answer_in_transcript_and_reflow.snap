@@ -1,0 +1,19 @@
+---
+source: tui/src/app/tests/transcript_composer.rs
+expression: "screens[0]"
+---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
+• Earlier answer
+
+• Introduction
+
+  Conclusion
+
+⚠ Diagnostic
+
+■ Failed to paste image: no image on clipboard
+
+
+⌃space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · f3 find · esc browse prompts

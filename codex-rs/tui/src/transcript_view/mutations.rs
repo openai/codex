@@ -135,9 +135,19 @@ impl TranscriptView {
             snapshot.cells = joined.into();
             return;
         }
-        if searching
-            || matches!(self.position, Position::Reading(anchor)
-                if cells[range].iter().any(|cell| EntryKey::cell(cell) == anchor.key))
+        self.retain_before_regroup(cells, range);
+    }
+
+    /// Preserve the original order before a regroup moves cells across a search cursor.
+    pub(crate) fn retain_before_regroup(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        range: Range<usize>,
+    ) {
+        if self.snapshot().is_none()
+            && (self.search.has_active_query()
+                || matches!(self.position, Position::Reading(anchor)
+                    if cells[range].iter().any(|cell| EntryKey::cell(cell) == anchor.key)))
         {
             self.held_reading = Some(self.capture_snapshot(cells));
         }

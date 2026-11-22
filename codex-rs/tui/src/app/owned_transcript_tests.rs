@@ -186,6 +186,7 @@ async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
             "- First item wraps onto a second row\n- b\n- c".into(),
             &app.config.cwd,
         ),
+        /*emitted_cells*/ 1,
         ConsolidationScrollbackReflow::Required,
         /*deferred_history_cell*/ None,
     )?;
@@ -1277,13 +1278,15 @@ async fn inline_select_mode_routes_find_and_returns_to_the_preserved_draft() -> 
 async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     attach_thread(&mut app, ThreadId::new());
-    app.transcript_cells = vec![user_cell("needle in history")];
+    app.transcript_cells = vec![user_cell("older NEEDLE"), user_cell("newer needle")];
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.open_transcript_overlay(&mut tui);
     for event in [
         TuiEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
         TuiEvent::Paste("needle".to_string()),
+        TuiEvent::Draw,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
         TuiEvent::Draw,
     ] {
         app.handle_backtrack_overlay_event(&mut tui, &mut app_server, event)
@@ -1305,6 +1308,38 @@ async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Resul
     assert!(
         matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.has_active_interaction() && !overlay.is_search_editing())
     );
+    // Completing a later split answer must preserve the older, non-default hit.
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::AgentMessageCell::new(
+            vec!["Introduction".into()],
+            /*is_first_line*/ true,
+        )),
+    );
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::new_warning_event("Diagnostic".into())),
+    );
+    app.handle_consolidate_agent_message(
+        &mut tui,
+        history_cell::AgentMarkdownCell::new("Introduction and conclusion".into(), &app.config.cwd),
+        /*emitted_cells*/ 2,
+        ConsolidationScrollbackReflow::IfResizeReflowRan,
+        Some(Box::new(history_cell::AgentMessageCell::new(
+            vec!["and conclusion".into()],
+            /*is_first_line*/ false,
+        ))),
+    )?;
+    app.handle_backtrack_overlay_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let highlighted = buffer
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::REVERSED))
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert_eq!(highlighted, "NEEDLE");
     assert!(!app.backtrack.overlay_preview_active);
     app.handle_backtrack_overlay_event(
         &mut tui,

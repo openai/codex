@@ -10277,6 +10277,7 @@ async fn directive_only_completion_removes_streamed_directive() -> Result<()> {
     app.handle_consolidate_agent_message(
         &mut tui,
         AgentMarkdownCell::new(String::new(), Path::new("/tmp")),
+        /*emitted_cells*/ 1,
         ConsolidationScrollbackReflow::Required,
         /*deferred_history_cell*/ None,
     )?;
@@ -10324,6 +10325,7 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
                 .into(),
             Path::new("/tmp"),
         ),
+        /*emitted_cells*/ 1,
         ConsolidationScrollbackReflow::Required,
         /*deferred_history_cell*/ None,
     )?;

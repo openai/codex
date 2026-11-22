@@ -1258,6 +1258,7 @@ impl App {
                 self.finish_initial_history_replay_buffer(tui);
             }
             AppEvent::ConsolidateAgentMessage {
+                emitted_cells,
                 phase,
                 interrupted_item,
                 source,
@@ -1273,6 +1274,7 @@ impl App {
                 self.handle_consolidate_agent_message(
                     tui,
                     cell,
+                    emitted_cells,
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
@@ -1299,7 +1301,7 @@ impl App {
                     if hidden {
                         self.finish_required_stream_reflow(tui)?;
                     } else {
-                        self.replace_agent_message(tui, index..index + 1, cell, crate::app_event::ConsolidationScrollbackReflow::Required)?;
+                        self.replace_agent_message(tui, index..index + 1, /*fragments*/ 1, cell, crate::app_event::ConsolidationScrollbackReflow::Required)?;
                     }
                     let previous = self.transcript_cells.iter().rev().find(|cell| {
                         (cell.as_any().is::<history_cell::AgentMarkdownCell>() && !cell.raw_lines().is_empty())

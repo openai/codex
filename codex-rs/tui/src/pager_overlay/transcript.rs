@@ -379,6 +379,21 @@ impl TranscriptOverlay {
         self.view.set_highlight(self.highlight_cell);
     }
 
+    pub(crate) fn regroup_answer(
+        &mut self,
+        start: usize,
+        ordered: &[Arc<dyn HistoryCell>],
+        fragments: usize,
+        consolidated: Arc<dyn HistoryCell>,
+    ) {
+        if fragments < ordered.len() {
+            let range = start..start + ordered.len();
+            self.view.retain_before_regroup(&self.cells, range.clone());
+            self.cells[range].clone_from_slice(ordered);
+        }
+        self.regroup_cells(start..start + fragments, consolidated);
+    }
+
     /// Grouping may change compact previews; retain the reader's revision before replacing cells.
     pub(crate) fn regroup_cells(
         &mut self,
