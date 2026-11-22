@@ -1,5 +1,6 @@
 //! Read-only Markdown previews use the focused thread's workspace and app-server.
 
+pub(super) mod model_read;
 mod open_error;
 mod watch;
 
@@ -24,12 +25,36 @@ use crate::transcript_view::DocumentPosition;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
 use codex_app_server_client::AppServerPath;
+use codex_app_server_client::ThreadPermissions;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use color_eyre::eyre::eyre;
 use ratatui::layout::Position;
 use ratatui::widgets::Widget;
+use tokio::sync::oneshot;
 use unicode_segmentation::UnicodeSegmentation;
+
+async fn decode_document(
+    bytes: Vec<u8>,
+    path: &PathUri,
+    location: Option<SourceLocation>,
+) -> Result<DocumentContent> {
+    if !(FileLink {
+        path: path.inferred_native_path_string(),
+        location,
+    })
+    .is_image()
+    {
+        return AppServerSession::preview_text(bytes).map(DocumentContent::Text);
+    }
+    tokio::task::spawn_blocking(move || match SidebarImage::decode(&bytes) {
+        Ok(image) => Ok(DocumentContent::Image(Box::new(image))),
+        Err(image_error) => AppServerSession::preview_text(bytes)
+            .map(DocumentContent::Text)
+            .map_err(|_| image_error),
+    })
+    .await?
+}
 
 #[derive(Debug)]
 struct FileCell {
@@ -78,6 +103,28 @@ pub(super) struct DocumentRenderOptions<'a> {
     pub(super) image_protocol: Option<ImageProtocol>,
 }
 
+const MAX_MODEL_DOCUMENTS: usize = 8;
+
+pub(super) enum DocumentOrigin {
+    User {
+        focus: bool,
+    },
+    Model {
+        permissions: Result<Option<ThreadPermissions>>,
+    },
+}
+
+enum DocumentAccess {
+    User,
+    Model { load: Option<ModelLoad> },
+}
+
+struct ModelLoad {
+    permissions: Arc<ThreadPermissions>,
+    // Dropping the tab or replacing the backend cancels the read.
+    _cancel: oneshot::Sender<()>,
+}
+
 pub(super) struct Document {
     source: ThreadId,
     pub(super) path: PathUri,
@@ -87,9 +134,11 @@ pub(super) struct Document {
     link: Option<usize>,
     location: Option<SourceLocation>,
     state: State,
+    access: DocumentAccess,
 }
 
 enum State {
+    AwaitingOpen,
     Loading(Instant),
     Failed {
         error: color_eyre::Report,
@@ -146,8 +195,54 @@ impl Document {
         self.path.basename().unwrap_or_default()
     }
 
+    pub(super) fn awaits_open(&self) -> bool {
+        matches!(self.state, State::AwaitingOpen)
+    }
+
+    fn is_model_snapshot(&self) -> bool {
+        matches!(self.access, DocumentAccess::Model { .. })
+            && matches!(self.state, State::Ready { .. } | State::Image(_))
+    }
+
+    pub(super) fn model_loading(&self) -> bool {
+        matches!(self.access, DocumentAccess::Model { load: Some(_) })
+    }
+
+    pub(super) async fn finish_model_load(
+        &mut self,
+        server: &AppServerSession,
+        result: Result<DocumentContent>,
+    ) {
+        let DocumentAccess::Model {
+            load: Some(initial),
+        } = &mut self.access
+        else {
+            return;
+        };
+        let initial = Arc::clone(&initial.permissions);
+        self.access = DocumentAccess::Model { load: None };
+        let result = match result {
+            Ok(content) => match server.model_preview_permissions(self.source).await {
+                Ok(Some(current))
+                    if initial.profile == current.profile
+                        && initial.workspace_roots == current.workspace_roots =>
+                {
+                    Ok(content)
+                }
+                _ => Err(eyre!(
+                    "Workspace or permissions changed while loading the preview"
+                )),
+            },
+            Err(error) => Err(error),
+        };
+        self.loaded(result);
+    }
+
     pub(super) fn connection_replaced(&mut self) {
         self.watch = None;
+        if let DocumentAccess::Model { load } = &mut self.access {
+            *load = None;
+        }
         if matches!(self.state, State::Loading(_)) {
             self.state = State::Failed {
                 error: eyre!("Connection changed. Reopen this file to try again."),
@@ -160,7 +255,7 @@ impl Document {
         let position = match &self.state {
             State::Ready { view, .. } => Some(view.document_position()),
             State::Failed { position, .. } => *position,
-            State::Loading(_) | State::Image(_) => None,
+            State::AwaitingOpen | State::Loading(_) | State::Image(_) => None,
         };
         self.state = match result {
             Ok(DocumentContent::Image(image)) => State::Image(image),
@@ -282,8 +377,32 @@ impl Document {
         } = options;
         let buf = &mut *frame.buffer;
         ratatui::widgets::Clear.render(area, buf);
-        let body = area.inner(ratatui::layout::Margin::new(1, 0));
+        let mut body = area.inner(ratatui::layout::Margin::new(1, 0));
+        if self.is_model_snapshot() && body.height > 1 {
+            "Snapshot · Enter to open live"
+                .dim()
+                .render(Rect { height: 1, ..body }, buf);
+            body.y += 1;
+            body.height -= 1;
+        }
         match &mut self.state {
+            State::AwaitingOpen => {
+                let path = self.path.inferred_native_path_string();
+                let path =
+                    crate::history_cell::sanitize_user_text(path.into()).replace(['\n', '\t'], " ");
+                let title = match self.location {
+                    Some(location) => format!("Open {path} at line {}?", location.line),
+                    None => format!("Open {path}?"),
+                };
+                let mut lines = textwrap::wrap(&title, usize::from(body.width).max(1))
+                    .into_iter()
+                    .map(|line| Line::from(line.into_owned()))
+                    .collect::<Vec<_>>();
+                lines.push("Focus this pane and press Enter to open.".dim().into());
+                Paragraph::new(lines)
+                    .wrap(ratatui::widgets::Wrap { trim: true })
+                    .render(body, buf);
+            }
             State::Image(image) => {
                 frame
                     .image_placements
@@ -468,9 +587,7 @@ impl App {
     ) -> bool {
         self.conversation_focus_available(tui)
             && self.sidebar_chooser_available()
-            && server.thread_params_mode() != crate::app_server_session::ThreadParamsMode::Cloud
-            && server.app_server_platform_family() != Some("windows")
-            && (server.uses_remote_workspace() || !cfg!(windows))
+            && server.supports_document_previews()
             && self.current_displayed_thread_id().is_some()
     }
 
@@ -493,8 +610,8 @@ impl App {
         let Some(parent) = self.sidebar_parent() else {
             return Ok(());
         };
-        let resolver = server.request_view();
-        let backend_id = resolver.backend_id();
+        let resolver = server.file_system();
+        let backend_id = server.backend_id();
         let tx = self.app_event_tx.clone();
         let request = uuid::Uuid::new_v4();
         let pane = self.sidebar_mut();
@@ -533,34 +650,148 @@ impl App {
         location: Option<SourceLocation>,
         focus: bool,
     ) -> Result<()> {
-        let Some(parent) = self.sidebar_parent() else {
-            return Ok(());
-        };
+        if let Some(id) = self.open_document_tab(
+            server,
+            source,
+            original_path,
+            path,
+            location,
+            DocumentOrigin::User { focus },
+        ) {
+            if focus {
+                self.activate_sidebar_tab(tui, server, SidebarTab::Document(id))
+                    .await?;
+            } else {
+                tui.frame_requester().schedule_frame();
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn open_document_tab(
+        &mut self,
+        server: &AppServerSession,
+        source: ThreadId,
+        original_path: AppServerPath,
+        path: PathUri,
+        location: Option<SourceLocation>,
+        origin: DocumentOrigin,
+    ) -> Option<uuid::Uuid> {
+        let parent = self.sidebar_parent()?;
         let backend_id = server.backend_id();
+        let tx = self.app_event_tx.clone();
+        let environment = self.environment_manager.try_local_environment();
         let existing = self.sidebar().and_then(|pane| {
-            pane.documents.iter().find_map(|(&id, doc)| {
-                (doc.backend == backend_id && doc.path == path)
-                    .then_some((id, matches!(doc.state, State::Failed { .. })))
-            })
+            pane.documents
+                .iter()
+                .find(|(_, doc)| doc.backend == backend_id && doc.path == path)
+                .map(|(&id, _)| id)
         });
-        if let Some((id, failed)) = existing {
-            if !focus {
-                return Ok(());
-            }
-            if !failed {
-                if let Some(doc) = self.sidebar_mut().documents.get_mut(&id) {
+        if let Some(id) = existing {
+            let doc = self.sidebar_mut().documents.get_mut(&id)?;
+            match (&origin, &doc.access) {
+                (DocumentOrigin::User { focus: false }, _) => return None,
+                (DocumentOrigin::User { focus: true }, DocumentAccess::User)
+                    if !matches!(doc.state, State::Failed { .. }) =>
+                {
                     doc.go_to(location);
+                    return Some(id);
                 }
-                return self
-                    .activate_sidebar_tab(tui, server, SidebarTab::Document(id))
-                    .await;
+                (DocumentOrigin::Model { permissions: Ok(_) }, DocumentAccess::User)
+                    if doc.source == source =>
+                {
+                    // The user already authorized this tab. Keep the watch and use its content.
+                    if location.is_some() {
+                        doc.go_to(location);
+                    }
+                    return Some(id);
+                }
+                (DocumentOrigin::Model { .. }, DocumentAccess::User) => return None,
+                _ => self.sidebar_mut().remove_document(id),
             }
-            self.sidebar_mut().remove_document(id);
+        }
+        if matches!(origin, DocumentOrigin::Model { .. })
+            && self
+                .sidebars
+                .values()
+                .flat_map(|pane| pane.documents.values())
+                .filter(|doc| matches!(doc.access, DocumentAccess::Model { .. }))
+                .count()
+                >= MAX_MODEL_DOCUMENTS
+        {
+            self.chat_widget.add_warning_message(
+                "Close a model-opened sidebar tab to open another model preview.".to_owned(),
+            );
+            return None;
         }
         let request = uuid::Uuid::new_v4();
-        let tx = self.app_event_tx.clone();
+        let (state, access) = match origin {
+            DocumentOrigin::User { .. } => (State::Loading(Instant::now()), DocumentAccess::User),
+            DocumentOrigin::Model { permissions } => {
+                let (state, load) = match (permissions, environment) {
+                    (Ok(None), _) => (State::AwaitingOpen, None),
+                    (Err(error), _) => (
+                        State::Failed {
+                            error,
+                            position: None,
+                        },
+                        None,
+                    ),
+                    (Ok(Some(_)), None) => (
+                        State::Failed {
+                            error: eyre!("Local filesystem is unavailable"),
+                            position: None,
+                        },
+                        None,
+                    ),
+                    (Ok(Some(permissions)), Some(environment)) => {
+                        let reader = server.file_system();
+                        let task_tx = tx.clone();
+                        let task_path = path.clone();
+                        let task_original = original_path.clone();
+                        let permissions = Arc::new(permissions);
+                        let initial = Arc::clone(&permissions);
+                        let (cancel, canceled) = oneshot::channel();
+                        tokio::spawn(async move {
+                            let read = model_read::read(
+                                &reader,
+                                &environment,
+                                source,
+                                &task_original,
+                                &task_path,
+                                &permissions,
+                            );
+                            let result = tokio::select! {
+                                biased;
+                                _ = canceled => Err(eyre!("Preview closed")),
+                                result = read => result,
+                            };
+                            let result = match result {
+                                Ok(bytes) => decode_document(bytes, &task_path, location).await,
+                                Err(error) => Err(error),
+                            };
+                            task_tx.send(AppEvent::SidebarDocumentLoaded {
+                                backend_id,
+                                parent,
+                                tab: request,
+                                request,
+                                result,
+                            });
+                        });
+                        (
+                            State::Loading(Instant::now()),
+                            Some(ModelLoad {
+                                permissions: initial,
+                                _cancel: cancel,
+                            }),
+                        )
+                    }
+                };
+                (state, DocumentAccess::Model { load })
+            }
+        };
         let pane = self.sidebar_mut();
-        if !pane.opened_files.contains(&path) {
+        if matches!(access, DocumentAccess::User) && !pane.opened_files.contains(&path) {
             pane.opened_files.push(path.clone());
         }
         let mut doc = Document {
@@ -571,18 +802,13 @@ impl App {
             backend: backend_id,
             link: None,
             location,
-            state: State::Loading(Instant::now()),
+            state,
+            access,
         };
         doc.subscribe(request, parent, server, tx);
         pane.documents.insert(request, doc);
         pane.add_document_tab(request);
-        if focus {
-            self.activate_sidebar_tab(tui, server, SidebarTab::Document(request))
-                .await?;
-        } else {
-            tui.frame_requester().schedule_frame();
-        }
-        Ok(())
+        Some(request)
     }
 
     pub(super) async fn handle_document_input(
@@ -593,7 +819,8 @@ impl App {
     ) -> bool {
         let focused = self.panel_focus() == Some(PaneFocus::Sidebar);
         let area = self.conversation_frame.panel_area();
-        let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent()) else {
+        let parent = self.sidebar_parent();
+        let Some(pane) = self.sidebars.get_mut(&parent) else {
             return false;
         };
         let Some(SidebarContent::Document(id)) = pane.visible_content() else {
@@ -625,6 +852,24 @@ impl App {
                 }
                 let escape = crate::key_hint::plain(KeyCode::Esc).is_press(*key);
                 if key.kind != KeyEventKind::Press && (escape || key.code == KeyCode::Enter) {
+                    return true;
+                }
+                if crate::key_hint::plain(KeyCode::Enter).is_press(*key)
+                    && let Some(parent) = parent
+                    && (doc.awaits_open()
+                        || (doc.is_model_snapshot()
+                            && doc.link.is_none()
+                            && !doc.owns_interaction_key(*key)))
+                {
+                    doc.access = DocumentAccess::User;
+                    if doc.awaits_open() {
+                        doc.state = State::Loading(Instant::now());
+                    }
+                    doc.subscribe(id, parent, server, self.app_event_tx.clone());
+                    if !pane.opened_files.contains(&doc.path) {
+                        pane.opened_files.push(doc.path.clone());
+                    }
+                    tui.frame_requester().schedule_frame();
                     return true;
                 }
                 if let State::Ready {

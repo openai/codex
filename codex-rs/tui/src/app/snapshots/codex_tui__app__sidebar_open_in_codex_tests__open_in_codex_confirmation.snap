@@ -1,0 +1,8 @@
+---
+source: tui/src/app/sidebar_open_in_codex_tests.rs
+assertion_line: 341
+expression: sidebar.trim_end()
+---
+ Side chat           ×  PLAN.md             ×  Agent transcript    ×  note.md             ×                          +
+ Open <workspace>/note.md?
+ Focus this pane and press Enter to open.

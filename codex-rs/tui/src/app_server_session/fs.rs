@@ -28,7 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use uuid::Uuid;
 
-impl AppServerSession {
+impl AppServerFileSystem {
     pub(crate) async fn resolve_thread_file(
         &self,
         source: ThreadId,
@@ -38,7 +38,7 @@ impl AppServerSession {
         resolve_preview_path(path, &cwd)
     }
 
-    async fn preview_workspace(&self, source: ThreadId) -> Result<PathUri> {
+    pub(crate) async fn preview_workspace(&self, source: ThreadId) -> Result<PathUri> {
         // Read only the environment metadata. Other paths in thread/read may be native
         // to a different operating system from the TUI.
         #[derive(serde::Deserialize)]
@@ -51,7 +51,7 @@ impl AppServerSession {
         }
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response: Response = self
-            .request_handle()
+            .request_handle
             .request_typed(ClientRequest::ThreadRead {
                 request_id,
                 params: codex_app_server_protocol::ThreadReadParams {
@@ -73,29 +73,6 @@ impl AppServerSession {
             })
     }
 
-    pub(crate) async fn read_document(
-        &self,
-        source: ThreadId,
-        original_path: &AppServerPath,
-        resolved_path: &PathUri,
-    ) -> Result<String> {
-        let bytes = self
-            .read_preview_file(source, original_path, resolved_path)
-            .await?;
-        Self::preview_text(bytes)
-    }
-
-    pub(crate) fn preview_text(bytes: Vec<u8>) -> Result<String> {
-        let text = String::from_utf8(bytes).wrap_err("Not a UTF-8 text file")?;
-        color_eyre::eyre::ensure!(
-            !text
-                .chars()
-                .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r')),
-            "Not a text file"
-        );
-        Ok(text)
-    }
-
     pub(crate) async fn read_preview_file(
         &self,
         source: ThreadId,
@@ -113,12 +90,31 @@ impl AppServerSession {
         );
         // fs/readFile follows symlinks. Only a server-side open can enforce no-follow.
         let path = AppServerPath::from_app_server(resolved_path.inferred_native_path_string());
-        let bytes = self.file_system().fs_read_file_path(&path).await?;
+        let bytes = self.fs_read_file_path(&path).await?;
         color_eyre::eyre::ensure!(
             self.preview_workspace(source).await? == workspace,
             "Workspace changed. Reopen the file to try again."
         );
         Ok(bytes)
+    }
+}
+
+impl AppServerSession {
+    pub(crate) fn supports_document_previews(&self) -> bool {
+        self.thread_params_mode() != super::ThreadParamsMode::Cloud
+            && self.app_server_platform_family() != Some("windows")
+            && (self.uses_remote_workspace() || !cfg!(windows))
+    }
+
+    pub(crate) fn preview_text(bytes: Vec<u8>) -> Result<String> {
+        let text = String::from_utf8(bytes).wrap_err("Not a UTF-8 text file")?;
+        color_eyre::eyre::ensure!(
+            !text
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r')),
+            "Not a text file"
+        );
+        Ok(text)
     }
 
     pub(crate) fn file_system(&self) -> AppServerFileSystem {
@@ -128,7 +124,7 @@ impl AppServerSession {
     }
 }
 
-fn resolve_preview_path(path: &AppServerPath, cwd: &PathUri) -> Result<PathUri> {
+pub(crate) fn resolve_preview_path(path: &AppServerPath, cwd: &PathUri) -> Result<PathUri> {
     let path = LegacyAppPathString::from_string(path.as_str())
         .resolve_against(cwd, /*user_home_dir*/ None)?;
     color_eyre::eyre::ensure!(

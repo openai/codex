@@ -293,6 +293,10 @@ mod sidebar_close;
 mod sidebar_document;
 mod sidebar_files;
 pub(crate) mod sidebar_loading;
+mod sidebar_model_documents;
+#[cfg(all(test, not(windows)))]
+#[path = "app/sidebar_open_in_codex_tests.rs"]
+mod sidebar_open_in_codex_tests;
 mod sidebar_subagents;
 mod startup;
 pub(crate) mod startup_bootstrap;
@@ -684,6 +688,7 @@ pub(crate) struct App {
     side_threads: HashMap<ThreadId, SideThreadState>,
     saved_openings: sidebar_loading::Openings,
     sidebars: HashMap<Option<ThreadId>, sidebar::SidebarPane>,
+    model_preview_load: Option<uuid::Uuid>,
     /// A parked parent view survives child cleanup until its own replay finishes.
     side_companions: HashMap<ThreadId, SideCompanion>,
     zoomed_thread: Option<ThreadId>,
@@ -1105,6 +1110,15 @@ impl App {
             return Ok(AppRunControl::Exit(ExitReason::UserRequested));
         }
         let screen_size = tui.screen_size_for_event(&event)?;
+        let draws_history = matches!(
+            event,
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
+        );
+        if draws_history && self.model_preview_load.is_none() {
+            self.model_preview_load = self
+                .start_queued_model_document(tui, app_server, screen_size.width)
+                .await;
+        }
         if !matches!(
             &event,
             TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost
@@ -1354,10 +1368,6 @@ impl App {
             _ => {}
         }
 
-        let draws_history = matches!(
-            event,
-            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
-        );
         if self.overlay.is_some() {
             let _ = self
                 .handle_backtrack_overlay_event(tui, app_server, event)

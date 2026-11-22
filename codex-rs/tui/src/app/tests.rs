@@ -94,6 +94,8 @@ mod recap_generation;
 #[path = "tests/resume_shutdown_tests.rs"]
 mod resume_shutdown_tests;
 mod safety_buffering;
+#[cfg(not(windows))]
+pub(super) use safety_buffering::wait_for_turn_completed;
 #[path = "tests/saved_chat_loading_tests.rs"]
 mod saved_chat_loading;
 #[path = "tests/session_lifecycle_requests.rs"]
@@ -9285,6 +9287,7 @@ async fn make_test_app() -> Box<App> {
         side_threads: HashMap::new(),
         saved_openings: Default::default(),
         sidebars: HashMap::new(),
+        model_preview_load: None,
         side_companions: HashMap::new(),
         zoomed_thread: None,
         exact_sidebar_width: None,
@@ -9433,6 +9436,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             side_threads: HashMap::new(),
             saved_openings: Default::default(),
             sidebars: HashMap::new(),
+            model_preview_load: None,
             side_companions: HashMap::new(),
             zoomed_thread: None,
             exact_sidebar_width: None,

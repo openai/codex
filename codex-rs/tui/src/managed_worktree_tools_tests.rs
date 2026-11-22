@@ -48,6 +48,7 @@ async fn start_server(
     server
         .start_dynamic_tool_mcp(
             config.clone(),
+            /*workspace_enabled*/ false,
             crate::app_event_sender::AppEventSender::new(events),
             status,
         )

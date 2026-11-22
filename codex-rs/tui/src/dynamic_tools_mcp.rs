@@ -1,7 +1,8 @@
-//! Approval-gated MCP transport for task tools owned by a local TUI.
+//! MCP transport for tools owned by the local interactive TUI.
 
 use crate::app_event_sender::AppEventSender;
 use crate::dynamic_tools;
+use crate::open_in_codex;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
@@ -44,6 +45,7 @@ use std::sync::Arc;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -127,6 +129,7 @@ impl DynamicToolMcpServer {
         app_event_tx: AppEventSender,
         status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
         worktrees: Option<crate::managed_worktree_tools::ManagedWorktreeTools>,
+        sidebar_backend: Option<crate::backend_id::BackendId>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -153,6 +156,8 @@ impl DynamicToolMcpServer {
             status_updates,
             server_config: server_config.clone(),
             worktrees,
+            sidebar_backend,
+            sidebar_pending_slots: Arc::new(Semaphore::new(open_in_codex::MAX_PENDING_DOCUMENTS)),
         };
         let service = StreamableHttpService::new(
             move || Ok(handler.clone()),
@@ -209,6 +214,8 @@ struct DynamicToolMcpHandler {
     status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
     server_config: Value,
     worktrees: Option<crate::managed_worktree_tools::ManagedWorktreeTools>,
+    sidebar_backend: Option<crate::backend_id::BackendId>,
+    sidebar_pending_slots: Arc<Semaphore>,
 }
 
 impl ServerHandler for DynamicToolMcpHandler {
@@ -222,6 +229,9 @@ impl ServerHandler for DynamicToolMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let mut tools = Vec::new();
+        if self.sidebar_backend.is_some() {
+            tools.push(open_in_codex::tool());
+        }
         let mut specs = dynamic_tools::tool_specs();
         if self.worktrees.is_some() {
             specs.extend(crate::managed_worktree_tool_specs::specs());
@@ -296,11 +306,6 @@ impl ServerHandler for DynamicToolMcpHandler {
             tool: request.name.into_owned(),
             arguments: Value::Object(request.arguments.unwrap_or_default()),
         };
-        let mut thread_start_params = self.thread_start_params.clone();
-        thread_start_params.config.get_or_insert_default().insert(
-            format!("mcp_servers.{}", dynamic_tools::NAMESPACE),
-            self.server_config.clone(),
-        );
         // Snapshot once: an in-flight call must never switch connections or replay a mutation.
         let (request_handle, app_event_tx) = self
             .connection
@@ -310,6 +315,21 @@ impl ServerHandler for DynamicToolMcpHandler {
             .ok_or_else(|| {
                 McpError::internal_error("TUI is reconnecting; tool was not sent", None)
             })?;
+        if params.tool == open_in_codex::NAME {
+            let backend = self.sidebar_backend.ok_or_else(|| {
+                McpError::invalid_params("The sidebar is unavailable on this connection", None)
+            })?;
+            return open_in_codex::execute(
+                request_handle,
+                &app_event_tx,
+                Arc::clone(&self.sidebar_pending_slots),
+                backend,
+                &params.thread_id,
+                params.arguments,
+            )
+            .await
+            .map(Into::into);
+        }
         let response = if matches!(
             params.tool.as_str(),
             "create_worktree" | "get_worktree_creation_status" | "list_worktrees"
@@ -326,6 +346,11 @@ impl ServerHandler for DynamicToolMcpHandler {
                 )
                 .await
         } else {
+            let mut thread_start_params = self.thread_start_params.clone();
+            thread_start_params.config.get_or_insert_default().insert(
+                format!("mcp_servers.{}", dynamic_tools::NAMESPACE),
+                self.server_config.clone(),
+            );
             dynamic_tools::execute(
                 request_handle,
                 params,

@@ -648,6 +648,7 @@ async fn closing_the_first_preview_populates_the_files_chooser() -> Result<()> {
 
     let original_path = codex_app_server_client::AppServerPath::from_app_server("notes.md");
     let path = server
+        .file_system()
         .resolve_thread_file(thread_id, &original_path)
         .await?;
     Box::pin(app.open_resolved_document(

@@ -93,6 +93,10 @@ pub(super) struct SidebarPane {
     pub(super) files: Option<super::sidebar_files::Files>,
     pub(super) opened_files: Vec<codex_utils_path_uri::PathUri>,
     pub(super) documents: HashMap<uuid::Uuid, super::sidebar_document::Document>,
+    pub(super) pending_documents: HashMap<
+        crate::backend_id::BackendId,
+        std::collections::VecDeque<crate::open_in_codex::DocumentRequest>,
+    >,
     pub(super) focus_document_request: Option<uuid::Uuid>,
     content: SidebarContent,
     tabs: Vec<SidebarTab>,
@@ -565,7 +569,9 @@ impl App {
         self.conversation_frame.panel_area().or_else(|| {
             match side_pane::split_layout(self, tui, screen) {
                 Some(SidebarLayout::Panel { sidebar, .. }) => Some(sidebar),
-                _ if screen.width < 100 && self.chooser_focus() == Some(PaneFocus::Sidebar) => {
+                _ if screen.width < side_pane::MIN_SPLIT_WIDTH
+                    && self.chooser_focus() == Some(PaneFocus::Sidebar) =>
+                {
                     Some(screen)
                 }
                 _ => None,
@@ -749,7 +755,7 @@ pub(super) fn paint_layout(app: &mut App, tui: &Tui, area: Rect) -> Option<Sideb
         && app.side_retention_enabled(tui)
         && !app.conversation_frame.has_caller_inset();
     let animate = allowed
-        && area.width >= 100
+        && area.width >= side_pane::MIN_SPLIT_WIDTH
         && app.local_settings.tui.animations
         && app.pane_resize.is_none()
         && app.divider_drag.is_none();
@@ -764,7 +770,7 @@ pub(super) fn paint_layout(app: &mut App, tui: &Tui, area: Rect) -> Option<Sideb
     }
     let content = pane.content;
     let focus = pane.focus.unwrap_or(PaneFocus::Main);
-    let [main, sidebar] = if zoomed_document || area.width < 100 {
+    let [main, sidebar] = if zoomed_document || area.width < side_pane::MIN_SPLIT_WIDTH {
         if focus == PaneFocus::Main {
             return None;
         }

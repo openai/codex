@@ -146,6 +146,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         side_threads: HashMap::new(),
         saved_openings: Default::default(),
         sidebars: HashMap::new(),
+        model_preview_load: None,
         side_companions: HashMap::new(),
         zoomed_thread: None,
         exact_sidebar_width: None,

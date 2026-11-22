@@ -8,6 +8,7 @@ codex_rust_crate(
     ]),
     crate_name = "codex_tui",
     extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
         "//codex-rs/cli:codex",
         "//codex-rs/rmcp-client:test_stdio_server",
     ],

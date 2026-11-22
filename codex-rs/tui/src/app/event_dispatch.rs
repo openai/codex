@@ -113,6 +113,7 @@ impl App {
                     | AppEvent::StartQueuedSavedChat
                     | AppEvent::OpenSidebarAgent { .. }
                     | AppEvent::OpenSidebarDocument { .. }
+                    | AppEvent::OpenModelSidebarDocument { .. }
                     | AppEvent::SidebarDocumentResolved { .. }
                     | AppEvent::SidebarDocumentLoaded { .. }
                     | AppEvent::SidebarFilesLoaded { .. }
@@ -3757,16 +3758,29 @@ impl App {
                     Box::pin(self.open_document(tui, app_server, source, link)).await?;
                 }
             }
+            AppEvent::OpenModelSidebarDocument { backend, thread_id, document } => {
+                let pending = self.sidebars.entry(Some(thread_id)).or_default()
+                    .pending_documents.entry(backend).or_default();
+                const MAX_PENDING_PER_THREAD: usize = 8;
+                pending.retain(|request| request.path != document.path);
+                if pending.len() == MAX_PENDING_PER_THREAD {
+                    pending.pop_front();
+                }
+                pending.push_back(document);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::SidebarDocumentResolved { backend_id, parent, source, request, original_path, path, location, } => {
+                let requested = self.sidebars.get_mut(&Some(parent))
+                    .and_then(|pane| pane.focus_document_request.take_if(|id| *id == request))
+                    .is_some();
+                if requested {
+                    tui.frame_requester().schedule_frame();
+                }
                 if backend_id == app_server.backend_id()
                     && self.sidebar_parent() == Some(parent)
-                    && let Some(pane) = self.sidebars.get_mut(&Some(parent))
+                    && self.sidebars.contains_key(&Some(parent))
                 {
                     // Late opens can add their tabs without taking back the user's focus.
-                    let requested = pane.focus_document_request == Some(request);
-                    if requested {
-                        pane.focus_document_request = None;
-                    }
                     let focus = requested
                         && self.current_displayed_thread_id() == Some(source)
                         && self.document_preview_available(tui, app_server);
@@ -3778,12 +3792,21 @@ impl App {
                 }
             }
             AppEvent::SidebarDocumentLoaded { backend_id, parent, tab, request, result } => {
+                let model_load = self.model_preview_load == Some(request);
+                if model_load {
+                    self.model_preview_load = None;
+                    tui.frame_requester().schedule_frame();
+                }
                 if let Some(doc) = self.sidebars.get_mut(&Some(parent)).and_then(|pane| pane.documents.get_mut(&tab))
                     && doc.backend == backend_id
-                    && doc.watch.as_ref().is_some_and(|(id, _)| *id == request)
                 {
-                    doc.loaded(result);
-                    tui.frame_requester().schedule_frame();
+                    if model_load && doc.model_loading() && app_server.backend_id() == backend_id {
+                        doc.finish_model_load(app_server, result).await;
+                        tui.frame_requester().schedule_frame();
+                    } else if doc.watch.as_ref().is_some_and(|(id, _)| *id == request) {
+                        doc.loaded(result);
+                        tui.frame_requester().schedule_frame();
+                    }
                 }
             }
             AppEvent::SidebarFilesLoaded { backend_id, parent, request, page } => {

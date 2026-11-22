@@ -75,12 +75,13 @@ async fn remote_preview_requests_the_source_thread_and_validates_text() -> Resul
         ThreadParamsMode::Remote,
     );
     let path = AppServerPath::from_app_server("notes.md");
-    let resolved = session.resolve_thread_file(source, &path).await?;
-    assert_eq!(session.read_document(source, &path, &resolved).await?, text);
-    let error = session
-        .read_document(source, &path, &resolved)
-        .await
-        .unwrap_err();
+    let fs = session.file_system();
+    let resolved = fs.resolve_thread_file(source, &path).await?;
+    let read_text = async || {
+        AppServerSession::preview_text(fs.read_preview_file(source, &path, &resolved).await?)
+    };
+    assert_eq!(read_text().await?, text);
+    let error = read_text().await.unwrap_err();
     let Some(TypedRequestError::Server {
         method,
         source: rpc_error,
@@ -103,10 +104,7 @@ async fn remote_preview_requests_the_source_thread_and_validates_text() -> Resul
         "Not a text file",
         "Workspace changed",
     ] {
-        let error = session
-            .read_document(source, &path, &resolved)
-            .await
-            .unwrap_err();
+        let error = read_text().await.unwrap_err();
         assert!(format!("{error:#}").contains(expected), "{error:#}");
     }
     // No fs/watch should reach the server for a path its client can't decode in fs/changed.

@@ -200,6 +200,7 @@ mod notifications;
 #[cfg(any(not(debug_assertions), test))]
 mod npm_registry;
 pub(crate) mod onboarding;
+mod open_in_codex;
 mod oss_selection;
 mod pager_overlay;
 mod projectless;

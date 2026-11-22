@@ -555,6 +555,11 @@ pub(crate) enum AppEvent {
         source: ThreadId,
         link: crate::markdown_render::FileLink,
     },
+    OpenModelSidebarDocument {
+        backend: crate::backend_id::BackendId,
+        thread_id: ThreadId,
+        document: crate::open_in_codex::DocumentRequest,
+    },
     SidebarDocumentResolved {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,

@@ -571,6 +571,7 @@ impl App {
         ) && let Err(error) = app_server
             .start_dynamic_tool_mcp(
                 config.clone(),
+                local_settings.workspace_enabled(&config),
                 app_event_tx.clone(),
                 dynamic_tool_status_updates.clone(),
             )
@@ -1139,6 +1140,7 @@ See the Codex keymap documentation for supported actions and examples."
             side_threads: HashMap::new(),
             saved_openings: Default::default(),
             sidebars: HashMap::new(),
+            model_preview_load: None,
             side_companions: HashMap::new(),
             zoomed_thread: None,
             exact_sidebar_width: None,

@@ -32,6 +32,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use std::time::Duration;
 
 pub(super) const GAP: u16 = 1;
+pub(super) const MIN_SPLIT_WIDTH: u16 = 100;
 pub(super) const RESIZE_HINT: &str = "Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -110,7 +111,7 @@ fn visible_split(app: &App, tui: &Tui, area: Rect) -> Option<SidebarLayout> {
 pub(super) fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidebarLayout> {
     let area = app.workspace_chat_area(area);
     let content = app.sidebar()?.visible_content()?;
-    if area.width < 100
+    if area.width < MIN_SPLIT_WIDTH
         || app.conversation_frame.has_caller_inset()
         || !app.side_retention_enabled(tui)
     {
