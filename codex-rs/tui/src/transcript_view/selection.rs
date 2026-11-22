@@ -857,6 +857,11 @@ impl TranscriptView {
     }
 
     pub(crate) fn tick_selection(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {
+        // A lost release can strand a Back to bottom press even without a text selection.
+        if crate::tui::tmux_mouse_disabled() {
+            self.end_drag();
+            return false;
+        }
         let snapshot = self.snapshot_cells();
         let cells = snapshot.as_deref().unwrap_or(cells);
         let Some(selection) = self

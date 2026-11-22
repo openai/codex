@@ -127,6 +127,11 @@ pub(crate) fn reports_key_releases() -> bool {
     keyboard_modes::reports_key_releases()
 }
 
+pub(crate) fn tmux_mouse_disabled() -> bool {
+    ALTERNATE_SCREEN.is_active()
+        && ALTERNATE_SCREEN.tmux_mouse() == tmux::MouseCapture::DisabledByTmux
+}
+
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
     match condition {
         NotificationCondition::Unfocused => !terminal_focused,
@@ -933,6 +938,28 @@ impl Tui {
         }
     }
 
+    // Nested screens such as /resume retain the capture request across draws.
+    // Apply a new tmux policy even if the screen never changes its request.
+    fn refresh_tmux_mouse(&mut self) -> Result<()> {
+        if ALTERNATE_SCREEN.is_active()
+            && let Some(mouse) = self
+                .event_broker
+                .size_monitor
+                .as_ref()
+                .and_then(size_monitor::SizeMonitor::mouse)
+        {
+            // Selection ticks can run before this draw applies the policy. Give
+            // even a stationary drag a chance to end without a button release.
+            if mouse == tmux::MouseCapture::DisabledByTmux && mouse != ALTERNATE_SCREEN.tmux_mouse()
+            {
+                self.frame_requester.schedule_frame();
+            }
+            ALTERNATE_SCREEN.set_tmux_mouse(mouse);
+            self.set_mouse_capture(self.mouse_capture)?;
+        }
+        Ok(())
+    }
+
     pub fn set_notification_settings(
         &mut self,
         method: NotificationMethod,
@@ -1213,6 +1240,9 @@ impl Tui {
             self.terminal.backend_mut(),
             self.mouse_capture.captures_mouse(self.owned_screen),
         );
+        if let Some(monitor) = &self.event_broker.size_monitor {
+            monitor.reset_mouse();
+        }
         self.alt_screen_active
             .store(ALTERNATE_SCREEN.is_active(), Ordering::Relaxed);
         if !self.is_alt_screen_active() {
@@ -1472,6 +1502,7 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        self.refresh_tmux_mouse()?;
         let screen_size = self.take_event_screen_size()?;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
@@ -1633,6 +1664,7 @@ impl Tui {
         hud: Option<crate::bottom_pane::ShortcutHud>,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        self.refresh_tmux_mouse()?;
         // This draw uses the caller's resolved geometry directly, so its reservation is consumed.
         self.screen_size.pending_draw_size = None;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it

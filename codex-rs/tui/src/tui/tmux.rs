@@ -26,6 +26,69 @@ pub(super) enum MouseCapture {
     DisabledByTmux,
 }
 
+impl MouseCapture {
+    fn parse(mouse: &str) -> Option<Self> {
+        match mouse.trim() {
+            "0" | "off" => Some(Self::DisabledByTmux),
+            "1" | "on" => Some(Self::Enabled),
+            _ => None,
+        }
+    }
+}
+
+fn command() -> Option<Command> {
+    let executable = codex_utils_path::system_executable("tmux")?;
+    let path = codex_utils_path::system_path().ok()?;
+    let mut command = Command::new(executable);
+    command
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    Some(command)
+}
+
+// Without a pane ID or a tty on stdin, tmux defaults to the most recently
+// active session. TMUX contains the socket, server PID and containing session ID.
+fn target() -> Option<String> {
+    std::env::var("TMUX_PANE")
+        .ok()
+        .filter(|pane| !pane.is_empty())
+        .or_else(|| {
+            let tmux = std::env::var("TMUX").ok()?;
+            let (session, _pid, _socket) = tmux.rsplitn(3, ',').collect_tuple()?;
+            let id = session.parse::<u32>().ok()?;
+            Some(format!("${id}:"))
+        })
+}
+
+/// A failed refresh must preserve the last confirmed policy, including mouse off.
+pub(super) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
+    let target = target()?;
+    // tmux clears the socket's execute bits when its last client detaches.
+    // Avoid spawning commands (and filling show-messages) on an idle server.
+    #[cfg(unix)]
+    if let Ok(tmux) = std::env::var("TMUX")
+        && let Some(socket) = tmux.rsplitn(3, ',').nth(2)
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(socket).ok()?.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+    }
+    let mut command = command()?;
+    // if-shell -F evaluates a tmux format without running a shell. Only invoke
+    // display-message (and the user's after-display-message hook) on a change.
+    let (condition, report) = match previous {
+        MouseCapture::Enabled => ("#{==:#{mouse},0}", "display-message -p 0"),
+        MouseCapture::DisabledByTmux => ("#{==:#{mouse},1}", "display-message -p 1"),
+    };
+    command.args(["if-shell", "-F", "-t", &target, condition, report]);
+    // Keep the periodic check short so a busy server cannot starve resize recovery.
+    let deadline = Instant::now() + Duration::from_millis(/*millis*/ 100);
+    let output = command_stdout_before_deadline(&mut command, deadline)?;
+    MouseCapture::parse(std::str::from_utf8(&output).ok()?)
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Options {
     pub(super) extended_keys_format: Option<String>,
@@ -34,16 +97,10 @@ pub(super) struct Options {
 }
 
 pub(super) fn options() -> Options {
-    let pane = std::env::var("TMUX_PANE").ok();
+    let pane = target();
     if std::env::var_os("TMUX").is_none() && pane.is_none() {
         return Options::default();
     }
-    let Some(executable) = codex_utils_path::system_executable("tmux") else {
-        return Options::default();
-    };
-    let Ok(path) = codex_utils_path::system_path() else {
-        return Options::default();
-    };
     if PROBE_IN_FLIGHT.swap(true, Ordering::AcqRel) {
         return Options::default();
     }
@@ -53,13 +110,7 @@ pub(super) fn options() -> Options {
         .name("tmux-options".into())
         .spawn(move || {
             let options = read_options(pane.as_deref(), |args| {
-                let mut command = Command::new(&executable);
-                command
-                    .env("PATH", &path)
-                    .args(args)
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null());
-                command_stdout_before_deadline(&mut command, deadline)
+                command_stdout_before_deadline(command()?.args(args), deadline)
             });
             PROBE_IN_FLIGHT.store(false, Ordering::Release);
             let _ = sender.send(options);
@@ -94,9 +145,7 @@ fn read_options(pane: Option<&str>, mut run: impl FnMut(&[&str]) -> Option<Vec<u
         let mouse = fields.next().unwrap_or_default();
         options.extended_keys_format =
             (!format.trim().is_empty()).then(|| format.trim().to_owned());
-        if matches!(mouse.trim(), "0" | "off") {
-            options.mouse_capture = MouseCapture::DisabledByTmux;
-        }
+        options.mouse_capture = MouseCapture::parse(mouse).unwrap_or_default();
         // tmux drops uploads from hidden panes unless passthrough is set to all.
         if let Some(("all", term, kind, features)) = fields.next_tuple()
             && (matches!(term, "xterm-ghostty" | "xterm-kitty")

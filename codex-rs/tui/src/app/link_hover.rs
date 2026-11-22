@@ -187,7 +187,7 @@ impl App {
         let Some((id, area)) = self.passive_link_drag else {
             return Ok(false);
         };
-        if self.conversation_focus_available(tui) {
+        if self.conversation_focus_available(tui) && !crate::tui::tmux_mouse_disabled() {
             match event {
                 TuiEvent::Draw => {
                     if let Some(companion) = self.side_companions.get_mut(&id)

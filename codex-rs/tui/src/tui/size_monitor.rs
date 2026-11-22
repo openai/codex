@@ -1,4 +1,4 @@
-//! Recovers lost tmux resize notifications without querying geometry on the UI thread.
+//! Recovers missed tmux resizes and mouse setting changes off the UI thread.
 //!
 //! One worker belongs to the event broker, including across nested screens. Queries never
 //! hold the shared lock. Pauses and newer geometry invalidate both in-flight and queued
@@ -10,6 +10,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
+
+use super::alternate_screen::ALTERNATE_SCREEN;
+use super::tmux;
 
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
@@ -17,11 +21,15 @@ use ratatui::layout::Size;
 use tokio::sync::broadcast;
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(500);
+// tmux does not notify the pane when "set mouse" changes. Unlike the geometry
+// ioctl, this check starts a subprocess, so sample less often and only in fullscreen.
+const MOUSE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 struct State {
     size: Size,
     generation: u64,
     pending: Option<Size>,
+    mouse: Option<tmux::MouseCapture>,
     active: bool,
     stopped: bool,
 }
@@ -40,9 +48,20 @@ impl SizeMonitor {
         if !cfg!(unix) || !matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. })) {
             return None;
         }
-        Self::spawn(size, draw_tx, || {
+        let mut last_mouse_check = Instant::now();
+        Self::spawn(size, draw_tx, move |previous_mouse| {
+            let mouse = if ALTERNATE_SCREEN.is_active()
+                && last_mouse_check.elapsed() >= MOUSE_CHECK_INTERVAL
+            {
+                last_mouse_check = Instant::now();
+                tmux::sample_mouse(previous_mouse.unwrap_or_else(|| ALTERNATE_SCREEN.tmux_mouse()))
+            } else {
+                None
+            };
             // Unlike terminal::size(), window_size() has no tput subprocess fallback.
-            crossterm::terminal::window_size().map(|size| Size::new(size.columns, size.rows))
+            let size =
+                crossterm::terminal::window_size().map(|size| Size::new(size.columns, size.rows));
+            (size, mouse)
         })
         .inspect_err(|error| tracing::warn!(%error, "Failed to start terminal size monitor"))
         .ok()
@@ -51,12 +70,17 @@ impl SizeMonitor {
     fn spawn(
         size: Size,
         draw_tx: broadcast::Sender<()>,
-        mut query: impl FnMut() -> io::Result<Size> + Send + 'static,
+        mut query: impl FnMut(
+            Option<tmux::MouseCapture>,
+        ) -> (io::Result<Size>, Option<tmux::MouseCapture>)
+        + Send
+        + 'static,
     ) -> io::Result<Self> {
         let state = Arc::new(Mutex::new(State {
             size,
             generation: 0,
             pending: None,
+            mouse: None,
             active: true,
             stopped: false,
         }));
@@ -66,7 +90,7 @@ impl SizeMonitor {
             .spawn(move || {
                 loop {
                     thread::park_timeout(CHECK_INTERVAL);
-                    let generation = {
+                    let (generation, previous_mouse) = {
                         let state = shared
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -76,9 +100,9 @@ impl SizeMonitor {
                         if !state.active {
                             continue;
                         }
-                        state.generation
+                        (state.generation, state.mouse)
                     };
-                    let sampled = query();
+                    let (sampled, mouse) = query(previous_mouse);
                     let mut state = shared
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -91,7 +115,11 @@ impl SizeMonitor {
                     state.pending = sampled
                         .ok()
                         .filter(|size| size.width > 0 && size.height > 0 && *size != state.size);
-                    if state.pending.is_some() {
+                    let mouse_changed = mouse.is_some() && mouse != state.mouse;
+                    if mouse_changed {
+                        state.mouse = mouse;
+                    }
+                    if state.pending.is_some() || mouse_changed {
                         drop(state);
                         let _ = draw_tx.send(());
                     }
@@ -118,6 +146,25 @@ impl SizeMonitor {
         state.active = active;
         state.generation = state.generation.wrapping_add(1);
         state.pending = None;
+        state.mouse = None;
+    }
+
+    // Screen entry probes tmux synchronously. Discard older samples, including
+    // any query still in flight when that probe finished.
+    pub(super) fn reset_mouse(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation = state.generation.wrapping_add(1);
+        state.mouse = None;
+    }
+
+    pub(super) fn mouse(&self) -> Option<tmux::MouseCapture> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mouse
     }
 
     pub(super) fn take_resize(&self) -> Option<Size> {

@@ -47,7 +47,7 @@ impl EventSource for KeySource {
 struct Harness {
     broker: Arc<EventBroker<KeySource>>,
     queries: tokio::sync::mpsc::UnboundedReceiver<()>,
-    replies: std::sync::mpsc::Sender<io::Result<Size>>,
+    replies: std::sync::mpsc::Sender<(io::Result<Size>, Option<tmux::MouseCapture>)>,
     draws: broadcast::Receiver<()>,
 }
 
@@ -56,11 +56,11 @@ impl Harness {
         let (draw_tx, draws) = broadcast::channel(/*capacity*/ 1);
         let (started, queries) = tokio::sync::mpsc::unbounded_channel();
         let (replies, responses) = std::sync::mpsc::channel();
-        let monitor = SizeMonitor::spawn(size, draw_tx, move || {
+        let monitor = SizeMonitor::spawn(size, draw_tx, move |_| {
             let _ = started.send(());
             responses
                 .recv_timeout(Duration::from_secs(5))
-                .unwrap_or_else(|_| Err(io::Error::other("test query was not released")))
+                .unwrap_or_else(|_| (Err(io::Error::other("test query was not released")), None))
         })
         .expect("monitor");
         let mut broker = EventBroker::new();
@@ -123,7 +123,7 @@ async fn missed_resize_recovers_and_slow_query_does_not_block_input() {
         .await
         .is_err()
     );
-    harness.replies.send(Ok(resized)).unwrap();
+    harness.replies.send((Ok(resized), None)).unwrap();
     let event = timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -158,7 +158,7 @@ async fn newer_resize_invalidates_in_flight_and_queued_samples() {
     let mut harness = Harness::new(initial);
     harness.next_query().await;
     harness.monitor().observe(newer);
-    harness.replies.send(Ok(initial)).unwrap();
+    harness.replies.send((Ok(initial), None)).unwrap();
     harness.next_query().await; // The previous result has been processed.
     assert_eq!(harness.monitor().take_resize(), None);
     assert_eq!(
@@ -166,7 +166,7 @@ async fn newer_resize_invalidates_in_flight_and_queued_samples() {
         Err(broadcast::error::TryRecvError::Empty)
     );
 
-    harness.replies.send(Ok(initial)).unwrap();
+    harness.replies.send((Ok(initial), None)).unwrap();
     timeout(Duration::from_secs(2), harness.draws.recv())
         .await
         .unwrap()
@@ -185,7 +185,7 @@ async fn unchanged_invalid_and_failed_samples_do_not_redraw() {
         Ok(Size::new(/*width*/ 0, /*height*/ 0)),
         Err(io::Error::other("query failed")),
     ] {
-        harness.replies.send(sample).unwrap();
+        harness.replies.send((sample, None)).unwrap();
         harness.next_query().await;
         assert_eq!(harness.monitor().take_resize(), None);
         assert_eq!(
@@ -196,13 +196,41 @@ async fn unchanged_invalid_and_failed_samples_do_not_redraw() {
 }
 
 #[tokio::test]
+async fn mouse_change_wakes_idle_screen_and_ignores_stale_or_failed_probes() {
+    let size = Size::new(/*width*/ 80, /*height*/ 24);
+    let mut harness = Harness::new(size);
+    let off = Some(tmux::MouseCapture::DisabledByTmux);
+    let on = Some(tmux::MouseCapture::Enabled);
+    harness.next_query().await;
+    for (sample, expected, redraw) in [
+        (off, off, true),
+        (None, off, false),
+        (on, on, true),
+        (on, on, false),
+    ] {
+        harness.replies.send((Ok(size), sample)).unwrap();
+        harness.next_query().await;
+        assert_eq!(
+            (harness.monitor().mouse(), harness.draws.try_recv().is_ok()),
+            (expected, redraw)
+        );
+    }
+
+    // A new screen entry has already read a newer policy.
+    harness.monitor().reset_mouse();
+    harness.replies.send((Ok(size), off)).unwrap();
+    harness.next_query().await;
+    assert_eq!(harness.monitor().mouse(), None);
+}
+
+#[tokio::test]
 async fn terminal_handoff_pauses_queries_and_discards_old_results() {
     let initial = Size::new(/*width*/ 80, /*height*/ 24);
     let resized = Size::new(/*width*/ 40, /*height*/ 12);
     let mut harness = Harness::new(initial);
     harness.next_query().await;
     harness.broker.pause_events();
-    harness.replies.send(Ok(resized)).unwrap();
+    harness.replies.send((Ok(resized), None)).unwrap();
     harness.monitor().worker.thread().unpark();
     assert!(
         timeout(Duration::from_millis(100), harness.queries.recv())
@@ -212,7 +240,7 @@ async fn terminal_handoff_pauses_queries_and_discards_old_results() {
     assert_eq!(harness.monitor().take_resize(), None);
     harness.broker.resume_events();
     harness.next_query().await;
-    harness.replies.send(Ok(resized)).unwrap();
+    harness.replies.send((Ok(resized), None)).unwrap();
     timeout(Duration::from_secs(2), harness.draws.recv())
         .await
         .unwrap()
@@ -230,7 +258,7 @@ async fn drop_does_not_wait_for_a_blocked_query_or_start_another() {
     assert!(state.lock().unwrap().stopped);
     harness
         .replies
-        .send(Ok(Size::new(/*width*/ 40, /*height*/ 12)))
+        .send((Ok(Size::new(/*width*/ 40, /*height*/ 12)), None))
         .unwrap();
     assert_eq!(
         timeout(Duration::from_secs(2), harness.queries.recv())

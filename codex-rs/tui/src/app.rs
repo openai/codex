@@ -899,6 +899,12 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) && tui::tmux_mouse_disabled() {
+            self.sidebar_press = None;
+            self.divider_drag = None;
+            self.chat_widget.end_composer_drag();
+            self.chat_widget.rendered_selection.borrow_mut().end_drag();
+        }
         match &event {
             TuiEvent::Draw
             | TuiEvent::Mouse(crossterm::event::MouseEvent {

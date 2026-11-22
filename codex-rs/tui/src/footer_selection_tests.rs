@@ -154,15 +154,24 @@ fn stationary_clicks_are_deferred_but_dragging_back_does_not_activate() {
         selection.handle_event(&mouse(Up(Left), /*column*/ 5, /*row*/ 0), &buffer),
         Some(RegionAction::Click(_))
     ));
-    // A stationary click after a selection releases the frozen revision.
-    for event in [
-        mouse(Down(Left), /*column*/ 0, /*row*/ 0),
-        mouse(Drag(Left), /*column*/ 3, /*row*/ 0),
-        mouse(Up(Left), /*column*/ 3, /*row*/ 0),
-    ] {
-        selection.handle_event(&event, &buffer);
-    }
+    // Losing capture cancels a deferred click, even if its release arrives late.
+    selection.handle_event(&mouse(Down(Left), /*column*/ 8, /*row*/ 0), &buffer);
+    selection.end_drag();
+    assert!(
+        selection
+            .handle_event(&mouse(Up(Left), /*column*/ 8, /*row*/ 0), &buffer)
+            .is_none()
+    );
+
+    selection.handle_event(&mouse(Down(Left), /*column*/ 0, /*row*/ 0), &buffer);
+    selection.handle_event(&mouse(Drag(Left), /*column*/ 3, /*row*/ 0), &buffer);
     assert!(selection.view.has_selection_range());
+    let selected = selection.view.selected_text(&selection.cells);
+    selection.end_drag();
+    selection.handle_event(&mouse(Up(Left), /*column*/ 9, /*row*/ 0), &buffer);
+    assert_eq!(selection.view.selected_text(&selection.cells), selected);
+
+    // A stationary click after a selection releases the frozen revision.
     selection.handle_event(&mouse(Down(Left), /*column*/ 10, /*row*/ 0), &buffer);
     assert!(matches!(
         selection.handle_event(&mouse(Up(Left), /*column*/ 10, /*row*/ 0), &buffer),

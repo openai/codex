@@ -39,6 +39,11 @@ pub(crate) enum RegionAction {
 }
 
 impl RenderedSelection {
+    pub(crate) fn end_drag(&mut self) {
+        self.pressed = None;
+        self.view.end_drag();
+    }
+
     pub(crate) fn clear(&mut self) {
         self.view.jump_to_latest();
         self.snapshot = None;
