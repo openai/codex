@@ -50,11 +50,42 @@ impl AgentsOverviewView {
         false
     }
 
+    pub(super) fn search_sort_key(&self, key: KeyEvent) -> bool {
+        key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && self.keymap.action_for(key).is_none()
+            && !self.center_shortcut_keys.is_pressed(key)
+    }
+
     pub(in crate::app::agents_overview_view) fn command_center_key(
         &mut self,
         key: KeyEvent,
     ) -> bool {
         if self.state().editing_metadata() {
+            if self.search_sort_key(key) && key.kind == KeyEventKind::Press {
+                let mut state = self.state();
+                if state.searching
+                    && state.rename_target.is_none()
+                    && state.connection_notice.is_none()
+                {
+                    state.search_sort = match state.search_sort {
+                        HistorySort::Updated => HistorySort::Created,
+                        HistorySort::Created => HistorySort::Updated,
+                    };
+                    if let Some(search) = &mut state.history {
+                        *search = HistorySearch {
+                            id: search.id,
+                            scan_id: uuid::Uuid::new_v4(),
+                            retained: self.rows.iter().map(|row| row.thread_id).collect(),
+                            ..Default::default()
+                        };
+                    }
+                    state.scroll = 0;
+                    drop(state);
+                    self.load_search_matches(/*additional*/ 10);
+                    return true;
+                }
+            }
             if self.keymap.action_for(key) == Some(ListAction::Cancel) {
                 self.on_ctrl_c();
                 return true;

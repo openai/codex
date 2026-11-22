@@ -98,15 +98,20 @@ impl AgentsOverviewView {
         };
         let entries = self.center_rows(&indices, &state);
         let reference = chrono::Utc::now();
+        let sort = if state.searching {
+            state.search_sort
+        } else {
+            HistorySort::Updated
+        };
         let age = |task: &AgentsOverviewRow| {
             format_relative_time(
                 reference,
-                chrono::DateTime::from_timestamp(task.thread.updated_at, /*nsecs*/ 0),
+                chrono::DateTime::from_timestamp(sort.timestamp(&task.thread), /*nsecs*/ 0),
             )
         };
         let widths = (state.list_width >= STATUS_COLUMNS_MIN_WIDTH).then(|| {
             let mut status_width = "Status".width();
-            let mut updated_width = "Updated".width();
+            let mut updated_width = sort.label().width();
             for task in indices.iter().filter_map(|&index| self.rows.get(index)) {
                 status_width = status_width.max(status_for(task).0.width());
                 updated_width = updated_width.max(age(task).width());
@@ -117,7 +122,7 @@ impl AgentsOverviewView {
             let (title, status, updated) = columns(row(area, /*offset*/ 0, /*height*/ 1), widths);
             line("Tasks".dim(), title, buf);
             line("Status".dim(), status, buf);
-            Line::from("Updated".dim())
+            Line::from(sort.label().dim())
                 .right_aligned()
                 .render(updated, buf);
         }

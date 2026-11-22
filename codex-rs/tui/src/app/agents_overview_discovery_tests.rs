@@ -731,6 +731,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                 thread.name = None;
                 thread.history_mode = ThreadHistoryMode::Paginated;
             }
+            thread.created_at -= 24 - index;
             thread.updated_at += 24 - index;
             thread.recency_at = Some(thread.updated_at);
             thread
@@ -769,6 +770,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
         let (stream, _) = listener.accept().await?;
         let mut socket = tokio_tungstenite::accept_async(stream).await?;
         let mut cursors = Vec::new();
+        let mut created_first_pages = 0;
         while let Some(Ok(Message::Text(text))) = socket.next().await {
             let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                 continue;
@@ -806,8 +808,15 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                             .await?;
                         continue;
                     }
-                    assert_eq!(params["sortKey"], "recency_at");
                     let limit = params["limit"].as_u64().unwrap() as usize;
+                    if limit == 100 {
+                        assert!(matches!(
+                            params["sortKey"].as_str(),
+                            Some("updated_at" | "created_at")
+                        ));
+                    } else {
+                        assert_eq!(params["sortKey"], "recency_at");
+                    }
                     assert!(params["searchTerm"].is_null());
                     {
                         let interactive = params["sourceKinds"] == json!([]);
@@ -815,6 +824,12 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                             .iter()
                             .filter(|row| matches!(row.source, SessionSource::Exec) != interactive)
                             .collect();
+                        if params["sortKey"] == "created_at" {
+                            if interactive && params["cursor"].is_null() {
+                                created_first_pages += 1;
+                            }
+                            source_rows.sort_by_key(|row| std::cmp::Reverse(row.created_at));
+                        }
                         if interactive && server_show_reopened_pin.load(Ordering::SeqCst) {
                             source_rows.insert(0, &reopened_pin);
                         }
@@ -858,6 +873,8 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                 ))
                 .await?;
         }
+        // One switch to Created, then one search typed in several edits.
+        assert_eq!(created_first_pages, 2);
         Ok::<_, color_eyre::Report>(cursors)
     });
     let mut session = AppServerSession::new(
@@ -915,6 +932,36 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     assert!(rendered.contains("All 11 "));
     assert!(rendered.contains("1 of 10"), "{rendered}"); // The pinned task has its own group.
     view.handle_key_event(KeyCode::Esc.into());
+
+    // The newest-created task is outside the first screen in updated order.
+    // Retain that screen and its selection while fetching the new first page.
+    view.handle_key_event(KeyCode::Char('/').into());
+    view.handle_paste("Task".into());
+    finish_history_search(&mut app, &mut tui, &mut session, &mut rx).await?;
+    view = app.agents_overview_view(browse_rows(), Some(ids[12]));
+    assert_eq!(view.thread_ids()[view.selected_index().unwrap()], ids[12]);
+    assert!(!view.thread_ids().contains(&ids[23]));
+    let old_id = app.agents_overview.search_id;
+    view.handle_key_event(KeyCode::Tab.into());
+    app.apply_agents_overview_search_page(
+        old_id,
+        owner,
+        Vec::new(),
+        Default::default(),
+        /*ok*/ false,
+    );
+    assert_eq!(view.thread_ids()[view.selected_index().unwrap()], ids[12]);
+    finish_history_search(&mut app, &mut tui, &mut session, &mut rx).await?;
+    view = app.agents_overview_view(browse_rows(), Some(ids[12]));
+    let order: Vec<_> = view
+        .visible_indices()
+        .into_iter()
+        .map(|index| view.rows[index].thread_id)
+        .collect();
+    assert_eq!(&order[..3], &[ids[1], ids[23], ids[22]]);
+    assert_eq!(view.thread_ids()[view.selected_index().unwrap()], ids[12]);
+    view.handle_key_event(KeyCode::Esc.into());
+    assert_eq!(app.agents_overview.threads, browse);
 
     if mixed_sources {
         // Queue Show more behind a metadata refresh before the archive creates a vacancy.
@@ -1051,7 +1098,9 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     // Another CLI inserts a matching session ahead of the exhausted browse cursor.
     show_reopened_pin.store(true, Ordering::SeqCst);
     view.handle_key_event(KeyCode::Char('/').into());
-    view.handle_paste("DA7ABA5E-0000-4000".into());
+    for c in "DA7ABA5E-0000-4000".chars() {
+        view.handle_key_event(KeyCode::Char(c).into());
+    }
     finish_history_search(&mut app, &mut tui, &mut session, &mut rx).await?;
     assert_eq!(
         app.agents_overview

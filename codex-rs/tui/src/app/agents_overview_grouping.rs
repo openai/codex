@@ -73,31 +73,32 @@ impl AgentsOverviewView {
         if let Some(ranks) = &self.pinned_thread_ranks {
             pinned.sort_by_key(|index| ranks.get(&self.rows[*index].thread_id).copied());
         }
+        let date_key = |index: usize| {
+            let thread = &self.rows[index].thread;
+            std::cmp::Reverse(if state.searching {
+                state.search_sort.timestamp(thread)
+            } else {
+                thread.updated_at
+            })
+        };
         match state.grouping {
-            AgentsOverviewGrouping::Project => visible.sort_by_key(|index| {
-                (
-                    &self.project_groups[*index].key,
-                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
-                )
-            }),
-            AgentsOverviewGrouping::Directory => visible.sort_by_key(|index| {
-                (
-                    &self.directory_group_keys[*index],
-                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
-                )
-            }),
+            AgentsOverviewGrouping::Project => {
+                visible.sort_by_key(|index| (&self.project_groups[*index].key, date_key(*index)))
+            }
+            AgentsOverviewGrouping::Directory => {
+                visible.sort_by_key(|index| (&self.directory_group_keys[*index], date_key(*index)))
+            }
             AgentsOverviewGrouping::Status => {
+                if state.searching {
+                    visible.sort_by_key(|index| date_key(*index));
+                }
                 pinned.extend(visible);
                 // Stable grouping preserves pin order, then the supplied newest-first order.
                 pinned.sort_by_key(|index| self.rows[*index].group);
                 return pinned;
             }
-            AgentsOverviewGrouping::Model => visible.sort_by_key(|index| {
-                (
-                    model_name(&self.rows[*index].thread),
-                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
-                )
-            }),
+            AgentsOverviewGrouping::Model => visible
+                .sort_by_key(|index| (model_name(&self.rows[*index].thread), date_key(*index))),
         }
         pinned.extend(visible);
         pinned
