@@ -11,6 +11,9 @@ use std::time::Instant;
 
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
+use tokio_stream::StreamExt;
+
+use super::TuiEvent;
 
 const STARTUP_INPUT_CHILD_TEST: &str = "tui::startup_tests::startup_typeahead_pty_child";
 
@@ -305,6 +308,65 @@ async fn startup_typeahead_pty_child() {
         Event::Key(key) if key.code == KeyCode::Esc
     ));
     assert!(escape_started_at.elapsed() < Duration::from_millis(/*millis*/ 250));
+
+    // Focus changes buffered alongside typeahead must still reach the app in order.
+    crossterm::event::buffer_input(b"\x1b[O\r\x1b[I\x1b")
+        .expect("buffer focus changes, Enter and Escape");
+    assert!(
+        tui.discard_pending_input_after_thread_transition()
+            .is_ready()
+    );
+    crossterm::event::buffer_input(b"x").expect("buffer fresh input");
+    let mut events = tui
+        .event_stream()
+        .filter(|event| !matches!(event, TuiEvent::Draw | TuiEvent::Resize(_)));
+    assert!(matches!(events.next().await, Some(TuiEvent::FocusLost)));
+    assert!(!tui.is_terminal_focused());
+    assert!(matches!(events.next().await, Some(TuiEvent::FocusGained)));
+    assert!(tui.is_terminal_focused());
+    assert!(
+        matches!(events.next().await, Some(TuiEvent::Key(key)) if key.code == KeyCode::Char('x'))
+    );
+
+    // Hold the boundary open past the drain deadline. An Enter behind the delayed
+    // paste terminator still belongs to the old screen, but the next edit is fresh.
+    crossterm::event::buffer_input(b"\x1b[200~unfinished").expect("begin a paste");
+    assert!(
+        tui.discard_pending_input_after_thread_transition()
+            .is_pending()
+    );
+    // The final draw must sample geometry even if a resize was consumed during a retry.
+    let old_size = tui
+        .screen_size_for_event(&TuiEvent::Resume)
+        .expect("sample initial size");
+    let resized = libc::winsize {
+        ws_row: old_size.height,
+        ws_col: old_size.width + 1,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // Safety: stdin is the child PTY and resized is valid for this ioctl.
+    assert_eq!(
+        unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCSWINSZ, &resized) },
+        0
+    );
+    crossterm::event::buffer_input(b"\x1b[201~\r\x1b[O").expect("finish paste and queue Enter");
+    assert!(
+        tui.discard_pending_input_after_thread_transition()
+            .is_ready()
+    );
+    assert_eq!(
+        tui.screen_size_for_event(&TuiEvent::Draw)
+            .expect("size after drain")
+            .width,
+        resized.ws_col
+    );
+    assert!(matches!(events.next().await, Some(TuiEvent::FocusLost)));
+    crossterm::event::buffer_input(b"z").expect("buffer fresh post-timeout input");
+    assert!(
+        matches!(events.next().await, Some(TuiEvent::Key(key)) if key.code == KeyCode::Char('z'))
+    );
+    tui.pause_events();
 
     for suffix in ["y", "1"] {
         crossterm::event::buffer_input(b"\x1b")

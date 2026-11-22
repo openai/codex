@@ -1,5 +1,6 @@
-//! Restore terminal ownership on initialization failures and quarantine protected-screen input.
+//! Restore terminal ownership on initialization failures and drain input across screen transitions.
 
+use std::collections::VecDeque;
 use std::io;
 #[cfg(unix)]
 use std::io::IsTerminal;
@@ -8,6 +9,8 @@ use std::io::Result;
 use std::io::stdin;
 use std::time::Duration;
 use std::time::Instant;
+
+use crossterm::event::Event;
 
 /// Restores terminal modes when initialization fails before ownership is transferred.
 pub(super) struct TerminalInitializationGuard {
@@ -29,7 +32,19 @@ pub(crate) fn discard_pending_terminal_input() -> Result<()> {
     #[cfg(unix)]
     let _ = crossterm::event::discard_buffered_input()?;
 
-    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 1);
+    drain_pending_input(/*focus_events*/ None)
+}
+
+/// A thread transition drains decoded events first so it can retain focus changes
+/// and let a standalone Escape expire before quarantining incomplete sequences.
+pub(super) fn drain_pending_input(mut focus_events: Option<&mut VecDeque<Event>>) -> Result<()> {
+    let budget = if focus_events.is_some() {
+        // Yield to the event loop between batches of continuous typeahead.
+        Duration::from_millis(/*millis*/ 100)
+    } else {
+        Duration::from_secs(/*secs*/ 1)
+    };
+    let deadline = Instant::now() + budget;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -40,8 +55,29 @@ pub(crate) fn discard_pending_terminal_input() -> Result<()> {
         }
 
         if crossterm::event::poll(remaining.min(Duration::from_millis(/*millis*/ 10)))? {
-            let _ = crossterm::event::read()?;
+            let event = crossterm::event::read()?;
+            if matches!(event, Event::FocusLost | Event::FocusGained)
+                && let Some(events) = &mut focus_events
+            {
+                events.push_back(event);
+            }
             continue;
+        }
+
+        #[cfg(unix)]
+        if focus_events.is_some() {
+            // Crossterm may have read a bare Escape just before poll returned.
+            // Wait for its 20 ms parser timeout without consuming more bytes.
+            // New bytes restart the drain. Poll once more to resolve the Escape.
+            match poll_terminal_input(/*timeout_ms*/ 20) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            }
+            if crossterm::event::poll(Duration::ZERO)? {
+                continue;
+            }
         }
 
         #[cfg(unix)]
@@ -66,6 +102,11 @@ pub(crate) fn discard_pending_terminal_input() -> Result<()> {
 /// Check Crossterm's terminal input source without consuming input or changing descriptor flags.
 #[cfg(unix)]
 pub(super) fn terminal_input_is_readable() -> Result<bool> {
+    poll_terminal_input(/*timeout_ms*/ 0)
+}
+
+#[cfg(unix)]
+fn poll_terminal_input(timeout_ms: libc::c_int) -> Result<bool> {
     use std::os::fd::AsRawFd;
 
     let terminal = if stdin().is_terminal() {
@@ -80,9 +121,9 @@ pub(super) fn terminal_input_is_readable() -> Result<bool> {
         events: libc::POLLIN,
         revents: 0,
     };
-    // Safety: `fd` is valid for the duration of this zero-timeout poll.
+    // Safety: `fd` is valid for the duration of the poll.
     let result = unsafe {
-        libc::poll(&mut fd, /*nfds*/ 1, /*timeout*/ 0)
+        libc::poll(&mut fd, /*nfds*/ 1, timeout_ms)
     };
     if result < 0 {
         return Err(io::Error::last_os_error());

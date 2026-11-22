@@ -62,6 +62,8 @@ pub(crate) const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
 pub(crate) struct BacktrackState {
+    /// Hold terminal input between confirming a prompt edit and dispatching its revert.
+    pub(crate) revert_queued: bool,
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
     /// Session id of the base thread whose transcript is being inspected.
@@ -171,6 +173,7 @@ impl App {
         else {
             return;
         };
+        self.backtrack.revert_queued = true;
         self.app_event_tx
             .send(AppEvent::RevertSessionForPromptEdit {
                 thread_id: selection.thread_id,

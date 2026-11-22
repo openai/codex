@@ -522,6 +522,12 @@ impl AppExitInfo {
 pub use exit_summary::DisconnectInfo;
 pub use exit_summary::ResumableThread;
 
+#[derive(Clone, Copy)]
+enum ThreadTransition {
+    PromptReverted(ThreadId),
+    DiscardTypeahead,
+}
+
 #[derive(Debug)]
 pub(crate) enum AppRunControl {
     Continue,
@@ -615,6 +621,7 @@ pub(crate) struct App {
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
     pending_thread_switch_resets: usize,
+    pending_input_drain: Option<ThreadTransition>,
     pub(crate) scrollback_has_older_history: bool,
 
     pub(crate) enhanced_keys_supported: bool,

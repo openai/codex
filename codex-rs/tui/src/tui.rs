@@ -1018,6 +1018,23 @@ impl Tui {
         drain_result
     }
 
+    /// Keep terminal events paused between batches. The caller retries before showing
+    /// the restored composer or allowing fresh input.
+    pub(crate) fn discard_pending_input_after_thread_transition(&mut self) -> std::task::Poll<()> {
+        self.pause_events();
+        let result = self.event_broker.drain_transition_input();
+        if let Err(err) = result {
+            if err.kind() == std::io::ErrorKind::TimedOut {
+                return std::task::Poll::Pending;
+            }
+            tracing::warn!(%err, "failed to discard input after thread transition");
+        }
+        self.resume_events();
+        // Any batch can consume a resize. Sample geometry after the final one.
+        self.schedule_screen_size_recheck(Duration::ZERO);
+        std::task::Poll::Ready(())
+    }
+
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
     /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores

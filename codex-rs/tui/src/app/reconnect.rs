@@ -423,6 +423,7 @@ impl App {
         self.app_server_backend_id = Some(session.backend_id());
         *app_event_rx = rx;
         self.pending_thread_switch_resets = 0;
+        self.backtrack.revert_queued = false;
         for (parent, pane) in &mut self.sidebars {
             pane.focus_document_request = None;
             pane.agents.pending_link = None;

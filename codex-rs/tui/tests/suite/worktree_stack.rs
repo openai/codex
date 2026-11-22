@@ -112,6 +112,25 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     terminal.wait_for_screen("Worked for")?;
     terminal.wait_for_screen("Ask Codex to do anything")?;
 
+    // A second rewind gesture is already buffered when the first is confirmed.
+    // A trailing bare Escape must not consume the first character of the fresh edit.
+    terminal.write_input(b"\x1b[27u\x1b[27u\r\x1b[27u\x1b[27u\r\x1b")?;
+    terminal.wait_for_screen("Conversation reverted to this point")?;
+    terminal.write_input(b" Revised.")?;
+    terminal.wait_for_screen("Reply with the marker requested by this test. Revised.")?;
+    let _edited_reply = responses::mount_sse_once_match(
+        &server,
+        body_string_contains("Reply with the marker requested by this test. Revised."),
+        responses::sse(vec![
+            responses::ev_assistant_message("edited", "STACK_SAVED_HISTORY_EDITED"),
+            responses::ev_completed("edited-response"),
+        ]),
+    )
+    .await;
+    terminal.write_input(b"\r")?;
+    terminal.wait_for_screen("STACK_SAVED_HISTORY_EDITED")?;
+    terminal.wait_for_screen("Worked for")?;
+
     // Starting and closing a side conversation both rebuild the displayed chat widget.
     // Repeat through the real event loop, whose dev-build frames share the production stack.
     for attempt in 1..=3 {

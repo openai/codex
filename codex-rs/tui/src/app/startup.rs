@@ -179,9 +179,11 @@ impl App {
         tui: &tui::Tui,
         app_event_rx: &mpsc::UnboundedReceiver<AppEvent>,
     ) -> bool {
-        self.pending_thread_switch_resets == 0
+        self.pending_input_drain.is_none()
+            && self.pending_thread_switch_resets == 0
             && (app_event_rx.is_empty()
-                || (!self.config.features.enabled(Feature::TuiMultiBackend)
+                || (!self.backtrack.revert_queued
+                    && !self.config.features.enabled(Feature::TuiMultiBackend)
                     && !self.side_retention_enabled(tui)
                     && self
                         .current_displayed_thread_id()
@@ -196,7 +198,8 @@ impl App {
         tui: &mut tui::Tui,
         app_event_rx: &mpsc::UnboundedReceiver<AppEvent>,
     ) -> Result<()> {
-        if self.awaiting_side_replay(tui)
+        if self.pending_input_drain.is_some()
+            || self.awaiting_side_replay(tui)
             || (tui.is_owned_screen()
                 && !app_event_rx.is_empty()
                 && !self.chat_widget.has_active_view())
@@ -1086,6 +1089,7 @@ See the Codex keymap documentation for supported actions and examples."
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
             pending_thread_switch_resets: 0,
+            pending_input_drain: None,
             scrollback_has_older_history: false,
             commit_animation: None,
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
@@ -1601,6 +1605,11 @@ See the Codex keymap documentation for supported actions and examples."
                     cloud_inventory_poll.reset();
                 }
                 let control = select! {
+                    // Leave the previous frame visible and let other app work run between batches.
+                    Some(transition) = std::future::ready(app.pending_input_drain), if app.pending_input_drain.is_some() => {
+                        app.finish_thread_input_drain(tui, transition);
+                        AppRunControl::Continue
+                    }
                     result = async {
                         match app.daemon_restart.as_mut() {
                             Some(task) => task.await,

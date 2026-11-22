@@ -18,6 +18,7 @@
 //!
 //! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim for more details.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -51,9 +52,16 @@ pub trait EventSource: Send + 'static {
 ///
 /// This intermediate layer enables dropping/recreating the underlying EventStream (pause/resume) without rebuilding consumers.
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
-    state: Mutex<EventBrokerState<S>>,
+    state: Mutex<BrokerInput<S>>,
     resume_events_tx: watch::Sender<()>,
     pub(super) size_monitor: Option<SizeMonitor>,
+}
+
+struct BrokerInput<S: EventSource> {
+    source: EventBrokerState<S>,
+    // Deliver focus changes captured during a thread transition before newer input.
+    pending_focus: VecDeque<Event>,
+    drain_failed: bool,
 }
 
 /// Tracks state of underlying [`EventSource`].
@@ -84,7 +92,11 @@ impl<S: EventSource + Default> EventBroker<S> {
     pub fn new() -> Self {
         let (resume_events_tx, _resume_events_rx) = watch::channel(());
         Self {
-            state: Mutex::new(EventBrokerState::Start),
+            state: Mutex::new(BrokerInput {
+                source: EventBrokerState::Start,
+                pending_focus: VecDeque::new(),
+                drain_failed: false,
+            }),
             resume_events_tx,
             size_monitor: None,
         }
@@ -99,7 +111,20 @@ impl<S: EventSource + Default> EventBroker<S> {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *state = EventBrokerState::Paused;
+        state.source = EventBrokerState::Paused;
+    }
+
+    /// Called with the event source paused. A terminal error must not expose stale keys.
+    pub(super) fn drain_transition_input(&self) -> std::io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = super::input_boundary::drain_pending_input(Some(&mut state.pending_focus));
+        state.drain_failed = result
+            .as_ref()
+            .is_err_and(|err| err.kind() != std::io::ErrorKind::TimedOut);
+        result
     }
 
     /// Create a new instance of the underlying event source
@@ -111,7 +136,7 @@ impl<S: EventSource + Default> EventBroker<S> {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *state = EventBrokerState::Start;
+        state.source = EventBrokerState::Start;
         let _ = self.resume_events_tx.send(());
     }
 
@@ -220,7 +245,16 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let events = match state.active_event_source_mut() {
+                if !matches!(state.source, EventBrokerState::Paused) {
+                    if state.drain_failed {
+                        return Poll::Ready(None);
+                    }
+                    if let Some(event) = state.pending_focus.pop_front() {
+                        drop(state);
+                        return Poll::Ready(self.map_crossterm_event(event));
+                    }
+                }
+                let events = match state.source.active_event_source_mut() {
                     Some(events) => events,
                     None => {
                         drop(state);
@@ -235,7 +269,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 match Pin::new(events).poll_next(cx) {
                     Poll::Ready(Some(Ok(event))) => Some(event),
                     Poll::Ready(Some(Err(_))) | Poll::Ready(None) => {
-                        *state = EventBrokerState::Start;
+                        state.source = EventBrokerState::Start;
                         return Poll::Ready(None);
                     }
                     Poll::Pending => {
@@ -399,7 +433,7 @@ mod tests {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Some(source) = state.active_event_source_mut() else {
+            let Some(source) = state.source.active_event_source_mut() else {
                 return;
             };
             let _ = source.tx.send(event);
@@ -439,7 +473,7 @@ mod tests {
     fn setup() -> SetupState {
         let source = FakeEventSource::new();
         let broker = Arc::new(EventBroker::new());
-        *broker.state.lock().unwrap() = EventBrokerState::Running(source);
+        broker.state.lock().unwrap().source = EventBrokerState::Running(source);
         let handle = FakeEventSourceHandle::new(broker.clone());
 
         let (draw_tx, draw_rx) = broadcast::channel(1);
@@ -511,10 +545,11 @@ mod tests {
         assert!(matches!(stream.next().await, Some(TuiEvent::FocusGained)));
         assert!(terminal_focused.load(Ordering::Relaxed));
         assert!(matches!(
-            &*broker
+            &broker
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .source,
             EventBrokerState::Running(_)
         ));
 

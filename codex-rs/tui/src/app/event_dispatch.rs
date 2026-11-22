@@ -30,6 +30,28 @@ use codex_app_server_protocol::WindowsSandboxSetupMode;
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 impl App {
+    pub(super) fn finish_thread_input_drain(
+        &mut self,
+        tui: &mut tui::Tui,
+        transition: ThreadTransition,
+    ) {
+        if tui
+            .discard_pending_input_after_thread_transition()
+            .is_pending()
+        {
+            self.pending_input_drain = Some(transition);
+            return;
+        }
+        self.pending_input_drain = None;
+        if let ThreadTransition::PromptReverted(thread_id) = transition
+            && self.chat_widget.thread_id() == Some(thread_id)
+        {
+            self.chat_widget
+                .set_queue_autosend_suppressed(/*suppressed*/ false);
+            self.chat_widget.emit_prompt_edit_thread_event();
+        }
+    }
+
     pub(crate) fn handle_event<'a>(
         &'a mut self,
         tui: &'a mut tui::Tui,
@@ -59,7 +81,10 @@ impl App {
         } else {
             event
         };
-        // Release the shortcut's input guard even when a fork is rejected below.
+        // Release queued input guards even when the transition is rejected below.
+        if matches!(event, AppEvent::RevertSessionForPromptEdit { .. }) {
+            self.backtrack.revert_queued = false;
+        }
         if matches!(event, AppEvent::ForkCurrentSession { .. }) {
             self.chat_widget.fork_in_progress = false;
         }
@@ -884,10 +909,7 @@ impl App {
                     }
                     if from_locked_thread || from_agents_overview {
                         // Repeated fork shortcuts must not act on the resulting view.
-                        if let Err(err) = tui.discard_pending_input_before_interactive_screen() {
-                            tracing::warn!(%err, "failed to discard input after forking");
-                        }
-                        tui.schedule_screen_size_recheck(Duration::ZERO);
+                        self.finish_thread_input_drain(tui, ThreadTransition::DiscardTypeahead);
                     }
                 } else {
                     self.chat_widget.add_error_message(
@@ -925,12 +947,12 @@ impl App {
                     self.chat_widget.add_error_message(
                         "Wait for permissions to update before editing this prompt.".into(),
                     );
-                    tui.frame_requester().schedule_frame();
+                    self.finish_thread_input_drain(tui, ThreadTransition::DiscardTypeahead);
                     return Ok(AppRunControl::Continue);
                 }
                 let Some(index) = self.transcript_cells.iter().position(|cell| Arc::ptr_eq(cell, &selected_cell)) else {
                     self.restore_backtrack_prompt_after_revert_error(prompt, "the selected prompt is no longer visible");
-                    tui.frame_requester().schedule_frame();
+                    self.finish_thread_input_drain(tui, ThreadTransition::DiscardTypeahead);
                     return Ok(AppRunControl::Continue);
                 };
                 let nth_user_message = crate::app_backtrack::user_count(&self.transcript_cells[..index]);
@@ -995,7 +1017,7 @@ impl App {
                     Ok(selection) => selection,
                     Err(err) => {
                         self.restore_backtrack_prompt_after_revert_error(prompt, err);
-                        tui.frame_requester().schedule_frame();
+                        self.finish_thread_input_drain(tui, ThreadTransition::DiscardTypeahead);
                         return Ok(AppRunControl::Continue);
                     }
                 };
@@ -1007,7 +1029,7 @@ impl App {
                     if matches!(&err, codex_app_server_client::TypedRequestError::Server { source, .. }
                         if matches!(source.code, -32602..=-32600)) {
                         self.restore_backtrack_prompt_after_revert_error(prompt, err);
-                        tui.frame_requester().schedule_frame();
+                        self.finish_thread_input_drain(tui, ThreadTransition::DiscardTypeahead);
                         return Ok(AppRunControl::Continue);
                     }
                     self.chat_widget.restore_user_message_to_composer(prompt);
@@ -1090,9 +1112,9 @@ impl App {
                     self.last_thread_usage_status_cell = None;
                     self.pending_thread_usage_history_refresh = false;
                     self.backtrack_render_pending = !tui.is_owned_screen();
-                    self.chat_widget.set_queue_autosend_suppressed(/*suppressed*/ false);
-                    self.chat_widget.emit_prompt_edit_thread_event();
-                    tui.frame_requester().schedule_frame();
+                    // Input was blocked through the transcript reset. A queued Enter must
+                    // not submit the prompt we just restored for editing.
+                    self.finish_thread_input_drain(tui, ThreadTransition::PromptReverted(thread_id));
                 }
             }
             AppEvent::BeginInitialHistoryReplayBuffer => {

@@ -858,6 +858,25 @@ async fn unattended_modals_survive_unfinished_terminal_input() -> Result<()> {
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server =
         crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    // A rewind must not advertise an editable prompt while typeahead is still draining.
+    crossterm::event::buffer_input(b"\x1b[200~unfinished")?;
+    let transition = ThreadTransition::PromptReverted(thread_id);
+    app.finish_thread_input_drain(&mut tui, transition);
+    assert!(!app.can_read_terminal_after_thread_switch(&tui, &app_event_rx));
+    assert!(
+        !std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "premature rewind notice"
+    );
+    crossterm::event::buffer_input(b"\x1b[201~\r")?;
+    app.finish_thread_input_drain(&mut tui, transition);
+    assert!(
+        std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "missing rewind notice"
+    );
+    assert!(app.can_read_terminal_after_thread_switch(&tui, &app_event_rx));
+
     crossterm::event::buffer_input(b"\x1b]10;")?;
     let request = exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
     let _ = app
