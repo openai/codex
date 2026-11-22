@@ -25,6 +25,8 @@ impl ChatWidget {
     }
 
     fn pause_for_disconnect_inner(&mut self, preserve_startup_input: bool) {
+        // Local pickers can survive disconnect, but queued server prompts cannot.
+        self.bottom_pane.clear_delayed_prompts();
         self.permission_discovery = None;
         self.invalidate_permission_discovery();
         if !preserve_startup_input {

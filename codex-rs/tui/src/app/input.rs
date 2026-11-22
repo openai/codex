@@ -200,10 +200,14 @@ impl App {
         {
             return Some(key_event);
         }
-        match self
+        let matched = self
             .key_chord_matcher
-            .advance(key_event, &self.keymap.chords, contexts)
-        {
+            .advance(key_event, &self.keymap.chords, contexts);
+        let pending = self.key_chord_matcher.is_pending();
+        if pending != was_pending {
+            self.chat_widget.set_key_chord_pending(pending);
+        }
+        match matched {
             crate::keymap::KeyChordMatch::PassThrough => {
                 if was_pending {
                     self.chat_widget.request_redraw();
@@ -237,6 +241,7 @@ impl App {
         }
         let contexts = self.key_chord_contexts(tui);
         if self.key_chord_matcher.expire(contexts) {
+            self.chat_widget.set_key_chord_pending(/*pending*/ false);
             self.chat_widget.request_redraw();
         }
     }
@@ -244,6 +249,7 @@ impl App {
     pub(super) fn cancel_pending_key_chord(&mut self) {
         self.chat_widget.cancel_quick_dial_menu();
         if self.key_chord_matcher.cancel() {
+            self.chat_widget.set_key_chord_pending(/*pending*/ false);
             self.chat_widget.request_redraw();
         }
     }

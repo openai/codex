@@ -341,7 +341,13 @@ impl RequestUserInputOverlay {
 
     fn has_options(&self) -> bool {
         self.current_question()
-            .and_then(|question| question.options.as_ref())
+            .is_some_and(Self::has_numbered_options)
+    }
+
+    pub(super) fn has_numbered_options(question: &ToolRequestUserInputQuestion) -> bool {
+        question
+            .options
+            .as_ref()
             .is_some_and(|options| !options.is_empty())
     }
 
@@ -700,10 +706,7 @@ impl RequestUserInputOverlay {
             .questions
             .iter()
             .map(|question| {
-                let has_options = question
-                    .options
-                    .as_ref()
-                    .is_some_and(|options| !options.is_empty());
+                let has_options = Self::has_numbered_options(question);
                 let mut options_state = ScrollState::new();
                 if has_options {
                     options_state.selected_idx = Some(0);
@@ -739,11 +742,7 @@ impl RequestUserInputOverlay {
     }
 
     fn other_option_enabled_for_question(question: &ToolRequestUserInputQuestion) -> bool {
-        question.is_other
-            && question
-                .options
-                .as_ref()
-                .is_some_and(|options| !options.is_empty())
+        question.is_other && Self::has_numbered_options(question)
     }
 
     fn option_label_for_index(
@@ -1027,11 +1026,7 @@ impl RequestUserInputOverlay {
         let Some(answer) = self.answers.get(idx) else {
             return false;
         };
-        let has_options = question
-            .options
-            .as_ref()
-            .is_some_and(|options| !options.is_empty());
-        if has_options {
+        if Self::has_numbered_options(question) {
             answer.options_state.selected_idx.is_some() && answer.answer_committed
         } else {
             answer.answer_committed
@@ -1846,35 +1841,57 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolution_uses_is_blocking_without_auto_resolution_ms() {
+    fn nonblocking_question_auto_resolves_over_picker_after_typing_delay() {
         let (tx, mut rx) = test_sender();
         let mut request = request_event("turn-1", vec![question_with_options("q1", "First")]);
         request.is_blocking = false;
         assert_eq!(request.auto_resolution_ms, None);
-        let mut overlay = RequestUserInputOverlay::new(
-            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
-            /*disable_paste_burst*/ false,
-        );
-        let now = Instant::now();
-        overlay.request_started_at = now;
-
-        assert_eq!(
-            overlay.auto_resolution_timing_at(now),
-            AutoResolutionTiming::HiddenGrace {
-                remaining: AUTO_RESOLUTION_HIDDEN_GRACE
-            }
-        );
+        let expected_thread_id = request.thread_id.clone();
+        let mut pane = crate::bottom_pane::tests::test_pane(tx);
+        pane.show_selection_view(crate::bottom_pane::SelectionViewParams {
+            view_id: Some("picker"),
+            is_searchable: true,
+            ..crate::bottom_pane::SelectionViewParams::picker()
+        });
+        pane.handle_key_event(KeyCode::Char('a').into());
+        pane.push_user_input_request(request);
+        let first_key = Instant::now() - Duration::from_millis(/*millis*/ 500);
+        pane.record_composer_activity_at(first_key);
+        pane.handle_key_event(KeyCode::Char('b').into());
+        pane.pre_draw_tick_at(first_key + Duration::from_secs(1));
+        assert_eq!(pane.active_view_id(), Some("picker"));
+        let idle = Instant::now() + Duration::from_secs(1);
+        pane.pre_draw_tick_at(idle);
+        assert_ne!(pane.active_view_id(), Some("picker"));
+        assert!(rx.try_recv().is_err());
 
         let total_timeout = AUTO_RESOLUTION_HIDDEN_GRACE + AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
-        let due = now + total_timeout;
-        assert!(overlay.pre_draw_tick(due));
-        assert!(overlay.done);
+        pane.pre_draw_tick_at(idle + total_timeout);
+        assert!(pane.has_active_view(), "the picker should remain open");
 
         let event = rx.try_recv().expect("expected UserInputAnswer event");
         let (thread_id, id, response) = expect_user_input_answer(event);
-        assert_eq!(thread_id.to_string(), overlay.request.thread_id);
+        assert_eq!(thread_id.to_string(), expected_thread_id);
         assert_eq!(id, "turn-1");
         assert_eq!(response.answers, HashMap::new());
+    }
+
+    #[test]
+    fn nonblocking_question_times_out_during_paste_capture() {
+        let (tx, mut rx) = test_sender();
+        let mut pane = crate::bottom_pane::tests::test_pane(tx);
+        pane.handle_paste("draft".into());
+        let mut request = request_event("turn-1", vec![question_with_options("q1", "First")]);
+        request.is_blocking = false;
+        pane.push_user_input_request(request);
+        pane.delayed_user_input.as_mut().unwrap().request_started_at =
+            Instant::now() - AUTO_RESOLUTION_HIDDEN_GRACE - AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
+        // Paste capture can skip pre_draw_tick for the entire timeout.
+        pane.flush_paste_burst_if_due();
+        let (_, _, response) = expect_user_input_answer(rx.try_recv().unwrap());
+        assert_eq!(response.answers, HashMap::new());
+        assert!(!pane.has_active_view());
+        assert_eq!(pane.composer_text_with_pending(), "draft");
     }
 
     #[test]
@@ -2313,22 +2330,81 @@ mod tests {
     }
 
     #[test]
-    fn number_keys_select_and_submit_options() {
-        let (tx, mut rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
-            tx,
-            /*has_input_focus*/ true,
-            /*enhanced_keys_supported*/ false,
-            /*disable_paste_burst*/ false,
+    fn number_keys_select_and_submit_options_only_after_typing_pauses() {
+        for (vim, edit) in [
+            (false, KeyCode::F(12)),
+            (true, KeyCode::F(12)),
+            (false, KeyCode::End),
+        ] {
+            let (tx, mut rx) = test_sender();
+            let mut pane = crate::bottom_pane::tests::test_pane(tx);
+            let mut keymap = RuntimeKeymap::defaults();
+            let f12 = vec![crate::key_hint::plain(KeyCode::F(12))];
+            if edit == KeyCode::End {
+                pane.handle_paste("Phase ".into());
+                pane.handle_key_event(KeyCode::Home.into());
+            } else if vim {
+                keymap.vim_normal.substitute_char = f12;
+                pane.handle_paste("Phase x".into());
+                pane.set_vim_enabled(/*enabled*/ true);
+                pane.handle_key_event(KeyCode::Char('$').into());
+            } else {
+                std::sync::Arc::make_mut(&mut keymap.editor).delete_backward_word = f12;
+                pane.handle_paste("Phase two".into());
+            }
+            pane.set_keymap_bindings(&keymap);
+            let first_key = Instant::now() - Duration::from_millis(/*millis*/ 500);
+            pane.record_composer_activity_at(first_key);
+            pane.push_user_input_request(request_event(
+                "turn-1",
+                vec![question_with_options("q1", "Pick one")],
+            ));
+
+            pane.handle_key_event(edit.into());
+            pane.pre_draw_tick_at(first_key + Duration::from_secs(1));
+            assert!(!pane.has_active_view());
+            pane.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+            let last_key = pane.last_composer_activity_at.unwrap();
+            pane.flush_pending_composer_input();
+            assert_eq!(pane.composer_text_with_pending(), "Phase 2");
+            assert!(rx.try_recv().is_err());
+
+            pane.pre_draw_tick_at(last_key + Duration::from_secs(1));
+            pane.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+            let event = rx.try_recv().expect("expected AppEvent");
+            let (_, _, response) = expect_user_input_answer(event);
+            let answer = response.answers.get("q1").expect("answer missing");
+            assert_eq!(answer.answers, vec!["Option 2".to_string()]);
+            assert_eq!(pane.composer_text_with_pending(), "Phase 2");
+        }
+    }
+
+    #[test]
+    fn numbered_question_waits_for_pending_chord_after_idle_deadline() {
+        let (tx, _rx) = test_sender();
+        let mut pane = crate::bottom_pane::tests::test_pane(tx);
+        pane.show_selection_view(crate::bottom_pane::SelectionViewParams {
+            view_id: Some("picker"),
+            ..crate::bottom_pane::SelectionViewParams::picker()
+        });
+        pane.key_chord_reset_requested = false;
+        pane.key_chord_pending = true;
+        let request = request_event("turn-1", vec![question_with_options("q1", "Pick one")]);
+        pane.push_user_input_request(request.clone());
+        assert!(
+            pane.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                call_id: request.item_id.clone(),
+            })
         );
+        assert!(!pane.key_chord_reset_requested);
 
-        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
-
-        let event = rx.try_recv().expect("expected AppEvent");
-        let (_, _, response) = expect_user_input_answer(event);
-        let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 2".to_string()]);
+        pane.push_user_input_request(request);
+        let idle = Instant::now() + Duration::from_secs(2);
+        pane.pre_draw_tick_at(idle);
+        assert_eq!(pane.active_view_id(), Some("picker"));
+        pane.key_chord_pending = false;
+        pane.pre_draw_tick_at(idle);
+        assert_ne!(pane.active_view_id(), Some("picker"));
     }
 
     #[test]

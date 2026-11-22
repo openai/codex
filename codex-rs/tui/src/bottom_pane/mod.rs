@@ -248,7 +248,7 @@ pub(crate) use selection_tabs::SelectionTab;
 /// Keeping a single value ensures Ctrl+C and Ctrl+D behave identically.
 pub(crate) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
-const APPROVAL_PROMPT_TYPING_IDLE_DELAY: Duration = Duration::from_secs(1);
+const PROMPT_TYPING_IDLE_DELAY: Duration = Duration::from_secs(1);
 
 /// Whether Ctrl+C/Ctrl+D require a second press to quit.
 ///
@@ -310,12 +310,14 @@ pub(crate) struct BottomPane {
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
     pub(crate) key_chord_reset_requested: bool,
+    pub(crate) key_chord_pending: bool,
     warnings_view: Option<warnings_view::WarningsView>,
     /// A keep press can close the viewer; its remaining repeats must not edit the draft.
     pub(crate) suppress_warning_keep_repeat: bool,
     pub(crate) view_transition_key_guard: Option<crate::activation_key_guard::ActivationKeyGuard>,
     pub(crate) questions: Option<Box<AsyncQuestions>>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
+    delayed_user_input: Option<Box<RequestUserInputOverlay>>,
     last_composer_activity_at: Option<Instant>,
 
     app_event_tx: AppEventSender,
@@ -412,11 +414,13 @@ impl BottomPane {
             composer,
             view_stack: Vec::new(),
             key_chord_reset_requested: false,
+            key_chord_pending: false,
             warnings_view: None,
             suppress_warning_keep_repeat: false,
             view_transition_key_guard: None,
             questions: None,
             delayed_approval_requests: VecDeque::new(),
+            delayed_user_input: None,
             last_composer_activity_at: None,
             app_event_tx,
             frame_requester,
@@ -807,10 +811,10 @@ impl BottomPane {
         }
     }
 
-    fn approval_prompt_delay_remaining(&self, now: Instant) -> Option<Duration> {
+    fn prompt_delay_remaining(&self, now: Instant) -> Option<Duration> {
         self.last_composer_activity_at.and_then(|last_activity_at| {
             last_activity_at
-                .checked_add(APPROVAL_PROMPT_TYPING_IDLE_DELAY)
+                .checked_add(PROMPT_TYPING_IDLE_DELAY)
                 .and_then(|show_at| show_at.checked_duration_since(now))
                 .filter(|delay| !delay.is_zero())
         })
@@ -818,19 +822,55 @@ impl BottomPane {
 
     pub(crate) fn record_composer_activity_at(&mut self, now: Instant) {
         self.last_composer_activity_at = Some(now);
-        if self.has_pending_approval()
-            && let Some(delay) = self.approval_prompt_delay_remaining(now)
+        if self.has_delayed_prompt()
+            && let Some(delay) = self.prompt_delay_remaining(now)
         {
             self.request_redraw_in(delay);
         }
     }
 
-    fn maybe_show_delayed_approval_requests_at(&mut self, now: Instant) {
-        if !self.has_pending_approval() || !self.view_stack.is_empty() {
+    pub(crate) fn clear_delayed_prompts(&mut self) {
+        self.delayed_approval_requests.clear();
+        self.delayed_user_input = None;
+    }
+
+    fn tick_delayed_question_at(&mut self, now: Instant) {
+        // Keep the original timeout running even if typing never pauses.
+        if let Some(question) = &mut self.delayed_user_input {
+            question.pre_draw_tick(now);
+            if question.is_complete() {
+                self.delayed_user_input = None;
+            }
+        }
+    }
+
+    fn maybe_show_delayed_prompts_at(&mut self, now: Instant) {
+        self.tick_delayed_question_at(now);
+        // A leader can stay pending beyond the idle deadline. Its next stroke
+        // still belongs to the shortcut until it completes or is cancelled.
+        if self.key_chord_pending
+            && let Some(question) = &self.delayed_user_input
+        {
+            if let Some(delay) = question.next_frame_delay() {
+                self.request_redraw_in(delay);
+            }
             return;
         }
-        if let Some(delay) = self.approval_prompt_delay_remaining(now) {
+        // Questions can cover a picker after typing pauses.
+        // Approvals wait until the user leaves the active view.
+        if !self.has_delayed_prompt()
+            || (!self.view_stack.is_empty() && self.delayed_user_input.is_none())
+        {
+            return;
+        }
+        if let Some(delay) = self.prompt_delay_remaining(now) {
             self.request_redraw_in(delay);
+            return;
+        }
+
+        // Keep questions ahead of delayed approvals when both are waiting.
+        if let Some(request) = self.delayed_user_input.take() {
+            self.show_user_input_request(request);
             return;
         }
 
@@ -854,25 +894,6 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
-    fn is_composer_activity_key(&self, key: KeyEvent) -> bool {
-        if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && (self.keymap.composer.undo.is_pressed(key)
-                || self.keymap.composer.redo.is_pressed(key))
-        {
-            return true;
-        }
-        matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && !key_hint::has_ctrl_or_alt(key.modifiers)
-            && matches!(
-                key.code,
-                KeyCode::Char(_)
-                    | KeyCode::Backspace
-                    | KeyCode::Delete
-                    | KeyCode::Enter
-                    | KeyCode::Tab
-            )
-    }
-
     /// Preserve restricted drafts, allowing recovery commands only for connected unavailable threads.
     pub(crate) fn handle_restricted_key(
         &mut self,
@@ -881,7 +902,7 @@ impl BottomPane {
     ) -> InputResult {
         if mode == RestrictedInputMode::DraftHandoff {
             let result = self.composer.handle_restricted_key(key, mode);
-            if self.is_composer_activity_key(key) {
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 self.record_composer_activity_at(Instant::now());
             }
             self.request_redraw();
@@ -889,7 +910,7 @@ impl BottomPane {
         }
         self.view_stack.clear();
         self.warnings_view = None;
-        self.delayed_approval_requests.clear();
+        self.clear_delayed_prompts();
         self.composer
             .set_input_enabled(/*enabled*/ true, /*placeholder*/ None);
         let result = self.composer.handle_restricted_key(key, mode);
@@ -925,11 +946,18 @@ impl BottomPane {
                 view.observe_key_event_while_covered(key_event, routed_key);
             }
         }
-        let records_composer_activity = self.is_composer_activity_key(key_event);
+        // Edits and cursor movements can be bound to arbitrary keys.
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (self.warnings_active()
+                || self.delayed_user_input.is_some()
+                || self.view_stack.last().is_none_or(|view| {
+                    view.search_query().is_some()
+                        || view.keymap_contexts().contains(KeymapContext::Editor)
+                }))
+        {
+            self.record_composer_activity_at(Instant::now());
+        }
         if self.warnings_active() {
-            if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                self.record_composer_activity_at(Instant::now());
-            }
             if self
                 .warnings_view
                 .as_mut()
@@ -951,9 +979,6 @@ impl BottomPane {
                 .copy_history_for_key(&self.composer, key_event);
             questions.composer.set_task_running(self.is_task_running);
             questions.handle_key_event(key_event);
-            if records_composer_activity {
-                self.record_composer_activity_at(Instant::now());
-            }
             self.request_redraw();
             self.schedule_active_view_frame();
             return InputResult::None;
@@ -1018,9 +1043,6 @@ impl BottomPane {
                 return InputResult::None;
             }
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
-            if records_composer_activity {
-                self.record_composer_activity_at(Instant::now());
-            }
             if needs_redraw {
                 self.request_redraw();
             }
@@ -1097,10 +1119,10 @@ impl BottomPane {
 
     pub fn handle_paste(&mut self, pasted: String) {
         self.interrupt_config_editor_transition();
+        if !pasted.is_empty() {
+            self.record_composer_activity_at(Instant::now());
+        }
         if self.warnings_active() {
-            if !pasted.is_empty() {
-                self.record_composer_activity_at(Instant::now());
-            }
             self.request_redraw();
             return;
         }
@@ -1108,11 +1130,9 @@ impl BottomPane {
             && let Some(questions) = self.questions.as_mut().filter(|q| q.expanded)
         {
             questions.handle_paste(pasted);
-            self.record_composer_activity_at(Instant::now());
             self.request_redraw();
             return;
         }
-        let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             let view_complete = view.is_complete();
@@ -1125,9 +1145,6 @@ impl BottomPane {
             }
         } else {
             let needs_redraw = self.composer.handle_paste(pasted);
-            if has_pasted_text {
-                self.record_composer_activity_at(Instant::now());
-            }
             if needs_redraw {
                 self.request_redraw();
             }
@@ -1149,7 +1166,7 @@ impl BottomPane {
 
     fn pre_draw_tick_at(&mut self, now: Instant) {
         self.composer.sync_popups();
-        self.maybe_show_delayed_approval_requests_at(now);
+        self.maybe_show_delayed_prompts_at(now);
         self.tick_active_view(now);
         self.schedule_active_view_frame();
     }
@@ -1161,8 +1178,8 @@ impl BottomPane {
         let needs_redraw = view.pre_draw_tick(now);
         let view_complete = view.is_complete();
         if view_complete {
-            self.view_stack.clear();
-            self.on_active_view_complete();
+            let completion = view.completion();
+            self.pop_active_view_with_completion(completion);
         }
         if needs_redraw || view_complete {
             self.key_chord_reset_requested = true;
@@ -1903,6 +1920,11 @@ impl BottomPane {
             .filter(|view| !view.is_complete())
             .find_map(|view| view.program_status_blocked_kind())
             .or_else(|| {
+                self.delayed_user_input
+                    .as_ref()
+                    .and_then(|view| view.program_status_blocked_kind())
+            })
+            .or_else(|| {
                 self.delayed_approval_requests
                     .front()
                     .map(|delayed| delayed.request.program_status_blocked_kind())
@@ -2063,7 +2085,11 @@ impl BottomPane {
     }
 
     pub(crate) fn handle_composer_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {
-        self.composer.handle_mouse(event)
+        let handled = self.composer.handle_mouse(event);
+        if handled {
+            self.record_composer_activity_at(Instant::now());
+        }
+        handled
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -2131,15 +2157,13 @@ impl BottomPane {
         };
 
         let now = Instant::now();
-        if !self.delayed_approval_requests.is_empty()
-            || self.approval_prompt_delay_remaining(now).is_some()
-        {
+        if self.has_delayed_prompt() || self.prompt_delay_remaining(now).is_some() {
             self.delayed_approval_requests
                 .push_back(DelayedApprovalRequest {
                     request,
                     features: features.clone(),
                 });
-            self.maybe_show_delayed_approval_requests_at(now);
+            self.maybe_show_delayed_prompts_at(now);
         } else {
             // No recent composer activity, so show the approval modal immediately.
             let modal = ApprovalOverlay::new(
@@ -2168,20 +2192,41 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new_with_keymap(
+        let now = Instant::now();
+        if let Some(question) = &mut self.delayed_user_input {
+            question.try_consume_user_input_request(request);
+            self.maybe_show_delayed_prompts_at(now);
+            return;
+        }
+        let starts_with_options = request
+            .questions
+            .first()
+            .is_some_and(RequestUserInputOverlay::has_numbered_options);
+        let modal = Box::new(RequestUserInputOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
             self.keymap.clone(),
-        );
+        ));
+        if starts_with_options
+            && (self.key_chord_pending || self.prompt_delay_remaining(now).is_some())
+        {
+            self.delayed_user_input = Some(modal);
+            self.maybe_show_delayed_prompts_at(now);
+        } else {
+            self.show_user_input_request(modal);
+        }
+    }
+
+    fn show_user_input_request(&mut self, modal: Box<RequestUserInputOverlay>) {
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             /*enabled*/ false,
             Some("Answer the questions to continue.".to_string()),
         );
-        self.push_view(Box::new(modal));
+        self.push_view(modal);
     }
 
     pub(crate) fn push_mcp_server_elicitation_request(
@@ -2292,34 +2337,35 @@ impl BottomPane {
         let delayed_len = self.delayed_approval_requests.len();
         self.delayed_approval_requests
             .retain(|delayed| !delayed.request.matches_resolved_request(request));
-        let delayed_changed = self.delayed_approval_requests.len() != delayed_len;
-
-        if self.view_stack.is_empty() {
-            if delayed_changed {
-                self.request_redraw();
+        let mut delayed_changed = self.delayed_approval_requests.len() != delayed_len;
+        if let Some(question) = &mut self.delayed_user_input {
+            delayed_changed |= question.dismiss_app_server_request(request);
+            if question.is_complete() {
+                self.delayed_user_input = None;
             }
-            return delayed_changed;
         }
 
-        let mut changed = delayed_changed;
+        let mut view_changed = false;
         let mut completed_indices = Vec::new();
         for index in (0..self.view_stack.len()).rev() {
             let view = &mut self.view_stack[index];
             if !view.dismiss_app_server_request(request) {
                 continue;
             }
-            changed = true;
+            view_changed = true;
             if view.is_complete() {
                 completed_indices.push(index);
             }
         }
-        if !changed {
+        if !delayed_changed && !view_changed {
             return false;
         }
         for index in completed_indices {
             self.view_stack.remove(index);
         }
-        self.on_view_stack_depth_decreased();
+        if view_changed {
+            self.on_view_stack_depth_decreased();
+        }
         self.request_redraw();
         true
     }
@@ -2361,6 +2407,8 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        // The app skips pre_draw_tick while capturing a paste burst.
+        self.tick_delayed_question_at(Instant::now());
         // Every editor can retain buffered input after losing focus. Flush all
         // of them, matching the buffers that can defer drawing below.
         let mut flushed = self.composer.flush_paste_burst_if_due();
@@ -3320,12 +3368,12 @@ mod tests {
             let now = pane.last_composer_activity_at.unwrap_or(now);
 
             pane.pre_draw_tick_at(
-                now + APPROVAL_PROMPT_TYPING_IDLE_DELAY - Duration::from_millis(/*millis*/ 1),
+                now + PROMPT_TYPING_IDLE_DELAY - Duration::from_millis(/*millis*/ 1),
             );
             assert!(pane.view_stack.is_empty());
             assert_eq!(pane.delayed_approval_requests.len(), 1);
 
-            pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+            pane.pre_draw_tick_at(now + PROMPT_TYPING_IDLE_DELAY);
             assert_eq!(pane.view_stack.len(), 1);
             assert!(pane.delayed_approval_requests.is_empty());
         }
@@ -3344,11 +3392,11 @@ mod tests {
         let continued_activity = first_activity + Duration::from_millis(/*millis*/ 750);
         pane.record_composer_activity_at(continued_activity);
 
-        pane.pre_draw_tick_at(first_activity + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.pre_draw_tick_at(first_activity + PROMPT_TYPING_IDLE_DELAY);
         assert!(pane.view_stack.is_empty());
         assert_eq!(pane.delayed_approval_requests.len(), 1);
 
-        pane.pre_draw_tick_at(continued_activity + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.pre_draw_tick_at(continued_activity + PROMPT_TYPING_IDLE_DELAY);
         assert_eq!(pane.view_stack.len(), 1);
         assert!(pane.delayed_approval_requests.is_empty());
     }
@@ -3372,7 +3420,7 @@ mod tests {
             KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
             RestrictedInputMode::Disconnected,
         );
-        pane.pre_draw_tick_at(Instant::now() + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.pre_draw_tick_at(Instant::now() + PROMPT_TYPING_IDLE_DELAY);
         pane.handle_paste(" kept".into());
         assert_eq!(pane.composer_text(), "ya kept");
         assert!(pane.view_stack.is_empty());
@@ -3394,7 +3442,7 @@ mod tests {
         pane.last_composer_activity_at = Some(now);
         pane.push_approval_request(exec_request(), &features);
 
-        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.pre_draw_tick_at(now + PROMPT_TYPING_IDLE_DELAY);
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
         let mut approval_decision = None;
@@ -3438,7 +3486,7 @@ mod tests {
         assert!(pane.delayed_approval_requests.is_empty());
         assert_eq!(pane.program_status_blocked_kind(), None);
 
-        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.pre_draw_tick_at(now + PROMPT_TYPING_IDLE_DELAY);
         assert!(pane.view_stack.is_empty());
     }
 

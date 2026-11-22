@@ -312,8 +312,15 @@ async fn composer_submit_chord_works_with_slash_argument_popup() -> Result<()> {
     app.chat_widget.apply_external_edit("/raw off".to_owned());
     assert!(!app.chat_widget.no_modal_or_popup_active());
 
+    let before_prefix = std::time::Instant::now();
     press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
     assert!(app.key_chord_matcher.is_pending());
+    assert!(
+        app.chat_widget
+            .composer_draft_snapshot()
+            .last_composer_activity_at
+            .is_some_and(|activity| activity >= before_prefix)
+    );
     assert!(app.chat_widget.raw_output_mode());
     press(&mut app, &mut tui, &mut app_server, KeyCode::Enter.into()).await?;
     assert!(!app.chat_widget.raw_output_mode());

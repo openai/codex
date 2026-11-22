@@ -86,7 +86,7 @@ impl BottomPane {
         self.composer.set_disable_paste_burst(disabled);
     }
 
-    /// Capture draft content together with the activity timestamp used by delayed approvals.
+    /// Capture draft content together with the activity timestamp used by delayed prompts.
     pub(crate) fn composer_draft_snapshot(&self) -> ComposerDraftSnapshot {
         let mut draft = self.composer.draft_snapshot();
         draft.last_composer_activity_at = self.last_composer_activity_at;
@@ -130,9 +130,9 @@ impl BottomPane {
         }
     }
 
-    /// Return whether an approval is waiting to become visible after typing stops.
-    pub(crate) fn has_pending_approval(&self) -> bool {
-        !self.delayed_approval_requests.is_empty()
+    /// Return whether a prompt is waiting to become visible after typing stops.
+    pub(crate) fn has_delayed_prompt(&self) -> bool {
+        !self.delayed_approval_requests.is_empty() || self.delayed_user_input.is_some()
     }
 
     pub(crate) fn composer_paste_deadline(&self) -> Option<Instant> {

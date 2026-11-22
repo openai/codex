@@ -95,6 +95,13 @@ impl ChatWidget {
         contexts
     }
 
+    pub(crate) fn set_key_chord_pending(&mut self, pending: bool) {
+        self.bottom_pane.key_chord_pending = pending;
+        if pending && !self.has_active_modal() {
+            self.bottom_pane.record_composer_activity_at(Instant::now());
+        }
+    }
+
     pub(crate) fn take_key_chord_reset(&mut self) -> bool {
         std::mem::take(&mut self.bottom_pane.key_chord_reset_requested)
     }

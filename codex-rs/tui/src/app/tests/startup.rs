@@ -1091,7 +1091,7 @@ async fn auto_declined_mcp_elicitations_do_not_leave_startup_quarantine_armed() 
 }
 
 #[tokio::test]
-async fn startup_draft_handoff_recognizes_late_user_input_as_new_protected_view() -> Result<()> {
+async fn startup_draft_handoff_protects_delayed_question_until_resolved() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     app.enqueue_primary_thread_session(
@@ -1135,12 +1135,25 @@ async fn startup_draft_handoff_recognizes_late_user_input_as_new_protected_view(
     assert!(!app.chat_widget.has_active_view());
     app.handle_thread_event_now(event);
 
-    assert!(app.chat_widget.has_active_view());
+    assert!(!app.chat_widget.has_active_view());
+    assert!(app.chat_widget.has_pending_protected_request());
+    app.chat_widget.dismiss_app_server_request(
+        &crate::app::app_server_requests::ResolvedAppServerRequest::UserInput {
+            call_id: "call-1".to_string(),
+        },
+    );
+    assert!(!app.chat_widget.has_pending_protected_request());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "x");
     while let Ok(event) = app_event_rx.try_recv() {
         assert!(
-            !matches!(event, AppEvent::CodexOp(Op::UserInputAnswer { .. })),
-            "showing the protected user input request must not submit an answer: {event:?}"
+            !matches!(
+                event,
+                AppEvent::SubmitThreadOp {
+                    op: Op::UserInputAnswer { .. },
+                    ..
+                }
+            ),
+            "dismissing the delayed question must not submit an answer: {event:?}"
         );
     }
 

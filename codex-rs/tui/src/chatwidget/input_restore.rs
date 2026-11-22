@@ -135,9 +135,9 @@ impl ChatWidget {
         crate::startup_recovery::handed_off(|| self.bottom_pane.composer_recovery_snapshot());
     }
 
-    /// Includes protected prompts deferred by streaming or the approval idle timer.
+    /// Includes protected prompts deferred by streaming or the typing idle timer.
     pub(crate) fn has_pending_protected_request(&self) -> bool {
-        self.bottom_pane.has_pending_approval() || self.interrupts.has_pending_prompt()
+        self.bottom_pane.has_delayed_prompt() || self.interrupts.has_pending_prompt()
     }
 
     /// Transfer startup input only after protected views and required sandbox setup finish.
