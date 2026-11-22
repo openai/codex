@@ -1312,14 +1312,16 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         );
     }
 
-    if !turn_context.root_capabilities_restricted
+    let root_messages = !turn_context.root_capabilities_restricted
         && (features.enabled(Feature::SendMessageToUserAsync)
             || context
                 .model_info
                 .experimental_supported_tools
                 .iter()
-                .any(|tool| tool == "send_message_to_user_async"))
-    {
+                .any(|tool| tool == "send_message_to_user_async"));
+    let subagent_messages = features.subagent_async_messages_enabled
+        && turn_context.session_source.parent_thread_id().is_some();
+    if root_messages || subagent_messages {
         registry.add_with_exposure(SendMessageToUserAsyncHandler, ToolExposure::DirectModelOnly);
     }
 

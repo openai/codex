@@ -1,5 +1,5 @@
-use crate::merge::is_structured_feature_path;
 use crate::merge::merge_toml_values;
+use crate::merge::structured_feature_toggle_field;
 use toml::Value as TomlValue;
 
 pub(crate) fn default_empty_table() -> TomlValue {
@@ -29,17 +29,18 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
         if is_last {
             match current {
                 TomlValue::Table(table) => {
-                    if is_structured_feature_path(&traversed_segments)
+                    if let Some(toggle_field) = structured_feature_toggle_field(&traversed_segments)
                         && let Some(existing) = table.get_mut(segment)
                     {
                         match (&mut *existing, &value) {
                             (TomlValue::Table(feature), TomlValue::Boolean(enabled)) => {
-                                feature.insert("enabled".to_string(), TomlValue::Boolean(*enabled));
+                                feature
+                                    .insert(toggle_field.to_string(), TomlValue::Boolean(*enabled));
                                 return;
                             }
                             (TomlValue::Boolean(enabled), TomlValue::Table(_)) => {
                                 *existing = TomlValue::Table(Table::from_iter([(
-                                    "enabled".to_string(),
+                                    toggle_field.to_string(),
                                     TomlValue::Boolean(*enabled),
                                 )]));
                                 merge_toml_values(existing, &value);
@@ -77,11 +78,11 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
                 current = table
                     .entry(segment.to_string())
                     .or_insert_with(|| TomlValue::Table(Table::new()));
-                if is_structured_feature_path(&traversed_segments)
+                if let Some(toggle_field) = structured_feature_toggle_field(&traversed_segments)
                     && let TomlValue::Boolean(enabled) = current
                 {
                     *current = TomlValue::Table(Table::from_iter([(
-                        "enabled".to_string(),
+                        toggle_field.to_string(),
                         TomlValue::Boolean(*enabled),
                     )]));
                 }

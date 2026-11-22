@@ -3,6 +3,7 @@ use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::is_structured_feature_path;
+use codex_config::structured_feature_toggle_field;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SessionPickerViewMode;
@@ -75,6 +76,8 @@ pub enum ConfigEdit {
     },
     /// Remove the value stored at the exact dotted path.
     ClearPath { segments: Vec<String> },
+    /// Disable the root opt-in without clearing a separate subagent setting.
+    DisableRootAsyncMessages,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,13 +335,15 @@ impl ConfigDocument {
             }
             ConfigEdit::SetPath { segments, value } => {
                 let mut path = Cow::Borrowed(segments.as_slice());
-                if is_structured_feature_path(segments) && value.as_bool().is_some() {
+                if value.as_bool().is_some()
+                    && let Some(toggle_field) = structured_feature_toggle_field(segments)
+                {
                     let mut existing = Some(self.doc.as_item());
                     for segment in segments {
                         existing = existing.and_then(|item| item.as_table_like()?.get(segment));
                     }
                     if existing.and_then(TomlItem::as_table_like).is_some() {
-                        path.to_mut().push("enabled".to_string());
+                        path.to_mut().push(toggle_field.to_string());
                     }
                 }
                 anyhow::ensure!(
@@ -347,6 +352,21 @@ impl ConfigDocument {
                     segments.join(".")
                 );
                 Ok(true)
+            }
+            ConfigEdit::DisableRootAsyncMessages => {
+                let key = codex_features::Feature::SendMessageToUserAsync.key();
+                if self
+                    .doc
+                    .get("features")
+                    .and_then(|features| features.get(key))
+                    .and_then(|feature| feature.get("subagents"))
+                    .is_some()
+                {
+                    let toggle_field = codex_features::feature_toggle_field(key);
+                    Ok(self.write_value(&["features", key, toggle_field], value(false)))
+                } else {
+                    Ok(self.clear(&["features", key]))
+                }
             }
             ConfigEdit::ClearPath { segments } => {
                 let preserves_broker_settings = is_structured_feature_path(segments)
@@ -655,11 +675,12 @@ impl ConfigDocument {
                     }
 
                     let item = current.get_mut(segment.as_str())?;
-                    if is_structured_feature_path(&segments[..=index])
-                        && let Some(enabled) = item.as_bool()
+                    if let Some(enabled) = item.as_bool()
+                        && let Some(toggle_field) =
+                            structured_feature_toggle_field(&segments[..=index])
                     {
                         let mut feature = document_helpers::new_implicit_table();
-                        feature.insert("enabled", value(enabled));
+                        feature.insert(toggle_field, value(enabled));
                         *item = TomlItem::Table(feature);
                     }
                     current = document_helpers::ensure_table_for_write(item)?;
@@ -885,8 +906,8 @@ impl ConfigEditsBuilder {
     ///
     /// Disabling a default-false feature clears the key instead of
     /// persisting `false`, so the config does not pin the feature once it
-    /// graduates to globally enabled. Structured multi-agent v2 settings are
-    /// an exception: its explicit `enabled = false` preserves nested options.
+    /// graduates to globally enabled. Structured features can retain a false
+    /// toggle to preserve their other settings.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
         let mut segments = vec!["features".to_string(), key.to_string()];
         if key == "multi_agent_v2" && !enabled {
@@ -906,6 +927,8 @@ impl ConfigEditsBuilder {
                 segments,
                 value: value(enabled),
             });
+        } else if key == codex_features::Feature::SendMessageToUserAsync.key() {
+            self.edits.push(ConfigEdit::DisableRootAsyncMessages);
         } else {
             self.edits.push(ConfigEdit::ClearPath { segments });
         }

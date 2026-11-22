@@ -34,6 +34,26 @@ pub struct ToolRegistryConfigToml {
     pub turn_metadata_includes_tool_info: Option<bool>,
 }
 
+/// Controls which agents can send async user messages.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendMessageToUserAsyncConfigToml {
+    /// Sets the root agent's feature flag, just like the plain boolean shorthand.
+    /// The model catalog can still enable the tool for the root when this is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_agent: Option<bool>,
+    /// Allow spawned subagents to use the tool independently of `root_agent`
+    /// and the model catalog. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<bool>,
+}
+
+impl FeatureConfig for SendMessageToUserAsyncConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.root_agent
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CodeModeConfigToml {

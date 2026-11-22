@@ -1408,7 +1408,9 @@ async fn dispatch_cli(
                                 continue;
                             }
                             let value = if let Some(table) = value.as_table() {
-                                let Some(enabled) = table.get("enabled") else {
+                                let Some(enabled) =
+                                    table.get(codex_features::feature_toggle_field(name))
+                                else {
                                     continue;
                                 };
                                 enabled

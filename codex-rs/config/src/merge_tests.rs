@@ -255,34 +255,30 @@ fn multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration() {
     }
 }
 
-#[test]
-fn code_mode_overrides_preserve_enabled_state_and_cell_overhead() {
+#[test_case::test_case("code_mode", "enabled", "experimental_show_cell_overhead"; "code mode")]
+#[test_case::test_case("send_message_to_user_async", "root_agent", "subagents"; "async user messages")]
+fn boolean_overrides_preserve_nested_option(feature: &str, toggle_field: &str, option: &str) {
     for feature_path in ["features", "profiles.work.features"] {
         for enabled in [true, false] {
             let toggle = (
-                format!("{feature_path}.code_mode"),
+                format!("{feature_path}.{feature}"),
                 TomlValue::Boolean(enabled),
             );
-            let overhead = (
-                format!("{feature_path}.code_mode.experimental_show_cell_overhead"),
+            let nested = (
+                format!("{feature_path}.{feature}.{option}"),
                 TomlValue::Boolean(true),
             );
             let expected = parse_toml(&format!(
-                "[{feature_path}.code_mode]\nenabled = {enabled}\nexperimental_show_cell_overhead = true\n",
+                "[{feature_path}.{feature}]\n{toggle_field} = {enabled}\n{option} = true\n",
             ));
 
-            // Adding a display option must preserve the toggle in either override order.
-            for overrides in [
-                vec![toggle.clone(), overhead.clone()],
-                vec![overhead, toggle],
-            ] {
+            for overrides in [vec![toggle.clone(), nested.clone()], vec![nested, toggle]] {
                 assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
             }
 
-            let boolean_layer = parse_toml(&format!("[{feature_path}]\ncode_mode = {enabled}\n"));
-            let table_layer = parse_toml(&format!(
-                "[{feature_path}.code_mode]\nexperimental_show_cell_overhead = true\n",
-            ));
+            let boolean_layer = parse_toml(&format!("[{feature_path}]\n{feature} = {enabled}\n"));
+            let table_layer =
+                parse_toml(&format!("[{feature_path}.{feature}]\n{option} = true\n",));
             for (mut base, overlay) in [
                 (boolean_layer.clone(), table_layer.clone()),
                 (table_layer, boolean_layer),

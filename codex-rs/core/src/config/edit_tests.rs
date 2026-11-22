@@ -136,27 +136,24 @@ fn multi_agent_v2_feature_toggle_preserves_nested_configuration() {
     );
 }
 
-#[test]
-fn sleep_tool_feature_toggle_preserves_mode() {
+#[test_case::test_case("sleep_tool", "enabled", "mode = \"always_on\""; "sleep mode")]
+#[test_case::test_case("send_message_to_user_async", "root_agent", "subagents = true"; "subagent messages")]
+fn feature_toggle_preserves_nested_setting(key: &str, toggle: &str, setting: &str) {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    std::fs::write(
-        &config_path,
-        "[features.sleep_tool]\nmode = \"always_on\"\n",
-    )
-    .expect("write config");
+    std::fs::write(&config_path, format!("[features.{key}]\n{setting}\n")).expect("write config");
 
     for enabled in [false, true] {
         ConfigEditsBuilder::new(codex_home)
-            .set_feature_enabled("sleep_tool", enabled)
+            .set_feature_enabled(key, enabled)
             .apply_blocking()
             .expect("toggle feature");
         let actual: TomlValue =
             toml::from_str(&std::fs::read_to_string(&config_path).expect("read config"))
                 .expect("parse config");
         let expected: TomlValue = toml::from_str(&format!(
-            "[features.sleep_tool]\nenabled = {enabled}\nmode = \"always_on\"\n",
+            "[features.{key}]\n{toggle} = {enabled}\n{setting}\n",
         ))
         .expect("parse expected config");
         assert_eq!(actual, expected);

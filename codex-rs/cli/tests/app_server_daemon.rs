@@ -187,6 +187,8 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
                 "connectors",
                 "-c",
                 "features.network_proxy.enabled=false",
+                "-c",
+                "features.send_message_to_user_async.root_agent=true",
             ],
             true,
         ),
@@ -216,7 +218,8 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
                 "api_key_model_discovery": discovery,
                 "auth_elicitation": true,
                 "apps": false,
-                "network_proxy": false
+                "network_proxy": false,
+                "send_message_to_user_async": true
             })
         );
         assert_eq!(settings["updater"]["autoUpdateEnabled"], false);

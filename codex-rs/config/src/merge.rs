@@ -74,9 +74,16 @@ pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
                 | "guardianv3"
                 | "multi_agent_v2"
                 | "network_proxy"
+                | "send_message_to_user_async"
                 | "sleep_tool"
                 | "runtime_agent_instances"
         )
+}
+
+/// Resolve the toggle field only at feature paths that support merging a boolean and a table.
+pub fn structured_feature_toggle_field<S: AsRef<str>>(path: &[S]) -> Option<&'static str> {
+    let feature = path.last()?;
+    is_structured_feature_path(path).then(|| codex_features::feature_toggle_field(feature.as_ref()))
 }
 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: TomlValue, path: &mut Vec<String>) {
@@ -87,18 +94,18 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: TomlValue, path: &mu
     }
     replace_shell_environment_policy_filter_representation(base, &overlay, path);
 
-    if is_structured_feature_path(path) {
+    if let Some(toggle_field) = structured_feature_toggle_field(path) {
         if let TomlValue::Boolean(enabled) = base
             && overlay.is_table()
         {
             *base = TomlValue::Table(toml::map::Map::from_iter([(
-                "enabled".to_string(),
+                toggle_field.to_string(),
                 TomlValue::Boolean(*enabled),
             )]));
         } else if let TomlValue::Table(table) = base
             && let TomlValue::Boolean(enabled) = overlay
         {
-            table.insert("enabled".to_string(), TomlValue::Boolean(enabled));
+            table.insert(toggle_field.to_string(), TomlValue::Boolean(enabled));
             return;
         }
     }

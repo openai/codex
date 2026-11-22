@@ -209,6 +209,7 @@ pub use merge::ShellEnvironmentPolicyFilterRepresentation;
 pub use merge::is_structured_feature_path;
 pub use merge::merge_toml_values;
 pub use merge::shell_environment_filter_entry;
+pub use merge::structured_feature_toggle_field;
 pub use model_provider_defaults::apply_default_gcp_auth;
 pub use overrides::build_cli_overrides_layer;
 pub use path_context::ConfigPathContext;

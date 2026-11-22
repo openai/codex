@@ -1370,7 +1370,7 @@
               "type": "boolean"
             },
             "send_message_to_user_async": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_SendMessageToUserAsyncConfigToml"
             },
             "shell_snapshot": {
               "type": "boolean"
@@ -1992,6 +1992,16 @@
         },
         {
           "$ref": "#/definitions/RuntimeAgentInstancesConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_SendMessageToUserAsyncConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/SendMessageToUserAsyncConfigToml"
         }
       ]
     },
@@ -5041,6 +5051,21 @@
             "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SendMessageToUserAsyncConfigToml": {
+      "additionalProperties": false,
+      "description": "Controls which agents can send async user messages.",
+      "properties": {
+        "root_agent": {
+          "description": "Sets the root agent's feature flag, just like the plain boolean shorthand. The model catalog can still enable the tool for the root when this is false.",
+          "type": "boolean"
+        },
+        "subagents": {
+          "description": "Allow spawned subagents to use the tool independently of `root_agent` and the model catalog. Defaults to false.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -8748,7 +8773,7 @@
           "type": "boolean"
         },
         "send_message_to_user_async": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_SendMessageToUserAsyncConfigToml"
         },
         "shell_snapshot": {
           "type": "boolean"

@@ -41,6 +41,7 @@ pub use feature_configs::NonPrefixedMcpToolNamesConfigToml;
 pub use feature_configs::RemoteMessageBoardConfigToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
 pub use feature_configs::RolloutBudgetConfigToml;
+pub use feature_configs::SendMessageToUserAsyncConfigToml;
 pub use feature_configs::SleepToolConfigToml;
 pub use feature_configs::SleepToolMode;
 pub use feature_configs::TokenBudgetConfigToml;
@@ -634,6 +635,8 @@ pub struct LegacyFeatureUsage {
 pub struct Features {
     enabled: BTreeSet<Feature>,
     legacy_usages: BTreeSet<LegacyFeatureUsage>,
+    /// Spawned agents require their own opt-in, independent of the root feature flag.
+    pub subagent_async_messages_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -671,7 +674,7 @@ impl Features {
         }
         Self {
             enabled: set,
-            legacy_usages: BTreeSet::new(),
+            ..Self::default()
         }
     }
 
@@ -984,6 +987,14 @@ pub fn canonical_feature_for_key(key: &str) -> Option<Feature> {
         .map(|spec| spec.id)
 }
 
+/// Field that carries a feature's boolean shorthand when it is written as a table.
+pub fn feature_toggle_field(key: &str) -> &'static str {
+    match key {
+        "send_message_to_user_async" => "root_agent",
+        _ => "enabled",
+    }
+}
+
 /// Returns `true` if the provided string matches a known `[features]` key.
 pub fn is_known_feature_key(key: &str) -> bool {
     key == "tool_registry" || feature_for_key(key).is_some()
@@ -1021,6 +1032,8 @@ pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_message_to_user_async: Option<FeatureToml<SendMessageToUserAsyncConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tool: Option<FeatureToml<SleepToolConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_agent_instances: Option<FeatureToml<RuntimeAgentInstancesConfigToml>>,
@@ -1035,6 +1048,11 @@ pub struct FeaturesToml {
 
 impl Features {
     fn apply_toml(&mut self, features: &FeaturesToml) {
+        if let Some(FeatureToml::Config(config)) = &features.send_message_to_user_async
+            && let Some(subagents) = config.subagents
+        {
+            self.subagent_async_messages_enabled = subagents;
+        }
         let entries = features.entries();
         self.apply_map(&entries);
     }
@@ -1100,6 +1118,13 @@ impl FeaturesToml {
         }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .send_message_to_user_async
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::SendMessageToUserAsync.key().to_string(), enabled);
         }
         if let Some(enabled) = self.sleep_tool.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::SleepTool.key().to_string(), enabled);
@@ -2571,7 +2596,7 @@ pub fn unstable_features_warning_event(
             let is_enabled = value.as_bool() == Some(true)
                 || value
                     .as_table()
-                    .and_then(|table| table.get("enabled"))
+                    .and_then(|table| table.get(feature_toggle_field(key)))
                     .and_then(toml::Value::as_bool)
                     == Some(true);
             if !is_enabled {
