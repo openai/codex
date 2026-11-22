@@ -9,6 +9,8 @@ use serde_json::json;
 fn configured_shortcut_tips_render_at_narrow_width() {
     let config = serde_json::from_value(json!({
         "global": {
+            "leader": "f9",
+            "open_agents": "f11",
             "open_transcript": ["ctrl-x t", "f12"],
             "find_transcript": "ctrl-x f",
             "open_external_editor": "ctrl-x e",
@@ -22,15 +24,19 @@ fn configured_shortcut_tips_render_at_narrow_width() {
             "open_presets": "ctrl-x p",
             "increase_reasoning_effort": "ctrl-x +",
             "decrease_reasoning_effort": "ctrl-x minus"
-        }
+        },
+        "agents": { "archive": "f10" }
     }))
     .unwrap();
     let keymap = RuntimeKeymap::from_config(&config).unwrap();
     let mut lines = Vec::new();
     for (label, keymap) in [("Default", RuntimeKeymap::defaults()), ("Remapped", keymap)] {
         lines.push(label.into());
-        for template in TOOLTIPS.iter().filter(|tip| tip.contains("{key:")) {
-            let tip = render_tooltip(template, Some(&keymap)).expect("valid shortcut tip");
+        for tip in TOOLTIPS
+            .iter()
+            .filter(|tip| tip.contains("{key:"))
+            .filter_map(|template| render_tooltip(template, Some(&keymap)))
+        {
             crate::markdown::append_markdown(
                 &format!("**Tip:** {tip}"),
                 Some(40),
@@ -40,13 +46,19 @@ fn configured_shortcut_tips_render_at_narrow_width() {
             lines.push("".into());
         }
     }
-    // This snapshot owns the preset hint's content and layout; Markdown tests own the
-    // terminal-default foreground applied to the shared "Tip:" prefix.
-    for line in lines
-        .iter_mut()
-        .filter(|line| line.to_string().contains("then 0–9"))
+    lines.push("Other tips".into());
+    for template in RAW_TOOLTIPS
+        .lines()
+        .map(str::trim)
+        .filter(|tip| !tip.is_empty() && !tip.starts_with('#') && !tip.contains("{key:"))
     {
-        line.spans[0].style.fg = None;
+        crate::markdown::append_markdown(
+            &format!("**Tip:** {template}"),
+            Some(40),
+            /*cwd*/ None,
+            &mut lines,
+        );
+        lines.push("".into());
     }
     insta::assert_snapshot!(
         lines
@@ -59,10 +71,11 @@ fn configured_shortcut_tips_render_at_narrow_width() {
 
 #[test]
 fn skips_unbound_or_invalid_placeholders() {
-    let config = serde_json::from_value(json!({ "global": { "copy": [] } })).unwrap();
+    let config = serde_json::from_value(json!({ "global": { "copy": [], "leader": [] } })).unwrap();
     let keymap = RuntimeKeymap::from_config(&config).unwrap();
     for template in [
         "Press {key:global.copy} to copy.",
+        "Press {key:global.leader} to start a chord.",
         "Press {key:global.open_transcript} or {key:global.copy}.",
         "Press {key:global.missing}.",
         "Press {key:missing.copy}.",
