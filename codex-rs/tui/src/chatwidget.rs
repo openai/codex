@@ -1169,8 +1169,8 @@ impl ChatWidget {
     }
 
     fn sync_context_window_visibility(&mut self) {
-        self.bottom_pane
-            .set_context_window_hidden(self.read_only_history || self.token_usage_pending);
+        let hidden = self.read_only_history || self.token_usage_pending;
+        self.bottom_pane.set_context_window_hidden(hidden);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
