@@ -138,6 +138,7 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
     );
     config.features.enable(Feature::MultiAgentV2)?;
     config.features.enable(Feature::DeferredExecutor)?;
+    config.multi_agent_v2.expose_spawn_agent_service_tier = true;
     let environments = manager.environment_manager();
     // Leave the handshake pending so the registration stays attached throughout the spawn.
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
@@ -193,6 +194,7 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
                 fork_mode: None,
                 agent_type: None,
                 model: None,
+                service_tier: Some("flex".into()),
                 reasoning_effort: None,
             },
             HostThreadSpawnReservation {
@@ -204,6 +206,10 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
         )
         .await?;
     let child = manager.get_thread(child_id).await?;
+    assert_eq!(
+        child.config_snapshot().await.service_tier.as_deref(),
+        Some("flex")
+    );
     assert!(
         child
             .thread_extension_data()

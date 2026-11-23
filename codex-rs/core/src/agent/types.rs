@@ -34,6 +34,7 @@ pub enum SpawnProgramSource {
 
 #[derive(Clone, Debug, Default)]
 pub struct SpawnAgentOptions {
+    pub service_tier: Option<String>,
     pub request_country: codex_protocol::RequestCountry,
     pub fork_parent_spawn_call_id: Option<String>,
     pub fork_mode: Option<SpawnAgentForkMode>,

@@ -3520,6 +3520,10 @@
           "description": "Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds corresponding guidance to root and subagent usage hints.",
           "type": "boolean"
         },
+        "expose_spawn_agent_service_tier": {
+          "description": "Allow V1 and V2 `spawn_agent` to select a `service_tier` for one child. Defaults to false.",
+          "type": "boolean"
+        },
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },

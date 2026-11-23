@@ -12,6 +12,7 @@ fn spawn_agent_tool_v2_requires_task_name() {
             expose_agent_type: true,
             hide_agent_type_model_reasoning: false,
             expose_spawn_agent_model_overrides: true,
+            expose_service_tier: true,
             usage_hint_text: None,
             ..Default::default()
         },
@@ -62,7 +63,7 @@ fn spawn_agent_tool_v2_requires_task_name() {
             .and_then(|schema| schema.description.as_deref()),
         Some("Reasoning effort override for the new agent. Omit to inherit the parent effort.")
     );
-    assert!(!properties.contains_key("service_tier"));
+    assert!(properties.contains_key("service_tier"));
     assert_eq!(
         parameters.required.as_deref(),
         Some(["task_name".to_string(), "message".to_string()].as_slice())
@@ -118,6 +119,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         expose_agent_type: true,
         hide_agent_type_model_reasoning: false,
         expose_spawn_agent_model_overrides: true,
+        expose_service_tier: true,
         usage_hint_text: None,
         ..Default::default()
     });
@@ -160,7 +162,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
     );
-    assert!(!properties.contains_key("service_tier"));
+    assert!(properties.contains_key("service_tier"));
 }
 
 #[test_case::test_case(false; "inline_catalog")]
@@ -174,6 +176,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden(
             expose_agent_type: false,
             hide_agent_type_model_reasoning: true,
             expose_spawn_agent_model_overrides: true,
+            expose_service_tier: true,
             model_catalog_in_context,
             usage_hint_text: None,
             ..Default::default()
@@ -197,7 +200,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden(
     assert!(!properties.contains_key("agent_type"));
     assert!(properties.contains_key("model"));
     assert!(properties.contains_key("reasoning_effort"));
-    assert!(!properties.contains_key("service_tier"));
+    assert!(properties.contains_key("service_tier"));
     assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
     assert_eq!(
         description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE_V2),
@@ -213,6 +216,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
             expose_agent_type: false,
             hide_agent_type_model_reasoning: true,
             expose_spawn_agent_model_overrides: false,
+            expose_service_tier: true,
             usage_hint_text: None,
             ..Default::default()
         },

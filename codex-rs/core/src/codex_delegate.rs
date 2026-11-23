@@ -112,6 +112,7 @@ pub(crate) async fn run_codex_thread_interactive(
         thread_extension_init.insert((*context).clone());
     }
     let spawn_result = Session::spawn(SessionSpawnArgs {
+        child_service_tier: None,
         attached_thread: false,
         startup: Some(Arc::clone(&startup)),
         config,

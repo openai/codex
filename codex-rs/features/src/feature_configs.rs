@@ -418,6 +418,9 @@ pub struct MultiAgentV2ConfigToml {
     /// corresponding guidance to root and subagent usage hints.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose_spawn_agent_model_overrides: Option<bool>,
+    /// Allow V1 and V2 `spawn_agent` to select a `service_tier` for one child. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expose_spawn_agent_service_tier: Option<bool>,
     /// Expose the multi-agent v2 `wait_agent` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_agent_enabled: Option<bool>,

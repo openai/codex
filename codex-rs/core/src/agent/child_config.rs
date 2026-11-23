@@ -43,9 +43,12 @@ pub(crate) struct SpawnConfigOptions<'a> {
     pub(crate) role_name: Option<&'a str>,
     pub(crate) model: Option<&'a str>,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    pub(crate) service_tier: Option<String>,
 }
 
 pub(crate) struct PreparedSpawnConfig {
+    /// The explicit choice for this child. Config retains the tier it would otherwise inherit.
+    pub(crate) service_tier: Option<String>,
     pub(crate) config: Config,
     pub(crate) role_name: Option<String>,
 }
@@ -74,7 +77,12 @@ pub(crate) async fn prepare_agent_spawn_config(
         AgentRuntimeServices::Controller => true,
         AgentRuntimeServices::Host(services) => services.service_tier.is_some(),
     };
-    if !shares_service_tier {
+    if !shares_service_tier
+        && turn
+            .initial_settings
+            .spawn_service_tier_override()
+            .is_none()
+    {
         // Inherit the parent's thread preference before applying child role overrides.
         config.service_tier = session.thread_settings_snapshot().await.service_tier;
     }
@@ -91,8 +99,11 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    if shares_service_tier {
-        apply_spawn_agent_service_tier(session, &mut config).await?;
+    let requested_tier = options
+        .service_tier
+        .filter(|_| turn.config.multi_agent_v2.expose_spawn_agent_service_tier);
+    if shares_service_tier || requested_tier.is_some() {
+        apply_spawn_agent_service_tier(session, &mut config, requested_tier.as_deref()).await?;
     }
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
@@ -109,7 +120,11 @@ pub(crate) async fn prepare_agent_spawn_config(
             .then_some(DEFAULT_ROLE_NAME)
         })
         .map(str::to_owned);
-    Ok(PreparedSpawnConfig { config, role_name })
+    Ok(PreparedSpawnConfig {
+        config,
+        role_name,
+        service_tier: requested_tier,
+    })
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.
@@ -144,6 +159,10 @@ pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, St
 fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, String> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
+    // Both spawn and resume need the ordinary tier, even when the caller uses its own.
+    if let Some(tier) = turn.initial_settings.spawn_service_tier_override() {
+        config.service_tier.clone_from(&tier.inherited_service_tier);
+    }
     if config
         .features
         .enabled(Feature::SubagentDefaultContextLimits)
@@ -281,15 +300,16 @@ async fn apply_requested_spawn_agent_model_overrides(
 pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
+    requested: Option<&str>,
 ) -> Result<(), String> {
-    let Some(service_tier) =
-        crate::agent::host::service_tier(session, config.service_tier.clone()).await
-    else {
-        config.service_tier = None;
+    if requested.is_none() {
+        config.service_tier =
+            crate::agent::host::service_tier(session, config.service_tier.take()).await;
+    }
+    let Some(service_tier) = requested.or(config.service_tier.as_deref()) else {
         return Ok(());
     };
     if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE {
-        config.service_tier = Some(service_tier);
         return Ok(());
     }
 
@@ -302,9 +322,23 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
-    config.service_tier = model_info
-        .supports_service_tier(service_tier.as_str())
-        .then_some(service_tier);
+    let supported = model_info.supports_service_tier(service_tier);
+    if requested.is_some()
+        && (!supported
+            || !config.features.service_tier_enabled(service_tier)
+            || !crate::client_common::provider_allows_service_tier(
+                &config.model_provider,
+                &model_info,
+                service_tier,
+            ))
+    {
+        return Err(format!(
+            "Service tier `{service_tier}` is unavailable for model `{model}`. Omit service_tier to inherit the usual tier."
+        ));
+    }
+    if !supported {
+        config.service_tier = None;
+    }
     Ok(())
 }
 

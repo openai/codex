@@ -54,18 +54,26 @@ use tokio::sync::watch;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
-#[test_case::test_case("priority", true, false; "fast mode enabled")]
-#[test_case::test_case("priority", false, true; "fast mode disabled")]
-#[test_case::test_case("ultrafast", false, true; "ultrafast mode enabled")]
-#[test_case::test_case("ultrafast", true, false; "ultrafast mode disabled")]
+#[test_case::test_case("ultrafast", true, true, Some("default"); "child requests ultrafast from default root")]
+#[test_case::test_case("priority", true, false, None; "fast mode enabled")]
+#[test_case::test_case("priority", false, true, None; "fast mode disabled")]
+#[test_case::test_case("ultrafast", false, true, None; "ultrafast mode enabled")]
+#[test_case::test_case("ultrafast", true, false, None; "ultrafast mode disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
+async fn spawned_agent_uses_effective_service_tier_from_handshake_through_first_request(
     tier: &'static str,
     fast_mode_enabled: bool,
     ultrafast_mode_enabled: bool,
+    different_root_tier: Option<&'static str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let mut args = json!({ "message": "hello", "task_name": "worker", "fork_turns": "none" });
+    if different_root_tier.is_some() {
+        args["service_tier"] = json!(tier);
+        args["fork_turns"] = json!("all");
+    }
+    let root_tier = different_root_tier.unwrap_or(tier);
     let server = start_websocket_server(vec![
         vec![
             vec![ev_response_created("root-warm"), ev_completed("root-warm")],
@@ -75,8 +83,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
                     "spawn-worker",
                     "collaboration",
                     "spawn_agent",
-                    &json!({ "message": "hello", "task_name": "worker", "fork_turns": "none" })
-                        .to_string(),
+                    &args.to_string(),
                 ),
                 ev_completed("root-spawn"),
             ],
@@ -110,6 +117,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
             });
         })
         .with_config(move |config| {
+            config.multi_agent_v2.expose_spawn_agent_service_tier = different_root_tier.is_some();
             for feature in [Feature::Collab, Feature::MultiAgentV2] {
                 config.features.enable(feature).expect("spawn feature");
             }
@@ -128,7 +136,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
                 .features
                 .set_enabled(Feature::UltrafastMode, ultrafast_mode_enabled)
                 .expect("configure Ultra Fast mode");
-            config.service_tier = Some(tier.to_string());
+            config.service_tier = Some(root_tier.to_string());
         })
         .build_with_websocket_server(&server)
         .await?;
@@ -145,7 +153,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                service_tier: Some(Some(tier.to_string())),
+                service_tier: Some(Some(root_tier.to_string())),
                 ..Default::default()
             }),
         )
@@ -179,6 +187,16 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
     assert_eq!(child_warmup["generate"], false);
     assert_eq!(
         child_warmup["service_tier"].as_str(),
+        tier_enabled.then_some(tier)
+    );
+    let child_request = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 1),
+    )
+    .await?
+    .body_json();
+    assert_eq!(
+        child_request["service_tier"].as_str(),
         tier_enabled.then_some(tier)
     );
     assert_eq!(server.handshakes().len(), 2);

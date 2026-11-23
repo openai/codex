@@ -30,6 +30,7 @@ pub struct SpawnAgentToolOptions {
     pub expose_agent_type: bool,
     pub hide_agent_type_model_reasoning: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub expose_service_tier: bool,
     pub multi_agent_version: MultiAgentVersion,
     pub model_catalog_in_context: bool,
     pub usage_hint_text: Option<String>,
@@ -43,6 +44,7 @@ impl Default for SpawnAgentToolOptions {
             expose_agent_type: true,
             hide_agent_type_model_reasoning: false,
             expose_spawn_agent_model_overrides: false,
+            expose_service_tier: false,
             multi_agent_version: MultiAgentVersion::Disabled,
             model_catalog_in_context: false,
             usage_hint_text: None,
@@ -83,6 +85,8 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
     }
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
+    } else if options.expose_service_tier {
+        properties.insert("service_tier".to_string(), spawn_service_tier_schema());
     }
 
     ToolSpec::Namespace(ResponsesApiNamespace {
@@ -129,6 +133,8 @@ pub fn create_spawn_agent_tool_v2(
     if !options.expose_spawn_agent_model_overrides {
         properties.remove("model");
         properties.remove("reasoning_effort");
+    } else if options.expose_service_tier {
+        properties.insert("service_tier".to_string(), spawn_service_tier_schema());
     }
     properties.insert(
         "task_name".to_string(),
@@ -605,6 +611,12 @@ fn create_collab_input_items_schema() -> JsonSchema {
             "Structured input items. Use this to pass explicit mentions (for example app:// connector paths)."
                 .to_string(),
         ))
+}
+
+fn spawn_service_tier_schema() -> JsonSchema {
+    JsonSchema::string(Some(
+        "Service tier override for this agent. Use `default` or a tier supported by its model. Omit unless explicitly requested.".to_string(),
+    ))
 }
 
 fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {

@@ -2387,6 +2387,7 @@ async fn multi_agent_catalog_parameters(
     let test = test_codex()
         .with_config(move |config| {
             configure_scenario_catalog(config);
+            config.multi_agent_v2.expose_spawn_agent_service_tier = true;
             config.multi_agent_v2.disable_native_tools = disable_native_tools;
             config.workspace_roots = vec![config.cwd.clone()];
         })

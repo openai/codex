@@ -39,6 +39,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
@@ -779,6 +780,20 @@ impl InitialHistory {
                 _ => None,
             }),
         }
+    }
+
+    pub fn resumed_thread_settings(&self) -> Option<&ThreadSettingsSnapshot> {
+        let Self::Resumed(resumed) = self else {
+            return None;
+        };
+        resumed.history.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                if event.thread_id == Some(resumed.conversation_id) =>
+            {
+                Some(&event.thread_settings)
+            }
+            _ => None,
+        })
     }
 
     fn get_resumed_session_meta(&self) -> Option<&SessionMeta> {

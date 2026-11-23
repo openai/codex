@@ -35,6 +35,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::InheritedExecPolicy;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
+use crate::session::ChildServiceTier;
 use crate::session::ForkPersistence;
 use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
@@ -513,6 +514,7 @@ struct PreparedChildOrigin {
 }
 
 struct ThreadSpawnRequest {
+    child_service_tier: Option<ChildServiceTier>,
     ready_notification: ThreadReadyNotification,
     startup: Option<Arc<crate::session::startup::SessionStartup>>,
     options: StartThreadOptions,
@@ -537,6 +539,7 @@ impl ThreadSpawnRequest {
         agent_control: impl Into<AgentControlInit>,
     ) -> Self {
         Self {
+            child_service_tier: None,
             ready_notification: ThreadReadyNotification::Emit,
             startup: None,
             options,
@@ -2447,6 +2450,7 @@ impl ThreadManagerState {
         agent_control: LocalAgentControl,
         parent_thread_id: Option<ThreadId>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        spawn_service_tier: Option<String>,
     ) -> CodexResult<NewThread> {
         (options.client_mcp_extensions, options.prompt_cache_key) =
             self.inherited_child_settings(parent_thread_id).await;
@@ -2456,6 +2460,7 @@ impl ThreadManagerState {
         request.inherited_runtime_auth = Some(runtime_auth);
         request.parent_thread_id = parent_thread_id;
         request.inherited_exec_policy = inherited_exec_policy;
+        request.child_service_tier = spawn_service_tier.map(ChildServiceTier::Requested);
         if forked {
             request.forked_from_thread_id = parent_thread_id;
             request.fork_persistence = ForkPersistence::CopiedDeferred;
@@ -2494,6 +2499,9 @@ impl ThreadManagerState {
         };
         request.inherited_instructions = Some(inheritance.instructions);
         request.inherited_exec_policy = inheritance.exec_policy;
+        request.child_service_tier = inheritance
+            .spawn_service_tier
+            .map(ChildServiceTier::Requested);
         request.prepared_child = Some(PreparedChildOrigin {
             history_initialization,
             originator: inheritance.originator,
@@ -2543,6 +2551,7 @@ impl ThreadManagerState {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
         request.parent_thread_id = parent_thread_id;
+        request.child_service_tier = Some(ChildServiceTier::Reload);
         request.inherited_environments = inherited_environments;
         request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
@@ -2627,6 +2636,7 @@ impl ThreadManagerState {
         let startup_guard =
             owns_startup.then(|| SessionStartupGuard::new(Arc::clone(&startup_state)));
         let ThreadSpawnRequest {
+            child_service_tier,
             ready_notification,
             startup,
             options,
@@ -3089,6 +3099,7 @@ impl ThreadManagerState {
         let registered = Arc::new(AtomicBool::new(false));
         thread_extension_init.insert(ThreadRegistrationReceipt(Arc::clone(&registered)));
         let spawn_result = Session::spawn(SessionSpawnArgs {
+            child_service_tier,
             attached_thread,
             startup,
             config,

@@ -85,6 +85,20 @@ async fn handle_spawn_agent(
         .into_iter()
         .map(ResolvedUserInput::from_client)
         .collect();
+    let prepared = prepare_agent_spawn_config(
+        &session,
+        step_context.as_ref(),
+        SpawnConfigOptions {
+            version: SpawnConfigVersion::V1,
+            full_history_fork: args.fork_context,
+            role_name,
+            model: args.model.as_deref(),
+            reasoning_effort: args.reasoning_effort.clone(),
+            service_tier: args.service_tier,
+        },
+    )
+    .await
+    .map_err(FunctionCallError::RespondToModel)?;
     session
         .emit_turn_item_started(
             turn,
@@ -102,19 +116,6 @@ async fn handle_spawn_agent(
             }),
         )
         .await;
-    let prepared = prepare_agent_spawn_config(
-        &session,
-        step_context.as_ref(),
-        SpawnConfigOptions {
-            version: SpawnConfigVersion::V1,
-            full_history_fork: args.fork_context,
-            role_name,
-            model: args.model.as_deref(),
-            reasoning_effort: args.reasoning_effort.clone(),
-        },
-    )
-    .await
-    .map_err(FunctionCallError::RespondToModel)?;
     let config = prepared.config;
     let fork_mode = args.fork_context.then_some(SpawnAgentForkMode::FullHistory);
     let result = session
@@ -132,6 +133,7 @@ async fn handle_spawn_agent(
                 /*task_name*/ None,
             )?,
             options: SpawnAgentOptions {
+                service_tier: prepared.service_tier,
                 request_country: step_context.settings.request_country().clone(),
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.to_string()),
                 fork_mode: fork_mode.clone(),
@@ -240,6 +242,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    service_tier: Option<String>,
     #[serde(default)]
     fork_context: bool,
 }

@@ -1,8 +1,9 @@
-//! Verifies that root service-tier changes reach existing child turns and future work.
+//! Verifies service-tier inheritance, overrides, and reloads for child agents.
 
 use super::agent_control::HostRuntime;
 use anyhow::Result;
 use codex_core::AgentRuntimeOwnership;
+use codex_core::ThreadEvictionOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::Config;
@@ -13,6 +14,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -92,14 +94,14 @@ async fn wait_for_turn_complete(thread: &codex_core::CodexThread) {
     wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
-async fn mount_root_collaboration_call(
+async fn mount_spawn_agent_turn(
     server: &wiremock::MockServer,
     prompt: &'static str,
     call_id: &'static str,
     arguments: serde_json::Value,
-) {
-    let response_id = format!("root-{call_id}");
-    mount_sse_once_match(
+) -> ResponseMock {
+    let response_id = format!("spawn-{call_id}");
+    let spawn_request = mount_sse_once_match(
         server,
         move |request: &wiremock::Request| {
             body_contains(request, prompt) && !body_contains(request, call_id)
@@ -117,7 +119,7 @@ async fn mount_root_collaboration_call(
     )
     .await;
 
-    let completion_id = format!("root-{call_id}-finished");
+    let completion_id = format!("spawn-{call_id}-finished");
     mount_sse_once_match(
         server,
         move |request: &wiremock::Request| {
@@ -130,6 +132,7 @@ async fn mount_root_collaboration_call(
         ]),
     )
     .await;
+    spawn_request
 }
 
 async fn mount_completed_child(
@@ -173,7 +176,7 @@ async fn root_service_tier_change_updates_existing_subagent(
     assert!(!test.config.features.enabled(Feature::StepModelSwitching));
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
-    mount_root_collaboration_call(
+    mount_spawn_agent_turn(
         &server,
         ROOT_PROMPT,
         SPAWN_CALL_ID,
@@ -286,7 +289,7 @@ async fn root_service_tier_change_updates_existing_subagent(
     wait_for_turn_complete(&child).await;
     assert_request_service_tier(&future_child_request, updated_request_service_tier);
 
-    mount_root_collaboration_call(
+    mount_spawn_agent_turn(
         &server,
         FRESH_ROOT_PROMPT,
         FRESH_SPAWN_CALL_ID,
@@ -308,15 +311,19 @@ async fn root_service_tier_change_updates_existing_subagent(
     Ok(())
 }
 
-#[test_case(AgentRuntimeOwnership::Controller, None; "controller")]
-#[test_case(AgentRuntimeOwnership::Host, Some("priority"); "host without a tier provider")]
+#[test_case(AgentRuntimeOwnership::Controller, Some("flex"), Some("flex"); "explicit tier survives eviction and root changes")]
+#[test_case(AgentRuntimeOwnership::Controller, None, None; "controller")]
+#[test_case(AgentRuntimeOwnership::Host, None, Some("priority"); "host without a tier provider")]
+#[test_case(AgentRuntimeOwnership::Host, Some("flex"), Some("flex"); "host without a tier provider scopes override to one child")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
     owner: AgentRuntimeOwnership,
+    requested: Option<&str>,
     expected: Option<&str>,
 ) -> Result<()> {
     let server = start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     if owner == AgentRuntimeOwnership::Host {
         extensions.thread_lifecycle_contributor(Arc::new(HostRuntime));
     }
@@ -328,13 +335,14 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
                 AgentRuntimeOwnership::Controller => "priority".to_string(),
                 AgentRuntimeOwnership::Host => SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string(),
             });
-            config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+            config.multi_agent_v2.max_concurrent_threads_per_session = 3;
             configure_priority_role(config);
+            config.multi_agent_v2.expose_spawn_agent_service_tier = true;
         });
     let test = builder.build_with_auto_env(&server).await?;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
-    mount_root_collaboration_call(
+    mount_spawn_agent_turn(
         &server,
         ROOT_PROMPT,
         SPAWN_CALL_ID,
@@ -342,6 +350,7 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
             "message": CHILD_PROMPT,
             "task_name": "original",
             "agent_type": PRIORITY_ROLE,
+            "service_tier": requested,
             "fork_turns": "none",
         }),
     )
@@ -351,28 +360,14 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
     let original_thread_id = created_threads.recv().await?;
     let original_thread = test.thread_manager.get_thread(original_thread_id).await?;
     wait_for_turn_complete(&original_thread).await;
-    assert_request_service_tier(&original_request, Some("priority"));
-    drop(original_thread);
-
-    mount_root_collaboration_call(
-        &server,
-        FRESH_ROOT_PROMPT,
-        FRESH_SPAWN_CALL_ID,
-        json!({
-            "message": FRESH_CHILD_PROMPT,
-            "task_name": "replacement",
-            "fork_turns": "none",
-        }),
-    )
-    .await;
-    mount_completed_child(&server, FRESH_CHILD_PROMPT, FRESH_ROOT_PROMPT).await;
-    test.submit_text_turn(FRESH_ROOT_PROMPT).await?;
-    let replacement_thread_id = created_threads.recv().await?;
-    let replacement_thread = test
-        .thread_manager
-        .get_thread(replacement_thread_id)
-        .await?;
-    wait_for_turn_complete(&replacement_thread).await;
+    assert_request_service_tier(&original_request, requested.or(Some("priority")));
+    ThreadIdle::wait(&original_thread).await;
+    assert_eq!(
+        test.thread_manager
+            .try_evict_v2_thread(original_thread)
+            .await?,
+        ThreadEvictionOutcome::Evicted,
+    );
     assert!(
         test.thread_manager
             .get_thread(original_thread_id)
@@ -393,7 +388,11 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
         .await?;
     let reloaded_thread = test.thread_manager.get_thread(original_thread_id).await?;
     let expected_configured_tier = match owner {
-        AgentRuntimeOwnership::Controller => test.codex.config_snapshot().await.service_tier,
+        AgentRuntimeOwnership::Controller => {
+            requested
+                .map(str::to_owned)
+                .or(test.codex.config_snapshot().await.service_tier)
+        }
         AgentRuntimeOwnership::Host => expected.map(str::to_string),
     };
     assert_eq!(
@@ -401,7 +400,21 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
         expected_configured_tier,
     );
 
-    let reloaded_request = mount_completed_child(&server, FOLLOWUP_PROMPT, ROOT_PROMPT).await;
+    let grandchild_prompt = "finish the service-tier grandchild";
+    let reloaded_request = mount_spawn_agent_turn(
+        &server,
+        FOLLOWUP_PROMPT,
+        "spawn-service-tier-grandchild",
+        json!({
+            "message": grandchild_prompt,
+            "task_name": "grandchild",
+            "fork_turns": "none",
+        }),
+    )
+    .await;
+    let grandchild_request =
+        mount_completed_child(&server, grandchild_prompt, FOLLOWUP_PROMPT).await;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
     reloaded_thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: FOLLOWUP_PROMPT.to_string(),
@@ -410,6 +423,15 @@ async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
         .await?;
     wait_for_turn_complete(&reloaded_thread).await;
     assert_request_service_tier(&reloaded_request, expected);
+    let grandchild_thread_id = created_threads.try_recv()?;
+    let grandchild = test.thread_manager.get_thread(grandchild_thread_id).await?;
+    wait_for_turn_complete(&grandchild).await;
+    let expected_grandchild_tier = match owner {
+        AgentRuntimeOwnership::Host => Some("priority"),
+        AgentRuntimeOwnership::Controller => None,
+    };
+    assert_request_service_tier(&grandchild_request, expected_grandchild_tier);
+    grandchild.shutdown_and_wait().await?;
     reloaded_thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
 

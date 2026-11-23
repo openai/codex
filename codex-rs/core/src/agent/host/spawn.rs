@@ -90,6 +90,7 @@ async fn prepare_spawn_inputs(
     thread_options.inherited_environments = options.environments;
     let client_metadata = parent.session.app_server_client_metadata().await;
     let inheritance = PreparedChildInheritance {
+        spawn_service_tier: options.service_tier,
         instructions,
         exec_policy,
         originator: parent.session.originator().await,

@@ -131,6 +131,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::SamplingStream;
+use crate::client_common::provider_allows_service_tier;
 use crate::context::BaseInstructionsFragment;
 use crate::context::ContextualUserFragment;
 use crate::cyber_access_program;
@@ -1353,13 +1354,7 @@ impl ModelClient {
         let service_tier = model_info
             .service_tier_for_request(service_tier)
             .filter(|tier| {
-                // Bedrock requires an advertised tier, including for flex, which the
-                // generic OpenAI resolver permits without catalog support.
-                !self.state.provider.info().is_amazon_bedrock()
-                    || model_info
-                        .service_tiers
-                        .iter()
-                        .any(|supported| supported.id == *tier)
+                provider_allows_service_tier(self.state.provider.info(), model_info, tier)
             });
         if !include_internal {
             let captures_result_bodies = self.captures_result_bodies();

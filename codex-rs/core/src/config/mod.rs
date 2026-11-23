@@ -1477,6 +1477,7 @@ pub struct MultiAgentV2Config {
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub expose_spawn_agent_service_tier: bool,
     pub wait_agent_enabled: bool,
     pub interrupt_at_item_boundary: bool,
     pub disable_native_tools: bool,
@@ -1502,6 +1503,7 @@ impl MultiAgentV2Config {
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
+            expose_spawn_agent_service_tier: false,
             wait_agent_enabled: true,
             interrupt_at_item_boundary: false,
             disable_native_tools: false,
@@ -3034,6 +3036,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let expose_spawn_agent_model_overrides = base
         .and_then(|config| config.expose_spawn_agent_model_overrides)
         .unwrap_or(default.expose_spawn_agent_model_overrides);
+    let expose_spawn_agent_service_tier = base
+        .and_then(|config| config.expose_spawn_agent_service_tier)
+        .unwrap_or(default.expose_spawn_agent_service_tier);
     let root_agent_usage_hint_text = base
         .and_then(|config| config.root_agent_usage_hint_text.as_ref())
         .cloned();
@@ -3087,6 +3092,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         tool_namespace,
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
+        expose_spawn_agent_service_tier,
         wait_agent_enabled,
         interrupt_at_item_boundary,
         disable_native_tools,

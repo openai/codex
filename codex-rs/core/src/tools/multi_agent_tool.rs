@@ -28,8 +28,24 @@ pub(super) fn multi_agent_v2_handler(
     let parameters_override = parameters_override.map(|parameters| -> Result<JsonSchema, &str> {
         let mut parameters = codex_tools::parse_catalog_tool_parameters(parameters)?;
         if let ToolSpec::Function(tool) = handler.spec()
-            && let Some(properties) = tool.parameters.properties
+            && let Some(mut properties) = tool.parameters.properties
         {
+            if tool.name == "spawn_agent"
+                && let Some(catalog) = parameters.properties.as_mut()
+            {
+                if let Some(tier) = properties.remove("service_tier")
+                    && catalog.contains_key("model")
+                {
+                    catalog.entry("service_tier".to_string()).or_insert(tier);
+                } else {
+                    catalog.remove("service_tier");
+                    if let Some(required) = parameters.required.take() {
+                        let mut required = required.into_vec();
+                        required.retain(|name| name != "service_tier");
+                        parameters.required = Some(required.into_boxed_slice());
+                    }
+                }
+            }
             // Argument transport requires these markers even without server encryption config.
             for (name, schema) in *properties {
                 if schema.encrypted == Some(true) {

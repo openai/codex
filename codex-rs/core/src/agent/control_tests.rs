@@ -2443,6 +2443,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                 ThreadSettingsAppliedEvent {
                     thread_id: Some(parent_thread_id),
                     thread_settings: ThreadSettingsSnapshot {
+                        spawn_service_tier_override: None,
                         disabled_plugin_ids: Vec::new(),
                         guardian_retention: None,
                         model: "parent-only-model".to_string(),

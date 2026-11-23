@@ -33,6 +33,7 @@ fn settings_item(
         ThreadSettingsAppliedEvent {
             thread_id,
             thread_settings: ThreadSettingsSnapshot {
+                spawn_service_tier_override: None,
                 disabled_plugin_ids: Vec::new(),
                 guardian_retention: None,
                 model: "gpt-5".to_string(),

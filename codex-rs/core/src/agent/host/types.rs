@@ -88,6 +88,7 @@ pub struct PreparedChildContext {
 }
 
 pub(crate) struct PreparedChildInheritance {
+    pub(crate) spawn_service_tier: Option<String>,
     pub(crate) instructions: SessionInstructions,
     pub(crate) exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) originator: String,

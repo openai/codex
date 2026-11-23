@@ -57,20 +57,6 @@ impl From<&ThreadSettingsSnapshot> for PersistedResumeSettings {
     }
 }
 
-pub(super) fn latest_owned_thread_settings(
-    history: &[RolloutItem],
-    thread_id: ThreadId,
-) -> Option<&ThreadSettingsSnapshot> {
-    history.iter().rev().find_map(|item| match item {
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-            if event.thread_id == Some(thread_id) =>
-        {
-            Some(&event.thread_settings)
-        }
-        _ => None,
-    })
-}
-
 fn latest_persisted_resume_settings(history: &[RolloutItem]) -> Option<PersistedResumeSettings> {
     history
         .iter()

@@ -48,9 +48,13 @@ const EXPECTED_CATALOG_PARAMETERS: &str = r#"{
     "$defs": {"unused": {"type": "string"}}
 }"#;
 
+const CATALOG_SPAWN_MODEL: &str = r#"{"type":"object","properties":{"message":{"type":"string"},"model":{"type":"string"}},"required":["message"]}"#;
+const CATALOG_SPAWN_TIER: &str = r#"{"type":"object","properties":{"message":{"type":"string"},"model":{"type":"string"},"service_tier":{"type":"string"}},"required":["message","service_tier"]}"#;
+
 #[derive(Clone, Copy)]
 enum Exposure {
     Namespaced,
+    NamespacedWithSpawnTier,
     Plain,
     CodeMode,
     V1,
@@ -103,6 +107,8 @@ fn all_tool_messages(message: Value) -> Value {
     "followup_task": {"parameters": r#"{"type":"object"}"#}
 }}), Exposure::Namespaced, None; "missing_encrypted_parameters_fall_back")]
 #[test_case(json!({"multi_agent": {"send_message": {"parameters": CATALOG_PARAMETERS}}}), Exposure::Namespaced, Some(EXPECTED_CATALOG_PARAMETERS); "sparse_parameters")]
+#[test_case(json!({"multi_agent": {"spawn_agent": {"parameters": CATALOG_SPAWN_MODEL}}}), Exposure::NamespacedWithSpawnTier, Some(CATALOG_SPAWN_MODEL); "catalog_spawn_model_exposes_service_tier_when_enabled")]
+#[test_case(json!({"multi_agent": {"spawn_agent": {"parameters": CATALOG_SPAWN_TIER}}}), Exposure::Namespaced, Some(CATALOG_SPAWN_MODEL); "catalog_spawn_service_tier_is_hidden_by_default")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_agent_catalog_messages_change_only_selected_tool_fields(
     tool_messages: Value,
@@ -143,6 +149,8 @@ async fn multi_agent_catalog_messages_change_only_selected_tool_fields(
                         .enable(Feature::MultiAgentV2)
                         .expect("enable V2");
                 }
+                config.multi_agent_v2.expose_spawn_agent_service_tier =
+                    matches!(exposure, Exposure::NamespacedWithSpawnTier);
                 if matches!(exposure, Exposure::CodeMode) {
                     config
                         .features
@@ -247,7 +255,17 @@ async fn multi_agent_catalog_messages_change_only_selected_tool_fields(
             if let Some(parameters) = expected_parameters
                 && tool_messages["multi_agent"][name]["parameters"].is_string()
             {
+                let tier = expected_tool["parameters"]["properties"]["service_tier"].clone();
                 expected_tool["parameters"] = serde_json::from_str(parameters)?;
+                if matches!(exposure, Exposure::NamespacedWithSpawnTier)
+                    && name == "spawn_agent"
+                    && expected_tool["parameters"]["properties"]
+                        .get("model")
+                        .is_some()
+                {
+                    assert!(tier.is_object());
+                    expected_tool["parameters"]["properties"]["service_tier"] = tier;
+                }
                 if matches!(name, "spawn_agent" | "send_message" | "followup_task") {
                     expected_tool["parameters"]["properties"]["message"]["encrypted"] = json!(true);
                 }

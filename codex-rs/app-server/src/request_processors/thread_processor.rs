@@ -15,7 +15,6 @@ use resume_permit::ResumePermit;
 mod thread_resume_account;
 
 use super::persisted_resume_settings::PersistedResumeSettings;
-use super::persisted_resume_settings::latest_owned_thread_settings;
 use super::persisted_resume_settings::latest_persisted_model_settings;
 use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
@@ -4315,11 +4314,7 @@ impl ThreadRequestProcessor {
         permit.finish_probe();
         // Copied or referenced history can contain another thread's settings. Only snapshots
         // explicitly owned by this thread can restore its cwd and workspace folders.
-        let history_settings = if let InitialHistory::Resumed(resumed) = &thread_history {
-            latest_owned_thread_settings(&resumed.history, resumed.conversation_id)
-        } else {
-            None
-        };
+        let history_settings = thread_history.resumed_thread_settings();
         let history_cwd = history_settings
             .map(|settings| settings.cwd.to_path_buf())
             .or_else(|| thread_history.session_cwd());
