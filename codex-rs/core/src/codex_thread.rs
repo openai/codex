@@ -9,6 +9,7 @@ use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::Submission;
 use crate::session::emit_subagent_session_started;
+use crate::session::inject::plaintext_agent_messages;
 use crate::session::inject::validate_injected_response_item;
 use crate::session::new_submission_id;
 use crate::session::session::AppServerClientMetadata;
@@ -28,7 +29,6 @@ use codex_history::RolloutItem;
 use codex_models_manager::ModelsManagerConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
-use codex_protocol::AgentPath;
 use codex_protocol::RequestCountry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -41,7 +41,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::ResponseItem;
@@ -52,7 +51,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -1181,35 +1179,7 @@ impl CodexThread {
         // mixed history and multipart/encrypted items on the raw injection path.
         if !config.multi_agent_v2.disable_native_tools
             && !items.is_empty()
-            && let Some(messages) = items
-                .iter()
-                .map(|item| {
-                    let ResponseItem::AgentMessage {
-                        id,
-                        author,
-                        recipient,
-                        content,
-                        internal_chat_message_metadata_passthrough,
-                    } = item
-                    else {
-                        return None;
-                    };
-                    let [AgentMessageInputContent::InputText { text }] = content.as_slice() else {
-                        return None;
-                    };
-                    Some(InterAgentCommunication {
-                        id: id.clone(),
-                        author: AgentPath::try_from(author.as_str()).ok()?,
-                        recipient: AgentPath::try_from(recipient.as_str()).ok()?,
-                        other_recipients: Vec::new(),
-                        content: text.clone(),
-                        encrypted_content: None,
-                        internal_chat_message_metadata_passthrough:
-                            internal_chat_message_metadata_passthrough.clone(),
-                        trigger_turn: false,
-                    })
-                })
-                .collect::<Option<Vec<_>>>()
+            && let Some(messages) = plaintext_agent_messages(&items)
             && match self.multi_agent_version() {
                 Some(version) => version,
                 None => self.session.resolve_multi_agent_version_for_model(
@@ -1238,13 +1208,21 @@ impl CodexThread {
         self.inject_response_items_with_retention(items).await
     }
 
-    /// Inject Responses items with explicit, persisted retention policies.
+    /// Inject Responses items with persisted retention policies. Ordinary native-root
+    /// agent mail can wake through the mailbox scheduler after the durable checkpoint.
     pub async fn inject_response_items_with_retention(
         &self,
         items: Vec<impl Into<InjectedResponseItem>>,
     ) -> CodexResult<()> {
-        self.record_injected_items(items).await?;
-        self.checkpoint_preparation().await?;
+        let items: Vec<InjectedResponseItem> = items.into_iter().map(Into::into).collect();
+        let agent_mail = items
+            .iter()
+            .all(|item| item.retention == ItemRetention::Unspecified)
+            && plaintext_agent_messages(items.iter().map(|item| &item.item)).is_some();
+        let recorded_through = self.record_injected_items(items).await?;
+        self.session
+            .checkpoint_client_injection(agent_mail.then_some(recorded_through))
+            .await?;
         Ok(())
     }
 
@@ -1270,13 +1248,13 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> CodexResult<()> {
-        self.record_injected_items(items).await
+        self.record_injected_items(items).await.map(|_| ())
     }
 
     async fn record_injected_items(
         &self,
         items: Vec<impl Into<InjectedResponseItem>>,
-    ) -> CodexResult<()> {
+    ) -> CodexResult<u64> {
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
                 "items must not be empty".to_string(),
@@ -1309,10 +1287,10 @@ impl CodexThread {
         }
 
         let turn_context = self.session.history_injection_context().await?;
-        self.session
+        Ok(self
+            .session
             .inject_client_response_items(items, &turn_context)
-            .await;
-        Ok(())
+            .await)
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {

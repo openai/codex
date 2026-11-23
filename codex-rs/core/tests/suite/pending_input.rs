@@ -520,6 +520,7 @@ impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config>
 enum MailDelivery {
     Native,
     Injected,
+    Persisted,
 }
 
 #[test_case(false, Some("automation"), None, false, MailDelivery::Native; "live_root")]
@@ -529,6 +530,7 @@ enum MailDelivery {
 #[test_case(false, Some("automation"), Some("original-parent"), true, MailDelivery::Native; "settings_while_asleep")]
 #[test_case(false, Some("automation"), None, false, MailDelivery::Injected; "injected_live_root")]
 #[test_case(true, Some("automation"), Some("original-parent"), false, MailDelivery::Injected; "injected_reloaded_root")]
+#[test_case(true, Some("automation"), Some("original-parent"), false, MailDelivery::Persisted; "persisted_reloaded_root")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
     reload: bool,
@@ -556,7 +558,7 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
         .with_model("gpt-5.4")
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            if matches!(delivery, MailDelivery::Injected) {
+            if matches!(delivery, MailDelivery::Injected | MailDelivery::Persisted) {
                 config
                     .features
                     .enable(Feature::MultiAgentV2)
@@ -616,25 +618,40 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
         )
         .await?;
     }
-    if matches!(delivery, MailDelivery::Injected) {
-        test.codex
-            .inject_response_items(vec![
-                InterAgentCommunication::new(
-                    AgentPath::try_from("/root/worker").expect("worker path"),
-                    AgentPath::root(),
-                    Vec::new(),
-                    CHILD_MESSAGE.to_owned(),
-                    /*trigger_turn*/ false,
-                )
-                .to_model_input_item(),
-            ])
-            .await?;
+    if matches!(delivery, MailDelivery::Injected | MailDelivery::Persisted) {
+        let items = vec![
+            InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("worker path"),
+                AgentPath::root(),
+                Vec::new(),
+                CHILD_MESSAGE.to_owned(),
+                /*trigger_turn*/ false,
+            )
+            .to_model_input_item(),
+        ];
+        match delivery {
+            MailDelivery::Injected => test.codex.inject_response_items(items).await?,
+            MailDelivery::Persisted => {
+                test.codex
+                    .inject_response_items_with_retention(items)
+                    .await?
+            }
+            MailDelivery::Native => unreachable!("native mail is enqueued below"),
+        }
     } else {
         enqueue_queue_only_agent_mail(&test.codex, CHILD_MESSAGE).await;
     }
     wait_for_turn_complete(&test.codex).await;
 
     let captured = requests.requests();
+    assert_eq!(
+        captured
+            .last()
+            .expect("wake request")
+            .inputs_of_type("agent_message")
+            .len(),
+        1
+    );
     let metadata = captured
         .iter()
         .skip(1)

@@ -45,11 +45,13 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[test_case(ThreadHistoryMode::Legacy; "legacy")]
-#[test_case(ThreadHistoryMode::Paginated; "paginated")]
+#[test_case(ThreadHistoryMode::Legacy, false; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated, false; "paginated")]
+#[test_case(ThreadHistoryMode::Paginated, true; "paginated_wake")]
 #[tokio::test]
 async fn thread_inject_items_adds_raw_response_items_to_thread_history(
     history_mode: ThreadHistoryMode,
+    wake_on_agent_messages: bool,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -57,16 +59,21 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock = responses::mount_sse_once(&server, body).await;
+    let expected_requests = if wake_on_agent_messages { 2 } else { 1 };
+    let response_mock = responses::mount_sse_sequence(&server, vec![body; expected_requests]).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
+    let config = MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::Sqlite)
         .enable_feature(Feature::MultiAgentV2)
-        .disable_feature(Feature::WakeOnAgentMessages)
         .enable_feature(Feature::RetainClientDeveloperMessages)
-        .with_extra_config("[memories]\ndisable_on_external_context = true")
-        .write(codex_home.path())?;
+        .with_extra_config("[memories]\ndisable_on_external_context = true");
+    if wake_on_agent_messages {
+        config.enable_feature(Feature::WakeOnAgentMessages)
+    } else {
+        config.disable_feature(Feature::WakeOnAgentMessages)
+    }
+    .write(codex_home.path())?;
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
         "mock_provider".into(),
@@ -137,6 +144,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .await?;
     let _response: ThreadInjectItemsResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(inject_req)).await??;
+    assert!(response_mock.requests().is_empty());
     // A standalone plaintext batch must retain the root's persisted injection path.
     let agent_mail: ResponseItem = serde_json::from_value(json!({
         "type": "agent_message",
@@ -152,7 +160,24 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .await?;
     let _: ThreadInjectItemsResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(inject_req)).await??;
-    assert!(response_mock.requests().is_empty());
+    if wake_on_agent_messages {
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        assert_eq!(
+            response_mock
+                .single_request()
+                .inputs_of_type("agent_message")
+                .into_iter()
+                .map(strip_response_item_ids_from_json)
+                .collect::<Vec<_>>(),
+            vec![serde_json::to_value(&agent_mail)?],
+        );
+    } else {
+        assert!(response_mock.requests().is_empty());
+    }
 
     assert_eq!(
         state_db
@@ -307,8 +332,11 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
     );
 
     let injected_value = serde_json::to_value(&injected_item)?;
-    let model_input: Vec<Value> = response_mock
-        .single_request()
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), expected_requests);
+    let model_input: Vec<Value> = requests
+        .last()
+        .context("resumed request missing")?
         .input()
         .into_iter()
         .map(strip_response_item_ids_from_json)
@@ -426,7 +454,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .await?;
     let ThreadResumeResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_req)).await??;
-    assert_eq!(thread.turns.len(), 2);
+    assert_eq!(thread.turns.len(), expected_requests + 1);
     assert!(thread.turns.iter().any(|turn| {
         turn.id == turn_started.turn.id
             && turn.status == TurnStatus::Completed

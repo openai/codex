@@ -4099,17 +4099,17 @@ impl Session {
         model_info: &ModelInfo,
         items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
-    ) {
+    ) -> u64 {
         // Ordinary history persistence retains its existing best-effort behavior.
-        let _ = self
-            .record_prepared_items(
-                turn_context,
-                model_info,
-                items,
-                image_preparations,
-                /*realtime*/ None,
-            )
-            .await;
+        self.record_prepared_items(
+            turn_context,
+            model_info,
+            items,
+            image_preparations,
+            /*realtime*/ None,
+        )
+        .await
+        .unwrap_or_default()
     }
 
     #[expect(
@@ -4123,7 +4123,7 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
         realtime: Option<RealtimeRecord<'_>>,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<u64> {
         // Save the originating history budget for replay.
         // Preserve any existing tool-specific override.
         let policy: codex_utils_output_truncation::TruncationPolicy =
@@ -4254,6 +4254,11 @@ impl Session {
                 .current_time_reminder
                 .note_recorded_items(&response_items);
         }
+        let recorded_through = items
+            .iter()
+            .filter_map(|item| item.metadata.as_ref()?.history_sequence)
+            .max()
+            .unwrap_or_default();
         for image in image_preparations {
             self.services
                 .analytics_events_client
@@ -4297,7 +4302,7 @@ impl Session {
         }
         self.send_raw_response_items(turn_context, &response_items)
             .await;
-        Ok(())
+        Ok(recorded_through)
     }
 
     pub(crate) async fn record_step_world_state_if_changed(

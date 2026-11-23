@@ -264,8 +264,12 @@ impl TurnStartAdmission for TestAdmission {
     }
 }
 
+#[test_case(false; "queued_mail")]
+#[test_case(true; "persisted_root_mail")]
 #[tokio::test]
-async fn host_drain_rejects_turn_start_paths_without_recording_input() -> anyhow::Result<()> {
+async fn host_drain_rejects_turn_start_paths_without_recording_input(
+    persisted_root_mail: bool,
+) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let response = responses::mount_sse_sequence(
         &server,
@@ -283,13 +287,20 @@ async fn host_drain_rejects_turn_start_paths_without_recording_input() -> anyhow
     extensions.turn_start_admission(admission.clone());
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model| {
+            model.multi_agent_version = Some(codex_protocol::protocol::MultiAgentVersion::V2);
+        })
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("select multi-agent version from model metadata");
             config
                 .features
                 .enable(Feature::WakeOnAgentMessages)
-                .unwrap();
+                .expect("enable agent-message wakes");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -316,18 +327,25 @@ async fn host_drain_rejects_turn_start_paths_without_recording_input() -> anyhow
         );
     }
     assert!(response.requests().is_empty());
-    test.codex
-        .submit(Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
-                AgentPath::root().join("worker").unwrap(),
-                AgentPath::root(),
-                Vec::new(),
-                "mail received while admission is paused".to_owned(),
-                /*trigger_turn*/ false,
-            ),
-            start_options: TurnStartOptions::default(),
-        })
-        .await?;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root().join("worker").expect("valid worker path"),
+        AgentPath::root(),
+        Vec::new(),
+        "mail received while admission is paused".to_owned(),
+        /*trigger_turn*/ false,
+    );
+    if persisted_root_mail {
+        test.codex
+            .inject_response_items_with_retention(vec![communication.to_model_input_item()])
+            .await?;
+    } else {
+        test.codex
+            .submit(Op::InterAgentCommunication {
+                communication,
+                start_options: TurnStartOptions::default(),
+            })
+            .await?;
+    }
     // Fence the mailbox dispatch so the first wake has already been rejected.
     test.codex
         .update_thread_settings(ThreadSettingsOverrides::default())
@@ -346,6 +364,13 @@ async fn host_drain_rejects_turn_start_paths_without_recording_input() -> anyhow
         response
             .single_request()
             .body_contains_text("mail received while admission is paused")
+    );
+    assert_eq!(
+        response
+            .single_request()
+            .inputs_of_type("agent_message")
+            .len(),
+        1
     );
 
     test.codex

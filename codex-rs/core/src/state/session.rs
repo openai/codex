@@ -88,6 +88,8 @@ pub(crate) struct SessionState {
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
+    /// Durable injected mail awaiting an ordinary mailbox wake; never re-enqueued as input.
+    pub(crate) pending_recorded_mail_sequence: u64,
     /// Newly recorded files awaiting best-effort lookup after the input batch is durable.
     pub(crate) pending_audio_duration_ids: BTreeSet<String>,
     /// Cancels work bound to discarded history or a superseded Guardian evidence policy.
@@ -153,6 +155,7 @@ impl SessionState {
             base_instructions_provenance: None,
             history,
             pending_audio_duration_ids: BTreeSet::new(),
+            pending_recorded_mail_sequence: 0,
             history_reset: CancellationToken::new(),
             latest_rate_limits: None,
             latest_token_usage_record: None,
@@ -241,6 +244,7 @@ impl SessionState {
             HistoryReplacement::Reset => {
                 self.turn_attribution = None;
                 self.restored_turn_routing = None;
+                self.pending_recorded_mail_sequence = 0;
                 self.history.replace_annotated(items);
                 true
             }

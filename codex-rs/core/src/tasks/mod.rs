@@ -589,10 +589,6 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await {
-            return;
-        }
-
         let Some(reservation) = self.reserve_pending_work_turn().await else {
             return;
         };

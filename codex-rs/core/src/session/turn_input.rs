@@ -900,6 +900,7 @@ impl Session {
         let mut state = self.state.lock().await;
         state.last_started_turn_id = Some(turn_id.to_owned());
         if let Some(attribution) = attribution {
+            state.pending_recorded_mail_sequence = 0;
             state.turn_attribution = Some(attribution);
         }
     }
@@ -912,6 +913,17 @@ impl Session {
         let mut active_turn = self.active_turn.lock().await;
         if active_turn.is_some() || self.turn_starts_closed() {
             return None;
+        }
+        if !self.input_queue.has_pending_mailbox_items().await {
+            let mut state = self.state.lock().await;
+            // An intervening turn may already have sampled the durable injection.
+            if state.pending_recorded_mail_sequence == 0
+                || state.pending_recorded_mail_sequence
+                    <= crate::context_manager::sampled_through(state.history.annotated_items())
+            {
+                state.pending_recorded_mail_sequence = 0;
+                return None;
+            }
         }
         let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
         if !has_trigger_turn
