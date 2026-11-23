@@ -24,6 +24,7 @@ use crate::protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_BATCH_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
@@ -37,6 +38,8 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataBatchParams;
+use crate::protocol::FsGetMetadataBatchResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsOpenMode;
@@ -77,6 +80,8 @@ pub(crate) enum FsHelperRequest {
     CreateDirectory(FsCreateDirectoryParams),
     #[serde(rename = "fs/getMetadata")]
     GetMetadata(FsGetMetadataParams),
+    #[serde(rename = "fs/getMetadataBatch")]
+    GetMetadataBatch(FsGetMetadataBatchParams),
     #[serde(rename = "fs/canonicalize")]
     Canonicalize(FsCanonicalizeParams),
     #[serde(rename = "fs/readDirectory")]
@@ -115,7 +120,7 @@ pub(crate) struct FsHelperOpenResponse {
     pub(crate) file_handle: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "response")]
 pub(crate) enum FsHelperPayload {
     #[serde(rename = "capabilities/loadDiscoveries")]
@@ -132,6 +137,8 @@ pub(crate) enum FsHelperPayload {
     CreateDirectory(FsCreateDirectoryResponse),
     #[serde(rename = "fs/getMetadata")]
     GetMetadata(FsGetMetadataResponse),
+    #[serde(rename = "fs/getMetadataBatch")]
+    GetMetadataBatch(FsGetMetadataBatchResponse),
     #[serde(rename = "fs/canonicalize")]
     Canonicalize(FsCanonicalizeResponse),
     #[serde(rename = "fs/readDirectory")]
@@ -154,6 +161,7 @@ impl FsHelperPayload {
             Self::WriteFile(_) => FS_WRITE_FILE_METHOD,
             Self::CreateDirectory(_) => FS_CREATE_DIRECTORY_METHOD,
             Self::GetMetadata(_) => FS_GET_METADATA_METHOD,
+            Self::GetMetadataBatch(_) => FS_GET_METADATA_BATCH_METHOD,
             Self::Canonicalize(_) => FS_CANONICALIZE_METHOD,
             Self::ReadDirectory(_) => FS_READ_DIRECTORY_METHOD,
             Self::Walk(_) => FS_WALK_METHOD,
@@ -217,6 +225,18 @@ impl FsHelperPayload {
             Self::GetMetadata(response) => Ok(response),
             other => Err(unexpected_response(
                 FS_GET_METADATA_METHOD,
+                other.operation(),
+            )),
+        }
+    }
+
+    pub(crate) fn expect_get_metadata_batch(
+        self,
+    ) -> Result<FsGetMetadataBatchResponse, JSONRPCErrorError> {
+        match self {
+            Self::GetMetadataBatch(response) => Ok(response),
+            other => Err(unexpected_response(
+                FS_GET_METADATA_BATCH_METHOD,
                 other.operation(),
             )),
         }
@@ -366,6 +386,21 @@ pub(crate) async fn run_direct_request(
                 modified_at_ms: metadata.modified_at_ms,
             }))
         }
+        FsHelperRequest::GetMetadataBatch(params) => {
+            let results = codex_file_system::resolve_metadata_batch(
+                &file_system,
+                &params.paths,
+                GetMetadataOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                /*sandbox*/ None,
+            )
+            .await
+            .map_err(map_fs_error)?;
+            Ok(FsHelperPayload::GetMetadataBatch(encode_metadata_batch(
+                results,
+            )))
+        }
         FsHelperRequest::Canonicalize(params) => {
             let path = file_system
                 .canonicalize(&params.path, /*sandbox*/ None)
@@ -428,6 +463,34 @@ pub(crate) async fn run_direct_request(
             Ok(FsHelperPayload::Copy(FsCopyResponse {}))
         }
     }
+}
+
+pub(crate) fn encode_metadata_batch(
+    results: Vec<io::Result<crate::FileMetadata>>,
+) -> FsGetMetadataBatchResponse {
+    FsGetMetadataBatchResponse {
+        results: results
+            .into_iter()
+            .map(|result| result.map_err(map_fs_error))
+            .collect(),
+    }
+}
+
+pub(crate) fn decode_metadata_batch(
+    response: FsGetMetadataBatchResponse,
+    expected: usize,
+) -> io::Result<Vec<io::Result<crate::FileMetadata>>> {
+    if response.results.len() != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid metadata batch response",
+        ));
+    }
+    Ok(response
+        .results
+        .into_iter()
+        .map(|result| result.map_err(crate::sandboxed_file_system::map_sandbox_error))
+        .collect())
 }
 
 pub(crate) fn map_fs_error(err: io::Error) -> JSONRPCErrorError {

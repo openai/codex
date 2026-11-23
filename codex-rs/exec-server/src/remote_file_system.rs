@@ -7,6 +7,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use codex_file_system::FILE_WRITE_CHUNK_SIZE;
+use codex_file_system::metadata_batch_fits;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPath;
@@ -43,6 +44,7 @@ use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCloseParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsOpenMode;
 use crate::protocol::FsOpenParams;
@@ -497,6 +499,38 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(RemoteFileSystem::get_metadata(self, path, options, sandbox))
+    }
+
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<FileMetadata>>> {
+        Box::pin(async move {
+            let Some((first_path, rest)) = paths.split_first() else {
+                return Ok(Vec::new());
+            };
+            let client = self.client.get().await.map_err(map_remote_error)?;
+            let convention = first_path.infer_path_convention();
+            if !client.supports_metadata_batch()
+                || !metadata_batch_fits(paths)
+                || rest
+                    .iter()
+                    .any(|path| path.infer_path_convention() != convention)
+            {
+                return Err(io::ErrorKind::Unsupported.into());
+            }
+            let response = client
+                .fs_get_metadata_batch(FsGetMetadataBatchParams {
+                    paths: paths.to_vec(),
+                    follow_symlinks: (!options.follow_symlinks).then_some(false),
+                    sandbox: read_sandbox(&client, first_path, sandbox).await?.cloned(),
+                })
+                .await
+                .map_err(map_remote_error)?;
+            crate::fs_helper::decode_metadata_batch(response, paths.len())
+        })
     }
 
     fn read_directory<'a>(

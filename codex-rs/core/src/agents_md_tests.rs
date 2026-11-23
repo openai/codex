@@ -46,6 +46,8 @@ use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
@@ -67,6 +69,7 @@ struct FailingFileSystem {
 }
 
 struct MetadataCallCounts {
+    batch_calls: Option<Arc<AtomicUsize>>,
     paths: Mutex<Vec<PathUri>>,
     started: Notify,
     release: Semaphore,
@@ -75,6 +78,7 @@ struct MetadataCallCounts {
 impl Default for MetadataCallCounts {
     fn default() -> Self {
         Self {
+            batch_calls: None,
             paths: Mutex::new(Vec::new()),
             started: Notify::new(),
             release: Semaphore::new(0),
@@ -270,6 +274,21 @@ impl ExecutorFileSystem for FailingFileSystem {
         Box::pin(FailingFileSystem::get_metadata(
             self, path, options, sandbox,
         ))
+    }
+
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<FileMetadata>>> {
+        Box::pin(async move {
+            let Some(calls) = &self.metadata_calls.batch_calls else {
+                return Err(io::ErrorKind::Unsupported.into());
+            };
+            calls.fetch_add(1, Ordering::Relaxed);
+            codex_file_system::resolve_metadata_batch(self, paths, options, sandbox).await
+        })
     }
 
     fn read_directory<'a>(
@@ -1103,6 +1122,30 @@ async fn finds_doc_in_repo_root() {
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "root level doc");
+    let batch_calls = Arc::new(AtomicUsize::new(0));
+    let metadata_calls = Arc::new(MetadataCallCounts {
+        batch_calls: Some(Arc::clone(&batch_calls)),
+        ..MetadataCallCounts::default()
+    });
+    let filesystem = FailingFileSystem {
+        path: cfg.cwd.join("unused"),
+        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+    let cwd = PathUri::from_abs_path(&cfg.cwd);
+    assert_eq!(
+        super::agents_md_paths(&cfg.config, &cwd, &filesystem, /*sandbox*/ None)
+            .await
+            .expect("batched nested discovery"),
+        vec![PathUri::from_abs_path(&repo.path().join("AGENTS.md").abs())]
+    );
+    assert_eq!(batch_calls.load(Ordering::Relaxed), 3);
+    batch_calls.store(0, Ordering::Relaxed);
+    let cwd = PathUri::from_abs_path(&repo.abs());
+    super::agents_md_paths(&cfg.config, &cwd, &filesystem, /*sandbox*/ None)
+        .await
+        .expect("batched shallow discovery");
+    assert_eq!(batch_calls.load(Ordering::Relaxed), 2);
 }
 
 /// Explicitly setting the byte-limit to zero disables project docs.

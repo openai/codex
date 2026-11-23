@@ -10,6 +10,7 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::EnvironmentAccessKey;
+use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
@@ -239,20 +240,18 @@ async fn repo_agents_skill_roots<'a>(
         cwd,
     )
     .await;
-    let directories = dirs_between_project_root_and_cwd(cwd, &project_root);
+    let mut candidates = Vec::new();
+    for directory in cwd.ancestors() {
+        candidates.push(directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
+        if directory == project_root {
+            break;
+        }
+    }
+    candidates.reverse();
+    let results = skill_root_metadata(repository_fs_accessor, &candidates).await;
     let mut roots = Vec::new();
     let mut missing = Vec::new();
-    let mut results = futures::stream::iter(directories)
-        .map(|directory| async move {
-            let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-            let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-            let result = repository_fs_accessor
-                .get_metadata(&agents_skills_uri, GetMetadataOptions::default())
-                .await;
-            (agents_skills, result)
-        })
-        .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
-    while let Some((agents_skills, result)) = results.next().await {
+    for (agents_skills, result) in candidates.into_iter().zip(results) {
         match result {
             Ok(metadata) if metadata.is_directory => roots.push(HostSkillRoot::host(
                 agents_skills,
@@ -330,6 +329,36 @@ async fn repo_agents_skill_roots<'a>(
         }
     }
     roots
+}
+
+async fn skill_root_metadata(
+    fs: &dyn EnvironmentAccess,
+    paths: &[AbsolutePathBuf],
+) -> Vec<io::Result<FileMetadata>> {
+    let options = GetMetadataOptions::default();
+    let mut results = Vec::with_capacity(paths.len());
+    // Keep the existing probe concurrency limit inside each helper. If a batch fails,
+    // retry the remaining paths individually.
+    for chunk in paths.chunks(MAX_CONCURRENT_ANCESTOR_PROBES) {
+        if chunk.len() == 1 {
+            break;
+        }
+        let uris = chunk.iter().map(PathUri::from_abs_path).collect::<Vec<_>>();
+        match fs.get_metadata_batch(&uris, options).await {
+            Ok(batch) if batch.len() == chunk.len() => results.extend(batch),
+            _ => break,
+        }
+    }
+    let mut remaining = futures::stream::iter(results.len()..paths.len())
+        .map(|index| async move {
+            fs.get_metadata(&PathUri::from_abs_path(&paths[index]), options)
+                .await
+        })
+        .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
+    while let Some(metadata) = remaining.next().await {
+        results.push(metadata);
+    }
+    results
 }
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
@@ -417,27 +446,6 @@ async fn find_project_root(
         marker: None,
         complete: true,
     }
-}
-
-fn dirs_between_project_root_and_cwd(
-    cwd: &AbsolutePathBuf,
-    project_root: &AbsolutePathBuf,
-) -> Vec<AbsolutePathBuf> {
-    let mut directories = cwd
-        .ancestors()
-        .scan(false, |done, directory| {
-            if *done {
-                None
-            } else {
-                if &directory == project_root {
-                    *done = true;
-                }
-                Some(directory)
-            }
-        })
-        .collect::<Vec<_>>();
-    directories.reverse();
-    directories
 }
 
 fn dedupe_skill_roots_by_path(roots: &mut Vec<HostSkillRoot>) {

@@ -470,6 +470,7 @@ callers must convert them to `file:` URIs before sending requests:
   reads also back `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
+- `fs/getMetadataBatch` (requires `fsMetadataBatch`, returns metadata or an error for each input path in the same order)
 - `fs/getMetadata`
 - `fs/canonicalize`
 - `fs/readDirectory`

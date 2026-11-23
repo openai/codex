@@ -82,6 +82,13 @@ pub trait EnvironmentAccess: Send + Sync {
         options: GetMetadataOptions,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
+    /// Get one metadata result per path using this accessor's captured permissions.
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FileMetadata>>>;
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -292,6 +299,15 @@ impl EnvironmentAccess for FileSystemEnvironmentAccessor<'_> {
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         self.file_system
             .get_metadata(path, options, self.key.sandbox.as_deref())
+    }
+
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FileMetadata>>> {
+        self.file_system
+            .get_metadata_batch(paths, options, self.key.sandbox.as_deref())
     }
 
     fn read_directory<'a>(

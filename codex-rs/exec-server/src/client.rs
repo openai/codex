@@ -77,6 +77,7 @@ use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_BATCH_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_BLOCK_METHOD;
@@ -94,6 +95,8 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataBatchParams;
+use crate::protocol::FsGetMetadataBatchResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsOpenMode;
@@ -1084,6 +1087,20 @@ impl ExecServerClient {
             .await?
             .watch_missing(missing, present)
             .await?)
+    }
+
+    pub(crate) fn supports_metadata_batch(&self) -> bool {
+        self.inner
+            .environment_info
+            .get()
+            .is_some_and(|info| info.capabilities.fs_metadata_batch)
+    }
+
+    pub(crate) async fn fs_get_metadata_batch(
+        &self,
+        params: FsGetMetadataBatchParams,
+    ) -> Result<FsGetMetadataBatchResponse, ExecServerError> {
+        self.call(FS_GET_METADATA_BATCH_METHOD, &params).await
     }
 
     pub async fn fs_get_metadata(

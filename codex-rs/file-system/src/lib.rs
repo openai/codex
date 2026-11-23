@@ -2,6 +2,7 @@ mod environment_accessor;
 mod exec_permission_profile_serde;
 mod find_up;
 mod local_logs;
+mod metadata_batch;
 mod nfs;
 
 use bytes::Bytes;
@@ -29,6 +30,10 @@ pub use find_up::find_nearest_native_ancestor_with_markers;
 use futures::Stream;
 use futures::stream::BoxStream;
 pub use local_logs::LocalLogsDir;
+pub use metadata_batch::MAX_METADATA_BATCH_BYTES;
+pub use metadata_batch::MAX_METADATA_BATCH_PROBES;
+pub use metadata_batch::metadata_batch_fits;
+pub use metadata_batch::resolve_metadata_batch;
 pub use nfs::is_nfs;
 use serde::Deserialize;
 use serde::Serialize;
@@ -112,7 +117,8 @@ pub struct CopyOptions {
     pub recursive: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
@@ -715,6 +721,16 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
+
+    /// Return one metadata result or error per input path, in the same order.
+    fn get_metadata_batch<'a>(
+        &'a self,
+        _paths: &'a [PathUri],
+        _options: GetMetadataOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<FileMetadata>>> {
+        Box::pin(async { Err(io::ErrorKind::Unsupported.into()) })
+    }
 
     fn read_directory<'a>(
         &'a self,
