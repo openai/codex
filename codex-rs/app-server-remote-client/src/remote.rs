@@ -7,6 +7,7 @@
 //! same `AppServerEvent` surface for both in-process and remote transports, so
 //! callers such as the TUI can switch between them without changing their
 //! higher-level session logic.
+//! Dropping the client or cancelling shutdown aborts its owned transport worker.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -59,6 +60,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::warn;
 use url::Url;
 
@@ -168,7 +170,7 @@ pub struct RemoteAppServerClient {
     event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
     pending_events: VecDeque<AppServerEvent>,
     metadata: RemoteServerMetadata,
-    worker_handle: tokio::task::JoinHandle<()>,
+    worker_handle: AbortOnDropHandle<()>,
 }
 
 #[derive(Clone)]
@@ -531,7 +533,7 @@ impl RemoteAppServerClient {
             event_rx,
             pending_events: pending_events.into(),
             metadata,
-            worker_handle,
+            worker_handle: AbortOnDropHandle::new(worker_handle),
         })
     }
 
@@ -1088,33 +1090,58 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn shutdown_aborts_worker_when_command_queue_is_full() {
-        let (command_tx, command_rx) = mpsc::channel(1);
-        let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
-        let (response_tx, _response_rx) = oneshot::channel();
-        assert!(
-            command_tx
-                .try_send(RemoteClientCommand::Shutdown { response_tx })
-                .is_ok()
-        );
-        let worker_handle = tokio::spawn(async move {
-            // Retain the full queue while simulating a stalled socket write.
-            std::future::pending::<()>().await;
-            drop(command_rx);
-        });
-        let worker_abort_handle = worker_handle.abort_handle();
-        let client = RemoteAppServerClient {
-            command_tx,
-            event_rx,
-            pending_events: VecDeque::new(),
-            metadata: RemoteServerMetadata::default(),
-            worker_handle,
-        };
+        enum Cleanup {
+            Shutdown,
+            CancelShutdown,
+            DropClient,
+        }
+        for cleanup in [
+            Cleanup::Shutdown,
+            Cleanup::CancelShutdown,
+            Cleanup::DropClient,
+        ] {
+            let (command_tx, command_rx) = mpsc::channel(1);
+            let commands = command_tx.clone();
+            let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+            let (response_tx, _response_rx) = oneshot::channel();
+            assert!(
+                command_tx
+                    .try_send(RemoteClientCommand::Shutdown { response_tx })
+                    .is_ok()
+            );
+            let worker_handle = tokio::spawn(async move {
+                // Retain the full queue while simulating a stalled socket write.
+                std::future::pending::<()>().await;
+                drop(command_rx);
+            });
+            let worker_abort_handle = worker_handle.abort_handle();
+            let client = RemoteAppServerClient {
+                command_tx,
+                event_rx,
+                pending_events: VecDeque::new(),
+                metadata: RemoteServerMetadata::default(),
+                worker_handle: AbortOnDropHandle::new(worker_handle),
+            };
 
-        timeout(SHUTDOWN_TIMEOUT * 3, client.shutdown())
-            .await
-            .expect("shutdown must not wait indefinitely for command queue space")
-            .expect("shutdown should abort a stalled worker");
-        assert!(worker_abort_handle.is_finished());
+            match cleanup {
+                Cleanup::Shutdown => {
+                    timeout(SHUTDOWN_TIMEOUT * 3, client.shutdown())
+                        .await
+                        .expect("shutdown must not wait indefinitely for command queue space")
+                        .expect("shutdown should abort a stalled worker");
+                }
+                Cleanup::CancelShutdown => {
+                    let mut shutdown = Box::pin(client.shutdown());
+                    assert!(futures::poll!(shutdown.as_mut()).is_pending());
+                    drop(shutdown);
+                }
+                Cleanup::DropClient => drop(client),
+            }
+            timeout(SHUTDOWN_TIMEOUT * 3, commands.closed())
+                .await
+                .expect("cleanup must release the stalled worker's command receiver");
+            assert!(worker_abort_handle.is_finished());
+        }
     }
 
     #[tokio::test]
@@ -1142,7 +1169,7 @@ mod tests {
             event_rx,
             pending_events: VecDeque::new(),
             metadata: RemoteServerMetadata::default(),
-            worker_handle,
+            worker_handle: AbortOnDropHandle::new(worker_handle),
         };
 
         client
