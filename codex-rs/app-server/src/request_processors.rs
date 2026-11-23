@@ -362,8 +362,6 @@ use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::path_utils;
-#[cfg(test)]
-use codex_core::read_head_for_summary;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::truncate_rollout_after_turn_id;
 use codex_core::truncate_rollout_before_turn_id;
@@ -746,8 +744,6 @@ use self::thread_resume_redaction::*;
 use self::thread_summary::*;
 
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;
-#[cfg(test)]
-pub(crate) use self::thread_summary::read_summary_from_rollout;
 #[cfg(test)]
 pub(crate) use self::thread_summary::summary_to_thread;
 pub(crate) use self::thread_summary::thread_settings_from_config_snapshot;

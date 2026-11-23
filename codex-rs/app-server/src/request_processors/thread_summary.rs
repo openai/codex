@@ -7,81 +7,6 @@ use codex_protocol::config_types::MultiAgentMode;
 use codex_utils_path_uri::LegacyAppPathString;
 
 #[cfg(test)]
-pub(crate) async fn read_summary_from_rollout(
-    path: &Path,
-    fallback_provider: &str,
-) -> std::io::Result<ConversationSummary> {
-    let head = read_head_for_summary(path).await?;
-
-    let Some(first) = head.first() else {
-        return Err(IoError::other(format!(
-            "rollout at {} is empty",
-            path.display()
-        )));
-    };
-
-    let session_meta_line =
-        serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
-            IoError::other(format!(
-                "rollout at {} does not start with session metadata",
-                path.display()
-            ))
-        })?;
-    let SessionMetaLine {
-        meta: session_meta,
-        git,
-    } = session_meta_line;
-    let mut session_meta = session_meta;
-    session_meta.source = with_thread_spawn_agent_metadata(
-        session_meta.source.clone(),
-        session_meta.agent_nickname.clone(),
-        session_meta.agent_role.clone(),
-    );
-
-    let created_at = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.as_str())
-    };
-    let updated_at = read_updated_at(path, created_at).await;
-    if let Some(summary) = extract_conversation_summary(
-        path.to_path_buf(),
-        &head,
-        &session_meta,
-        git.as_ref(),
-        fallback_provider,
-        updated_at.clone(),
-    ) {
-        return Ok(summary);
-    }
-
-    let timestamp = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.clone())
-    };
-    let model_provider = session_meta
-        .model_provider
-        .clone()
-        .unwrap_or_else(|| fallback_provider.to_string());
-    let git_info = git.as_ref().map(map_git_info);
-    let updated_at = updated_at.or_else(|| timestamp.clone());
-
-    Ok(ConversationSummary {
-        conversation_id: session_meta.id,
-        timestamp,
-        updated_at,
-        path: path.to_path_buf(),
-        preview: String::new(),
-        model_provider,
-        cwd: session_meta.cwd,
-        cli_version: session_meta.cli_version,
-        source: session_meta.source,
-        git_info,
-    })
-}
-
-#[cfg(test)]
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -218,19 +143,6 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc))
     })
-}
-
-#[cfg(test)]
-async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
-    let updated_at = tokio::fs::metadata(path)
-        .await
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .map(|modified| {
-            let updated_at: DateTime<Utc> = modified.into();
-            updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)
-        });
-    updated_at.or_else(|| created_at.map(str::to_string))
 }
 
 pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNotification {

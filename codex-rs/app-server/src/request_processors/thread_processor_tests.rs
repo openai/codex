@@ -654,7 +654,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn summary_from_stored_thread_preserves_millisecond_precision() {
+    fn stored_thread_conversions_preserve_timestamps_and_agent_metadata() {
         let created_at =
             DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
         let updated_at =
@@ -687,11 +687,17 @@ mod thread_processor_behavior_tests {
             daybreak_enabled: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
-            source: SessionSource::Cli,
+            source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
             history_mode: Default::default(),
-            thread_source: Some(codex_protocol::protocol::ThreadSource::User),
-            agent_nickname: None,
-            agent_role: None,
+            thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
+            agent_nickname: Some("atlas".to_string()),
+            agent_role: Some("explorer".to_string()),
             agent_path: None,
             git_info: None,
             approval_mode: AskForApproval::OnRequest,
@@ -701,7 +707,25 @@ mod thread_processor_behavior_tests {
             history: None,
         };
 
+        let fallback_cwd = AbsolutePathBuf::current_dir().expect("current directory");
+        let (thread, _) =
+            thread_from_stored_thread(stored_thread.clone(), "fallback", &fallback_cwd)
+                .expect("stored thread should convert");
         let summary = summary_from_stored_thread(stored_thread, "fallback");
+        assert_eq!(
+            (
+                thread.agent_nickname.as_deref(),
+                thread.agent_role.as_deref()
+            ),
+            (Some("atlas"), Some("explorer")),
+        );
+        assert_eq!(
+            (
+                summary.source.get_nickname(),
+                summary.source.get_agent_role()
+            ),
+            (Some("atlas".to_string()), Some("explorer".to_string())),
+        );
 
         assert_eq!(
             summary.timestamp.as_deref(),
@@ -1126,58 +1150,6 @@ mod thread_processor_behavior_tests {
             Some("mock_provider".to_string())
         );
         assert_eq!(request_overrides, None);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
-        use codex_protocol::protocol::SessionMetaLine;
-        use codex_rollout::RolloutItem;
-        use codex_rollout::RolloutLine;
-        use std::fs;
-
-        let temp_dir = TempDir::new()?;
-        let path = temp_dir.path().join("rollout.jsonl");
-
-        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
-        let parent_thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
-
-        let session_meta = SessionMeta {
-            session_id: parent_thread_id.into(),
-            id: conversation_id,
-            timestamp: timestamp.clone(),
-            source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }),
-            thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
-            agent_nickname: Some("atlas".to_string()),
-            agent_role: Some("explorer".to_string()),
-            model_provider: Some("test-provider".to_string()),
-            ..SessionMeta::default()
-        };
-
-        let line = RolloutLine {
-            timestamp,
-            ordinal: None,
-            item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            })),
-        };
-        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
-
-        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
-        let thread = summary_to_thread(summary, &fallback_cwd);
-
-        assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
-        assert_eq!(thread.agent_role, Some("explorer".to_string()));
-        assert_eq!(thread.thread_source, None);
         Ok(())
     }
 
