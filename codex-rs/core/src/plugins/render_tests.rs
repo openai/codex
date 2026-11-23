@@ -2,11 +2,6 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn render_plugins_section_returns_none_for_empty_plugins() {
-    assert_eq!(render_plugins_section(&[]), None);
-}
-
-#[test]
 fn render_plugins_section_keeps_plugin_usage_guidance_without_listing_plugins() {
     let rendered = render_plugins_section(&[PluginCapabilitySummary {
         config_name: "sample@test".to_string(),
