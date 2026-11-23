@@ -1646,6 +1646,9 @@ impl ThreadRequestProcessor {
                 .then_some(ThreadHistoryMode::Paginated)
         });
         let mut thread_extension_init = ExtensionDataInit::new();
+        if experimental_raw_events {
+            thread_extension_init.insert(codex_core::UsageAttributionPolicy::Retain);
+        }
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
         }

@@ -206,11 +206,8 @@ pub(super) async fn attach_created_thread_listener(
         !connection_ids.is_empty()
             && listener_task_context
                 .thread_state_manager
-                .thread_state(parent_thread_id)
+                .raw_events_enabled(parent_thread_id)
                 .await
-                .lock()
-                .await
-                .experimental_raw_events
     } else {
         false
     };

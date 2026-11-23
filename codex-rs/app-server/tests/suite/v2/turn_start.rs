@@ -1324,7 +1324,8 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage(
                 "input_tokens_details": { "cached_tokens": 11 },
                 "output_tokens": 7,
                 "output_tokens_details": { "reasoning_tokens": 3 },
-                "total_tokens": 37
+                "total_tokens": 37,
+                "attribution": {"items": {"msg_input": {"input_tokens": 30, "cached_tokens": 11}}}
             }
         }
     });
@@ -1412,7 +1413,13 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage(
         }
     );
 
-    response_mock.single_request();
+    assert_eq!(
+        response_mock
+            .single_request()
+            .header("x-codex-exclude")
+            .as_deref(),
+        Some("tools")
+    );
     Ok(())
 }
 

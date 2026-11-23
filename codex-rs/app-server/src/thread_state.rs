@@ -13,6 +13,11 @@ use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnItemsView;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::UsageAttributionPolicy;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 #[cfg(test)]
@@ -499,6 +504,25 @@ impl ListenerStateCandidate {
     }
 }
 
+impl ThreadLifecycleContributor<Config> for ThreadStateManager {
+    /// Restore attribution for raw-event subscriptions that outlive a Core runtime.
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let thread_id = ThreadId::from_string(input.thread_store.level_id()).ok();
+            let parent_id = input.session_source.parent_thread_id();
+            for id in [thread_id, parent_id].into_iter().flatten() {
+                if self.raw_events_enabled(id).await {
+                    input.thread_store.insert(UsageAttributionPolicy::Retain);
+                    break;
+                }
+            }
+        })
+    }
+}
+
 impl ThreadStateManager {
     /// Coordinates goal edits with cold/path-based resume for just this thread.
     pub(crate) async fn lock_goal_resume(
@@ -587,6 +611,17 @@ impl ThreadStateManager {
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
         let mut state = self.state.lock().await;
         state.threads.entry(thread_id).or_default().state.clone()
+    }
+
+    pub(crate) async fn raw_events_enabled(&self, thread_id: ThreadId) -> bool {
+        let thread_state = {
+            let state = self.state.lock().await;
+            let Some(entry) = state.threads.get(&thread_id) else {
+                return false;
+            };
+            Arc::clone(&entry.state)
+        };
+        thread_state.lock().await.experimental_raw_events
     }
 
     pub(crate) async fn created_listener_state(

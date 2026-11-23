@@ -1,7 +1,16 @@
-//! Header overrides for host-created threads on the Codex Responses endpoint.
-//! Headers are scoped to a model and rechecked against current auth on each attempt.
+//! Host-supplied header settings for threads on the Codex Responses endpoint.
 
 use http::HeaderMap;
+
+/// Controls delivery of per-item attribution requested by the Codex backend for
+/// accounting. Seed in `StartThreadOptions::thread_extension_init` to set the
+/// policy for a thread and its subagents.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum UsageAttributionPolicy {
+    #[default]
+    Exclude,
+    Retain,
+}
 
 /// Seed in `StartThreadOptions::thread_extension_init` to supply Responses headers.
 ///

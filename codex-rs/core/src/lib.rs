@@ -15,6 +15,7 @@ mod realtime_conversation;
 mod realtime_history;
 mod responses_headers;
 pub use responses_headers::CodexResponsesHeaders;
+pub use responses_headers::UsageAttributionPolicy;
 mod responses_metadata;
 mod responses_retry;
 pub(crate) mod session;

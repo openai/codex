@@ -1869,8 +1869,6 @@ impl Session {
                 };
             let executed_tool_calls =
                 crate::state::ExecutedToolCalls::new(&config.features, &initial_history);
-            let codex_responses_headers =
-                thread_extension_data.get::<crate::CodexResponsesHeaders>();
             // Ephemeral title requests use request-level effort even when managed settings
             // enable overrides. The client-supplied tag selects cache behavior, not permissions.
             let title_request = config.ephemeral
@@ -1926,7 +1924,7 @@ impl Session {
                 )
                 .or(fork_cache_key),
                 tx_event.clone(),
-                codex_responses_headers,
+                &thread_extension_data,
                 crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(&config),
                 required_cyber_access_programs,
             );

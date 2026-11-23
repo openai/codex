@@ -32,6 +32,7 @@ use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadStateManager;
 
 pub(crate) struct ThreadExtensionDependencies {
+    pub(crate) thread_state_manager: ThreadStateManager,
     pub(crate) sample_responses: Arc<crate::thread_sample::SampleResponseRegistry>,
     pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -54,6 +55,7 @@ pub(crate) fn thread_extensions(
     dependencies: ThreadExtensionDependencies,
 ) -> Arc<ExtensionRegistry<Config>> {
     let ThreadExtensionDependencies {
+        thread_state_manager,
         sample_responses,
         event_sink,
         auth_manager,
@@ -70,6 +72,7 @@ pub(crate) fn thread_extensions(
         turn_start_admission,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
+    builder.thread_lifecycle_contributor(Arc::new(thread_state_manager));
     if config
         .features
         .enabled(codex_features::Feature::MultiEnvCopyFile)
