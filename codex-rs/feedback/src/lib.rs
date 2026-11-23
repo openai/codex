@@ -362,10 +362,6 @@ impl RingBuffer {
         }
     }
 
-    fn len(&self) -> usize {
-        self.buf.len()
-    }
-
     fn push_bytes(&mut self, data: &[u8]) {
         if data.is_empty() {
             return;
@@ -379,15 +375,7 @@ impl RingBuffer {
             return;
         }
 
-        // Evict from the front if we would exceed capacity.
-        let needed = self.len() + data.len();
-        if needed > self.max {
-            let to_drop = needed - self.max;
-            for _ in 0..to_drop {
-                let _ = self.buf.pop_front();
-            }
-        }
-
+        self.buf.retain_back(self.max - data.len());
         self.buf.extend(data.iter().copied());
     }
 
