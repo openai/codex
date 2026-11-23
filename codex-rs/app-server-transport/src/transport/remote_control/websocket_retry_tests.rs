@@ -3,6 +3,7 @@
 use super::tests::TEST_INSTALLATION_ID;
 use super::tests::TEST_REMOTE_CONTROL_SERVER_TOKEN;
 use super::tests::enabled_desired_state_sender;
+use super::tests::initialize_client;
 use super::tests::remote_control_auth_manager;
 use super::tests::remote_control_enrollment;
 use super::tests::remote_control_state_runtime;
@@ -137,7 +138,7 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
             assert!(matches!(outcome, ConnectOutcome::Connected(_)));
             assert_eq!(websocket.reconnect_attempt, 11);
             assert!(
-                next_reconnect_delay(&mut websocket.reconnect_attempt) >= Duration::from_secs(15),
+                websocket.next_reconnect_delay().await >= Duration::from_secs(15),
                 "a successful handshake must not reset backoff before the connection stays healthy"
             );
             assert_eq!(current_enrollment.snapshot(), Some(enrollment));
@@ -150,17 +151,149 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
     }
 }
 
-#[test]
-fn reconnect_backoff_stays_capped_during_sustained_failures() {
-    let mut reconnect_attempt = 0;
-    for max_delay in [5, 10, 20] {
-        let delay = next_reconnect_delay(&mut reconnect_attempt);
+#[tokio::test]
+async fn fast_retries_restart_when_the_first_controller_attaches() {
+    let (server_tx, _server_rx) = mpsc::channel(/*buffer*/ 32);
+    let (transport_tx, transport_rx) = mpsc::channel(/*buffer*/ 32);
+    let mut clients = ClientTracker::new(server_tx, transport_tx, &CancellationToken::new());
+    let mut attempt = 0;
+    let fast_retries = [5, 5, 5, 5, 5, 10, 20];
+
+    initialize_client(&mut clients, "backend_host").await;
+    assert_reconnect_backoff(&mut attempt, &mut clients, &[5, 10, 20, 30, 30, 30, 30]);
+    initialize_client(&mut clients, "first").await;
+    assert_reconnect_backoff(&mut attempt, &mut clients, &fast_retries);
+
+    // Replaying initialize must preserve the original connection and its backoff.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(599)).await;
+    let events_before_replay = transport_rx.len();
+    initialize_client(&mut clients, "first").await;
+    assert_eq!(transport_rx.len(), events_before_replay);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(clients.has_controller());
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) >= Duration::from_secs(15));
+
+    initialize_client(&mut clients, "second").await;
+    let stream = StreamId("stream".to_string());
+    clients
+        .close_client(&(ClientId("first".to_string()), stream.clone()))
+        .await
+        .unwrap();
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) >= Duration::from_secs(15));
+
+    // The last controller leaves and a new one joins without an intervening retry.
+    clients
+        .close_client(&(ClientId("second".to_string()), stream))
+        .await
+        .unwrap();
+    initialize_client(&mut clients, "replacement").await;
+    assert_reconnect_backoff(&mut attempt, &mut clients, &fast_retries);
+
+    // A controller may initialize before the first idle sweep after a long outage.
+    tokio::time::advance(Duration::from_secs(600)).await;
+    assert!(!clients.has_controller());
+    initialize_client(&mut clients, "after-expiry").await;
+    assert_reconnect_backoff(&mut attempt, &mut clients, &fast_retries);
+
+    tokio::time::advance(Duration::from_secs(600)).await;
+    let ping = serde_json::from_value(serde_json::json!({
+        "type": "ping", "client_id": "after-expiry", "stream_id": "stream"
+    }))
+    .unwrap();
+    clients.handle_message(ping).await.unwrap();
+    assert_reconnect_backoff(&mut attempt, &mut clients, &fast_retries);
+}
+
+#[tokio::test]
+async fn legacy_reinitialization_does_not_renew_fast_retries() {
+    let (server_tx, _server_rx) = mpsc::channel(/*buffer*/ 32);
+    let (transport_tx, _transport_rx) = mpsc::channel(/*buffer*/ 32);
+    let mut clients = ClientTracker::new(server_tx, transport_tx, &CancellationToken::new());
+    let initialize: ClientEnvelope = serde_json::from_value(serde_json::json!({
+        "type": "client_message",
+        "client_id": "legacy",
+        "message": {"id": 1, "method": "initialize", "params": {}}
+    }))
+    .unwrap();
+    let mut attempt = 0;
+    for _ in 0..7 {
+        clients.handle_message(initialize.clone()).await.unwrap();
+        next_reconnect_delay(&mut attempt, &mut clients);
+    }
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) >= Duration::from_secs(15));
+}
+
+#[tokio::test(start_paused = true)]
+async fn last_controller_can_expire_while_the_next_open_is_blocked() {
+    let (server_tx, _server_rx) = mpsc::channel(/*buffer*/ 2);
+    let (transport_tx, mut transport_rx) = mpsc::channel(/*buffer*/ 2);
+    let mut clients = ClientTracker::new(server_tx, transport_tx, &CancellationToken::new());
+    initialize_client(&mut clients, "first").await;
+    let mut attempt = 0;
+    for _ in 0..7 {
+        next_reconnect_delay(&mut attempt, &mut clients);
+    }
+    let wait = Duration::from_millis(5);
+    tokio::time::advance(Duration::from_secs(600) - wait).await;
+    assert!(clients.has_controller());
+    assert_eq!(transport_rx.len(), 2);
+
+    let ((), _first_open) = tokio::join!(
+        biased;
+        initialize_client(&mut clients, "next"),
+        async {
+            tokio::time::advance(wait).await;
+            let opened = transport_rx.recv().await.unwrap();
+            transport_rx.recv().await.unwrap();
+            opened
+        },
+    );
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) <= Duration::from_secs(5));
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_controller_uses_idle_backoff_before_writer_is_reaped() {
+    let (server_tx, _server_rx) = mpsc::channel(/*buffer*/ 2);
+    let (transport_tx, mut transport_rx) = mpsc::channel(/*buffer*/ 4);
+    let mut clients = ClientTracker::new(server_tx, transport_tx, &CancellationToken::new());
+    initialize_client(&mut clients, "controller").await;
+    let TransportEvent::ConnectionOpened {
+        disconnect_sender: Some(token),
+        writer: _writer,
+        ..
+    } = transport_rx.recv().await.unwrap()
+    else {
+        panic!("missing connection open");
+    };
+    let mut attempt = 0;
+    for _ in 0..3 {
+        next_reconnect_delay(&mut attempt, &mut clients);
+    }
+    token.cancel();
+    assert!(!clients.has_controller());
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) >= Duration::from_secs(15));
+
+    // A replay on the cancelled stream may open a replacement before the old
+    // writer finishes. Its cleanup must not close the replacement.
+    initialize_client(&mut clients, "controller").await;
+    assert!(
+        timeout(Duration::from_millis(10), clients.bookkeep_join_set())
+            .await
+            .is_err()
+    );
+    assert!(next_reconnect_delay(&mut attempt, &mut clients) <= Duration::from_secs(5));
+}
+
+fn assert_reconnect_backoff(attempt: &mut u64, clients: &mut ClientTracker, max_delays: &[u64]) {
+    for &max_delay in max_delays {
+        let delay = next_reconnect_delay(attempt, clients);
         assert!(delay >= Duration::from_secs(max_delay) / 2);
         assert!(delay <= Duration::from_secs(max_delay));
     }
-    for mut reconnect_attempt in [reconnect_attempt, 9, u64::MAX] {
+    for mut reconnect_attempt in [*attempt, 9, u64::MAX] {
         for _ in 0..1000 {
-            let delay = next_reconnect_delay(&mut reconnect_attempt);
+            let delay = next_reconnect_delay(&mut reconnect_attempt, clients);
             assert!(delay >= Duration::from_secs(15));
             assert!(delay <= Duration::from_secs(30));
         }

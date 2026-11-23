@@ -74,6 +74,9 @@ const REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(10);
 const REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(60);
+// Reconnect a controller after three heartbeat intervals of complete silence.
+const REMOTE_CONTROL_ACTIVE_IDLE_TIMEOUT: std::time::Duration =
+    REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL.saturating_mul(3);
 const REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
 const REMOTE_CONTROL_RECONNECT_BACKOFF_INITIAL: std::time::Duration =
@@ -547,7 +550,7 @@ impl RemoteControlWebsocket {
                 self.status_publisher
                     .publish_status(RemoteControlConnectionStatus::Connecting);
                 // Spread automatic reconnects before token refresh or enrollment, too.
-                let reconnect_delay = next_reconnect_delay(&mut self.reconnect_attempt);
+                let reconnect_delay = self.next_reconnect_delay().await;
                 tokio::select! {
                     biased;
                     _ = self.shutdown_token.cancelled() => break,
@@ -687,6 +690,11 @@ impl RemoteControlWebsocket {
         }
     }
 
+    async fn next_reconnect_delay(&mut self) -> std::time::Duration {
+        let mut clients = self.client_tracker.lock().await;
+        next_reconnect_delay(&mut self.reconnect_attempt, &mut clients)
+    }
+
     async fn wait_until_enabled(&mut self) -> bool {
         tokio::select! {
             _ = self.shutdown_token.cancelled() => false,
@@ -822,7 +830,7 @@ impl RemoteControlWebsocket {
                         self.status_publisher
                             .publish_status(RemoteControlConnectionStatus::Errored);
                         let reconnect_attempt = self.reconnect_attempt.saturating_add(1);
-                        let reconnect_delay = next_reconnect_delay(&mut self.reconnect_attempt);
+                        let reconnect_delay = self.next_reconnect_delay().await;
                         let reconnect_delay = server_retry_delay
                             .map_or(reconnect_delay, |delay| reconnect_delay.max(delay));
                         let enrollment = self.current_enrollment.snapshot();
@@ -1187,11 +1195,23 @@ impl RemoteControlWebsocket {
         let mut idle_sweep_interval = tokio::time::interval(REMOTE_CONTROL_IDLE_SWEEP_INTERVAL);
         idle_sweep_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let pong_deadline = tokio::time::sleep(pong_timeout);
-        tokio::pin!(pong_deadline);
+        let idle_deadline = tokio::time::sleep(REMOTE_CONTROL_ACTIVE_IDLE_TIMEOUT);
+        tokio::pin!(pong_deadline, idle_deadline);
 
         loop {
             let incoming_message = tokio::select! {
                 _ = shutdown_token.cancelled() => return Ok(()),
+                _ = &mut idle_deadline => {
+                    // A controller may have expired or disconnected during the wait.
+                    if !client_tracker.has_controller() {
+                        idle_deadline.as_mut().reset(tokio::time::Instant::now() + REMOTE_CONTROL_ACTIVE_IDLE_TIMEOUT);
+                        continue;
+                    }
+                    return Err(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "remote control websocket idle timeout",
+                    ));
+                }
                 _ = &mut pong_deadline => {
                     return Err(io::Error::new(
                         ErrorKind::TimedOut,
@@ -1239,6 +1259,9 @@ impl RemoteControlWebsocket {
                     }
                 }
             };
+            idle_deadline
+                .as_mut()
+                .reset(tokio::time::Instant::now() + REMOTE_CONTROL_ACTIVE_IDLE_TIMEOUT);
             let (client_envelope, wire_size_bytes) = match incoming_message {
                 Ok(tungstenite::Message::Text(text)) => {
                     let wire_size_bytes = text.len();
@@ -1404,8 +1427,20 @@ async fn wait_for_auth_change(
     auth_change_rx.changed().await
 }
 
-fn next_reconnect_delay(reconnect_attempt: &mut u64) -> std::time::Duration {
-    let exponent = u32::try_from(*reconnect_attempt).unwrap_or(u32::MAX);
+fn next_reconnect_delay(
+    reconnect_attempt: &mut u64,
+    clients: &mut ClientTracker,
+) -> std::time::Duration {
+    let has_controller = clients.has_controller();
+    if has_controller && !clients.retried_with_controller {
+        *reconnect_attempt = 0;
+    }
+    clients.retried_with_controller = has_controller;
+    // Give an attached controller five attempts at the initial jittered
+    // delay before increasing the backoff for a sustained outage.
+    let extra_attempts = if has_controller { 4 } else { 0 };
+    let exponent =
+        u32::try_from(reconnect_attempt.saturating_sub(extra_attempts)).unwrap_or(u32::MAX);
     let backoff = REMOTE_CONTROL_RECONNECT_BACKOFF_INITIAL
         .saturating_mul(2_u32.saturating_pow(exponent))
         .min(REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
@@ -2900,6 +2935,29 @@ mod tests {
 
     #[tokio::test]
     async fn run_websocket_reader_inner_times_out_without_pong_frames() {
+        assert_eq!(
+            reader_timeout_without_pongs(/*attached*/ false).await,
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            reader_timeout_without_pongs(/*attached*/ true).await,
+            Duration::from_secs(30)
+        );
+    }
+
+    pub(super) async fn initialize_client(clients: &mut ClientTracker, id: &str) {
+        let initialize = serde_json::from_value(serde_json::json!({
+            "type": "client_message",
+            "client_id": id,
+            "stream_id": "stream",
+            "seq_id": 1,
+            "message": {"id": 1, "method": "initialize", "params": {}}
+        }))
+        .unwrap();
+        clients.handle_message(initialize).await.unwrap();
+    }
+
+    async fn reader_timeout_without_pongs(attached: bool) -> Duration {
         let (client_stream, _server_stream) = connected_websocket_pair().await;
         let (_websocket_writer, websocket_reader) = client_stream.split();
         let (outbound_buffer, _used_rx) = BoundedOutboundBuffer::new();
@@ -2914,28 +2972,34 @@ mod tests {
         let (transport_event_tx, _transport_event_rx) =
             mpsc::channel(super::super::CHANNEL_CAPACITY);
         let shutdown_token = CancellationToken::new();
-        let client_tracker = Arc::new(Mutex::new(ClientTracker::new(
-            server_event_tx,
-            transport_event_tx,
-            &shutdown_token,
-        )));
+        let mut client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
 
-        let err = timeout(
-            Duration::from_secs(5),
-            RemoteControlWebsocket::run_websocket_reader_inner(
-                client_tracker,
-                state,
-                websocket_reader,
-                Duration::from_millis(100),
-                shutdown_token,
-            ),
+        initialize_client(&mut client_tracker, "backend_host").await;
+        if attached {
+            initialize_client(&mut client_tracker, "controller").await;
+        }
+        tokio::time::pause();
+        let start = tokio::time::Instant::now();
+        let err = RemoteControlWebsocket::run_websocket_reader_inner(
+            Arc::new(Mutex::new(client_tracker)),
+            state,
+            websocket_reader,
+            super::REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT,
+            shutdown_token,
         )
         .await
-        .expect("reader should time out waiting for pong")
         .expect_err("missing pong should fail the websocket reader");
-
+        let elapsed = start.elapsed();
+        tokio::time::resume();
         assert_eq!(err.kind(), ErrorKind::TimedOut);
-        assert_eq!(err.to_string(), "remote control websocket pong timeout");
+        let expected_error = if attached {
+            "remote control websocket idle timeout"
+        } else {
+            "remote control websocket pong timeout"
+        };
+        assert_eq!(err.to_string(), expected_error);
+        Duration::from_secs(elapsed.as_secs())
     }
 
     #[test]

@@ -44,15 +44,44 @@ struct ClientState {
 
 pub(crate) struct ClientTracker {
     pub(super) auth: Option<crate::ConnectionAuth>,
+    /// Whether the host has retried since it last had no live controllers.
+    pub(super) retried_with_controller: bool,
     clients: HashMap<(ClientId, StreamId), ClientState>,
     legacy_stream_ids: HashMap<ClientId, StreamId>,
-    join_set: JoinSet<(ClientId, StreamId)>,
+    join_set: JoinSet<(ConnectionId, (ClientId, StreamId))>,
     server_event_tx: mpsc::Sender<QueuedServerEnvelope>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
 }
 
 impl ClientTracker {
+    pub(super) fn has_controller(&self) -> bool {
+        self.has_controller_at(Instant::now())
+    }
+
+    fn has_controller_at(&self, now: Instant) -> bool {
+        self.clients
+            .iter()
+            .any(|((id, _), client)| is_live_controller(id, client, now))
+    }
+
+    // Sample liveness at the same instant that starts or refreshes a client.
+    // A controller can expire while we await space for ConnectionOpened.
+    fn begin_client_activity(&mut self) -> Instant {
+        let now = Instant::now();
+        if self.retried_with_controller && !self.has_controller_at(now) {
+            self.retried_with_controller = false;
+        }
+        now
+    }
+
+    fn refresh_client(&mut self, key: &(ClientId, StreamId)) -> Option<&mut ClientState> {
+        let now = self.begin_client_activity();
+        let client = self.clients.get_mut(key)?;
+        client.last_activity_at = now;
+        Some(client)
+    }
+
     pub(crate) fn new(
         server_event_tx: mpsc::Sender<QueuedServerEnvelope>,
         transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -60,6 +89,7 @@ impl ClientTracker {
     ) -> Self {
         Self {
             auth: None,
+            retried_with_controller: false,
             clients: HashMap::new(),
             legacy_stream_ids: HashMap::new(),
             join_set: JoinSet::new(),
@@ -71,9 +101,17 @@ impl ClientTracker {
 
     pub(crate) async fn bookkeep_join_set(&mut self) -> Option<(ClientId, StreamId)> {
         while let Some(join_result) = self.join_set.join_next().await {
-            let Ok(client_key) = join_result else {
+            let Ok((connection_id, client_key)) = join_result else {
                 continue;
             };
+            // A new connection can reuse this stream before its old writer exits.
+            if self
+                .clients
+                .get(&client_key)
+                .is_some_and(|client| client.connection_id != connection_id)
+            {
+                continue;
+            }
             return Some(client_key);
         }
         futures::future::pending().await
@@ -132,24 +170,34 @@ impl ClientTracker {
         let client_key = (client_id.clone(), stream_id.clone());
         match event {
             ClientEvent::ClientMessage { message } => {
+                let now = Instant::now();
+                let existing = self.clients.get_mut(&client_key);
+                let replacing_live_controller = is_initialize
+                    && existing
+                        .as_deref()
+                        .is_some_and(|client| is_live_controller(&client_id, client, now));
                 if let Some(seq_id) = seq_id
-                    && let Some(client) = self.clients.get(&client_key)
+                    && let Some(client) = existing
                     && client
                         .last_inbound_seq_id
                         .is_some_and(|last_seq_id| last_seq_id >= seq_id)
-                    && !is_initialize
                 {
-                    return Ok(());
+                    if !is_initialize {
+                        return Ok(());
+                    }
+                    // Desktop starts a new stream for each fresh initialize. A replay
+                    // keeps the live stream active without closing its terminals.
+                    if !is_legacy_stream_id && replacing_live_controller {
+                        client.last_activity_at = now;
+                        return Ok(());
+                    }
                 }
 
-                if is_initialize && self.clients.contains_key(&client_key) {
-                    self.close_client(&client_key).await?;
-                }
-
-                if let Some(connection_id) = self.clients.get_mut(&client_key).map(|client| {
-                    client.last_activity_at = Instant::now();
-                    client.connection_id
-                }) {
+                if !is_initialize {
+                    let Some(client) = self.refresh_client(&client_key) else {
+                        return Ok(());
+                    };
+                    let connection_id = client.connection_id;
                     self.send_transport_event(TransportEvent::IncomingMessage {
                         connection_id,
                         message,
@@ -159,8 +207,8 @@ impl ClientTracker {
                     return Ok(());
                 }
 
-                if !is_initialize {
-                    return Ok(());
+                if self.clients.contains_key(&client_key) {
+                    self.close_client(&client_key).await?;
                 }
 
                 let connection_id = next_connection_id();
@@ -178,6 +226,7 @@ impl ClientTracker {
 
                 let (status_tx, status_rx) = watch::channel(PongStatus::Active);
                 self.join_set.spawn(Self::run_client_outbound(
+                    connection_id,
                     client_id.clone(),
                     stream_id.clone(),
                     self.server_event_tx.clone(),
@@ -185,12 +234,19 @@ impl ClientTracker {
                     status_rx,
                     disconnect_token.clone(),
                 ));
+                // A legacy reinitialize replaces the connection on the same live
+                // stream. Its temporary removal is not a gap in controller activity.
+                let last_activity_at = if replacing_live_controller {
+                    Instant::now()
+                } else {
+                    self.begin_client_activity()
+                };
                 self.clients.insert(
                     client_key.clone(),
                     ClientState {
                         connection_id,
                         disconnect_token,
-                        last_activity_at: Instant::now(),
+                        last_activity_at,
                         last_inbound_seq_id: None,
                         status_tx,
                     },
@@ -220,8 +276,7 @@ impl ClientTracker {
             }
             ClientEvent::ClientMessageChunk { .. } | ClientEvent::Ack { .. } => Ok(()),
             ClientEvent::Ping => {
-                if let Some(client) = self.clients.get_mut(&client_key) {
-                    client.last_activity_at = Instant::now();
+                if let Some(client) = self.refresh_client(&client_key) {
                     let _ = client.status_tx.send(PongStatus::Active);
                     return Ok(());
                 }
@@ -245,13 +300,14 @@ impl ClientTracker {
     }
 
     async fn run_client_outbound(
+        connection_id: ConnectionId,
         client_id: ClientId,
         stream_id: StreamId,
         server_event_tx: mpsc::Sender<QueuedServerEnvelope>,
         mut writer_rx: mpsc::Receiver<QueuedOutgoingMessage>,
         mut status_rx: watch::Receiver<PongStatus>,
         disconnect_token: CancellationToken,
-    ) -> (ClientId, StreamId) {
+    ) -> (ConnectionId, (ClientId, StreamId)) {
         loop {
             let (event, write_complete_tx) = tokio::select! {
                 _ = disconnect_token.cancelled() => {
@@ -289,7 +345,8 @@ impl ClientTracker {
                 break;
             }
         }
-        (client_id, stream_id)
+        disconnect_token.cancel();
+        (connection_id, (client_id, stream_id))
     }
 
     pub(crate) async fn close_expired_clients(
@@ -436,6 +493,13 @@ fn remote_control_message_starts_connection(message: &JSONRPCMessage) -> bool {
         JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest { method, .. })
             if method == "initialize"
     )
+}
+
+fn is_live_controller(id: &ClientId, client: &ClientState, now: Instant) -> bool {
+    // The relay also initializes its own client for each online host.
+    !id.0.starts_with("backend_")
+        && !client.disconnect_token.is_cancelled()
+        && remote_control_client_is_alive(client, now)
 }
 
 fn remote_control_client_is_alive(client: &ClientState, now: Instant) -> bool {
