@@ -1,5 +1,5 @@
-//! Fetches authenticated Plugin Service signing keys. The bounded cache reuses keys only within the
-//! same endpoint and credentials. Each lookup fetches at most once.
+//! Fetches authenticated Plugin Service signing keys. The bounded cache shares keys and in-flight
+//! fetches only within the same endpoint and credentials. Each lookup fetches at most once.
 
 use crate::ArchiveVerificationFailure;
 use aws_lc_rs::digest::Context;
@@ -50,7 +50,7 @@ impl SigningKeyCache {
             // External providers can authenticate with custom headers. Always fetch in that case.
             return Arc::default();
         }
-        // Bind the cache entry to the exact outgoing auth,
+        // Bind both the cache entry and its single-flight fetch to the exact outgoing auth,
         // including account and provider-specific identity headers. A fresh runtime proof
         // must select a fresh scope so the key service authorizes that request.
         let mut fields: Vec<_> = headers.iter().collect();
@@ -149,22 +149,28 @@ impl CachedSigningKeys {
 }
 
 struct ScopedSigningKeyCache {
-    cached: Mutex<Option<CachedSigningKeys>>,
+    state: Mutex<SigningKeyCacheState>,
     refresh: Semaphore,
+}
+
+#[derive(Default)]
+struct SigningKeyCacheState {
+    completed_fetches: u64,
+    last_fetch: Option<Result<CachedSigningKeys, ArchiveVerificationFailure>>,
 }
 
 impl Default for ScopedSigningKeyCache {
     fn default() -> Self {
         Self {
-            cached: Mutex::new(None),
+            state: Mutex::default(),
             refresh: Semaphore::new(/*permits*/ 1),
         }
     }
 }
 
 impl ScopedSigningKeyCache {
-    fn lock_cached(&self) -> MutexGuard<'_, Option<CachedSigningKeys>> {
-        self.cached
+    fn lock_state(&self) -> MutexGuard<'_, SigningKeyCacheState> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -175,13 +181,15 @@ impl ScopedSigningKeyCache {
         key_url: &str,
         key_id: &str,
     ) -> Result<SigningKey, ArchiveVerificationFailure> {
-        if let Some(key) = self
-            .lock_cached()
-            .as_ref()
-            .and_then(|keys| keys.fresh_key(key_id))
-        {
-            return key.clone();
-        }
+        let observed_fetches = {
+            let state = self.lock_state();
+            if let Some(Ok(keys)) = &state.last_fetch
+                && let Some(key) = keys.fresh_key(key_id)
+            {
+                return key.clone();
+            }
+            state.completed_fetches
+        };
 
         // Keep refreshes ordered without locking the cached data during the request.
         // Dropping the permit lets a waiter retry after a cancelled refresh.
@@ -191,16 +199,25 @@ impl ScopedSigningKeyCache {
             .await
             .map_err(|_| ArchiveVerificationFailure::SigningKeysUnavailable)?;
         {
-            let mut cached = self.lock_cached();
-            if let Some(key) = cached.as_ref().and_then(|keys| keys.fresh_key(key_id)) {
-                return key.clone();
+            let mut state = self.lock_state();
+            // Lookups that overlapped a completed refresh share its result, even
+            // if the response has already expired or the key is absent.
+            if state.completed_fetches != observed_fetches
+                && let Some(result) = &state.last_fetch
+            {
+                return result.as_ref().map_err(Clone::clone)?.key(key_id);
             }
             // A failed refresh can mean that this caller has lost access to the published keys.
-            *cached = None;
+            state.last_fetch = None;
         }
-        let keys = fetch_signing_keys(request, key_url).await?;
-        let key = keys.key(key_id);
-        *self.lock_cached() = Some(keys);
+        let result = fetch_signing_keys(request, key_url).await;
+        let key = result
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|keys| keys.key(key_id));
+        let mut state = self.lock_state();
+        state.last_fetch = Some(result);
+        state.completed_fetches = state.completed_fetches.wrapping_add(1);
         key
     }
 }

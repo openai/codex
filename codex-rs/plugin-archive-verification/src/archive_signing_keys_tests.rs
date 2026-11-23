@@ -7,12 +7,16 @@ use crate::test_support::key_request;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::future::Future;
 use std::task::Context as TaskContext;
 use std::task::Waker;
+use tokio::sync::Barrier;
 use tokio::sync::Notify;
+use tokio::task::JoinSet;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -94,6 +98,216 @@ async fn fetches_once_per_lookup_for_an_unknown_key() {
                 .await,
             Err(ArchiveVerificationFailure::SigningKeysUnavailable)
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consolidates_concurrent_fetches_only_for_the_same_credentials() {
+    enum Credentials {
+        Same,
+        Different,
+    }
+
+    let valid = key_response();
+    let key: SigningKey = serde_json::from_value(valid["keys"][0].clone()).unwrap();
+    for (status, ttl, key_id, expected, credentials) in [
+        (
+            200,
+            0,
+            key.key_id.as_str(),
+            Ok(key.clone()),
+            Credentials::Same,
+        ),
+        (
+            200,
+            600,
+            "unknown-key",
+            Err(ArchiveVerificationFailure::UnknownSigningKey),
+            Credentials::Same,
+        ),
+        (
+            503,
+            600,
+            key.key_id.as_str(),
+            Err(ArchiveVerificationFailure::SigningKeysUnavailable),
+            Credentials::Same,
+        ),
+        (
+            200,
+            0,
+            key.key_id.as_str(),
+            Ok(key.clone()),
+            Credentials::Different,
+        ),
+        (
+            401,
+            600,
+            key.key_id.as_str(),
+            Err(ArchiveVerificationFailure::SigningKeysUnavailable),
+            Credentials::Different,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let mut response = valid.clone();
+        response["cache_ttl_seconds"] = json!(ttl);
+        let auth = auth_headers("Access Token", "account_id");
+        let different_credentials = matches!(credentials, Credentials::Different);
+        let first_auth = if different_credentials {
+            auth_headers("e30.e30.b2xk", "account_id")
+        } else {
+            auth.clone()
+        };
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/signing-keys"))
+            .and(header(
+                "authorization",
+                first_auth[AUTHORIZATION].to_str().unwrap(),
+            ))
+            .respond_with(ResponseTemplate::new(status).set_body_json(response.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        if different_credentials {
+            Mock::given(method("GET"))
+                .and(path("/backend-api/ps/plugins/signing-keys"))
+                .and(header("authorization", "Bearer Access Token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let base_url = format!("{}/backend-api", server.uri());
+        let cache = SigningKeyCache::default();
+        // Hold each credential scope until all its callers have observed the same fetch generation.
+        let first_scope = cache.scope(&base_url, &first_auth);
+        let other_scope = cache.scope(&base_url, &auth);
+        assert_eq!(
+            Arc::ptr_eq(&first_scope, &other_scope),
+            !different_credentials
+        );
+        let first_permit = first_scope
+            .refresh
+            .try_acquire()
+            .expect("fresh credential scope");
+        let other_permit = different_credentials.then(|| {
+            other_scope
+                .refresh
+                .try_acquire()
+                .expect("fresh credential scope")
+        });
+        let auths = std::iter::once(&first_auth).chain(std::iter::repeat_n(&auth, 7));
+        let mut lookups: Vec<_> = auths
+            .map(|auth| Box::pin(cache.key(&base_url, key_id, key_request(auth.clone()))))
+            .collect();
+        for lookup in &mut lookups {
+            assert!(
+                lookup
+                    .as_mut()
+                    .poll(&mut TaskContext::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        drop(other_permit);
+        drop(first_permit);
+        let mut expected_results = vec![expected; 8];
+        if different_credentials {
+            // The second caller gets its own successful response even if the first is rejected.
+            expected_results[1..].fill(Ok(key.clone()));
+        }
+        for (lookup, expected) in lookups.into_iter().zip(expected_results) {
+            assert_eq!(lookup.await, expected);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_waiters_share_completion_or_retry_a_canceled_fetch() {
+    for (cancel_owner, expected_requests) in [(false, 1), (true, 2)] {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let server = MockServer::start().await;
+            let mut response = key_response();
+            response["cache_ttl_seconds"] = json!(0);
+            let expected: SigningKey = serde_json::from_value(response["keys"][0].clone()).unwrap();
+            let response = ResponseTemplate::new(200).set_body_json(response);
+            let request_started = Arc::new(Notify::new());
+            let started = Arc::clone(&request_started);
+            let (release_response, released) = std::sync::mpsc::channel();
+            let released = Mutex::new(released);
+            let held_response = response.clone();
+            Mock::given(method("GET"))
+                .and(path("/backend-api/ps/plugins/signing-keys"))
+                .respond_with(move |_: &wiremock::Request| {
+                    started.notify_one();
+                    // Wiremock runs its own server thread; dropping the sender also releases it.
+                    let _ = released.lock().unwrap().recv();
+                    held_response.clone()
+                })
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/backend-api/ps/plugins/signing-keys"))
+                .respond_with(response)
+                .expect(expected_requests - 1)
+                .mount(&server)
+                .await;
+
+            let base_url = format!("{}/backend-api", server.uri());
+            let auth = auth_headers("Access Token", "account_id");
+            let cache = Arc::new(SigningKeyCache::default());
+            let owner = tokio::spawn({
+                let cache = Arc::clone(&cache);
+                let base_url = base_url.clone();
+                let auth = auth.clone();
+                let key_id = expected.key_id.clone();
+                async move {
+                    cache
+                        .key(&base_url, &key_id, key_request(auth.clone()))
+                        .await
+                }
+            });
+            request_started.notified().await;
+            let queued = Arc::new(Barrier::new(9));
+            let mut waiters = JoinSet::new();
+            for _ in 0..8 {
+                let cache = Arc::clone(&cache);
+                let base_url = base_url.clone();
+                let auth = auth.clone();
+                let key_id = expected.key_id.clone();
+                let queued = Arc::clone(&queued);
+                waiters.spawn(async move {
+                    let mut lookup =
+                        std::pin::pin!(cache.key(&base_url, &key_id, key_request(auth.clone())));
+                    // All waiters must observe the in-flight fetch before it completes or is canceled.
+                    assert!(
+                        lookup
+                            .as_mut()
+                            .poll(&mut TaskContext::from_waker(Waker::noop()))
+                            .is_pending()
+                    );
+                    queued.wait().await;
+                    lookup.await
+                });
+            }
+            queued.wait().await;
+            if cancel_owner {
+                owner.abort();
+                assert!(owner.await.unwrap_err().is_cancelled());
+                release_response
+                    .send(())
+                    .expect("release canceled response");
+            } else {
+                release_response.send(()).expect("release first response");
+                assert_eq!(owner.await.unwrap(), Ok(expected.clone()));
+            }
+            while let Some(result) = waiters.join_next().await {
+                assert_eq!(result.unwrap(), Ok(expected.clone()));
+            }
+            server.verify().await;
+        })
+        .await
+        .expect("spawned signing-key fetches should finish");
     }
 }
 
