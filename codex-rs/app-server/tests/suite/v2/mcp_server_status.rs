@@ -86,6 +86,70 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(unix)]
+#[test_case("codex_app", Some("Bearer desktop"), true; "authenticated Desktop")]
+#[test_case("codex_app", None, false; "helper alone cannot authorize Desktop")]
+#[test_case("other", Some("Bearer desktop"), false; "another server cannot use the socket")]
+#[tokio::test]
+async fn desktop_socket_mcp_startup(
+    name: &str,
+    authorization: Option<&str>,
+    expect_connection: bool,
+) -> Result<()> {
+    let id = uuid::Uuid::now_v7();
+    let path =
+        codex_uds::prepare_shared_daemon_socket_directory()?.join(format!("desktop-{id}.sock"));
+    let listener = tokio::net::UnixListener::bind(&path)?;
+    let _socket = tempfile::TempPath::try_from_path(path)?;
+    let (seen, mut requests) = mpsc::unbounded_channel();
+    let router = mcp_status_router("lookup", /*tools_error*/ None, "desktop".to_owned()).layer(
+        axum::middleware::from_fn(
+            move |headers: HeaderMap, request, next: axum::middleware::Next| {
+                let _ = seen.send(headers);
+                async move { next.run(request).await }
+            },
+        ),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let mut config = json!({
+        "url": format!("codex-desktop://{id}"),
+        "required": true,
+        "http_headers_helper": r#"printf '%s' '{"X-Extra":"from-helper","Authorization":"Bearer helper","Proxy-Authorization":"Basic test-proxy"}'"#,
+    });
+    if let Some(value) = authorization {
+        config["http_headers"] = json!({"Authorization": value});
+    }
+    let mut app = TestAppServer::builder().build_initialized().await?;
+    let params = ThreadStartParams {
+        config: Some([("mcp_servers".into(), json!({name: config}))].into()),
+        ..Default::default()
+    };
+    if expect_connection {
+        app.start_thread(params).await?;
+        let captured: Vec<_> = std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        assert!(!captured.is_empty());
+        for headers in captured {
+            assert_eq!(
+                ["authorization", "x-extra", "proxy-authorization"]
+                    .map(|name| headers.get(name).map(axum::http::HeaderValue::as_bytes)),
+                [authorization.map(str::as_bytes), Some(b"from-helper"), None],
+            );
+        }
+    } else {
+        let id = app.send_thread_start_request_with_auto_env(params).await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_error_message(RequestId::Integer(id)),
+        )
+        .await??
+        .error;
+        assert!(error.message.contains("Desktop MCP requires"), "{error:?}");
+        assert!(requests.try_recv().is_err());
+    }
+    server.abort();
+    Ok(())
+}
+
 async fn recording_widget_server() -> (MockServer, serde_json::Value) {
     let server = MockServer::start().await;
     let tool = json!({
@@ -1972,26 +2036,32 @@ async fn start_mcp_server(
     tools_error: Option<rmcp::ErrorData>,
 ) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
+    let origin = format!("http://{}", listener.local_addr()?);
+    let router = mcp_status_router(tool_name, tools_error, origin.clone());
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok((origin, handle))
+}
+
+fn mcp_status_router(
+    tool_name: &str,
+    tools_error: Option<rmcp::ErrorData>,
+    origin: String,
+) -> Router {
     let tool_name = Arc::new(tool_name.to_string());
     let mcp_service = StreamableHttpService::new(
         move || {
             Ok(McpStatusServer {
                 tool_name: Arc::clone(&tool_name),
                 tools_error: tools_error.clone(),
-                origin: format!("http://{addr}"),
+                origin: origin.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/mcp", mcp_service);
-
-    let handle = tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
-
-    Ok((format!("http://{addr}"), handle))
+    Router::new().nest_service("/mcp", mcp_service)
 }
 
 async fn start_slow_inventory_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {

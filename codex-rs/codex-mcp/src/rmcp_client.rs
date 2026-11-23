@@ -1610,9 +1610,40 @@ pub(crate) async fn make_rmcp_client(
                 }
                 None => (None, runtime_context),
             };
-            let http_client = runtime_context
-                .http_client_for_server(server.config(), resolved_environment.as_ref())
-                .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;
+            let (url, http_client) = match url.strip_prefix("codex-desktop://") {
+                #[cfg(unix)]
+                Some(id) => {
+                    if server_name != "codex_app"
+                        || !is_local_environment
+                        || !has_explicit_http_authorization(server.config())
+                    {
+                        return Err(anyhow!(
+                            "Desktop MCP requires a local, authenticated codex_app server"
+                        )
+                        .into());
+                    }
+                    let id = uuid::Uuid::parse_str(id).map_err(anyhow::Error::from)?;
+                    let client = runtime_context
+                        .desktop_http_client(id)
+                        .map_err(anyhow::Error::from)?;
+                    // Only the HTTP path and Host go on the wire. The socket supplies the peer.
+                    let url = "http://127.0.0.1:0/mcp";
+                    let client = crate::runtime::apply_http_headers_helper_at(
+                        client,
+                        server.config(),
+                        runtime_context.local_process_cwd(),
+                        Some(url),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    (url.to_owned(), client)
+                }
+                _ => {
+                    let client = runtime_context
+                        .http_client_for_server(server.config(), resolved_environment.as_ref())
+                        .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;
+                    (url, client)
+                }
+            };
             let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);
             let executor_resolves_bearer_token = if !is_local_environment
                 && bearer_token_env_var.is_some()

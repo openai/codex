@@ -114,6 +114,10 @@ impl RouteAwareClientPool {
                     request_url = request.url().to_string();
                     apply_default_headers(request.headers_mut(), &self.default_headers);
                 }
+                #[cfg(unix)]
+                if self.client_builder.unix_socket.is_some() {
+                    request.headers_mut().remove(PROXY_AUTHORIZATION);
+                }
                 let current_url = request.url().clone();
                 if previous_route
                     .as_ref()

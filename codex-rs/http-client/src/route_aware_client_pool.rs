@@ -45,6 +45,12 @@ enum SelectedTlsBackend {
     RustlsFallback,
 }
 
+#[derive(Default)]
+struct ClientBuildState {
+    #[cfg(unix)]
+    socket_identity: Option<(u64, u64, i64, i64)>,
+}
+
 /// Reuses transport clients by resolved route while selecting a route for every request URL.
 ///
 /// Resolves the initial route from the complete input URL, before reqwest handles URL credentials.
@@ -59,7 +65,7 @@ pub struct RouteAwareClientPool {
     custom_ca_fallback: CustomCaFallback,
     direct_proxy: bool,
     clients: Arc<Mutex<HashMap<OutboundProxyRoute, TransportClient>>>,
-    client_build: Arc<tokio::sync::Mutex<()>>,
+    client_build: Arc<tokio::sync::Mutex<ClientBuildState>>,
     rustls_clients: Option<RustlsClientCache>,
 }
 
@@ -232,6 +238,16 @@ impl RouteAwareClientPool {
     /// Creates a pool with the shared default HTTP transport settings.
     pub fn new(http_client_factory: HttpClientFactory, route_class: ClientRouteClass) -> Self {
         Self::with_builder(http_client_factory, route_class, HttpClientBuilder::new())
+    }
+
+    /// A Unix socket supplies the peer, so neither proxies nor redirects apply.
+    #[cfg(unix)]
+    pub fn for_unix_socket(factory: HttpClientFactory, path: std::path::PathBuf) -> Self {
+        let mut pool =
+            Self::new_without_redirects_or_request_logging(factory, ClientRouteClass::Other)
+                .with_direct_proxy();
+        pool.client_builder.unix_socket = Some(path);
+        pool
     }
 
     /// Creates a pool that returns redirect responses without following them.
@@ -508,6 +524,31 @@ impl RouteAwareClientPool {
                     .await
                     .map_err(RouteAwareClientPoolError::Resolve)?
             };
+        #[cfg(unix)]
+        if let Some(path) = self.client_builder.unix_socket.clone() {
+            // SSH can replace the listener while the old keep-alive connection stays
+            // open. Serialize the identity check and eviction with transport builds.
+            let mut build = Arc::clone(&self.client_build).lock_owned().await;
+            let clients = Arc::clone(&self.clients);
+            tokio::task::spawn_blocking(move || {
+                use std::os::unix::fs::MetadataExt;
+                // Include ctime in case the filesystem recycles the inode.
+                let identity = std::fs::metadata(path)
+                    .ok()
+                    .map(|meta| (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()));
+                if identity.is_none() || identity != build.socket_identity {
+                    clients
+                        .lock()
+                        .unwrap_or_else(|error| {
+                            panic!("route-aware client cache lock should not be poisoned: {error}")
+                        })
+                        .clear();
+                    build.socket_identity = identity;
+                }
+            })
+            .await
+            .map_err(RouteAwareClientPoolError::BuildTask)?;
+        }
         if let Some(rustls_clients) = self.rustls_clients.as_ref()
             && let Ok(url) = reqwest::Url::parse(request_url)
             && rustls_clients.requires_rustls(&url, &route)

@@ -1220,6 +1220,15 @@ pub fn apply_http_headers_helper(
     config: &codex_config::McpServerConfig,
     local_process_cwd: PathBuf,
 ) -> Result<Arc<dyn HttpClient>, String> {
+    apply_http_headers_helper_at(client, config, local_process_cwd, /*wire_url*/ None)
+}
+
+pub(crate) fn apply_http_headers_helper_at(
+    client: Arc<dyn HttpClient>,
+    config: &codex_config::McpServerConfig,
+    local_process_cwd: PathBuf,
+    wire_url: Option<&str>,
+) -> Result<Arc<dyn HttpClient>, String> {
     if matches!(
         config.disabled_reason,
         Some(
@@ -1240,7 +1249,7 @@ pub fn apply_http_headers_helper(
     if !config.is_local_environment() {
         return Err("HTTP headers helpers can only run in the local environment".to_string());
     }
-    with_http_headers_helper(client, url, command, local_process_cwd)
+    with_http_headers_helper(client, wire_url.unwrap_or(url), command, local_process_cwd)
         .map_err(|error| error.to_string())
 }
 
@@ -1291,6 +1300,19 @@ impl McpRuntimeContext {
 
     pub(crate) fn local_http_client(&self) -> Arc<dyn HttpClient> {
         Arc::clone(&self.local_http_client)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn desktop_http_client(
+        &self,
+        id: uuid::Uuid,
+    ) -> std::io::Result<Arc<dyn HttpClient>> {
+        let path =
+            codex_uds::prepare_shared_daemon_socket_directory()?.join(format!("desktop-{id}.sock"));
+        Ok(Arc::new(RouteAwareHttpClient::for_unix_socket(
+            self.environment_manager.http_client_factory().clone(),
+            path,
+        )))
     }
 
     pub(crate) fn resolve_server_environment(

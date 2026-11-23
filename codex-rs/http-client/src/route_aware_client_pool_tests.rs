@@ -23,6 +23,74 @@ use super::*;
 use crate::OutboundProxyPolicy;
 use crate::request_draft::RequestDraft;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_socket_reuses_authenticated_connection_until_listener_is_replaced() {
+    use tokio::io::AsyncBufReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
+    use tokio::net::UnixListener;
+    use tokio::net::UnixStream;
+
+    async fn respond(stream: &mut BufReader<UnixStream>) {
+        let mut headers = String::new();
+        while !headers.ends_with("\r\n\r\n") {
+            assert_ne!(stream.read_line(&mut headers).await.unwrap(), 0);
+        }
+        let received = headers.to_ascii_lowercase();
+        assert!(received.contains("\r\nauthorization: bearer desktop-test\r\n"));
+        assert!(!received.contains("\r\nproxy-authorization:"));
+        stream
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    }
+
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let path = dir.path().join("desktop.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let pool = RouteAwareClientPool::for_unix_socket(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        path.clone(),
+    );
+    let call = || async {
+        let mut request =
+            reqwest::Request::new(Method::POST, "http://127.0.0.1:0/mcp".parse().unwrap());
+        request.headers_mut().insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer desktop-test"),
+        );
+        let response = pool
+            .send_with_resolver(request, |_| async {
+                Ok(OutboundProxyRoute::Proxy {
+                    url: "http://proxy-user:proxy-test@127.0.0.1:1".into(),
+                    no_proxy: None,
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (_, mut old) = tokio::join!(call(), async {
+            let mut stream = BufReader::new(listener.accept().await.unwrap().0);
+            respond(&mut stream).await;
+            stream
+        });
+        tokio::join!(call(), respond(&mut old));
+        // The old SSH connection is still open but will never answer another request.
+        let staged = dir.path().join("forward.sock");
+        let replacement = UnixListener::bind(&staged).unwrap();
+        std::fs::rename(staged, &path).unwrap();
+        tokio::join!(call(), async {
+            respond(&mut BufReader::new(replacement.accept().await.unwrap().0)).await;
+        });
+    })
+    .await
+    .expect("the same pool should reach the replacement socket");
+}
+
 #[tokio::test]
 async fn redirects_honor_sensitive_header_protection_without_changing_default_behavior() {
     for policy in [

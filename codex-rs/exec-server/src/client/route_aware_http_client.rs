@@ -79,6 +79,16 @@ pub(crate) struct RouteAwareHttpRequestRunner {
 }
 
 impl RouteAwareHttpClient {
+    /// HTTP over a local socket never follows redirects to another server.
+    #[cfg(unix)]
+    pub fn for_unix_socket(factory: HttpClientFactory, path: std::path::PathBuf) -> Self {
+        let pool = RouteAwareClientPool::for_unix_socket(factory, path);
+        Self {
+            follow_redirects: pool.clone(),
+            stop_redirects: pool,
+        }
+    }
+
     pub fn new(http_client_factory: HttpClientFactory) -> Self {
         Self {
             follow_redirects: RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(

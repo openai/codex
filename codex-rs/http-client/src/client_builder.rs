@@ -46,6 +46,8 @@ pub struct HttpClientBuilder {
     pub(crate) request_logging: RequestLogging,
     tls_backend: TlsBackend,
     pub(crate) tls: HttpClientTlsConfig,
+    #[cfg(unix)]
+    pub(crate) unix_socket: Option<std::path::PathBuf>,
     #[cfg(windows)]
     windows_proxy_pipe_path: Option<std::path::PathBuf>,
 }
@@ -397,6 +399,10 @@ impl HttpClientBuilder {
 
     fn base_reqwest_builder(self) -> reqwest::ClientBuilder {
         let mut builder = reqwest::Client::builder();
+        #[cfg(unix)]
+        if let Some(path) = self.unix_socket {
+            builder = builder.unix_socket(path);
+        }
         #[cfg(windows)]
         if let Some(path) = self.windows_proxy_pipe_path {
             builder = builder.windows_named_pipe(path);
@@ -460,6 +466,8 @@ impl Default for HttpClientBuilder {
             request_logging: RequestLogging::Enabled,
             tls_backend: TlsBackend::TransportDefault,
             tls: HttpClientTlsConfig::default(),
+            #[cfg(unix)]
+            unix_socket: None,
             #[cfg(windows)]
             windows_proxy_pipe_path: None,
         }
