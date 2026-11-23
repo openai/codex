@@ -10,6 +10,7 @@ use codex_http_client::RouteAwareClientPool;
 use codex_http_client::RouteAwareRequestError;
 use http::StatusCode;
 use serde::Deserialize;
+use std::pin::Pin;
 use std::time::Duration;
 use url::Url;
 
@@ -49,7 +50,19 @@ impl RuntimeRegistrationClient {
         })
     }
 
-    pub async fn register(
+    /// Share the registration request across callers. A cached runtime skips this allocation.
+    pub fn register<'a>(
+        &'a self,
+        registration: &'a RuntimeRegistration,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<RuntimeRegistrationResponse, RegistrationError>> + Send + 'a,
+        >,
+    > {
+        Box::pin(self.register_inner(registration))
+    }
+
+    async fn register_inner(
         &self,
         registration: &RuntimeRegistration,
     ) -> Result<RuntimeRegistrationResponse, RegistrationError> {
