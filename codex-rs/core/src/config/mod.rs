@@ -152,6 +152,8 @@ use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::Platform;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use http::HeaderValue;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -3539,16 +3541,16 @@ impl Config {
         .await
     }
 
-    pub(crate) async fn load_config_with_layer_stack(
+    pub(crate) fn load_config_with_layer_stack(
         fs: &dyn ExecutorFileSystem,
         mut cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
-    ) -> std::io::Result<Self> {
+    ) -> BoxFuture<'_, std::io::Result<Self>> {
+        // Keep the large future off small test thread stacks and share its poll code across callers.
+        async move {
         config_layer_stack.validate_project_mitm_profiles()?;
-        // Keep the large config-construction future off small test thread stacks.
-        Box::pin(async move {
         if cfg.experimental_thread_store_endpoint.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -5138,8 +5140,8 @@ impl Config {
             config.startup_warnings.push(message.to_string());
         }
         Ok(config)
-        })
-        .await
+        }
+        .boxed()
     }
 
     /// If `path` is `Some`, attempts to read the file at the given path and
