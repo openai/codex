@@ -27,6 +27,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -474,7 +475,17 @@ impl SqliteConfig {
         .await
     }
 
-    async fn open_read_write_pool_with_spec(
+    // Share SQLite setup and recovery between the runtime and standalone database owners.
+    fn open_read_write_pool_with_spec<'a>(
+        &'a self,
+        path: &'a Path,
+        recover_spec: Option<RuntimeDbSpec>,
+        telemetry_override: Option<&'a dyn DbTelemetry>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<SqlitePool>> + Send + 'a>> {
+        Box::pin(self.open_pool_inner(path, recover_spec, telemetry_override))
+    }
+
+    async fn open_pool_inner(
         &self,
         path: &Path,
         recover_spec: Option<RuntimeDbSpec>,
