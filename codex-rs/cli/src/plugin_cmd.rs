@@ -5,6 +5,7 @@ use anyhow::ensure;
 use clap::Parser;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_config::types::PluginsConfigToml;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::LoaderOverrides;
@@ -293,12 +294,9 @@ pub async fn run_plugin_list(overrides: &CliConfigOverrides, args: ListPluginsAr
                 path: Some(marketplace.path),
             }
         })
-        .chain(
-            remote_listing
-                .marketplaces
-                .into_iter()
-                .map(PluginListMarketplace::from),
-        )
+        .chain(remote_listing.marketplaces.into_iter().map(|marketplace| {
+            PluginListMarketplace::from_remote(marketplace, &plugins_input.plugins)
+        }))
         .filter(|marketplace| {
             args.marketplace_name
                 .as_ref()
@@ -439,14 +437,15 @@ struct PluginListMarketplace {
     plugins: Vec<PluginListEntry>,
 }
 
-impl From<RemoteMarketplace> for PluginListMarketplace {
-    fn from(marketplace: RemoteMarketplace) -> Self {
+impl PluginListMarketplace {
+    fn from_remote(marketplace: RemoteMarketplace, plugin_policy: &PluginsConfigToml) -> Self {
         Self {
             plugins: marketplace
                 .plugins
                 .into_iter()
                 .map(|plugin| {
                     let version = plugin.local_version.or(plugin.version);
+                    let enabled = plugin.enabled && plugin_policy.allows_plugin(&plugin.id);
                     PluginListEntry {
                         plugin_id: plugin.id,
                         name: plugin.name,
@@ -454,7 +453,7 @@ impl From<RemoteMarketplace> for PluginListMarketplace {
                         display_version: version.clone(),
                         version,
                         installed: plugin.installed,
-                        enabled: plugin.enabled,
+                        enabled,
                         source: JsonPluginSource::Remote {
                             id: plugin.remote_plugin_id,
                         },

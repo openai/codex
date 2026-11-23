@@ -548,8 +548,9 @@ Plugin summaries returned by `plugin/list`, `plugin/installed`, `plugin/read`,
 and `plugin/share/list` report effective `enabled` state. When
 `plugins._default.enabled` is configured, an explicit
 `plugins."<plugin-name>@<marketplace-name>".enabled` overrides that default;
-a plugin disabled at its source remains disabled. Omitting the default preserves
-existing source and account enablement. Other plugin settings, including remembered
+a plugin disabled at its source remains disabled. When `_default` is absent,
+an explicit `enabled: false` still disables the plugin without changing its
+installation or account settings. Other plugin settings, including remembered
 tool approvals, inherit the activation default unless `enabled` is explicitly set.
 `plugin/search` retains its discovery behavior: results report `enabled: false`
 while preserving their installation state.

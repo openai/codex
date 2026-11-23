@@ -1357,6 +1357,19 @@ async fn remote_plugin_listing_replaces_local_curated_catalog() -> Result<()> {
     sample@openai-curated-remote  installed, enabled  1.2.3    b1234567-89ab-4cde-8f01-234567890abc
     ");
 
+    let config_path = fixture.home.path().join(CONFIG_TOML_FILE);
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!("\n[plugins.\"{PLUGIN_KEY}\"]\nenabled = false\n"));
+    std::fs::write(config_path, config)?;
+    let mut expected: Value = serde_json::from_str(&listed)?;
+    expected["installed"][0]["enabled"] = json!(false);
+    let disabled = fixture
+        .success(&["plugin", "list", "--available", "--json"])
+        .await?;
+    assert_eq!(serde_json::from_str::<Value>(&disabled)?, expected);
+    let table = fixture.success(&["plugin", "list"]).await?;
+    assert!(table.contains("installed, disabled"), "{table}");
+
     fixture.server.reset().await;
     let listed = fixture
         .success(&["plugin", "list", "-m", "openai-curated", "--json"])

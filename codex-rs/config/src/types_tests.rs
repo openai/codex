@@ -49,9 +49,8 @@ auto_provision = true
             ]
             .map(|plugin_id| config.allows_plugin(plugin_id)),
             match default_enabled {
-                None => [true, true, true, true, true, true, true],
+                None | Some(true) => [true, true, true, true, true, false, true],
                 Some(false) => [false, false, false, false, true, false, false],
-                Some(true) => [true, true, true, true, true, false, true],
             },
         );
         let round_trip: PluginsConfigToml =

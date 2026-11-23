@@ -1389,9 +1389,6 @@ async fn remote_installed_plugin_preserves_configured_mcp_server_policy() {
         r#"[features]
 plugins = true
 
-[plugins."linear@openai-curated-remote"]
-enabled = false
-
 [plugins."linear@openai-curated-remote".mcp_servers.linear]
 enabled = false
 default_tools_approval_mode = "approve"
@@ -3447,11 +3444,11 @@ async fn plugin_defaults_resolve_remote_enablement_and_separate_cache_entries() 
             "[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\".mcp_servers.example]\ndefault_tools_approval_mode = 'approve'",
             Vec::new(),
         ),
-        // Without the new default, legacy remote account enablement still wins.
         (
             "[plugins.\"sample@openai-curated-remote\"]\nenabled = false",
-            vec![other, sample],
+            vec![other],
         ),
+        ("", vec![other, sample]),
     ] {
         write_file(&config_path, policy);
         let config = load_config(codex_home.path(), codex_home.path()).await;
