@@ -470,7 +470,7 @@ async fn output_collection_preserves_omissions_from_drained_buffer() {
 
 #[tokio::test]
 async fn network_denial_fallback_message_names_sandbox_network_proxy() {
-    let message = network_denial_message_for_session(/*session*/ None, /*deferred*/ None).await;
+    let message = network_denial_message(/*deferred*/ None);
 
     assert_eq!(
         message,
@@ -557,10 +557,8 @@ async fn late_network_denial_grace_observes_cancellation_after_exit() -> anyhow:
             .execution_proxy()
             .remote_policy_decider(/*allow_local_binding*/ true)
             .expect("remote policy callback");
-        let finish = finish_deferred_network_approval_after_process_exit_for_session(
-            Some(&session),
-            approval.into_deferred(),
-        );
+        let finish =
+            finish_deferred_network_approval_after_process_exit(Some(approval.into_deferred()));
         tokio::pin!(finish);
         assert!(futures::poll!(&mut finish).is_pending());
 

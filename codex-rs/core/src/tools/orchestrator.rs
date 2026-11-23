@@ -111,10 +111,9 @@ impl ToolOrchestrator {
             return (run_result, None);
         };
 
-        let deferred = network_approval.into_deferred();
+        let deferred = Some(network_approval.into_deferred());
         if run_result.is_err() {
-            let finalize_result =
-                finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+            let finalize_result = finish_deferred_network_approval(deferred);
             if let Err(err) = finalize_result {
                 return (Err(err), None);
             }

@@ -18,6 +18,8 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::sandbox::SandboxType;
 use codex_protocol::user_input::UserInput;
@@ -41,6 +43,8 @@ use serde_json::json;
 use std::fs;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -436,4 +440,181 @@ async fn respond_to_setup_or_hook_request(
         _ => panic!("unexpected setup or hook request: {request}"),
     };
     send_exec_server_json(websocket, json!({"id": request["id"], "result": result})).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_exec_startup_does_not_poison_next_network_approval() -> Result<()> {
+    let server = start_mock_server().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    let exec_server = tokio::spawn(async move {
+        let mut websocket = accept_initialized_exec_server(listener).await;
+        loop {
+            let request = read_exec_server_json(&mut websocket, STARTUP_TIMEOUT).await;
+            match request["method"].as_str() {
+                Some("process/start") => {
+                    let params: ExecParams =
+                        serde_json::from_value(request["params"].clone()).unwrap();
+                    assert!(
+                        params.network_proxy.is_some(),
+                        "launch must register network approval"
+                    );
+                    started.send(params).unwrap();
+                    // Hold the launch RPC open so interruption drops the active approval.
+                }
+                Some("process/terminate") => {
+                    send_exec_server_json(
+                        &mut websocket,
+                        json!({
+                            "id": request["id"], "result": {"running": false}
+                        }),
+                    )
+                    .await;
+                }
+                _ => respond_to_setup_or_hook_request(&mut websocket, &request).await,
+            }
+        }
+    });
+    let test = test_codex()
+        .with_exec_server_url(exec_server_url)
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[experimental_network]\nenabled = true",
+            ),
+        )
+        .with_pre_build_hook(|home| {
+            fs::write(
+                home.join("config.toml"),
+                r#"
+default_permissions = "workspace"
+[permissions.workspace.filesystem]
+":minimal" = "read"
+[permissions.workspace.network]
+enabled = true
+mode = "full"
+"#,
+            )
+            .unwrap();
+        })
+        .with_config(|config| {
+            config.project_doc_max_bytes = 0;
+            // The raw HTTP client has no restricted-token identity for shared Windows ingress.
+            config.permissions.windows_sandbox_type = SandboxType::WindowsMxc;
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            #[cfg(windows)]
+            config.set_windows_sandbox_enabled(/*value*/ true);
+        })
+        // Supply the existing fake executor so process/start can remain pending.
+        .build(&server)
+        .await?;
+    let selection = test.codex.environment_selections().await.pop().unwrap();
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.network_policy = Some(
+        test.config
+            .permissions
+            .network
+            .as_ref()
+            .unwrap()
+            .environment_policy(),
+    );
+    test.codex.environment_ready(&selection, config).await?;
+    for call_id in ["abandoned-launch", "live-launch"] {
+        let response = core_test_support::responses::mount_sse_once(
+            &server,
+            sse(vec![
+                ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &json!({"cmd": "pwd", "yield_time_ms": 10_000}).to_string(),
+                ),
+                ev_completed(call_id),
+            ]),
+        )
+        .await;
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: call_id.into(),
+                    text_elements: Vec::new(),
+                }])
+                .with_thread_settings(ThreadSettingsOverrides {
+                    approval_policy: Some(AskForApproval::OnRequest),
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        timeout(STARTUP_TIMEOUT, starts.recv())
+            .await
+            .context("command did not start")?
+            .context("executor closed")?;
+        assert_eq!(response.requests().len(), 1);
+        if call_id == "abandoned-launch" {
+            test.codex.submit(Op::Interrupt).await?;
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnAborted(_))
+            })
+            .await;
+        }
+    }
+    // Legacy clients send untagged requests to the shared controller proxy.
+    // There is now only one live call; an abandoned registration must not make it ambiguous.
+    let proxy_addr = test
+        .session_configured
+        .network_proxy
+        .as_ref()
+        .unwrap()
+        .http_addr
+        .clone();
+    let mut proxy_request = tokio::spawn(async move {
+        let mut stream = TcpStream::connect(proxy_addr).await?;
+        stream.write_all(b"GET http://codex-network-test.invalid/ HTTP/1.1\r\nHost: codex-network-test.invalid\r\nConnection: close\r\n\r\n").await?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await?;
+        Ok::<_, std::io::Error>(response)
+    });
+    let approval = timeout(Duration::from_secs(/*secs*/ 10), async {
+        loop {
+            tokio::select! {
+                result = &mut proxy_request => {
+                    anyhow::bail!("sole live call lost network approval after interruption: {}", result??);
+                }
+                event = test.codex.next_event() => {
+                    if let EventMsg::ExecApprovalRequest(approval) = event?.msg {
+                        break Ok::<_, anyhow::Error>(approval);
+                    }
+                }
+            }
+        }
+    }).await;
+    let result = async {
+        let approval = approval.context("live command did not receive network approval")??;
+        assert_eq!(
+            approval.command,
+            ["network-access", "http://codex-network-test.invalid:80"]
+        );
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: Some(approval.turn_id),
+                decision: ReviewDecision::Denied {
+                    rejection: "denied by test".to_string(),
+                },
+            })
+            .await?;
+        let response = timeout(Duration::from_secs(/*secs*/ 10), &mut proxy_request).await???;
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    proxy_request.abort();
+    exec_server.abort();
+    let _ = exec_server.await;
+    result
 }
