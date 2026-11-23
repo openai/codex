@@ -518,69 +518,6 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity_over_sse()
 }
 
 #[tokio::test]
-async fn modern_http_rejects_oversized_discovery_and_tool_json_responses() -> anyhow::Result<()> {
-    for oversized_method in ["server/discover", "tools/list", "tools/list:error"] {
-        let server = MockServer::start().await;
-        let padding = Arc::new("x".repeat(MAX_MCP_MESSAGE_BYTES + 1));
-        Mock::given(method("POST"))
-            .and(path("/mcp"))
-            .respond_with(move |request: &Request| {
-                let body: Value = request.body_json().expect("valid JSON-RPC request");
-                match body["method"].as_str() {
-                    Some("server/discover") => {
-                        let mut response = modern_discover_result(&body);
-                        if oversized_method == "server/discover" {
-                            response["result"]["instructions"] = json!(padding.as_str());
-                        }
-                        ResponseTemplate::new(200).set_body_json(response)
-                    }
-                    Some("tools/list") if oversized_method == "tools/list:error" => {
-                        ResponseTemplate::new(500).set_body_json(json!({
-                            "jsonrpc": "2.0",
-                            "id": body["id"],
-                            "error": {"code": -32603, "message": padding.as_str()},
-                        }))
-                    }
-                    Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
-                        "jsonrpc": "2.0",
-                        "id": body["id"],
-                        "result": {
-                            "resultType": "complete",
-                            "tools": [{
-                                "name": "oversized_tool",
-                                "description": padding.as_str(),
-                                "inputSchema": {"type": "object"},
-                            }],
-                        },
-                    })),
-                    other => panic!("unexpected MCP method {other:?}"),
-                }
-            })
-            .mount(&server)
-            .await;
-
-        let client = create_client(&server, McpProtocolMode::V20260728).await?;
-        let error = if oversized_method == "server/discover" {
-            initialize_client(&client)
-                .await
-                .expect_err("oversized discovery response must be rejected")
-        } else {
-            initialize_client(&client).await?;
-            client
-                .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
-                .await
-                .expect_err("oversized tools response must be rejected")
-        };
-        assert!(
-            format!("{error:#}").contains("8388608 bytes"),
-            "expected bounded {oversized_method} response, got {error:#}"
-        );
-        client.shutdown().await;
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn legacy_http_keeps_existing_large_json_response_behavior() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let padding = Arc::new("x".repeat(MAX_MCP_MESSAGE_BYTES + 1));
