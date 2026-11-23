@@ -527,19 +527,27 @@ impl ConfigLayerStack {
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     }
 
-    /// Retains session layers while adopting current MCP, plugin, and feature restrictions.
+    /// Updates MCP, plugin, and feature restrictions on the retained stack.
     /// Rejected refreshes must not restore an earlier policy on the next user reload.
-    pub fn with_mcp_requirements_from(&self, incoming: &Self) -> Self {
-        let mut stack = self.clone();
-        stack.requirements.mcp_servers = incoming.requirements.mcp_servers.clone();
-        stack.requirements.plugins = incoming.requirements.plugins.clone();
-        stack.requirements.feature_requirements =
-            incoming.requirements.feature_requirements.clone();
-        stack.requirements_toml.mcp_servers = incoming.requirements_toml.mcp_servers.clone();
-        stack.requirements_toml.plugins = incoming.requirements_toml.plugins.clone();
-        stack.requirements_toml.feature_requirements =
-            incoming.requirements_toml.feature_requirements.clone();
-        stack
+    pub fn refresh_mcp_requirements(&mut self, incoming: &Self) {
+        let requirements = incoming.requirements();
+        let requirements_toml = incoming.requirements_toml();
+        self.requirements
+            .mcp_servers
+            .clone_from(&requirements.mcp_servers);
+        self.requirements.plugins.clone_from(&requirements.plugins);
+        self.requirements
+            .feature_requirements
+            .clone_from(&requirements.feature_requirements);
+        self.requirements_toml
+            .mcp_servers
+            .clone_from(&requirements_toml.mcp_servers);
+        self.requirements_toml
+            .plugins
+            .clone_from(&requirements_toml.plugins);
+        self.requirements_toml
+            .feature_requirements
+            .clone_from(&requirements_toml.feature_requirements);
     }
 
     pub(crate) fn with_startup_warnings(mut self, startup_warnings: Vec<String>) -> Self {

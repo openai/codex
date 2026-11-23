@@ -166,9 +166,9 @@ impl Session {
                             Constrained::allow_any(Default::default())
                         };
                     }
-                    config.config_layer_stack = config
+                    config
                         .config_layer_stack
-                        .with_mcp_requirements_from(&next_config.config_layer_stack);
+                        .refresh_mcp_requirements(&next_config.config_layer_stack);
                     if let Err(err) = config.features.refresh_mcp_features(&next_config.features) {
                         warn!(%err, "failed to apply managed MCP feature restrictions");
                         config.mcp_servers = Constrained::allow_any(Default::default());
