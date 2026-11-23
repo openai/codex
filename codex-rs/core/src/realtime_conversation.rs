@@ -2284,9 +2284,7 @@ async fn handle_start_inner(
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
-                    RealtimeConversationRealtimeEvent {
-                        payload: event.clone(),
-                    },
+                    RealtimeConversationRealtimeEvent { payload: event },
                 )))
                 .await;
             if !completed.is_empty() {
