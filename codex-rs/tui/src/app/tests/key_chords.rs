@@ -303,6 +303,30 @@ async fn completed_global_chords_toggle_output_and_request_external_editor() -> 
 }
 
 #[tokio::test]
+async fn disconnected_command_popup_accepts_the_composer_submit_chord() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut server = start_config_write_test_app_server(&app).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let config = toml::from_str("[composer]\nsubmit = 'ctrl-x enter'")?;
+    app.keymap = RuntimeKeymap::from_config(&config).expect("valid submit chord");
+    app.chat_widget.apply_keymap_update(config, &app.keymap);
+    app.reconnect.offline = true;
+    for ch in "/warnings".chars() {
+        press(&mut app, &mut tui, &mut server, KeyCode::Char(ch).into()).await?;
+    }
+    press(&mut app, &mut tui, &mut server, ctrl('x')).await?;
+    assert!(app.key_chord_matcher.is_pending());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "/warnings");
+    press(&mut app, &mut tui, &mut server, KeyCode::Enter.into()).await?;
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::OpenWarnings))
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn composer_submit_chord_works_with_slash_argument_popup() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
     let config = toml::from_str("[composer]\nsubmit = 'ctrl-x enter'")?;

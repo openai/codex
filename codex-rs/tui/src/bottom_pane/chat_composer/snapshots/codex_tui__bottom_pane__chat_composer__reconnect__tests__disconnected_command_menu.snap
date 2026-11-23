@@ -6,7 +6,7 @@ expression: terminal.backend()
 "› /rc        manage remote control for the local background server              "
 "  /warnings  view retained warnings and diagnostic details                      "
 "  /exit      exit Codex                                                         "
-"  /feedback  show the thread ID and how to send feedback                        "
+"  /feedback  show the current thread ID                                         "
 "                                                                                "
 "› /                                                                             "
 "                                                                                "

@@ -34,7 +34,7 @@ pub(crate) enum CommandItem {
 
 pub(crate) struct CommandPopup {
     disconnected: bool,
-    command_filter: String,
+    command_filter: Option<String>,
     commands: Vec<CommandItem>,
     side_conversation_active: bool,
     state: ScrollState,
@@ -98,7 +98,7 @@ impl CommandPopup {
         .collect();
         Self {
             disconnected: flags.disconnected,
-            command_filter: String::new(),
+            command_filter: None,
             commands,
             side_conversation_active: flags.side_conversation_active,
             state: ScrollState::new(),
@@ -106,40 +106,37 @@ impl CommandPopup {
         }
     }
 
-    /// Update the filter string based on the current composer text. The text
-    /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/' on the *first* line becomes the active filter that is used
-    /// to narrow down the list of available commands.
+    /// Changing availability can reorder or hide rows. Never retarget a pending Enter.
+    pub(crate) fn set_disconnected(&mut self, disconnected: bool) {
+        let selected = self.current_item();
+        self.disconnected = disconnected;
+        self.restore_selection(selected);
+    }
+
+    pub(super) fn restore_selection(&mut self, selected: Option<CommandItem>) {
+        let items = self.filtered_items();
+        self.state.reset();
+        self.state.selected_idx = items
+            .iter()
+            .position(|item| Some(item) == selected.as_ref());
+        self.state.ensure_visible(items.len(), MAX_POPUP_ROWS);
+    }
+
+    /// Only a new filter selects the first match. Redraws must also preserve
+    /// an empty selection if the previously highlighted command disappeared.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
-        let first_line = text.lines().next().unwrap_or("");
-        let previous_filter = self.command_filter.clone();
-
-        if let Some(stripped) = first_line.strip_prefix('/') {
-            // Extract the *first* token (sequence of non-whitespace
-            // characters) after the slash so that `/clear something` still
-            // shows the help for `/clear`.
-            let token = stripped.trim_start();
-            let cmd_token = token.split_whitespace().next().unwrap_or("");
-
-            // Update the filter keeping the original case (commands are all
-            // lower-case for now but this may change in the future).
-            self.command_filter = cmd_token.to_string();
-        } else {
-            // The composer no longer starts with '/'. Reset the filter so the
-            // popup shows the *full* command list if it is still displayed
-            // for some reason.
-            self.command_filter.clear();
+        let filter = text
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix('/'))
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or_default();
+        if self.command_filter.as_deref() == Some(filter) {
+            return;
         }
-
-        if self.command_filter != previous_filter {
-            self.state.reset();
-        }
-
-        // Reset or clamp selected index based on new filtered list.
-        let matches_len = self.filtered_items().len();
-        self.state.clamp_selection(matches_len);
-        self.state
-            .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
+        self.command_filter = Some(filter.to_owned());
+        self.state.reset();
+        self.state.clamp_selection(self.filtered_items().len());
     }
 
     /// Determine the preferred height of the popup for a given width.
@@ -160,7 +157,7 @@ impl CommandPopup {
     /// paired with optional highlight indices. Preserves the original
     /// presentation order for built-ins and prompts.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
-        let filter = self.command_filter.trim();
+        let filter = self.command_filter.as_deref().unwrap_or_default();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             for command in self.commands.iter() {
@@ -219,6 +216,13 @@ impl CommandPopup {
         self.filtered().into_iter().map(|(c, _)| c).collect()
     }
 
+    /// With no actionable selection, don't reinterpret a disabled offline row
+    /// or a lost highlight as a request to submit the underlying draft.
+    pub(crate) fn blocks_submit_fallback(&self) -> bool {
+        (self.disconnected || self.state.selected_idx.is_none())
+            && !self.filtered_items().is_empty()
+    }
+
     fn rows_from_matches(
         &self,
         matches: Vec<(CommandItem, Option<Vec<usize>>)>,
@@ -230,7 +234,7 @@ impl CommandPopup {
                 let name = format!("/{}", item.command());
                 let description = match item {
                     CommandItem::Builtin(SlashCommand::Feedback) if self.disconnected => {
-                        "show the thread ID and how to send feedback"
+                        "show the current thread ID"
                     }
                     CommandItem::Builtin(SlashCommand::Daybreak) => self
                         .daybreak_command_description
@@ -284,12 +288,15 @@ impl CommandPopup {
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
-    /// Return currently selected command, if any.
-    pub(crate) fn selected_item(&self) -> Option<CommandItem> {
-        let matches = self.filtered_items();
+    /// Remember the row even if it is temporarily disabled.
+    pub(super) fn current_item(&self) -> Option<CommandItem> {
         self.state
             .selected_idx
-            .and_then(|idx| matches.get(idx).cloned())
+            .and_then(|idx| self.filtered_items().into_iter().nth(idx))
+    }
+
+    pub(crate) fn selected_item(&self) -> Option<CommandItem> {
+        self.current_item()
             .filter(|item| self.unavailable_reason(item).is_none())
     }
 

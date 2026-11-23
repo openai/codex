@@ -14,6 +14,57 @@ use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
 #[tokio::test]
+async fn disconnected_tab_keeps_exact_exit_out_of_the_queue() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    chat.queue_user_message("already queued".to_string().into());
+    chat.pause_for_disconnect();
+    assert!(chat.bottom_pane.is_task_running());
+    chat.apply_external_edit("/exit".into());
+    chat.handle_restricted_key(KeyCode::Tab.into(), RestrictedInputMode::Disconnected);
+    assert_eq!(chat.queued_user_message_texts(), ["already queued"]);
+    assert_eq!(chat.composer_text_with_pending(), "/exit");
+}
+
+#[tokio::test]
+async fn reconnect_keeps_a_split_command_unselected_in_the_new_widget() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.apply_external_edit("/exit".into());
+    for key in [KeyCode::End, KeyCode::Left, KeyCode::Left, KeyCode::Down] {
+        chat.handle_key_event(key.into());
+    }
+    chat.handle_restricted_key(KeyCode::Null.into(), RestrictedInputMode::Disconnected);
+    let mut input = chat.capture_thread_input_state().expect("offline draft");
+    input.reconnect_pending = true;
+
+    let (mut restored, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    restored.restore_reconnected_input(Some(input), &[]);
+    restored.handle_key_event(KeyCode::Enter.into());
+    assert_eq!(
+        (
+            restored.composer_text_with_pending(),
+            restored.bottom_pane.composer_cursor()
+        ),
+        ("/exit".to_owned(), "/ex".len())
+    );
+}
+
+#[tokio::test]
+async fn reconnect_keeps_a_dismissed_command_popup_closed() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.apply_external_edit("/config".into());
+    chat.handle_restricted_key(KeyCode::Esc.into(), RestrictedInputMode::Disconnected);
+    let mut input = chat.capture_thread_input_state().expect("offline draft");
+    input.reconnect_pending = true;
+
+    let (mut restored, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    restored.restore_reconnected_input(Some(input), &[]);
+    assert!(restored.bottom_pane.no_modal_or_popup_active());
+    restored.handle_key_event(KeyCode::Enter.into());
+    assert!(restored.has_active_view());
+}
+
+#[tokio::test]
 async fn reconnect_queues_enter_and_resumes_ordinary_next_turn_submission() {
     let (mut chat, mut events, _operations) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

@@ -71,7 +71,7 @@ const COMPOSER_SUBMIT: u64 = 1 << 33;
 const TRANSCRIPT_BROWSING: u64 = 1 << 14;
 
 impl KeymapContextSet {
-    /// Retain submission while an argument suggestion is open.
+    /// Retain submission without enabling other composer shortcuts in a popup.
     pub(crate) const fn with_composer_submit(self) -> Self {
         Self(self.0 | COMPOSER_SUBMIT)
     }

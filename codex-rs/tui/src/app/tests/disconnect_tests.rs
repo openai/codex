@@ -220,27 +220,6 @@ async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()>
             AppRunControl::Exit(ExitReason::UserRequested)
         ));
     }
-    for ch in "/feedback".chars() {
-        app.handle_tui_event(
-            &mut tui,
-            &mut session,
-            TuiEvent::Key(KeyCode::Char(ch).into()),
-        )
-        .await?;
-    }
-    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))
-        .await?;
-    while let Ok(event) = events.try_recv() {
-        app.handle_event(&mut tui, &mut session, event).await?;
-    }
-    let guidance = lines_to_single_string(
-        &app.transcript_cells
-            .last()
-            .unwrap()
-            .display_lines(/*width*/ 120),
-    );
-    assert_snapshot!(guidance.replace(&id.to_string(), "<id>"), @"• Thread ID <id> Reconnect to send feedback or save a ZIP.");
-
     for command in ["/exit", "/quit", "/q"] {
         app.chat_widget
             .restore_user_message_to_composer(command.into());

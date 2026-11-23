@@ -134,6 +134,7 @@ pub(super) enum QueueDrain {
 pub(super) struct ThreadComposerState {
     pub(super) text: String,
     pub(super) shell_mode: Option<bool>,
+    pub(super) disconnected_command: Option<crate::bottom_pane::DisconnectedCommandState>,
     pub(super) local_images: Vec<LocalImageAttachment>,
     pub(super) remote_image_urls: Vec<String>,
     pub(super) text_elements: Vec<TextElement>,

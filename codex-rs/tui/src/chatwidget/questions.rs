@@ -198,6 +198,7 @@ impl ChatWidget {
                     self.restore_composer_state(ThreadComposerState {
                         text: main.text,
                         shell_mode: None,
+                        disconnected_command: None,
                         text_elements: main.text_elements,
                         local_images: main.local_images,
                         remote_image_urls: main.remote_image_urls,

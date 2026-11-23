@@ -568,6 +568,16 @@ async fn reconnect_reconciles_offscreen_pending_profile_before_restoring_permiss
     let mut session = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.begin_reconnect();
+    // The displayed thread is editing /config when the connection returns.
+    for ch in "/co".chars() {
+        app.handle_tui_event(
+            &mut tui,
+            &mut session,
+            TuiEvent::Key(KeyCode::Char(ch).into()),
+        )
+        .await?;
+    }
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("› /config"));
     let connected = reconnect(
         session.backend_id(),
         app.app_server_target.clone(),
@@ -588,6 +598,21 @@ async fn reconnect_reconciles_offscreen_pending_profile_before_restoring_permiss
     )
     .await?;
     assert!(app.pending_server_profiles.contains_key(&primary));
+    // Replay replaces the widget. Tab must still complete /config even though
+    // /compact now sorts first.
+    let menu = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    let choices = menu
+        .lines()
+        .filter(|line| line.contains("/compact") || line.contains("/config"))
+        .map(str::trim_end)
+        .collect::<Vec<_>>();
+    assert_snapshot!(choices.join("\n"), @r"
+      /compact  summarize conversation to prevent hitting the context limit
+    › /config   configure Codex preferences
+    ");
+    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Tab.into()))
+        .await?;
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "/config ");
 
     app.select_agent_thread(&mut tui, &mut session, primary)
         .await?;

@@ -334,7 +334,7 @@ impl ChatComposer {
                 if has_visible_items && !has_selectable_item {
                     return (InputResult::None, true);
                 }
-                if self.is_task_running {
+                if self.is_task_running && mode == SlashPopupInputMode::Normal {
                     return self.handle_submission(/*should_queue*/ true);
                 }
                 (InputResult::None, true)
@@ -422,7 +422,10 @@ impl ChatComposer {
                         true,
                     );
                 }
-                // Fallback to default newline handling if no command selected.
+                // A selection lost on disconnect must not submit the raw draft after reconnect.
+                if popup.blocks_submit_fallback() {
+                    return (InputResult::None, true);
+                }
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
@@ -562,7 +565,7 @@ pub(super) fn command_popup_filter_text(first_line: &str, cursor: usize) -> Opti
 
 /// If the cursor is currently within a slash command on the first line,
 /// extract the command fragment before the cursor and the rest of the line after it.
-fn command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
+pub(super) fn command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
     if !first_line.starts_with('/') {
         return None;
     }

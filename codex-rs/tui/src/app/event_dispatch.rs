@@ -96,9 +96,10 @@ impl App {
                 || "Thread ID unavailable.".to_string(),
                 |id| format!("Thread ID {id}"),
             );
+            self.transcript_view.jump_to_latest();
             self.chat_widget.add_info_message(
                 thread,
-                Some("Reconnect to send feedback or save a ZIP.".into()),
+                Some("Reconnect and retry /feedback.".into()),
             );
             return Ok(AppRunControl::Continue);
         }

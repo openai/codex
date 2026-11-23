@@ -48,6 +48,40 @@ fn submit_local_command(app: &mut App, command: &str) {
 }
 
 #[tokio::test]
+async fn disconnected_feedback_reveals_the_thread_id_from_older_history() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut server = start_config_write_test_app_server(&app).await?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let id = ThreadId::new();
+    app.active_thread_id = Some(id);
+    app.reconnect.offline = true;
+    hold_older_history(&mut app, &mut tui);
+    for ch in "/feedback".chars() {
+        app.handle_tui_event(
+            &mut tui,
+            &mut server,
+            TuiEvent::Key(KeyCode::Char(ch).into()),
+        )
+        .await?;
+    }
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    while let Ok(event) = events.try_recv() {
+        app.handle_event(&mut tui, &mut server, event).await?;
+    }
+    let visible = crate::app::owned_transcript::tests::buffer_text(&transcript_buffer(&mut app));
+    insta::assert_snapshot!(visible.replace(&id.to_string(), "<id>"), @"
+    older 5
+
+    • Thread ID <id> Reconnect and retry /feedback.
+    ");
+    tui.set_owned_screen(/*owned*/ false)?;
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn settings_pickers_preserve_the_reading_anchor_through_open_and_close() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;

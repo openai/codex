@@ -679,6 +679,7 @@ impl ChatWidget {
         let ThreadComposerState {
             text,
             shell_mode: _,
+            disconnected_command,
             local_images,
             remote_image_urls,
             text_elements,
@@ -699,6 +700,9 @@ impl ChatWidget {
             },
         );
         self.bottom_pane.set_composer_pending_pastes(pending_pastes);
+        if let Some(command) = disconnected_command {
+            self.bottom_pane.restore_disconnected_command(command);
+        }
     }
 
     fn composer_state_from_user_message(
@@ -715,6 +719,7 @@ impl ChatWidget {
         ThreadComposerState {
             text,
             shell_mode: None,
+            disconnected_command: None,
             local_images,
             remote_image_urls,
             text_elements,
@@ -728,6 +733,7 @@ impl ChatWidget {
         let draft = self.bottom_pane.composer_recovery_snapshot();
         let composer = ThreadComposerState {
             text: draft.text,
+            disconnected_command: self.bottom_pane.disconnected_command_state(),
             // A disabled shell composer also treats a leading bang literally.
             shell_mode: Some(draft.shell_mode.unwrap_or(false)),
             text_elements: draft.text_elements,

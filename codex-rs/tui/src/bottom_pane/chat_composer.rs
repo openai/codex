@@ -195,7 +195,9 @@
 //! Exports and local display commands (`/title` and `/statusline`) also accept arguments.
 //!
 //! While disconnected, `handle_restricted_key` keeps the draft editable without submission.
-//! The slash popup supports navigation, Tab and submission of local commands.
+//! The slash popup supports navigation and configured submit keys for local commands.
+//! Tab completes without queuing. A connection change keeps the same selection or leaves
+//! the menu unselected if the command disappears.
 //! Local commands include `/warnings`, `/config`, `/rc` (alias `/remote`, including `stop`),
 //! `/feedback` (thread ID and reconnection guidance), `/quit`, and `/exit`. Searching for
 //! other commands shows that they require a server connection. `?` becomes literal input.
@@ -432,6 +434,7 @@ mod passive_hints;
 mod paste_input;
 mod popup_state;
 mod reconnect;
+pub(crate) use reconnect::DisconnectedCommandState;
 pub(crate) use reconnect::RestrictedInputMode;
 mod edit_history;
 mod slash_argument;
@@ -1181,7 +1184,14 @@ impl ChatComposer {
             } else {
                 KeymapContextSet::default()
             };
-            return if matches!(self.popups.active, ActivePopup::Argument(_)) {
+            let restricted_command = matches!(self.popups.active, ActivePopup::Command(_))
+                && matches!(
+                    self.popups.restricted_input_mode,
+                    Some(
+                        RestrictedInputMode::Disconnected | RestrictedInputMode::UnavailableThread
+                    )
+                );
+            return if matches!(self.popups.active, ActivePopup::Argument(_)) || restricted_command {
                 contexts.with_composer_submit()
             } else {
                 contexts
@@ -1663,7 +1673,8 @@ impl ChatComposer {
         self.current_cursor()
     }
 
-    fn history_navigation_cursor(&self) -> usize {
+    /// Treat Vim's final block cursor as the end of the draft.
+    fn logical_cursor(&self) -> usize {
         if self.draft.is_bash_mode && self.draft.textarea.cursor() == 0 {
             0
         } else if self.draft.textarea.is_vim_normal_mode()
@@ -3720,10 +3731,9 @@ impl ChatComposer {
         };
         if history_up_pressed || history_down_pressed {
             if self.draft.textarea.mouse_selection_range().is_none()
-                && self.history.should_handle_navigation(
-                    &self.current_text(),
-                    self.history_navigation_cursor(),
-                )
+                && self
+                    .history
+                    .should_handle_navigation(&self.current_text(), self.logical_cursor())
             {
                 let replace_entry = if history_up_pressed {
                     self.history.navigate_up(&self.app_event_tx)
@@ -4077,7 +4087,7 @@ impl ChatComposer {
         if self.draft.is_bash_mode
             || self
                 .history
-                .should_handle_navigation(&self.current_text(), self.history_navigation_cursor())
+                .should_handle_navigation(&self.current_text(), self.logical_cursor())
         {
             if self.popups.current_file_query.is_some() {
                 self.app_event_tx

@@ -1,4 +1,5 @@
 //! Restricted editing retains drafts and limits slash dispatch to local commands.
+//! A reconnect can replace the composer. Preserve the slash selection with the draft.
 //! Unavailable threads also allow recovery and other local commands.
 //! Connected unavailable threads retain the empty-prompt agents shortcut.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
@@ -8,6 +9,44 @@
 //! Offline draft edits also consume the Astra sparkle opportunity before rendering.
 
 use super::*;
+use crate::bottom_pane::BottomPane;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DisconnectedCommandState {
+    cursor: usize,
+    selected: Option<CommandItem>,
+    dismissed: Option<String>,
+}
+
+impl BottomPane {
+    pub(crate) fn disconnected_command_state(&self) -> Option<DisconnectedCommandState> {
+        let composer = &self.composer;
+        if composer.popups.restricted_input_mode != Some(RestrictedInputMode::Disconnected)
+            || composer.draft.is_bash_mode
+            || !composer.draft.textarea.text().starts_with('/')
+        {
+            return None;
+        }
+        Some(DisconnectedCommandState {
+            cursor: composer.logical_cursor(),
+            selected: match &composer.popups.active {
+                ActivePopup::Command(popup) => popup.current_item(),
+                _ => None,
+            },
+            dismissed: composer.popups.dismissed_command_token.clone(),
+        })
+    }
+
+    pub(crate) fn restore_disconnected_command(&mut self, state: DisconnectedCommandState) {
+        self.composer.popups.active = ActivePopup::None;
+        self.composer.popups.dismissed_command_token = state.dismissed;
+        self.set_composer_cursor(state.cursor);
+        if let ActivePopup::Command(popup) = &mut self.composer.popups.active {
+            // An absent selection matters too, e.g. when the cursor split the name offline.
+            popup.restore_selection(state.selected);
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RestrictedInputMode {
@@ -33,12 +72,11 @@ impl ChatComposer {
         let was_disconnected =
             self.popups.restricted_input_mode == Some(RestrictedInputMode::Disconnected);
         self.popups.restricted_input_mode = mode;
-        // Command popups cache their catalog. Rebuild it on a connection change, keeping
-        // the selection across keys and redraws that use the same catalog.
-        if was_disconnected != (mode == Some(RestrictedInputMode::Disconnected))
-            && matches!(self.popups.active, ActivePopup::Command(_))
+        let disconnected = mode == Some(RestrictedInputMode::Disconnected);
+        if was_disconnected != disconnected
+            && let ActivePopup::Command(popup) = &mut self.popups.active
         {
-            self.popups.active = ActivePopup::None;
+            popup.set_disconnected(disconnected);
             self.sync_restricted_slash_popup();
         }
         // Reconcile a popup opened before the routing mode changed, before Tab can accept it.
@@ -216,6 +254,9 @@ impl ChatComposer {
                 self.sync_restricted_slash_popup();
                 return result;
             }
+            if submit && popup.blocks_submit_fallback() {
+                return InputResult::None;
+            }
             if !submit
                 && (matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::Esc)
                     || matches!(
@@ -246,6 +287,15 @@ impl ChatComposer {
         {
             let input = self.slash_input();
             let text = self.draft.textarea.text();
+            // A partial name under the cursor hides the popup offline. Don't
+            // dispatch the full draft in place of the previously highlighted row.
+            if mode == RestrictedInputMode::Disconnected
+                && let Some((_, tail)) =
+                    slash_input::command_under_cursor(text, self.logical_cursor())
+                && tail.starts_with(|ch: char| !ch.is_whitespace())
+            {
+                return InputResult::None;
+            }
             let command = input
                 .bare_command(text)
                 .or_else(|| input.inline_command(text).map(|command| command.command))
