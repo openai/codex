@@ -437,8 +437,7 @@ async fn queued_startup_requests_block_terminal_input_after_draft_handoff() -> R
         app.enqueue_primary_thread_request(request).await?;
 
         assert!(
-            app.active_thread_rx
-                .as_ref()
+            app.active_thread_rx()
                 .is_some_and(|receiver| !receiver.is_empty())
         );
         assert!(
@@ -457,8 +456,7 @@ async fn queued_startup_requests_block_terminal_input_after_draft_handoff() -> R
         }
 
         let event = app
-            .active_thread_rx
-            .as_mut()
+            .active_thread_rx_mut()
             .expect("primary thread receiver should be active")
             .try_recv()
             .expect("protected request should be queued on the active thread");
@@ -518,8 +516,7 @@ async fn queued_startup_requests_block_draft_restore_until_drained() -> Result<(
     assert!(app.chat_widget.composer_is_empty());
 
     let event = app
-        .active_thread_rx
-        .as_mut()
+        .active_thread_rx_mut()
         .expect("primary thread receiver should be active")
         .try_recv()
         .expect("protected request should be queued on the active thread");
@@ -562,8 +559,7 @@ async fn startup_draft_handoff_keeps_approval_shortcuts_in_recently_active_compo
         .note_server_request(&approval_request);
     app.enqueue_primary_thread_request(approval_request).await?;
     let approval_event = app
-        .active_thread_rx
-        .as_mut()
+        .active_thread_rx_mut()
         .expect("primary thread receiver should be active")
         .try_recv()
         .expect("approval should be queued on the active thread");
@@ -627,8 +623,7 @@ async fn startup_draft_delayed_approval_becomes_protected_on_redraw() -> Result<
         .note_server_request(&approval_request);
     app.enqueue_primary_thread_request(approval_request).await?;
     let approval_event = app
-        .active_thread_rx
-        .as_mut()
+        .active_thread_rx_mut()
         .expect("primary thread receiver should be active")
         .try_recv()
         .expect("approval should be queued on the active thread");
@@ -767,8 +762,7 @@ async fn later_thread_approval_preserves_input_after_startup_boundary_ends() -> 
         .note_server_request(&approval_request);
     app.enqueue_primary_thread_request(approval_request).await?;
     let approval_event = app
-        .active_thread_rx
-        .as_mut()
+        .active_thread_rx_mut()
         .expect("primary thread receiver should be active")
         .try_recv()
         .expect("approval should be queued on the active thread");
@@ -883,7 +877,7 @@ async fn unattended_modals_survive_unfinished_terminal_input() -> Result<()> {
         .pending_app_server_requests
         .note_server_request(&request);
     app.enqueue_primary_thread_request(request).await?;
-    let event = app.active_thread_rx.as_mut().unwrap().try_recv()?;
+    let event = app.active_thread_rx_mut().unwrap().try_recv()?;
     app.handle_active_thread_event(&mut tui, &mut app_server, event)
         .await?;
     assert!(app.chat_widget.has_active_modal());
@@ -1145,8 +1139,7 @@ async fn startup_draft_handoff_protects_delayed_question_until_resolved() -> Res
         .note_server_request(&request);
     app.enqueue_primary_thread_request(request).await?;
     let event = app
-        .active_thread_rx
-        .as_mut()
+        .active_thread_rx_mut()
         .expect("primary thread receiver should be active")
         .try_recv()
         .expect("user input request should be queued on the active thread");
@@ -1218,8 +1211,7 @@ async fn fresh_startup_thread_drains_buffered_approval_before_draft_handoff() ->
 
     assert!(matches!(control, AppRunControl::Continue));
     assert!(
-        app.active_thread_rx
-            .as_ref()
+        app.active_thread_rx()
             .is_some_and(|receiver| !receiver.is_empty())
     );
     assert!(!app.chat_widget.has_active_view());
@@ -1638,8 +1630,7 @@ async fn startup_thread_started_discards_another_threads_buffered_events() {
 
     assert!(app.pending_primary_events.is_empty());
     assert!(
-        app.active_thread_rx
-            .as_mut()
+        app.active_thread_rx_mut()
             .is_some_and(|rx| rx.try_recv().is_err())
     );
 }

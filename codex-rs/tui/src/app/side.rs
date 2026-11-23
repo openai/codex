@@ -1033,7 +1033,7 @@ impl App {
                 if already_selected {
                     // Selection normally skips the live thread. Replay the initialized snapshot
                     // even if the picker exposed this child before the boundary RPC completed.
-                    self.store_active_thread_receiver().await;
+                    self.save_active_thread_state().await;
                     self.active_thread_id = None;
                 }
                 if let Err(err) = self

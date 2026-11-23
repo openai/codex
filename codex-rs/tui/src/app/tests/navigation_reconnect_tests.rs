@@ -69,7 +69,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 );
             app.chat_widget
                 .restore_user_message_to_composer("old draft".into());
-            app.store_active_thread_receiver().await;
+            app.save_active_thread_state().await;
             app.chat_widget
                 .handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
             assert!(app.chat_widget.composer_is_empty());
@@ -641,7 +641,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 agent_message_delta_notification(id, "new-turn", "new-item", "fresh delivery"),
             ));
             channel.sender.send(event).await?;
-            assert!(app.active_thread_rx.as_mut().unwrap().try_recv().is_ok());
+            assert!(app.active_thread_rx_mut().unwrap().try_recv().is_ok());
         }
         session.shutdown().await?;
         let methods = server.await??;

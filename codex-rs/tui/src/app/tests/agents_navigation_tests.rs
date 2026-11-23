@@ -2,6 +2,35 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn clearing_focus_keeps_unread_events_on_the_original_thread() -> Result<()> {
+    let mut app = make_test_app().await;
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    app.ensure_thread_channel(first);
+    app.ensure_thread_channel(second);
+    app.activate_thread_channel(first).await;
+    app.enqueue_thread_notification(first, thread_closed_notification(first))
+        .await?;
+
+    app.clear_active_thread().await;
+    assert!(app.active_thread_rx().is_none());
+    app.activate_thread_channel(second).await;
+    assert!(app.active_thread_rx().unwrap().is_empty());
+
+    app.clear_active_thread().await;
+    app.activate_thread_channel(first).await;
+    let event = app.active_thread_rx_mut().unwrap().try_recv()?;
+    let ThreadBufferedEvent::Notification(notification) = event else {
+        panic!("expected the original notification");
+    };
+    let ServerNotification::ThreadClosed(closed) = *notification else {
+        panic!("expected thread closure");
+    };
+    assert_eq!(closed.thread_id, first.to_string());
+    Ok(())
+}
+
+#[tokio::test]
 async fn agents_navigation_opens_the_command_center_on_every_target() -> Result<()> {
     let endpoint = crate::RemoteAppServerEndpoint::UnixSocket {
         socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
@@ -431,6 +460,26 @@ fn thread_links_navigate_and_missing_threads_preserve_the_draft() -> Result<()> 
                 (Some(root), Some(target))
             );
         }
+        if scenario == "root" {
+            for exiting in [false, true] {
+                app.ensure_thread_channel(root).mark_replay_only();
+                app.chat_widget.show_external_writer_thread();
+                app.pending_shutdown_exit_thread_id = exiting.then_some(root);
+                app.enqueue_thread_notification(root, thread_closed_notification(root)).await?;
+                Box::pin(app.select_agent_thread(&mut tui, &mut app_server, root)).await?;
+                assert_eq!(app.thread_event_channels[&root].attachment(), ThreadEventAttachment::Live);
+                let mut saw_exit = false;
+                while let Ok(event) = events.try_recv() {
+                    if matches!(event, AppEvent::Exit(ExitMode::Immediate)) {
+                        saw_exit = true;
+                    } else {
+                        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+                    }
+                }
+                assert_eq!(saw_exit, exiting);
+            }
+            app.pending_shutdown_exit_thread_id = None;
+        }
         if scenario == "grandchild" {
             let intermediate = intermediate.expect("grandchild has an intermediate parent");
             Box::pin(app.select_agent_thread(&mut tui, &mut app_server, intermediate)).await?;
@@ -440,13 +489,13 @@ fn thread_links_navigate_and_missing_threads_preserve_the_draft() -> Result<()> 
             Box::pin(thread_links::open_thread_link(&mut app, &mut tui, &mut app_server, target)).await?;
             Box::pin(app.select_agent_thread(&mut tui, &mut app_server, intermediate)).await?;
             assert_eq!(app.active_thread_id, Some(intermediate));
-            while app.active_thread_rx.as_mut().unwrap().try_recv().is_ok() {}
+            while app.active_thread_rx_mut().unwrap().try_recv().is_ok() {}
             let event = ThreadBufferedEvent::Notification(Box::new(
                 agent_message_delta_notification(intermediate, "turn", "item", "fresh delivery"),
             ));
             app.thread_event_channels[&intermediate].sender.send(event).await?;
             let ThreadBufferedEvent::Notification(notification) =
-                app.active_thread_rx.as_mut().unwrap().try_recv()?
+                app.active_thread_rx_mut().unwrap().try_recv()?
             else {
                 panic!("expected an agent message notification");
             };

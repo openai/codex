@@ -1075,8 +1075,8 @@ impl App {
                 self.chat_widget.restore_user_message_to_composer(prompt);
                 self.chat_widget.set_queue_autosend_suppressed(/*suppressed*/ true);
                 self.abort_thread_event_listener(thread_id);
-                if let Some(mut rx) = self.active_thread_rx.take() {
-                    while let Ok(event) = rx.try_recv() {
+                if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
+                    while let Ok(event) = channel.receiver.try_recv() {
                         if let ThreadBufferedEvent::Notification(notification) = event {
                             self.chat_widget.handle_server_notification(*notification, Some(ReplayKind::ThreadSnapshot));
                         }

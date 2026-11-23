@@ -416,7 +416,7 @@ impl App {
         if let Some(input) = input.as_mut() {
             input.reconnect_pending = true;
         }
-        self.store_active_thread_receiver().await;
+        self.save_active_thread_state().await;
         // Old request handles stay attached to the dead connection. Rotating the event channel
         // prevents their late completions from submitting follow-up operations on the new one.
         let (tx, rx) = mpsc::unbounded_channel();
@@ -599,10 +599,9 @@ impl App {
             self.thread_event_channels.insert(id, channel);
         }
         if let Some(id) = displayed
-            && let Some((receiver, snapshot)) = self.activate_thread_for_replay(id).await
+            && let Some(snapshot) = self.activate_thread_for_replay(id).await
         {
             self.active_thread_id = Some(id);
-            self.active_thread_rx = Some(receiver);
             self.recap.seed_from_turns(&snapshot.turns, Instant::now());
             if let Err(err) = self
                 .render_thread_snapshot(
@@ -627,7 +626,6 @@ impl App {
             }
         } else {
             self.active_thread_id = None;
-            self.active_thread_rx = None;
             self.primary_thread_id = None;
             self.primary_session_configured = None;
             let init = self.chatwidget_init_for_forked_or_resumed_thread(

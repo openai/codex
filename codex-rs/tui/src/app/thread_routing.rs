@@ -116,16 +116,31 @@ impl App {
         }
     }
 
+    pub(super) fn active_thread_rx(&self) -> Option<&mpsc::Receiver<ThreadBufferedEvent>> {
+        Some(
+            &self
+                .thread_event_channels
+                .get(&self.active_thread_id?)?
+                .receiver,
+        )
+    }
+
+    pub(super) fn active_thread_rx_mut(
+        &mut self,
+    ) -> Option<&mut mpsc::Receiver<ThreadBufferedEvent>> {
+        Some(
+            &mut self
+                .thread_event_channels
+                .get_mut(&self.active_thread_id?)?
+                .receiver,
+        )
+    }
+
     pub(super) async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
         if self.active_thread_id.is_some() {
             return;
         }
         self.set_thread_active(thread_id, /*active*/ true).await;
-        let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
-            channel.receiver.take()
-        } else {
-            None
-        };
         if let Some(startup_pane) = self.sidebars.remove(&None)
             && let std::collections::hash_map::Entry::Vacant(entry) =
                 self.sidebars.entry(Some(thread_id))
@@ -138,11 +153,10 @@ impl App {
             }
         }
         self.active_thread_id = Some(thread_id);
-        self.active_thread_rx = receiver;
         self.refresh_pending_thread_approvals().await;
     }
 
-    pub(super) async fn store_active_thread_receiver(&mut self) {
+    pub(super) async fn save_active_thread_state(&mut self) {
         let Some(active_id) = self.active_thread_id else {
             return;
         };
@@ -153,7 +167,6 @@ impl App {
         let input_state = self.chat_widget.capture_thread_input_state();
         let recap_progress = self.recap.progress();
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
-            let receiver = self.active_thread_rx.take();
             let mut store = channel.store.lock().await;
             if store.active {
                 store.replay_may_have_output = false;
@@ -161,9 +174,6 @@ impl App {
             store.active = false;
             store.input_state = input_state;
             store.merge_recap_progress(recap_progress);
-            if let Some(receiver) = receiver {
-                channel.receiver = Some(receiver);
-            }
         }
     }
 
@@ -192,20 +202,17 @@ impl App {
     pub(super) async fn activate_thread_for_replay(
         &mut self,
         thread_id: ThreadId,
-    ) -> Option<(mpsc::Receiver<ThreadBufferedEvent>, ThreadEventSnapshot)> {
-        let channel = self.thread_event_channels.get_mut(&thread_id)?;
-        let receiver = channel.receiver.take()?;
+    ) -> Option<ThreadEventSnapshot> {
+        let channel = self.thread_event_channels.get(&thread_id)?;
         let mut store = channel.store.lock().await;
         store.active = true;
-        let snapshot = store.snapshot();
-        Some((receiver, snapshot))
+        Some(store.snapshot())
     }
 
     pub(super) async fn clear_active_thread(&mut self) {
         if let Some(active_id) = self.active_thread_id.take() {
             self.set_thread_active(active_id, /*active*/ false).await;
         }
-        self.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
     }
 
@@ -1887,12 +1894,7 @@ impl App {
         tui: &mut tui::Tui,
         frame_deadline: Instant,
     ) -> Result<()> {
-        let Some(mut rx) = self.active_thread_rx.take() else {
-            return Ok(());
-        };
-
-        let mut disconnected = false;
-        loop {
+        while let Some(rx) = self.active_thread_rx_mut() {
             match rx.try_recv() {
                 Ok(event) => {
                     self.handle_thread_event_now_recovering_file_changes(event)
@@ -1900,19 +1902,13 @@ impl App {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
+                    self.clear_active_thread().await;
                     break;
                 }
             }
             if Instant::now() >= frame_deadline {
                 break;
             }
-        }
-
-        if !disconnected {
-            self.active_thread_rx = Some(rx);
-        } else {
-            self.clear_active_thread().await;
         }
 
         if self.backtrack_render_pending {

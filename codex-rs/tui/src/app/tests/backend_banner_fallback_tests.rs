@@ -188,7 +188,7 @@ async fn backend_banner_fallback_uses_current_task_and_accepted_generation() -> 
         /*initial_user_message*/ None,
     );
     app.replace_chat_widget(ChatWidget::new_with_app_event(init));
-    app.store_active_thread_receiver().await;
+    app.save_active_thread_state().await;
     app.active_thread_id = None;
     app.enqueue_primary_thread_session(second.session, second.turns)
         .await?;

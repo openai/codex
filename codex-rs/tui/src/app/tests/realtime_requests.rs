@@ -502,13 +502,12 @@ async fn switching_agent_threads_preserves_backend_voice_and_routes_pending_spee
         matches!(speech, Op::RealtimeConversationSpeech { .. }),
         "{speech:?}"
     );
-    let mut source_channel = ThreadEventChannel::new_with_session(
+    let source_channel = ThreadEventChannel::new_with_session(
         THREAD_EVENT_CHANNEL_CAPACITY,
         test_thread_session(source, app.config.cwd.to_path_buf()),
         Vec::new(),
     );
     source_channel.store.lock().await.active = true;
-    app.active_thread_rx = source_channel.receiver.take();
     app.thread_event_channels.insert(source, source_channel);
     // Routed to the active channel, but not yet delivered to the old widget.
     app.enqueue_thread_notification(

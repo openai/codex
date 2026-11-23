@@ -91,7 +91,7 @@ async fn saved_chat_retry_and_supersession_with_pending_requests() -> Result<()>
             events = rx;
         } else if index == 4 {
             // Switching away and back cannot resurrect the original parent's intent.
-            app.store_active_thread_receiver().await;
+            app.save_active_thread_state().await;
         } else if index == 5 {
             // An archive from another client wins over a read that is already in flight.
             boxed_future!(app.handle_event(

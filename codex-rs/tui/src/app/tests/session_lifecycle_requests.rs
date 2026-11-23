@@ -953,7 +953,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 completed(other, ongoing, directive.clone()),
             ] {
                 app.enqueue_thread_notification(other, notification).await?;
-                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                let event = app.active_thread_rx_mut().unwrap().recv().await.unwrap();
                 app.handle_thread_event_now(event);
             }
             drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
@@ -999,7 +999,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 ),
             ] {
                 app.enqueue_thread_notification(other, notification).await?;
-                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                let event = app.active_thread_rx_mut().unwrap().recv().await.unwrap();
                 app.handle_thread_event_now(event);
             }
             drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
@@ -1035,7 +1035,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
                 turn_completed_notification(other, ongoing, TurnStatus::Completed),
             ] {
                 app.enqueue_thread_notification(other, notification).await?;
-                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                let event = app.active_thread_rx_mut().unwrap().recv().await.unwrap();
                 app.handle_thread_event_now(event);
             }
             drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
@@ -1135,7 +1135,7 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     ] {
         app.enqueue_thread_notification(original, notification)
             .await?;
-        let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+        let event = app.active_thread_rx_mut().unwrap().recv().await.unwrap();
         app.handle_thread_event_now(event);
     }
     drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;

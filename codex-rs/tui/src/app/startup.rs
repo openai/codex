@@ -238,19 +238,16 @@ impl App {
     pub(super) fn has_queued_startup_protected_request(&self) -> bool {
         self.startup_protected_input_boundary
             && (self
-                .active_thread_rx
-                .as_ref()
-                .is_some_and(|receiver| !receiver.is_empty())
-                && self
-                    .active_thread_id
-                    .and_then(|thread_id| self.thread_event_channels.get(&thread_id))
-                    .is_none_or(|channel| {
-                        // A bounded drain can leave ordinary notifications queued. Only protect
-                        // input for pending requests, or when their state cannot be inspected.
-                        channel.store.try_lock().map_or(/*default*/ true, |store| {
+                .active_thread_id
+                .and_then(|id| self.thread_event_channels.get(&id))
+                .is_some_and(|channel| {
+                    // A bounded drain can leave ordinary notifications queued. Only protect
+                    // input for pending requests, or when their state cannot be inspected.
+                    !channel.receiver.is_empty()
+                        && channel.store.try_lock().map_or(/*default*/ true, |store| {
                             store.side_parent_pending_status().is_some()
                         })
-                    })
+                })
                 || self
                     .pending_primary_events
                     .iter()
@@ -1154,7 +1151,6 @@ See the Codex keymap documentation for supported actions and examples."
             sidebar_press: None,
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
-            active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
@@ -1297,7 +1293,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
         if Self::should_handle_active_thread_events(
             wait_for_initial_session_configured,
-            app.active_thread_rx.is_some(),
+            app.active_thread_rx().is_some(),
         ) && let Err(err) = app.drain_active_thread_events(tui).await
         {
             return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
@@ -1751,14 +1747,14 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                     }
                     active = async {
-                        if let Some(rx) = app.active_thread_rx.as_mut() {
-                            rx.recv().await
+                        if let Some(channel) = app.active_thread_id.and_then(|id| app.thread_event_channels.get_mut(&id)) {
+                            channel.receiver.recv().await
                         } else {
                             None
                         }
                     }, if App::should_handle_active_thread_events(
                         waiting_for_initial_session_configured,
-                        app.active_thread_rx.is_some()
+                        app.active_thread_rx().is_some()
                     ) && !has_pending_app_events && !app.reconnect.offline => {
                         if let Some(event) = active {
                             if let Err(err) = app.handle_active_thread_event(tui, backends.session_at_mut(displayed_session), event).await {
@@ -1783,8 +1779,7 @@ See the Codex keymap documentation for supported actions and examples."
                                 && app_event_rx.is_empty()
                                 && !app.startup_pending_protected_request
                                 && app
-                                    .active_thread_rx
-                                    .as_ref()
+                                    .active_thread_rx()
                                     .is_none_or(tokio::sync::mpsc::Receiver::is_empty)
                                 && !app.pending_primary_events.iter().any(|event| {
                                     matches!(event, ThreadBufferedEvent::Request(_))

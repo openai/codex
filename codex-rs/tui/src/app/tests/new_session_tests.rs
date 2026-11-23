@@ -1199,7 +1199,7 @@ async fn replacement_failure_keeps_current_task_and_restores_input() -> Result<(
         .await;
         assert_eq!(app.chat_widget.thread_id(), Some(current));
         assert_eq!(app.active_thread_id, Some(current));
-        assert!(app.active_thread_rx.is_some());
+        assert!(app.active_thread_rx().is_some());
         assert_eq!(app.config, original_config);
         assert_eq!(
             app.chat_widget.composer_text_with_pending(),
@@ -1262,7 +1262,7 @@ async fn replacement_failure_keeps_current_task_and_restores_input() -> Result<(
             assert_eq!(backends.displayed_owner(), source_id);
             assert_eq!(app.config, original_config);
             assert_eq!(app.active_thread_id, Some(current));
-            assert!(app.active_thread_rx.is_some());
+            assert!(app.active_thread_rx().is_some());
             assert_eq!(app.chat_widget.thread_id(), Some(current));
             assert_eq!(
                 app.chat_widget.composer_text_with_pending(),
@@ -1455,7 +1455,7 @@ async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Res
 
     assert!(app.finish_docked_task_opening(&tui, resumed_id));
     assert!(app.startup_protected_input_boundary);
-    while let Ok(event) = app.active_thread_rx.as_mut().unwrap().try_recv() {
+    while let Ok(event) = app.active_thread_rx_mut().unwrap().try_recv() {
         app.handle_thread_event_now(event);
     }
     assert!(app.chat_widget.has_active_modal());

@@ -274,8 +274,7 @@ async fn subagent_mcp_startup_settles_while_cached_servers_remain_deferred() {
         )
         .await;
         let event = app
-            .active_thread_rx
-            .as_mut()
+            .active_thread_rx_mut()
             .expect("subagent receiver should be active")
             .try_recv()
             .expect("MCP startup update should reach the active subagent");

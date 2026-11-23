@@ -500,7 +500,7 @@ async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn()
         );
         app.enqueue_thread_notification(id, ServerNotification::ItemCompleted(completed))
             .await?;
-        let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+        let event = app.active_thread_rx_mut().unwrap().recv().await.unwrap();
         app.handle_thread_event_now(event);
         drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
     }

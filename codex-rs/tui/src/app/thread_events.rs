@@ -651,7 +651,7 @@ pub(super) struct ThreadEventChannel {
     /// Set on backend handoff so a retained channel is detached through its owning session.
     pub(super) backend_id: Option<crate::backend_id::BackendId>,
     pub(super) sender: mpsc::Sender<ThreadBufferedEvent>,
-    pub(super) receiver: Option<mpsc::Receiver<ThreadBufferedEvent>>,
+    pub(super) receiver: mpsc::Receiver<ThreadBufferedEvent>,
     pub(super) store: Arc<Mutex<ThreadEventStore>>,
     /// Live Attach restored delivery without reading the history from the gap.
     pub(super) history_may_be_incomplete: bool,
@@ -665,7 +665,7 @@ impl ThreadEventChannel {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
-            receiver: Some(receiver),
+            receiver,
             store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
             backend_id: None,
             history_may_be_incomplete: false,
@@ -703,7 +703,7 @@ impl ThreadEventChannel {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
-            receiver: Some(receiver),
+            receiver,
             store: Arc::new(Mutex::new(ThreadEventStore::new_with_session(
                 capacity, session, turns,
             ))),
