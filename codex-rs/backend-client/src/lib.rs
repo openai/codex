@@ -19,6 +19,7 @@ pub use client::profile::ProfileInvocation;
 pub use client::profile::ProfileInvocationKind;
 pub use client::profile::ProfileMetadata;
 pub use client::profile::ProfileStats;
+pub use client::statsig::StatsigBootstrapContext;
 pub use client::turn_usage::ApiKeyResponseCost;
 pub use client::turn_usage::ApiKeyTurnCost;
 pub use client::turn_usage::ApiKeyTurnCostStatus;
