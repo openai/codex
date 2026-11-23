@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::exec_cell::CommandOutput;
+use crate::exec_cell::plain_output_text;
 
 impl ChatWidget {
     pub(super) fn flush_unified_exec_wait_streak(&mut self) {
@@ -57,7 +58,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_exec_command_output_delta(&mut self, call_id: &str, delta: &str) {
-        self.track_unified_exec_output_chunk(call_id, delta.as_bytes());
+        self.track_unified_exec_output_chunk(call_id, delta);
         if !self.bottom_pane.is_task_running() {
             return;
         }
@@ -184,12 +185,14 @@ impl ChatWidget {
             existing.call_id = call_id.to_string();
             existing.command_display = command_display;
             existing.recent_chunks.clear();
+            existing.pending = Default::default();
         } else {
             self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
                 call_id: call_id.to_string(),
                 command_display,
                 recent_chunks: Vec::new(),
+                pending: Default::default(),
             });
         }
         self.sync_unified_exec_footer();
@@ -230,6 +233,7 @@ impl ChatWidget {
                     call_id: terminal.item_id,
                     command_display: terminal.command,
                     recent_chunks: Vec::new(),
+                    pending: Default::default(),
                 });
             }
         }
@@ -263,7 +267,7 @@ impl ChatWidget {
     }
 
     /// Record recent stdout/stderr lines for the unified exec footer.
-    pub(super) fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) {
+    fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &str) {
         let Some(process) = self
             .unified_exec_processes
             .iter_mut()
@@ -272,20 +276,20 @@ impl ChatWidget {
             return;
         };
 
-        let text = String::from_utf8_lossy(chunk);
-        for line in text
-            .lines()
-            .map(str::trim_end)
+        let limit = UnifiedExecProcessSummary::MAX_RECENT_CHUNKS;
+        let insert_at = process.recent_chunks.len();
+        for line in process
+            .pending
+            .push_lines(chunk)
+            .rev()
+            .map(plain_output_text)
             .filter(|line| !line.is_empty())
+            .take(limit)
         {
-            process.recent_chunks.push(line.to_string());
+            process.recent_chunks.insert(insert_at, line);
         }
-
-        const MAX_RECENT_CHUNKS: usize = 3;
-        if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
-            let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
-            process.recent_chunks.drain(0..drop_count);
-        }
+        let excess = process.recent_chunks.len().saturating_sub(limit);
+        process.recent_chunks.drain(..excess);
     }
 
     pub(crate) fn handle_command_execution_started_now(&mut self, item: ThreadItemPayload) {

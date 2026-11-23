@@ -3,6 +3,8 @@
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 
+use crate::exec_cell::PendingLine;
+use crate::exec_cell::plain_output_text;
 use crate::exec_command::split_command_string;
 
 pub(super) struct RunningCommand {
@@ -16,6 +18,23 @@ pub(super) struct UnifiedExecProcessSummary {
     pub(super) call_id: String,
     pub(super) command_display: String,
     pub(super) recent_chunks: Vec<String>,
+    pub(super) pending: PendingLine,
+}
+
+impl UnifiedExecProcessSummary {
+    pub(super) const MAX_RECENT_CHUNKS: usize = 3;
+
+    pub(super) fn recent_lines(&self) -> Vec<String> {
+        let mut lines = self.recent_chunks.clone();
+        let pending = plain_output_text(self.pending.clone().render());
+        if !pending.is_empty() {
+            if lines.len() == Self::MAX_RECENT_CHUNKS {
+                lines.remove(0);
+            }
+            lines.push(pending);
+        }
+        lines
+    }
 }
 
 pub(super) struct UnifiedExecWaitState {

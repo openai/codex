@@ -53,7 +53,7 @@ fn switches_to_bounded_storage_after_the_byte_budget_and_preserves_split_crlf() 
                 .transcript_lines()
                 .next()
                 .expect("partial line")
-                .ends_with('\r')
+                .ends_with('x')
         );
         split.push_str("\n");
 
@@ -132,4 +132,73 @@ fn retained_output_stays_within_the_live_byte_budget() {
         "… +80 lines"
     );
     assert!(lines.iter().map(|line| line.len()).sum::<usize>() <= LIVE_COMMAND_OUTPUT_MAX_BYTES);
+}
+
+#[test]
+fn progress_redraws_agree_across_chunks_and_the_live_byte_limit() {
+    for prefix in [String::new(), "x".repeat(LIVE_COMMAND_OUTPUT_MAX_BYTES)] {
+        let mut output = LiveCommandOutput::default();
+        output.push_str(&prefix);
+        output.push_str("\n");
+        for (chunk, expected) in [
+            ("abcdef\r", "abcdef"),
+            ("XY", "XYcdef"),
+            ("\x1b[", "XYcdef"),
+            ("K", "XY"),
+            ("\r界\u{301}ok\r!", "! ok"),
+            ("\r\x1b[0K100%", "100%"),
+            ("\rDownloading 100%\r\x1b[2KDone", "Done"),
+            ("\rXY\x1b[2K!", "  !"),
+            ("\r\x1b[K\r\x1b[K\r\x1b[K", ""),
+            ("\x1b[31m10%\r", "\x1b[31m10%"),
+            ("100%\x1b[0m", "\x1b[31m100%\x1b[0m"),
+            ("\r\x1b[31mabcdef\rXY\rZ", "\x1b[31mZYcdef"),
+            ("\r\x1b[32m!", "\x1b[32m!\x1b[31mYcdef"),
+            ("\r\x1b[1;44;31m.\x1b[39m\rFinished", "\x1b[1;44mFinished"),
+        ] {
+            output.push_str(chunk);
+            let row = output.lines().next_back().expect("progress row");
+            let actual = ansi_escape_line(&row);
+            let expected = ansi_escape_line(expected);
+            let base = ratatui::style::Style::reset();
+            assert_eq!(
+                actual.styled_graphemes(base).collect::<Vec<_>>(),
+                expected.styled_graphemes(base).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn overwritten_colors_do_not_consume_the_preview_budget() {
+    let raw = "\x1b[31m.\x1b[39m\r".repeat(1100) + "Done!";
+    let mut live = LiveCommandOutput::default();
+    live.push_str(&raw);
+    let mut pending = super::PendingLine::default();
+    pending.push_str(&raw);
+    let ps = crate::exec_cell::plain_output_text(pending.render());
+    let completed = crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, raw);
+
+    assert_eq!(ps, "Done!");
+    for row in [live.lines().next(), completed.lines().next()] {
+        let line = ansi_escape_line(&row.expect("progress row"));
+        let base = ratatui::style::Style::reset();
+        assert_eq!(line.to_string(), "Done!");
+        assert!(line.styled_graphemes(base).all(|g| g.style == base));
+    }
+}
+
+#[test]
+fn long_redraw_overwrites_columns_before_abbreviating_the_row() {
+    let mut output = LiveCommandOutput::default();
+    output.push_str(&"x".repeat(LIVE_COMMAND_OUTPUT_MAX_BYTES));
+    output.push_str("\n");
+    output.push_str(&"x".repeat(15_000));
+    output.push_str(&format!("\r{}\rabc\rXY\r\n", "y".repeat(12_000)));
+
+    let mut expected = LiveCommandOutput::default();
+    expected.push_str("XYc");
+    expected.push_str(&"y".repeat(11_997));
+    expected.push_str(&"x".repeat(3_000));
+    assert_eq!(output.lines().next_back(), expected.lines().next_back());
 }

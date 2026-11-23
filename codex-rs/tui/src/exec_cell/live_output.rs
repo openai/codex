@@ -1,3 +1,4 @@
+use super::command_output_line;
 use itertools::Either;
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -21,10 +22,9 @@ pub(super) struct LiveCommandOutput {
     truncated: bool,
     head: Vec<String>,
     tail: VecDeque<String>,
-    current: LiveCommandOutputLine,
+    current: PendingLine,
     completed_lines: usize,
     has_partial_line: bool,
-    pending_carriage_return: bool,
 }
 
 impl LiveCommandOutput {
@@ -52,39 +52,12 @@ impl LiveCommandOutput {
         self.push_truncated_str(chunk);
     }
 
-    /// Appends bounded output while treating a split CRLF as one terminator and retaining lone CRs.
     fn push_truncated_str(&mut self, chunk: &str) {
-        for part in chunk.split_inclusive('\n') {
-            let Some(part) = part.strip_suffix('\n') else {
-                if part.is_empty() {
-                    continue;
-                }
-                if self.pending_carriage_return {
-                    self.current.push_str("\r");
-                    self.pending_carriage_return = false;
-                }
-                let part = if let Some(part) = part.strip_suffix('\r') {
-                    self.pending_carriage_return = true;
-                    part
-                } else {
-                    part
-                };
-                self.current.push_str(part);
-                self.has_partial_line |= !part.is_empty() || self.pending_carriage_return;
-                continue;
-            };
-
-            let has_carriage_return = part.ends_with('\r');
-            let part = part.strip_suffix('\r').unwrap_or(part);
-            if self.pending_carriage_return && (has_carriage_return || !part.is_empty()) {
-                self.current.push_str("\r");
-            }
-            self.pending_carriage_return = false;
-            self.current.push_str(part);
+        if !chunk.is_empty() {
+            self.has_partial_line = !chunk.ends_with('\n');
+        }
+        for line in self.current.push_lines(chunk) {
             self.completed_lines = self.completed_lines.saturating_add(1);
-            self.has_partial_line = false;
-
-            let line = std::mem::take(&mut self.current).render();
             if self.head.len() < LIVE_COMMAND_OUTPUT_MAX_LINES {
                 self.head.push(line);
             } else {
@@ -122,23 +95,24 @@ impl LiveCommandOutput {
                     .map(|line| Cow::Borrowed(line.as_str()))
                     .chain(
                         self.has_partial_line
-                            .then(|| Cow::Owned(self.render_partial_line())),
+                            .then(|| Cow::Owned(self.current.clone().render())),
                     ),
             )
         } else {
             Either::Right(self.full_output.lines().map(|line| {
+                let line = command_output_line(line);
                 if line.len() <= LIVE_COMMAND_OUTPUT_MAX_LINE_BYTES {
-                    Cow::Borrowed(line)
+                    line
                 } else {
                     let mut truncated = LiveCommandOutputLine::default();
-                    truncated.push_str(line);
+                    truncated.push_str(&line);
                     Cow::Owned(truncated.render())
                 }
             }))
         }
     }
 
-    /// Returns lossless transcript lines until truncated, then inserts the omitted-line marker.
+    /// Returns full visible transcript lines until truncated, then inserts the omitted-line marker.
     pub(super) fn transcript_lines(&self) -> impl Iterator<Item = Cow<'_, str>> {
         let omitted = self.total_lines().saturating_sub(self.retained_lines());
         if self.truncated {
@@ -153,32 +127,111 @@ impl LiveCommandOutput {
                     .chain(self.tail.iter().map(|line| Cow::Borrowed(line.as_str())))
                     .chain(
                         self.has_partial_line
-                            .then(|| Cow::Owned(self.render_partial_line())),
+                            .then(|| Cow::Owned(self.current.clone().render())),
                     ),
             )
         } else {
-            Either::Right(self.full_output.lines().map(Cow::Borrowed))
+            Either::Right(self.full_output.lines().map(command_output_line))
         }
-    }
-
-    fn render_partial_line(&self) -> String {
-        let mut line = self.current.render();
-        if self.pending_carriage_return {
-            line.push('\r');
-        }
-        line
     }
 }
 
-#[derive(Debug, Default)]
+/// Bounded state for an unfinished row. Keep the write after the last CR
+/// together across deltas, including any partial escape or grapheme.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PendingLine {
+    previous: LiveCommandOutputLine,
+    write: LiveCommandOutputLine,
+}
+
+impl PendingLine {
+    /// Yield completed rows lazily and keep the unfinished row for the next delta.
+    pub(crate) fn push_lines(&mut self, chunk: &str) -> impl DoubleEndedIterator<Item = String> {
+        let mut parts = chunk.split('\n');
+        let partial = parts.next_back().unwrap_or_default();
+        let first = parts.next().map(|part| (std::mem::take(self), part));
+        self.push_str(partial);
+        first
+            .into_iter()
+            .chain(parts.map(|part| (Self::default(), part)))
+            .map(|(mut row, part)| {
+                row.push_str(part);
+                row.render()
+            })
+    }
+
+    fn push_str(&mut self, mut text: &str) {
+        while !text.is_empty() {
+            // Fold a batch of redraws together before abbreviating. A long
+            // single write still uses the ordinary bounded head/tail buffer.
+            let room = if self.previous.omitted_bytes > 0 && !self.previous.variable_width {
+                // Overlay individual writes directly at their original byte offsets.
+                0
+            } else {
+                LIVE_COMMAND_OUTPUT_MAX_LINE_BYTES
+                    .saturating_sub(self.write.head.len() + self.write.tail.len())
+            };
+            let end = text.floor_char_boundary(room.min(text.len()));
+            let Some(cr) = text[..end].rfind('\r').or_else(|| text.find('\r')) else {
+                self.write.push_str(text);
+                break;
+            };
+            self.write.push_str(text[..cr].trim_end_matches('\r'));
+            self.previous.overwrite(std::mem::take(&mut self.write));
+            text = &text[cr + 1..];
+        }
+    }
+
+    pub(crate) fn render(mut self) -> String {
+        self.previous.overwrite(self.write);
+        self.previous.render()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 struct LiveCommandOutputLine {
     head: String,
     tail: String,
     omitted_bytes: usize,
+    variable_width: bool,
 }
 
 impl LiveCommandOutputLine {
+    fn overwrite(&mut self, write: Self) {
+        if write.head.is_empty() {
+            return;
+        }
+        if !self.variable_width && !write.variable_width {
+            // Byte offsets equal columns, even across an omitted middle.
+            let end = write.head.len() + write.omitted_bytes + write.tail.len();
+            let tail_start = self.head.len() + self.omitted_bytes;
+            if end >= tail_start + self.tail.len() {
+                *self = write;
+            } else {
+                self.head.replace_range(..write.head.len(), &write.head);
+                let overlap = end.saturating_sub(tail_start);
+                self.tail
+                    .replace_range(..overlap, &write.tail[write.tail.len() - overlap..]);
+            }
+            return;
+        }
+
+        let mut raw = self.render();
+        if !raw.is_empty() {
+            raw.push('\r');
+        }
+        raw.push_str(&write.render());
+        match command_output_line(&raw) {
+            Cow::Borrowed(_) => *self = write,
+            Cow::Owned(line) => {
+                *self = Self::default();
+                self.push_str(&line);
+            }
+        }
+    }
+
     fn push_str(&mut self, chunk: &str) {
+        self.variable_width |= !chunk.is_ascii() || chunk.contains(['\x1b', '\t', '\r']);
         let head_remaining = if self.tail.is_empty() && self.omitted_bytes == 0 {
             LIVE_COMMAND_OUTPUT_LINE_HEAD_BYTES.saturating_sub(self.head.len())
         } else {

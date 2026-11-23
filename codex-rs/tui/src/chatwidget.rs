@@ -1555,7 +1555,7 @@ impl ChatWidget {
             .iter()
             .map(|process| history_cell::UnifiedExecProcessDetails {
                 command_display: process.command_display.clone(),
-                recent_chunks: process.recent_chunks.clone(),
+                recent_chunks: process.recent_lines(),
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));

@@ -219,7 +219,9 @@ fn historical_command_fallbacks_preserve_status_output_and_group_boundaries() {
             } else if label == "UNC command" {
                 *command = r"\\server\share\tool.exe -arg".to_owned();
             }
-            *aggregated_output = Some("first line\n  indented output\nlast line".to_owned());
+            *aggregated_output = Some(
+                "first line\n  indented output\r\nlong stale message\r\x1b[Klast line".to_owned(),
+            );
             *exit_code = recorded_exit;
         }
         let cells = thread_items_to_transcript_cells(

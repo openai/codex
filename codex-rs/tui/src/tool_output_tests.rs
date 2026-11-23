@@ -148,7 +148,7 @@ fn command_preview_matches_streamed_and_completed_output() {
         /*interaction_input*/ None,
         /*animations_enabled*/ false,
     );
-    let output = "first\nsecond\nthird\nfourth\nfifth\n";
+    let output = "first\nsecond\nthird\nupdating\r\x1b[Kfourth\r\nfifth\n";
     cell.append_output("call-preview", output);
     let live = cell.display_lines(/*width*/ 80);
     cell.complete_call(

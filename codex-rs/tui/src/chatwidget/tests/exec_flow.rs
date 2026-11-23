@@ -78,6 +78,14 @@ async fn replayed_background_terminals_belong_to_the_displayed_thread() {
     };
     fork.track_unified_exec_process_end(&exited.item_id, Some(&exited.process_id));
     fork.restore_background_terminals(request_id, vec![live, exited]);
+    for chunk in [
+        "starting\n\x1b]0;Building\x07Warning\n10%\r50%\r\x1b[",
+        "K\x1b]0;Done\x1b",
+        "\\100%\r",
+        "\nDone\ncleared\r\x1b[K",
+    ] {
+        fork.on_exec_command_output_delta("child-call", chunk);
+    }
     fork.add_ps_output();
     let history = drain_insert_history(&mut events)
         .iter()
@@ -89,6 +97,9 @@ async fn replayed_background_terminals_belong_to_the_displayed_thread() {
     Background terminals
 
       • sleep 200
+        ↳ Warning
+          100%
+          Done
     ");
 }
 
@@ -948,6 +959,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
         call_id: "call-1".to_string(),
         command_display: "sleep 5".to_string(),
         recent_chunks: Vec::new(),
+        pending: Default::default(),
     });
 
     terminal_interaction(&mut chat, "call-1", "proc-1", "");
