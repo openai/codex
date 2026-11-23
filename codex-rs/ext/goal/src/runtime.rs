@@ -200,7 +200,10 @@ impl GoalRuntimeHandle {
             .as_ref()
             .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
         if previous_goal.is_none() || replaced_existing_goal {
-            self.inner.metrics.record_created();
+            self.inner
+                .metrics
+                .record_external_created(&self.inner.thread_manager, self.inner.thread_id)
+                .await;
             self.inner
                 .analytics
                 .created(&goal, GoalEventAttribution::NoTurn);

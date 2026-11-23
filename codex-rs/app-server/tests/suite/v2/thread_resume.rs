@@ -13,6 +13,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::create_request_user_input_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
 use app_test_support::to_response;
@@ -82,6 +83,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_core::test_support::all_model_presets;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -3397,6 +3399,7 @@ async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
     let server = create_mock_responses_server_sequence(vec![
+        create_request_user_input_sse_response("confirm-goal")?,
         responses::sse(vec![
             responses::ev_response_created("create-goal"),
             responses::ev_function_call(
@@ -3417,7 +3420,10 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .enable_feature(Feature::Goals)
+        .enable_feature(Feature::DefaultModeRequestUserInput)
+        .enable_feature(Feature::StepModelSwitching)
         .write(codex_home.path())?;
+    let collector = super::auth_storage_originator::configure_collector(codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3425,19 +3431,39 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
         .build_initialized()
         .await?;
 
+    let model = all_model_presets()
+        .iter()
+        .find(|model| {
+            model.show_in_picker
+                && model.default_reasoning_effort == ReasoningEffort::Medium
+                && model
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|level| level.effort == ReasoningEffort::High)
+        })
+        .expect("a bundled model defaults to medium and supports high effort");
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
+            model: Some(model.id.clone()),
             ..Default::default()
         })
         .await?;
     let ThreadStartResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
-    let turn_id = mcp
+    // Before the first turn, /goal inherits the model default.
+    let set_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({"threadId": thread.id, "objective": "initial goal", "status": "complete"})),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
+
+    let start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
-            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "Create a goal to keep polishing, then pause it.".to_string(),
                 text_elements: Vec::new(),
@@ -3445,11 +3471,32 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let _turn_resp: JSONRPCResponse = timeout(
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+    let request = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        mcp.read_stream_until_request_message(),
     )
     .await??;
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = request else {
+        anyhow::bail!("expected request_user_input, received {request:?}");
+    };
+    // Only the active turn changes. The next step calls create_goal at high
+    // while the thread still defaults to medium.
+    let update_id = mcp
+        .send_raw_request(
+            "turn/settings/update",
+            Some(json!({"threadId": thread.id, "turnId": turn.id, "effort": "high"})),
+        )
+        .await?;
+    let outcome: serde_json::Value =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(update_id)).await??;
+    assert_eq!(outcome, json!({"status": "applied"}));
+    mcp.send_response(
+        request_id,
+        json!({"answers": {"confirm_path": {"answers": ["Yes (Recommended)"]}}}),
+    )
+    .await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -3491,6 +3538,40 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
             .any(|method| method == "turn/started"),
         "paused goal should not continue after thread resume"
     );
+
+    assert!(
+        timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully())
+            .await??
+            .success()
+    );
+    let mut efforts = Vec::new();
+    for request in collector.received_requests().await.expect("OTLP requests") {
+        let payload: serde_json::Value = request.body_json()?;
+        let points = payload["resourceMetrics"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|resource| resource["scopeMetrics"].as_array().into_iter().flatten())
+            .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
+            .filter(|metric| metric["name"] == "codex.goal.created")
+            .flat_map(|metric| metric["sum"]["dataPoints"].as_array().into_iter().flatten());
+        for point in points {
+            let effort = point["attributes"]
+                .as_array()
+                .expect("attributes")
+                .iter()
+                .find(|tag| tag["key"] == "reasoning_effort")
+                .expect("goal creation should include reasoning effort");
+            efforts.push(
+                effort["value"]["stringValue"]
+                    .as_str()
+                    .expect("effort")
+                    .to_string(),
+            );
+        }
+    }
+    efforts.sort();
+    assert_eq!(efforts, ["high", "medium"]);
 
     Ok(())
 }
