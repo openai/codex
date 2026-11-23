@@ -576,12 +576,12 @@ async fn project_diagnostic_uses_the_current_file_and_ignores_its_provider() -> 
     );
     std::fs::write(
         &path,
-        "[tui]\nstatus_line_provider = 42\nvim_mode_default = 43\n",
+        "ignored_setting = true\n[tui]\nstatus_line_provider = 42\nvim_mode_default = 43\n",
     )?;
     let error = first_layer_config_error_from_entries(&[layer])
         .await
         .expect("invalid vim setting");
-    assert_eq!((error.path, error.range.start.line), (path, 3));
+    assert_eq!((error.path, error.range.start.line), (path, 4));
     assert!(error.message.contains("43"), "{}", error.message);
     Ok(())
 }
