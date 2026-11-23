@@ -31,8 +31,12 @@ impl HookMcpExecutor for RecordingExecutor {
         async move {
             self.calls.lock().expect("lock calls").push(call);
             Ok(HookMcpOutput {
-                structured_content: None,
-                text: self.output.clone(),
+                result: codex_protocol::mcp::CallToolResult {
+                    content: vec![serde_json::json!({"type":"text","text":self.output.clone()})],
+                    structured_content: None,
+                    meta: None,
+                    is_error: None,
+                },
                 source_tool_namespace: Some("security".into()),
             })
         }

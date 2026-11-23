@@ -6,6 +6,9 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use regex::Regex;
 use serde_json::Map;
 use serde_json::Value;
@@ -16,6 +19,9 @@ use super::HandlerRunResult;
 use super::HandlerSourcePath;
 use crate::mcp::HookMcpCall;
 use crate::mcp::HookMcpExecutor;
+
+// The memory producer bounds the decrypted tokens. The runner can only bound the ciphertext.
+const MAX_ENCRYPTED_CONTEXT_BYTES: usize = 40_000;
 
 /// Expands an MCP argument template against this hook event and invokes the configured tool.
 #[tracing::instrument(
@@ -73,7 +79,7 @@ pub(crate) async fn run_mcp_tool(
                 .get_or_insert_with(Map::new)
                 .extend(metadata.clone());
         }
-        executor
+        let output = executor
             .execute(HookMcpCall {
                 skip_dormant_repl_cleanup: handler.builtin
                     && is_node_repl_backed_server(server)
@@ -96,21 +102,78 @@ pub(crate) async fn run_mcp_tool(
                     Duration::from_secs(handler.timeout_sec)
                 },
             })
-            .await
+            .await?;
+        let mut plaintext = Vec::new();
+        let mut encrypted_context = Vec::new();
+        let mut encrypted_bytes = 0;
+        for block in &output.result.content {
+            if block.get("type").and_then(Value::as_str) != Some("text") {
+                continue;
+            }
+            let Some(text) = block.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            if handler.event_name == HookEventName::SessionStart
+                && let Ok(part @ FunctionCallOutputContentItem::EncryptedContent { .. }) =
+                    FunctionCallOutputContentItem::from_mcp_content_block(block)
+            {
+                anyhow::ensure!(
+                    handler.execution_mode() == HookExecutionMode::Sync,
+                    "encrypted SessionStart context requires a synchronous MCP hook"
+                );
+                anyhow::ensure!(
+                    !text.is_empty() && text.len() <= MAX_ENCRYPTED_CONTEXT_BYTES,
+                    "invalid encrypted SessionStart context size"
+                );
+                encrypted_bytes += serde_json::to_vec(&part)?.len();
+                anyhow::ensure!(
+                    encrypted_bytes <= MAX_ENCRYPTED_CONTEXT_BYTES,
+                    "encrypted SessionStart context exceeds 40,000 bytes"
+                );
+                encrypted_context.push(crate::HookContextPayload::EncryptedToolOutput {
+                    name: tool.to_owned(),
+                    namespace: output.source_tool_namespace.clone(),
+                    encrypted_content: text.to_owned(),
+                });
+            } else {
+                plaintext.push(text);
+            }
+        }
+        let stdout = plaintext.join("\n");
+        anyhow::ensure!(
+            output.result.is_error != Some(true),
+            "MCP tool returned an error: {stdout}"
+        );
+        Ok((
+            stdout,
+            encrypted_context,
+            output.source_tool_namespace,
+            output.result.structured_content,
+        ))
     }
     .await;
 
-    let (exit_code, stdout, error, source_tool_namespace, structured_content) = match result {
-        Ok(output) => (
-            Some(0),
-            output.text,
-            None,
-            output.source_tool_namespace,
-            output.structured_content,
-        ),
-        Err(error) => (None, String::new(), Some(error.to_string()), None, None),
-    };
+    let (exit_code, stdout, encrypted_context, error, source_tool_namespace, structured_content) =
+        match result {
+            Ok((stdout, context, namespace, structured_content)) => (
+                Some(0),
+                stdout,
+                context,
+                None,
+                namespace,
+                structured_content,
+            ),
+            Err(error) => (
+                None,
+                String::new(),
+                Vec::new(),
+                Some(error.to_string()),
+                None,
+                None,
+            ),
+        };
     HandlerRunResult {
+        encrypted_context,
         structured_content,
         context_metadata: ContentItemMetadata::tool(source_tool_namespace.map(Into::into)),
         started_at,

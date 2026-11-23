@@ -1,5 +1,4 @@
 use super::ContextualUserFragment;
-use codex_hooks::HookContext;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ContentItemMetadata;
@@ -7,12 +6,13 @@ use codex_protocol::models::input_text;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HookAdditionalContext {
-    context: HookContext,
+    text: String,
+    metadata: ContentItemMetadata,
 }
 
 impl HookAdditionalContext {
-    pub(crate) fn new(context: HookContext) -> Self {
-        Self { context }
+    pub(crate) fn new(text: String, metadata: ContentItemMetadata) -> Self {
+        Self { text, metadata }
     }
 }
 
@@ -34,10 +34,10 @@ impl ContextualUserFragment for HookAdditionalContext {
     }
 
     fn body(&self) -> ContentItem {
-        input_text(self.context.text.clone())
+        input_text(self.text.clone())
     }
 
     fn content_metadata(&self) -> ContentItemMetadata {
-        self.context.metadata.clone()
+        self.metadata.clone()
     }
 }

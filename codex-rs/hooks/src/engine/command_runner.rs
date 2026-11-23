@@ -268,6 +268,7 @@ pub(crate) async fn run_command(
             Err(error) => (None, String::new(), String::new(), Some(error.to_string())),
         };
         return HandlerRunResult {
+            encrypted_context: Vec::new(),
             structured_content: None,
             context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
             started_at,
@@ -433,6 +434,7 @@ fn finish_command_run(
 ) -> HandlerRunResult {
     Span::current().record("hook.command_outcome", completion.outcome);
     HandlerRunResult {
+        encrypted_context: Vec::new(),
         structured_content: None,
         context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
         started_at,

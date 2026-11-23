@@ -76,8 +76,11 @@ async fn additional_contexts_apply_limits_individually() -> Result<()> {
     let [limited_output, zero_limit_output, high_limit_output] = output.as_slice() else {
         panic!("expected one output for each additional context");
     };
-    assert!(limited_output.text.contains("Full hook output saved to:"));
-    assert_eq!(&zero_limit_output.text, &unlimited_text);
-    assert_eq!(&high_limit_output.text, &unlimited_text);
+    assert!(
+        matches!(&limited_output.payload, crate::HookContextPayload::Text(text) if text.contains("Full hook output saved to:"))
+    );
+    let expected = crate::HookContext::harness(unlimited_text);
+    assert_eq!(zero_limit_output, &expected);
+    assert_eq!(high_limit_output, &expected);
     Ok(())
 }

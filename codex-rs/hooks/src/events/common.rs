@@ -58,7 +58,7 @@ pub(crate) fn append_additional_context(
     });
     additional_contexts_for_model.push(AdditionalContext {
         context: crate::HookContext {
-            text: additional_context,
+            payload: crate::HookContextPayload::Text(additional_context),
             metadata: metadata.clone(),
         },
         limit: handler.additional_context_limit,

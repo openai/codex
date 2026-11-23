@@ -164,6 +164,7 @@ pub(crate) enum ConfiguredHandlerKind {
 
 #[derive(Debug)]
 pub(crate) struct HandlerRunResult {
+    pub encrypted_context: Vec<crate::HookContextPayload>,
     pub structured_content: Option<serde_json::Value>,
     pub context_metadata: codex_protocol::models::ContentItemMetadata,
     pub started_at: i64,

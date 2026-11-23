@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use anyhow::Context;
-use anyhow::bail;
 use codex_hooks::HookMcpCall;
 use codex_hooks::HookMcpExecutor;
 use codex_hooks::HookMcpOutput;
@@ -110,24 +109,8 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
             )
             .await
             .context("MCP hook timed out")??;
-            let result = call_result.result;
-            let text = result
-                .content
-                .iter()
-                .filter_map(|content| {
-                    (content.get("type").and_then(Value::as_str) == Some("text"))
-                        .then(|| content.get("text").and_then(Value::as_str))
-                        .flatten()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if result.is_error == Some(true) {
-                bail!("MCP tool returned an error: {text}");
-            }
-
             Ok(HookMcpOutput {
-                structured_content: result.structured_content,
-                text,
+                result: call_result.result,
                 source_tool_namespace: call_result.source_tool_namespace,
             })
         }

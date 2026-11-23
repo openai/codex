@@ -19,10 +19,9 @@ pub struct HookMcpCall {
     pub timeout: Duration,
 }
 
-/// The MCP hook's text, structured result, and originating callable namespace.
+/// The original response returned by an MCP hook and the callable namespace that supplied it.
 pub struct HookMcpOutput {
-    pub text: String,
-    pub structured_content: Option<serde_json::Value>,
+    pub result: codex_protocol::mcp::CallToolResult,
     pub source_tool_namespace: Option<String>,
 }
 
@@ -30,6 +29,6 @@ pub struct HookMcpOutput {
 ///
 /// Implementations own server readiness, policy enforcement, timeout handling, and elicitation.
 pub trait HookMcpExecutor: Send + Sync {
-    /// Returns text that is interpreted using ordinary command-hook output semantics.
+    /// Preserves MCP content metadata so the hook runner can interpret the result.
     fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<HookMcpOutput>>;
 }

@@ -1,0 +1,51 @@
+---
+source: core/tests/suite/scenarios_encrypted_hooks.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A synchronous MCP SessionStart hook returns a public status and marked memory. The status appears in the hook preview, and the named encrypted tool output reaches sampling before the user message and survives a cold resume.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A synchronous MCP SessionStart hook returns a public status and marked memory. The status appears in the hook preview, and the named encrypted tool output reaches sampling before the user message and survives a cold resume.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=a7c46a0959d54866):
+        - namespace/functions; hash=81846de5bc4e7474
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - mcp__memory: Use these tools to exercise the rmcp test server.
+        </tools>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/developer:
+    Lookup completed
+07:function_call_output/mcp__memory.encrypted_output:<encrypted_content>
+08:message/user:
+    Load the context.
+09:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+10:message/assistant:
+    Context loaded.
+11:message/user:
+    <ENVIRONMENT_CONTEXT>
+12:message/user:
+    Use the context again.
+13:configuration_update:reasoning={"effort":"low"}

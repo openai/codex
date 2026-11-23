@@ -907,12 +907,14 @@ impl ServerHandler for TestToolServer {
                 Ok(Self::structured_result(structured_content))
             }
             "encrypted_output" => {
+                let ciphertext = std::env::var("MCP_TEST_ENCRYPTED_OUTPUT")
+                    .unwrap_or_else(|_| "gAAAA-test".to_string());
                 let mut meta = MetaObject::new();
                 meta.insert("codex/encryptedContent".to_string(), json!(true));
                 let mut result = CallToolResult::success(vec![
                     rmcp::model::ContentBlock::text("Lookup completed"),
                     rmcp::model::ContentBlock::Text(
-                        rmcp::model::TextContent::new("gAAAA-test").with_meta(meta),
+                        rmcp::model::TextContent::new(ciphertext).with_meta(meta),
                     ),
                 ]);
                 result.structured_content = Some(json!({"encrypted_output": "ignored"}));

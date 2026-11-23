@@ -223,7 +223,7 @@ pub(crate) async fn run(
 /// `continue:false`; `SubagentStart` stays context-injection-only.
 fn parse_completed(
     handler: &ConfiguredHandler,
-    run_result: HandlerRunResult,
+    mut run_result: HandlerRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<SessionStartHandlerData> {
     let mut entries = Vec::new();
@@ -330,6 +330,18 @@ fn parse_completed(
         },
     }
 
+    if status != HookRunStatus::Failed {
+        additional_contexts_for_model.extend(run_result.encrypted_context.drain(..).map(
+            |payload| AdditionalContext {
+                context: crate::HookContext {
+                    payload,
+                    metadata: run_result.context_metadata.clone(),
+                },
+                limit: handler.additional_context_limit,
+            },
+        ));
+    }
+
     if let Some(reason) = common::apply_failure_policy(handler, &mut status, &mut entries) {
         should_stop = true;
         stop_reason = Some(reason);
@@ -363,6 +375,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> Sessio
 
 #[cfg(test)]
 mod tests {
+    use codex_config::HookFailurePolicy;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
@@ -450,32 +463,49 @@ mod tests {
 
     #[test]
     fn invalid_json_like_stdout_fails_instead_of_becoming_model_context() {
-        let parsed = parse_completed(
-            &handler(),
-            run_result(
+        for (on_failure, expected_status, stop_reason) in [
+            (HookFailurePolicy::Continue, HookRunStatus::Failed, None),
+            (
+                HookFailurePolicy::Block,
+                HookRunStatus::Blocked,
+                Some("SessionStart hook failed. This hook is configured to block continuation on failure.".to_string()),
+            ),
+        ] {
+            let mut handler = handler();
+            handler.on_failure = on_failure;
+            let mut result = run_result(
                 Some(0),
                 r#"{"hookSpecificOutput":{"hookEventName":"SessionStart""#,
                 "",
-            ),
-            /*turn_id*/ None,
-        );
+            );
+            result.encrypted_context.push(crate::HookContextPayload::EncryptedToolOutput {
+                name: "encrypted_output".to_string(),
+                namespace: Some("mcp__memory".to_string()),
+                encrypted_content: "sealed-memory".to_string(),
+            });
+            let parsed = parse_completed(&handler, result, /*turn_id*/ None);
 
-        assert_eq!(
-            parsed.data,
-            SessionStartHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                additional_contexts_for_model: Vec::new(),
-            }
-        );
-        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
-        assert_eq!(
-            parsed.completed.run.entries,
-            vec![HookOutputEntry {
+            let mut entries = vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
                 text: "hook returned invalid session start JSON output".to_string(),
-            }]
-        );
+            }];
+            if let Some(reason) = &stop_reason {
+                entries.push(HookOutputEntry {
+                    kind: HookOutputEntryKind::Feedback,
+                    text: reason.clone(),
+                });
+            }
+            assert_eq!(
+                parsed.data,
+                SessionStartHandlerData {
+                    should_stop: stop_reason.is_some(),
+                    stop_reason,
+                    additional_contexts_for_model: Vec::new(),
+                }
+            );
+            assert_eq!(parsed.completed.run.status, expected_status);
+            assert_eq!(parsed.completed.run.entries, entries);
+        }
     }
 
     #[test]
@@ -571,6 +601,7 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
+            encrypted_context: Vec::new(),
             structured_content: None,
             context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1,
