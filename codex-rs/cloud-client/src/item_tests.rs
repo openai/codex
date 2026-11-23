@@ -98,7 +98,7 @@ fn user_message_preserves_client_id_and_text() {
 }
 
 #[test]
-fn user_message_preserves_images_spans_and_client_id() {
+fn user_message_preserves_images_spans_mentions_and_client_id() {
     let url = "data:image/png;base64,AA==";
     let label = "[Image #1]";
     let element = [
@@ -112,12 +112,18 @@ fn user_message_preserves_images_spans_and_client_id() {
     ]
     .concat();
     let image_bytes = [vec![0x08, 99], message(/*tag*/ 2, url.as_bytes())].concat();
+    let mention = [
+        message(/*tag*/ 1, b"Example"),
+        message(/*tag*/ 2, b"plugin://plugins~Plugin_example"),
+    ]
+    .concat();
     let content = [
         message(/*tag*/ 1, &message(/*tag*/ 1, &text)),
         message(
             /*tag*/ 1,
             &message(/*tag*/ 2, &message(/*tag*/ 1, &image_bytes)),
         ),
+        message(/*tag*/ 1, &message(/*tag*/ 7, &mention)),
     ]
     .concat();
     let user = message(
@@ -144,6 +150,10 @@ fn user_message_preserves_images_spans_and_client_id() {
             UserMessageInput::Image {
                 image: ImageReference::Url(url.into()),
                 detail: None,
+            },
+            UserMessageInput::Mention {
+                name: "Example".into(),
+                path: "plugin://plugins~Plugin_example".into(),
             },
         ],
     };
@@ -336,6 +346,9 @@ fn unsupported_and_incomplete_items_stay_opaque() {
         message(/*tag*/ 2, &message(/*tag*/ 3, b"")),         // Future image reference.
         message(/*tag*/ 2, &message(/*tag*/ 1, b"\x08\x01")), // Missing URL.
         message(/*tag*/ 2, &message(/*tag*/ 2, b"")),         // Missing file ID.
+        message(/*tag*/ 7, b"\xff"),                          // Malformed mention payload.
+        message(/*tag*/ 7, &message(/*tag*/ 2, b"plugin://x")), // Missing mention name.
+        message(/*tag*/ 7, &message(/*tag*/ 1, b"Example")),  // Missing mention path.
         message(
             /*tag*/ 1,
             &[

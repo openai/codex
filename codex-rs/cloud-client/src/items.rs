@@ -12,6 +12,7 @@ use crate::transcript::required;
 use crate::transcript_wire::Envelope;
 use crate::transcript_wire::SelectedMessages;
 use crate::transcript_wire::merge_messages;
+use prost::Message;
 use std::fmt;
 
 /// Lifecycle identity and timestamp for a typed item event.
@@ -230,6 +231,17 @@ pub(crate) fn summary(item: wire::Item) -> Result<Option<ItemSummary>, DecodeFai
                             None | Some(_) => None,
                         };
                         UserMessageInput::Image { image, detail }
+                    }
+                    Some(crate::turns_wire::Value::Mention(bytes)) => {
+                        // Keep an undecodable mention local to this item in history and live events.
+                        let Ok(crate::turns_wire::Mention {
+                            name: Some(name),
+                            path: Some(path),
+                        }) = crate::turns_wire::Mention::decode(bytes.as_slice())
+                        else {
+                            return Ok(None);
+                        };
+                        UserMessageInput::Mention { name, path }
                     }
                     _ => return Ok(None),
                 };

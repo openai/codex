@@ -1,4 +1,4 @@
-//! Native text/image submission and interruption envelopes; omitted settings inherit thread config.
+//! Native message submission and interruption envelopes; omitted settings inherit thread config.
 use prost::Message;
 
 #[derive(Clone, Message)]
@@ -48,6 +48,13 @@ pub(super) enum Value {
     Skill(Vec<u8>),
     #[prost(bytes, tag = "7")]
     Mention(Vec<u8>),
+}
+#[derive(Clone, Message)]
+pub(super) struct Mention {
+    #[prost(string, optional, tag = "1")]
+    pub name: Option<String>,
+    #[prost(string, optional, tag = "2")]
+    pub path: Option<String>,
 }
 #[derive(Clone, Message)]
 pub(super) struct Text {
