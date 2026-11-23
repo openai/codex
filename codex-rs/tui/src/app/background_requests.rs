@@ -1350,47 +1350,6 @@ pub(super) fn build_feedback_params(
     }
 }
 
-/// Convert flat `McpServerStatus` responses into the per-server maps used by the
-/// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
-/// per-server resource/template/auth maps). Test-only because the TUI
-/// renders directly from `McpServerStatus` rather than these maps.
-#[cfg(test)]
-pub(super) type McpInventoryMaps = (
-    HashMap<String, codex_protocol::mcp::Tool>,
-    HashMap<String, Vec<codex_protocol::mcp::Resource>>,
-    HashMap<String, Vec<codex_protocol::mcp::ResourceTemplate>>,
-    HashMap<String, McpAuthStatus>,
-);
-
-#[cfg(test)]
-pub(super) fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -> McpInventoryMaps {
-    let mut tools = HashMap::new();
-    let mut resources = HashMap::new();
-    let mut resource_templates = HashMap::new();
-    let mut auth_statuses = HashMap::new();
-
-    for status in statuses {
-        let server_name = status.name;
-        auth_statuses.insert(
-            server_name.clone(),
-            match status.auth_status {
-                codex_app_server_protocol::McpAuthStatus::Unknown => McpAuthStatus::Unknown,
-                codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
-                codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
-                codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
-                codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
-            },
-        );
-        resources.insert(server_name.clone(), status.resources);
-        resource_templates.insert(server_name.clone(), status.resource_templates);
-        for (tool_name, tool) in status.tools {
-            tools.insert(format!("mcp__{server_name}__{tool_name}"), tool);
-        }
-    }
-
-    (tools, resources, resource_templates, auth_statuses)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1400,7 +1359,6 @@ mod tests {
     use codex_app_server_protocol::PluginMarketplaceEntry;
     use codex_app_server_protocol::ThreadUsage;
     use codex_config::types::AuthCredentialsStoreMode;
-    use codex_protocol::mcp::Tool;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -1638,72 +1596,6 @@ mod tests {
                 message: "Enable plugin sharing for this Codex session to load shared plugins"
                     .to_string(),
             }
-        );
-    }
-
-    #[test]
-    fn mcp_inventory_maps_prefix_tool_names_by_server() {
-        let statuses = vec![
-            McpServerStatus {
-                environment_id: None,
-                server_capabilities: None,
-                tool_list_meta: None,
-                tools_error: None,
-                name: "docs".to_string(),
-                runtime_status: None,
-                plugin_id: None,
-                http_origin: None,
-                server_info: None,
-                tools: HashMap::from([(
-                    "list".to_string(),
-                    Tool {
-                        description: None,
-                        name: "list".to_string(),
-                        title: None,
-                        input_schema: serde_json::json!({"type": "object"}),
-                        output_schema: None,
-                        annotations: None,
-                        icons: None,
-                        meta: None,
-                    },
-                )]),
-                resources: Vec::new(),
-                resource_templates: Vec::new(),
-                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-            },
-            McpServerStatus {
-                environment_id: None,
-                server_capabilities: None,
-                tool_list_meta: None,
-                tools_error: None,
-                name: "disabled".to_string(),
-                runtime_status: None,
-                plugin_id: None,
-                http_origin: None,
-                server_info: None,
-                tools: HashMap::new(),
-                resources: Vec::new(),
-                resource_templates: Vec::new(),
-                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-            },
-        ];
-
-        let (tools, resources, resource_templates, auth_statuses) =
-            mcp_inventory_maps_from_statuses(statuses);
-        let mut resource_names = resources.keys().cloned().collect::<Vec<_>>();
-        resource_names.sort();
-        let mut template_names = resource_templates.keys().cloned().collect::<Vec<_>>();
-        template_names.sort();
-
-        assert_eq!(
-            tools.keys().cloned().collect::<Vec<_>>(),
-            vec!["mcp__docs__list".to_string()]
-        );
-        assert_eq!(resource_names, vec!["disabled", "docs"]);
-        assert_eq!(template_names, vec!["disabled", "docs"]);
-        assert_eq!(
-            auth_statuses.get("disabled"),
-            Some(&McpAuthStatus::Unsupported)
         );
     }
 
