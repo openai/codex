@@ -62,7 +62,11 @@ impl SessionStartup {
         }
     }
 
-    pub(crate) async fn cleanup(&self) {
+    pub(crate) fn cleanup(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.cleanup_inner())
+    }
+
+    async fn cleanup_inner(&self) {
         let mut teardown = self.lock_teardown().take();
         if let Some(teardown) = teardown.as_mut()
             && let Some(session) = self.session.get()
