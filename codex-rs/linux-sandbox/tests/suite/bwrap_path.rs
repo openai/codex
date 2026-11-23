@@ -63,6 +63,7 @@ fn child_workdir_does_not_probe_or_launch_writable_parent_bwrap() {
             "bubblewrap is unavailable",
             "No permissions to create a new namespace",
             "setting up uid map: Permission denied",
+            "bwrap: Failed to make / slave: Permission denied",
         ]
         .iter()
         .any(|message| stderr.contains(message))

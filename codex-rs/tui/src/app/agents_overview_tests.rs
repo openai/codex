@@ -1895,7 +1895,8 @@ async fn worktrees_overview_groups_by_project_or_directory() {
         .collect::<Vec<_>>()
         .join("\n");
     for (heading, stable) in directory_headings.iter().rev() {
-        directory_grouping = directory_grouping.replace(heading, stable);
+        // Long paths can truncate to the same heading for both worktrees.
+        directory_grouping = directory_grouping.replacen(heading, stable, 1);
     }
     let directory_grouping = directory_grouping.replace('\\', "/");
     insta::with_settings!({snapshot_path => "../snapshots"}, {

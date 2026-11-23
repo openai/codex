@@ -53,6 +53,7 @@ const MANAGED_PROXY_PERMISSION_ERR_SNIPPETS: &[&str] = &[
     "loopback: Failed RTM_NEWLINK",
     "setting up uid map: Permission denied",
     "No permissions to create a new namespace",
+    "bwrap: Failed to make / slave: Permission denied",
     "error isolating Linux network namespace for proxy mode",
 ];
 

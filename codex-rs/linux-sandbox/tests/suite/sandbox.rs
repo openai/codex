@@ -217,6 +217,10 @@ async fn run_cmd_result_with_permission_profile_for_cwd(
 
 fn is_bwrap_unavailable_output(output: &codex_protocol::exec_output::ExecToolCallOutput) -> bool {
     output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
+        || output
+            .stderr
+            .text
+            .contains("bwrap: Failed to make / slave: Permission denied")
         || (output
             .stderr
             .text

@@ -53,13 +53,12 @@ fn sandbox_available() -> Result<bool> {
         .args(["sandbox", "--", "/usr/bin/true"])
         .env("CODEX_HOME", home.path())
         .output()?;
+    let stderr = String::from_utf8_lossy(&probe.stderr);
     if !probe.status.success()
-        && String::from_utf8_lossy(&probe.stderr).contains("Operation not permitted")
+        && (stderr.contains("Operation not permitted")
+            || stderr.contains("bwrap: Failed to make / slave: Permission denied"))
     {
-        eprintln!(
-            "skipping helper test: Linux sandbox is unavailable: {}",
-            String::from_utf8_lossy(&probe.stderr)
-        );
+        eprintln!("skipping helper test: Linux sandbox is unavailable: {stderr}");
         return Ok(false);
     }
     anyhow::ensure!(

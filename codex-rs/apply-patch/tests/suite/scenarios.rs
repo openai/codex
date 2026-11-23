@@ -124,7 +124,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
             if let Some(parent) = dest_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&path, &dest_path)?;
+            // Scenario inputs must be writable even when Bazel runfiles are read-only.
+            fs::write(&dest_path, fs::read(&path)?)?;
         }
     }
     Ok(())

@@ -4867,7 +4867,7 @@ async fn code_mode_exec_nested_limit_truncates_result_variable_when_exceeded() -
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 25000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
+  cmd: "printf '%90000s' '' | tr ' ' A",
   max_output_tokens: 20000
 });
 const resultVariableWasTruncated = result.output.includes("…2500 tokens truncated…");
@@ -4998,7 +4998,7 @@ async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_co
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+  cmd: "printf '%50000s' '' | tr ' ' x"
 });
 const resultVariableWasTruncated = result.output.length !== 50000;
 text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
