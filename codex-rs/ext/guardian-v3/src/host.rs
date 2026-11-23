@@ -22,6 +22,7 @@ use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
 use codex_features::GuardianV3HousekeeperConfigToml;
 use codex_guardian_reviewer::ReviewerTasks;
+use codex_guardian_reviewer::routes_approval_policy_to_guardian;
 use codex_history::HistoryInitialization;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::LocalAgentMessageBoard;
@@ -266,13 +267,21 @@ impl ThreadLifecycleContributor<Config> for Host {
                 Arc::clone(&tree),
             ));
             input.thread_store.insert_arc(Arc::clone(&actor_reviewer));
-            let attached: Arc<dyn codex_core::guardian_review::AttachedReviewer> = actor_reviewer;
+            let attached: Arc<dyn codex_core::guardian_review::AttachedReviewer> =
+                actor_reviewer.clone();
             input.thread_store.insert(attached);
             if actor != root {
                 return;
             }
             if let Err(error) = self.activate(root, &tree, &input).await {
                 tracing::warn!(%root, error = %error, "Guardian intake unavailable");
+                return;
+            }
+            if routes_approval_policy_to_guardian(
+                input.config.permissions.approval_policy.value(),
+                input.config.approvals_reviewer,
+            ) {
+                actor_reviewer.schedule_root_prewarm();
             }
         })
     }

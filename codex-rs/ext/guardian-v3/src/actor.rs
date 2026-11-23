@@ -11,6 +11,7 @@ use codex_core::ThreadManager;
 use codex_core::guardian_review::PreparedGuardianContext;
 use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::ReviewRetrieval;
+use codex_core::guardian_review::prepare_review_prewarm;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_message_board::AgentMessageBoard;
@@ -47,7 +48,6 @@ struct ActorDelivery {
 }
 
 pub struct PreparedReviewer {
-    kind: GuardianReviewSessionKind,
     conversation: Conversation,
     slot: OwnedMutexGuard<Option<Conversation>>,
 }
@@ -59,6 +59,7 @@ impl PreparedReviewer {
 
     pub fn finish(mut self, disposition: SessionDisposition) {
         if disposition == SessionDisposition::Reusable {
+            self.conversation.kind = GuardianReviewSessionKind::TrunkReused;
             *self.slot = Some(self.conversation);
         }
     }
@@ -161,6 +162,55 @@ impl ActorReviewer {
         });
     }
 
+    /// Warm the root conversation without routing evidence or starting a review.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "prewarm and the first review must share a single conversation startup"
+    )]
+    pub(super) fn schedule_root_prewarm(self: &Arc<Self>) {
+        let actor = Arc::clone(self);
+        self.lifetime.tasks.spawn(async move {
+            let warm = async {
+                let manager = actor.manager.upgrade().context("Guardian host stopped")?;
+                let root = manager.get_thread(actor.actor).await?;
+                let setup = prepare_review_prewarm(&root, actor.retrieval.clone()).await?;
+                let worker = root.thread_extension_data().get::<RootWorker>()
+                    .context("Guardian board unavailable")?;
+                // A review may already own the slot or have left a reusable conversation.
+                if let Ok(mut slot) = actor.slot.try_lock()
+                    && slot.is_none()
+                {
+                    *slot = Some(actor.start(&manager, &setup, &worker).await?);
+                }
+                anyhow::Ok(())
+            };
+            if let Some(Err(_)) = actor.lifetime.cancellation.run_until_cancelled(warm).await {
+                tracing::debug!(actor = %actor.actor, "Guardian prewarm failed; will start on demand");
+            }
+        });
+    }
+
+    async fn start(
+        &self,
+        manager: &Arc<ThreadManager>,
+        setup: &PreparedGuardianContext,
+        worker: &RootWorker,
+    ) -> Result<Conversation, ReviewPreparationError> {
+        let binding = self.binding(Arc::clone(&worker.reader))?;
+        let stop = self.lifetime.cancellation.child_token();
+        let conversation =
+            Conversation::start(manager, setup, &self.lifetime, binding, stop.clone())
+                .await
+                .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
+        self.observe_inbox(
+            Arc::clone(&worker.reader),
+            &conversation.inbox,
+            Arc::clone(&conversation.thread),
+            stop,
+        );
+        Ok(conversation)
+    }
+
     /// Reserve this actor's reviewer for a verdict against the root intake that caught up.
     pub async fn reserve(
         &self,
@@ -189,35 +239,20 @@ impl ActorReviewer {
             if !std::ptr::eq(routed, evidence.as_ref()) {
                 return Err(ReviewPreparationError::EvidenceUnavailable);
             }
-            let (mut conversation, kind) = match slot.take() {
-                Some(previous) if setup.matches_session_configuration(&previous.runtime) => {
-                    (previous, GuardianReviewSessionKind::TrunkReused)
+            let mut conversation = match slot.take() {
+                Some(previous)
+                    if !previous.thread.has_shutdown_status()
+                        && setup.matches_session_configuration(&previous.runtime) =>
+                {
+                    previous
                 }
-                _ => {
-                    let binding = self.binding(Arc::clone(&worker.reader))?;
-                    let stop = self.lifetime.cancellation.child_token();
-                    let conversation =
-                        Conversation::start(&manager, setup, &self.lifetime, binding, stop.clone())
-                            .await
-                            .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
-                    self.observe_inbox(
-                        Arc::clone(&worker.reader),
-                        &conversation.inbox,
-                        Arc::clone(&conversation.thread),
-                        stop,
-                    );
-                    (conversation, GuardianReviewSessionKind::TrunkNew)
-                }
+                _ => self.start(&manager, setup, &worker).await?,
             };
             conversation
                 .deliver(self.actor, worker.reader.as_ref())
                 .await
                 .map_err(|_| ReviewPreparationError::DeliveryFailed)?;
-            Ok(PreparedReviewer {
-                conversation,
-                slot,
-                kind,
-            })
+            Ok(PreparedReviewer { conversation, slot })
         };
         tokio::select! {
             biased;
@@ -354,7 +389,7 @@ impl codex_core::guardian_review::PreparedAssessment for PreparedReviewer {
         &self.conversation.runtime
     }
     fn session_kind(&self) -> GuardianReviewSessionKind {
-        self.kind
+        self.conversation.kind
     }
     fn finish(self: Box<Self>, disposition: SessionDisposition) {
         PreparedReviewer::finish(*self, disposition);

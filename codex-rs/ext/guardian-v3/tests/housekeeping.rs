@@ -6,6 +6,8 @@
 use chrono::Utc;
 use codex_core::CodexThread;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
+use codex_core::config::GuardianInferenceProvider;
 use codex_core::guardian_review::AttachedReviewer;
 use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::prepare_review_prewarm;
@@ -14,7 +16,9 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadStopInput;
+use codex_features::Feature;
 use codex_features::GuardianV3HousekeeperConfigToml;
+use codex_guardian_reviewer::GUARDIAN_FOLLOWUP_REVIEW_REMINDER;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_v3::ActorReviewer;
 use codex_guardian_v3::EvidenceCursor;
@@ -40,9 +44,11 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::user_input::UserInput;
 use codex_state::SqliteConfig;
@@ -56,6 +62,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use reviewer_tool_call::invoke;
+use serde_json::Value;
 use serde_json::json;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -904,6 +911,7 @@ enum ChildKind {
 
 struct ReviewerFixture {
     harness: TestCodexHarness,
+    config: Config,
     root: Arc<CodexThread>,
     child: Arc<CodexThread>,
     session: ExtensionData,
@@ -911,8 +919,12 @@ struct ReviewerFixture {
     host: Arc<PausedClockHost>,
 }
 
-async fn reviewer_fixture(kind: ChildKind) -> anyhow::Result<ReviewerFixture> {
+async fn reviewer_fixture(
+    kind: ChildKind,
+    prewarm: Option<&WebSocketTestServer>,
+) -> anyhow::Result<ReviewerFixture> {
     let named = matches!(kind, ChildKind::Named);
+    let url = prewarm.map(|server| format!("{}/v1", server.uri()));
     let builder = test_codex()
         .with_pre_build_hook(|home| {
             std::fs::write(
@@ -937,7 +949,24 @@ retrieval_instructions = "{RETRIEVAL}"
                 model.tool_mode = Some(codex_protocol::openai_models::ToolMode::Direct);
             }
         })
-        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::User);
+        .with_config(move |config| {
+            // Enable auto-review only for the manually installed GV3 lifecycle below.
+            // The fixture manager installs GV2 before it knows about GV3.
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            if let Some(url) = url {
+                let mut info = config.model_provider.clone();
+                info.supports_websockets = true;
+                info.base_url = Some(url);
+                config.guardian_model_provider = Some(Arc::new(GuardianInferenceProvider {
+                    id: "reviewer".into(),
+                    info,
+                }));
+                config
+                    .features
+                    .enable(Feature::RequestPermissionsTool)
+                    .expect("enable request_permissions");
+            }
+        });
     let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
     let test = harness.test();
     let manager = &test.thread_manager;
@@ -972,7 +1001,13 @@ retrieval_instructions = "{RETRIEVAL}"
     test.thread_store
         .persist_thread(root, PersistContext::Standard)
         .await?;
+    let mut config = test.config.clone();
+    if prewarm.is_some() {
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    }
     let fixture = ReviewerFixture {
+        config,
         root: Arc::clone(&test.codex),
         child: child.thread,
         session: ExtensionData::new(root.to_string()),
@@ -993,7 +1028,7 @@ impl ReviewerFixture {
     async fn ready(&self, thread: &CodexThread, history_initialization: HistoryInitialization) {
         self.lifecycle
             .on_thread_ready(ThreadReadyInput {
-                config: &self.harness.test().config,
+                config: &self.config,
                 session_source: thread.session_source(),
                 history_initialization,
                 history_mode: ThreadHistoryMode::Paginated,
@@ -1157,7 +1192,7 @@ async fn wait_for_revocation(reviewer: &CodexThread) -> anyhow::Result<()> {
 async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle()
 -> anyhow::Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
-    let fixture = reviewer_fixture(ChildKind::Legacy).await?;
+    let fixture = reviewer_fixture(ChildKind::Legacy, /*prewarm*/ None).await?;
     assert!(
         fixture
             .child
@@ -1220,10 +1255,105 @@ async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle(
 }
 
 #[tokio::test]
+async fn first_approval_reuses_the_prewarmed_root_reviewer() -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    // Only Guardian uses this endpoint. Leave room for an unexpected child reviewer.
+    let warmup = vec![ev_response_created("warm"), ev_completed("warm")];
+    let verdict = vec![
+        ev_assistant_message("allow", r#"{"outcome":"allow"}"#),
+        ev_completed("allow"),
+    ];
+    let server = start_websocket_server(vec![vec![warmup, verdict]; 2]).await;
+    let fixture = reviewer_fixture(ChildKind::Named, Some(&server)).await?;
+    let warm = tokio::time::timeout(
+        Duration::from_secs(15),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(warm["generate"], false);
+    assert_eq!(
+        warm["client_metadata"]["x-codex-parent-thread-id"],
+        fixture.root.startup_metadata().thread_id.to_string()
+    );
+    let reviewer = warm["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("prewarmed reviewer");
+
+    let responses = mount_response_handler(fixture.harness.server(), |request| {
+        let body = request.body_json();
+        let routes = &body["text"]["format"]["schema"]["properties"]["routes"];
+        let response = if let Some(count) = routes["minItems"].as_u64() {
+            let mut routing: Value =
+                serde_json::from_str(CREATE_RELEASE).expect("valid release route");
+            routing["routes"] = json!(vec![["release"]; count as usize]);
+            reply("route", &routing.to_string())
+        } else if request.function_call_output_text("network").is_some() {
+            reply("done", "Done.")
+        } else {
+            sse(vec![
+                ev_function_call(
+                    "network",
+                    "request_permissions",
+                    r#"{"permissions":{"network":{"enabled":true}}}"#,
+                ),
+                ev_completed("request"),
+            ])
+        };
+        sse_response(response)
+    })
+    .await;
+    fixture
+        .root
+        .start_turn_if_idle(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Request network access for the release.".into(),
+                text_elements: vec![],
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_successful_turn(&fixture.root).await;
+    let output = responses
+        .requests()
+        .iter()
+        .find_map(|request| request.function_call_output_text("network"))
+        .expect("permission result");
+    let grant: Value = serde_json::from_str(&output)?;
+    assert_eq!(grant["permissions"]["network"]["enabled"], true);
+
+    fixture.shutdown().await?;
+    // An eager child reviewer or a replacement root would open a second connection.
+    assert_eq!(server.handshakes().len(), 1);
+    let connections = server.connections();
+    let [_, review] = connections[0].as_slice() else {
+        anyhow::bail!("expected one warmup and one verdict");
+    };
+    let review = review.body_json();
+    assert_eq!(review["text"]["format"]["type"], "json_schema");
+    assert_eq!(review["client_metadata"]["thread_id"], reviewer);
+    let input = review["input"].as_array().expect("verdict input");
+    let parts = input.iter().filter_map(|item| item["content"].as_array());
+    let mut texts = parts.flatten().filter_map(|part| part["text"].as_str());
+    for text in texts.clone() {
+        assert!(!text.contains(GUARDIAN_FOLLOWUP_REVIEW_REMINDER));
+    }
+    assert!(texts.any(|text| text.trim() == "Planned action JSON:"));
+    let action: Value = serde_json::from_str(texts.next().expect("planned action"))?;
+    assert_eq!(action["tool"], "request_permissions");
+    assert_eq!(action["permissions"]["network"]["enabled"], true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn child_can_search_pending_evidence_on_first_review_after_root_reload() -> anyhow::Result<()>
 {
     core_test_support::skip_if_no_network!(Ok(()));
-    let mut fixture = reviewer_fixture(ChildKind::Named).await?;
+    let mut fixture = reviewer_fixture(ChildKind::Named, /*prewarm*/ None).await?;
     fixture.record(/*order*/ 1, REVOCATION).await?;
     fixture.stop(&fixture.root).await?;
     fixture.mock_reply("resume", CREATE_RELEASE).await;
@@ -1249,7 +1379,7 @@ async fn child_keeps_searched_and_subscribed_evidence_after_root_reload() -> any
     const GRANT: &str = "Go ahead with the release.";
     const AFTER_RESUME: &str = "Keep the release on hold.";
 
-    let mut fixture = reviewer_fixture(ChildKind::Named).await?;
+    let mut fixture = reviewer_fixture(ChildKind::Named, /*prewarm*/ None).await?;
     let original = fixture.intake();
     // Only a search of the unsubscribed audit channel can supply this instruction.
     let seed = json!({
