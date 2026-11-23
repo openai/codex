@@ -49,13 +49,18 @@ fn received_user_instruction(request: &responses::ResponsesRequest, text: &str) 
         })
 }
 
-#[test_case(ReviewCase::V3; "v3_follows_subscribed_revocation_and_reapproval")]
-#[test_case(ReviewCase::V3WithReconsideration; "v3_resamples_a_terminal_denial_once")]
-#[test_case(ReviewCase::V3RoutingFailure; "v3_denies_when_pending_routing_fails")]
-#[test_case(ReviewCase::Native; "native_without_v3")]
-#[test_case(ReviewCase::EphemeralV3; "ephemeral_uses_native_with_v3")]
+#[test_case(ReviewCase::V3, None; "v3_follows_subscribed_revocation_and_reapproval")]
+#[test_case(ReviewCase::V3, Some(true); "v3_reports_high_probe_without_changing_verdicts")]
+#[test_case(ReviewCase::V3, Some(false); "v3_reports_low_probe_without_changing_verdicts")]
+#[test_case(ReviewCase::V3WithReconsideration, None; "v3_resamples_a_terminal_denial_once")]
+#[test_case(ReviewCase::V3RoutingFailure, None; "v3_denies_when_pending_routing_fails")]
+#[test_case(ReviewCase::Native, None; "native_without_v3")]
+#[test_case(ReviewCase::EphemeralV3, None; "ephemeral_uses_native_with_v3")]
 #[tokio::test]
-async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Result<()> {
+async fn pending_mcp_action_uses_the_configured_reviewer(
+    case: ReviewCase,
+    probe: Option<bool>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let reconsider = matches!(case, ReviewCase::V3WithReconsideration);
     let uses_board = matches!(
@@ -138,15 +143,22 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
                 response
             };
         } else if let Some(call_id) = actor_call.lock().expect("next actor call").take() {
-            responses::sse(vec![
-                responses::ev_function_call_with_namespace(
+            let mut call = responses::ev_function_call_with_namespace(
                     call_id,
                     "mcp__codex_apps__browser",
                     "_js",
                     r#"{"code":"release-action"}"#,
-                ),
-                responses::ev_completed(call_id),
-            ])
+                );
+            call["item"]["id"] = json!(call_id);
+            let mut events = vec![responses::ev_response_created(call_id)];
+            if let Some(requires_review) = probe {
+                events.push(json!({
+                    "type": "response.metadata", "response_id": call_id,
+                    "metadata": {"guardian": {"item_id": call_id, "requires_review": requires_review}},
+                }));
+            }
+            events.extend([call, responses::ev_completed(call_id)]);
+            responses::sse(events)
         } else {
             responses::sse(vec![
                 responses::ev_assistant_message("actor", "Done."),
@@ -282,6 +294,13 @@ async fn pending_mcp_action_uses_the_configured_reviewer(case: ReviewCase) -> Re
                 |event| {
                     let fields = &event["fields"];
                     fields["message"] == "Guardian V3 review preparation started"
+                        && fields["tool_call_id"] == call_id
+                        && fields["probe_review"]
+                            == match probe {
+                                Some(true) => "required",
+                                Some(false) => "not_required",
+                                None => "not_reported",
+                            }
                         && fields["review_id"]
                             .as_str()
                             .is_some_and(|id| Some(id) != previous_review_id.as_deref())

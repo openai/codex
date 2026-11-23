@@ -218,7 +218,16 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             };
             drop(history);
             let started = Instant::now();
-            tracing::info!(%review_id, "Guardian V3 review preparation started");
+            tracing::info!(
+                %review_id,
+                tool_call_id = self.request.tool_call_id.as_deref(),
+                probe_review = match context.guardian_probe {
+                    Some(true) => "required",
+                    Some(false) => "not_required",
+                    None => "not_reported",
+                },
+                "Guardian V3 review preparation started"
+            );
             let result = AttachedApproval::prepare(
                 provider,
                 authorization,
