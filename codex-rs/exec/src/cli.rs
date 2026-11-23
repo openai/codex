@@ -18,6 +18,8 @@ pub struct Cli {
     pub command: Option<Command>,
 
     /// Connect to an existing app server.
+    /// Explicit --model and -c model_reasoning_effort overrides update the remote thread
+    /// for this turn and subsequent turns; omitted settings are inherited from the server.
     #[arg(
         id = "exec_remote",
         long = "remote",

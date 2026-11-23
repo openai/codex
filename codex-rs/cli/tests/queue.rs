@@ -1,3 +1,7 @@
+#[cfg(unix)]
+#[path = "common/remote_exec.rs"]
+mod remote_exec_support;
+
 use std::path::Path;
 use std::process::Output;
 
@@ -263,14 +267,7 @@ async fn run_remote_queue_command(response: QueueResponse) -> Result<(Output, Va
 async fn remote_session_commands_with_workload_identity_use_server_auth() -> Result<()> {
     use std::time::Duration;
 
-    use app_test_support::MockResponsesConfig;
-    use app_test_support::TestAppServer;
-    use app_test_support::create_final_assistant_message_sse_response;
     use codex_app_server_client::AppServerEvent;
-    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
-    use codex_app_server_client::RemoteAppServerClient;
-    use codex_app_server_client::RemoteAppServerConnectArgs;
-    use codex_app_server_client::RemoteAppServerEndpoint;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
@@ -282,78 +279,32 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use codex_app_server_protocol::ThreadReadResponse;
     use codex_app_server_protocol::ThreadSetNameParams;
     use codex_app_server_protocol::ThreadSetNameResponse;
-    use codex_app_server_protocol::ThreadStartParams;
-    use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
     use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
-    use core_test_support::responses;
     use tokio::process::Command;
     use tokio::time::timeout;
-    use wiremock::Mock;
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
 
     let codex_home = socket_test_home()?;
     let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
-    let model = responses::start_mock_server().await;
-    let model_requests = Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(responses::sse_response(
-            create_final_assistant_message_sse_response("queued message consumed")?,
-        ))
-        .expect(4)
-        .mount_as_scoped(&model)
-        .await;
-    MockResponsesConfig::new(&model.uri())
-        .with_root_config("features.plugins = false\nanalytics.enabled = false")
-        .with_provider_config("env_key = \"CODEX_QUEUE_SERVER_API_KEY\"")
-        .write(codex_home.path())?;
-    let _server = TestAppServer::builder()
-        .with_program(&codex)
-        .with_codex_home(codex_home.path())
-        .with_plugin_startup_tasks()
-        .without_managed_config()
-        .with_args(&["app-server", "--listen", "unix://"])
-        .with_env_overrides(&[
+    let (fixture, mut app, thread_id) = remote_exec_support::RemoteExecFixture::start(
+        &codex,
+        codex_home.path(),
+        "queued message consumed",
+        /*expected_requests*/ 4,
+        |config| config.with_provider_config("env_key = \"CODEX_QUEUE_SERVER_API_KEY\""),
+        &[
             ("OPENAI_API_KEY", None),
             ("CODEX_API_KEY", None),
             ("CODEX_ACCESS_TOKEN", None),
             (OPENAI_FEDERATION_RULE_ID_ENV_VAR, None),
             (OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, None),
             ("CODEX_QUEUE_SERVER_API_KEY", Some("server-only-test-key")),
-        ])
-        .build()
-        .await?;
-    let socket_path = codex_app_server::app_server_control_socket_path(codex_home.path())?;
-    timeout(Duration::from_secs(30), async {
-        while !socket_path.as_path().try_exists()? {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await??;
-
-    let endpoint = format!("unix://{}", socket_path.as_path().display());
-    let mut app = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        required_human_approval: false,
-        endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
-        client_name: "queue-e2e-test".to_string(),
-        client_version: "0.1.0".to_string(),
-        experimental_api: true,
-        mcp_server_openai_form_elicitation: false,
-        opt_out_notification_methods: Vec::new(),
-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
+        ],
+    )
     .await?;
-    let started: ThreadStartResponse = app
-        .request_typed(ClientRequest::ThreadStart {
-            request_id: RequestId::Integer(1),
-            params: ThreadStartParams::default(),
-        })
-        .await?;
-    let thread_id = started.thread.id;
+    let endpoint = &fixture.endpoint;
     let message = "synthetic WIF queue end-to-end message";
     let output = timeout(
         Duration::from_secs(30),
@@ -401,7 +352,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
         .await?;
     assert!(queue.data.is_empty());
 
-    let requests = model_requests.received_requests().await;
+    let requests = fixture.requests.received_requests().await;
     let request = requests
         .first()
         .context("queued message did not reach the model")?;
@@ -417,7 +368,6 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     let metadata: Value = serde_json::from_str(request.headers["x-codex-turn-metadata"].to_str()?)?;
     assert_eq!(metadata["turn_trigger"], "queue");
 
-    let exec_home = TempDir::new()?;
     for args in [
         vec!["exec", "--remote", &endpoint, "--json", "new task"],
         vec![
@@ -429,10 +379,9 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             "continue task",
         ],
     ] {
-        let output = Command::new(&codex)
-            .env("CODEX_HOME", exec_home.path())
+        let output = fixture
+            .caller_command()
             .env_remove("CODEX_QUEUE_SERVER_API_KEY")
-            .current_dir(exec_home.path())
             .args(args)
             .output()
             .await?;
@@ -495,7 +444,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             )
             .env_remove("CODEX_QUEUE_SERVER_API_KEY")
             .kill_on_drop(true)
-            .args(["--remote", &endpoint]);
+            .args(["--remote", endpoint]);
         command
     };
     let output = timeout(
@@ -590,10 +539,10 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             );
             timeout(
                 Duration::from_secs(30),
-                model_requests.wait_until_satisfied(),
+                fixture.requests.wait_until_satisfied(),
             )
             .await?;
-            let requests = model_requests.received_requests().await;
+            let requests = fixture.requests.received_requests().await;
             assert!(
                 requests[3].body_json::<Value>()?["input"]
                     .to_string()

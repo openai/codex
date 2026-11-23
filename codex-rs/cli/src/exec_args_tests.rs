@@ -20,7 +20,10 @@ fn exec_help_documents_cyber_access_program() {
         .join("\n");
     insta::assert_snapshot!(remote_help.trim(), @r"
     --remote <ADDR>
-              Connect to an existing app server
+              Connect to an existing app server. Explicit --model and -c
+              model_reasoning_effort overrides update the remote thread for this
+              turn and subsequent turns; omitted settings are inherited from the
+              server
     ");
     let program_help = help
         .to_string()

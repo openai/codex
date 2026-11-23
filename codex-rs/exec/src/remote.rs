@@ -1,6 +1,7 @@
 //! Execute a noninteractive turn on an existing app server, using its configuration and credentials.
 
 use super::*;
+use anyhow::Context;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
 use codex_app_server_client::RemoteAppServerEndpoint;
@@ -15,9 +16,7 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
             && cli.thread_source.is_none()
             && cli.cyber_access_program.is_none()
             && cli.output_schema.is_none()
-            && cli.config_overrides.raw_overrides.is_empty()
             && cli.images.is_empty()
-            && cli.model.is_none()
             && !cli.oss
             && cli.oss_provider.is_none()
             && cli.config_profile_v2.is_none()
@@ -28,8 +27,37 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
             && cli.cwd.is_none()
             && !cli.worktree
             && cli.add_dir.is_empty(),
-        "--remote currently supports only prompt, resume by UUID, and output options; configure the agent on the server"
+        "--remote supports prompt, resume by UUID, model, reasoning effort, and output options; configure other agent settings on the server"
     );
+    let mut model = None;
+    let mut effort = None;
+    for (key, value) in cli
+        .config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?
+    {
+        match key.as_str() {
+            "model" => {
+                model = Some(
+                    serde_json::from_value::<String>(serde_json::to_value(value)?)
+                        .context("invalid model override: expected a string")?,
+                );
+            }
+            "model_reasoning_effort" => {
+                effort = Some(
+                    serde_json::from_value::<codex_protocol::openai_models::ReasoningEffort>(
+                        serde_json::to_value(value)?,
+                    )
+                    .context("invalid model_reasoning_effort override")?,
+                );
+            }
+            _ => anyhow::bail!(
+                "--remote does not support config override `{key}`; configure it on the server"
+            ),
+        }
+    }
+    // Match local exec precedence: --model wins over -c model=... .
+    let model = cli.model.clone().or(model);
     let (session_id, prompt) = match cli.command {
         None => (None, resolve_root_prompt(cli.prompt)),
         Some(ExecCommand::Resume(args)) => {
@@ -95,6 +123,7 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
             .request_typed::<ThreadStartResponse>(ClientRequest::ThreadStart {
                 request_id: ids.next(),
                 params: ThreadStartParams {
+                    model: model.clone(),
                     approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
                     ..Default::default()
                 },
@@ -127,6 +156,10 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
                     text_elements: Vec::new(),
                 }],
                 approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+                // Like other app-server clients, explicit overrides apply to this
+                // turn and subsequent turns. Omission preserves the thread settings.
+                model,
+                effort,
                 ..Default::default()
             },
         })
