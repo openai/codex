@@ -26,17 +26,34 @@ const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|process)$";
 // `/diff` may execute Git through a remote workspace, so git-utils owns the
 // probe policy while this adapter keeps command execution in the TUI layer.
 // WorkspaceCommand bounds each call; `/diff` has no aggregate command deadline.
-struct WorkspaceFsmonitorProbeRunner<'a> {
+struct DiffCommands<'a> {
     runner: &'a dyn WorkspaceCommandExecutor,
     cwd: &'a Path,
+    permission_profile: Option<&'a str>,
 }
 
-impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
+impl DiffCommands<'_> {
+    fn command(&self, argv: impl IntoIterator<Item = impl Into<String>>) -> WorkspaceCommand {
+        let mut command = WorkspaceCommand::new(argv, self.cwd.to_path_buf());
+        if let Some(profile) = self.permission_profile {
+            command.permission_profile = Some(profile.to_owned());
+            // A thread profile can grant network access outside the application's
+            // destination policy. Keep Git local even on older versions that
+            // ignore GIT_NO_LAZY_FETCH by denying all transport protocols.
+            command = command
+                .env("GIT_NO_LAZY_FETCH", "1")
+                .env("GIT_ALLOW_PROTOCOL", "");
+        }
+        command
+    }
+}
+
+impl FsmonitorProbeRunner for DiffCommands<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
         let argv = ["git", "-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG]
             .into_iter()
             .chain(args.iter().copied());
-        let command = WorkspaceCommand::new(argv, self.cwd.to_path_buf());
+        let command = self.command(argv);
         match self.runner.run(command).await {
             Ok(output) if output.success() => Some(output.stdout.into_bytes()),
             _ => None,
@@ -51,22 +68,36 @@ impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
 pub(crate) async fn get_git_diff(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
+    permission_profile: Option<&str>,
 ) -> Result<(bool, String), String> {
+    // A reattached client inherits the ID but not the flags that defined it.
+    // Check custom IDs once so all Git commands use the same selection.
+    let permission_profile = match permission_profile {
+        Some(id) if !id.starts_with(':') => runner
+            .has_permission_profile(cwd, id)
+            .await
+            .map_err(|err| err.to_string())?
+            .then_some(id),
+        profile => profile,
+    };
+    let mut commands = DiffCommands {
+        runner,
+        cwd,
+        permission_profile,
+    };
     // First check if we are inside a Git repository.
-    if !inside_git_repo(runner, cwd).await? {
+    if !inside_git_repo(&commands).await? {
         return Ok((false, String::new()));
     }
 
     // Probe once per `/diff` and reuse the result for all subsequent Git commands.
-    let mut probe_runner = WorkspaceFsmonitorProbeRunner { runner, cwd };
-    let fsmonitor = detect_fsmonitor_override(&mut probe_runner).await;
+    let fsmonitor = detect_fsmonitor_override(&mut commands).await;
 
     // Keep `/diff` informational: repository configuration must not select executable diff helpers.
-    let diff_config_overrides = diff_filter_config_overrides(runner, cwd, fsmonitor).await?;
+    let diff_config_overrides = diff_filter_config_overrides(&commands, fsmonitor).await?;
     let (tracked_diff_res, untracked_output_res) = tokio::join!(
         run_git_capture_diff(
-            runner,
-            cwd,
+            &commands,
             fsmonitor,
             &diff_config_overrides,
             &[
@@ -79,8 +110,7 @@ pub(crate) async fn get_git_diff(
             ]
         ),
         run_git_capture_stdout(
-            runner,
-            cwd,
+            &commands,
             fsmonitor,
             &["ls-files", "--others", "--exclude-standard"]
         ),
@@ -114,7 +144,7 @@ pub(crate) async fn get_git_diff(
             file,
         ];
         let diff =
-            run_git_capture_diff(runner, cwd, fsmonitor, &diff_config_overrides, &args).await?;
+            run_git_capture_diff(&commands, fsmonitor, &diff_config_overrides, &args).await?;
         untracked_diff.push_str(&diff);
     }
 
@@ -124,12 +154,11 @@ pub(crate) async fn get_git_diff(
 /// Helper that executes `git` with the given `args` and returns `stdout` as a
 /// UTF-8 string. Any non-zero exit status is considered an *error*.
 async fn run_git_capture_stdout(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
+    commands: &DiffCommands<'_>,
     fsmonitor: FsmonitorOverride,
     args: &[&str],
 ) -> Result<String, String> {
-    let output = run_git_command(runner, cwd, fsmonitor, &[], args).await?;
+    let output = run_git_command(commands, fsmonitor, &[], args).await?;
     if output.success() {
         Ok(output.stdout)
     } else {
@@ -143,13 +172,12 @@ async fn run_git_capture_stdout(
 /// Like [`run_git_capture_stdout`] but treats exit status 1 as success and
 /// returns stdout. Git returns 1 for diffs when differences are present.
 async fn run_git_capture_diff(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
+    commands: &DiffCommands<'_>,
     fsmonitor: FsmonitorOverride,
     config_overrides: &[(String, String)],
     args: &[&str],
 ) -> Result<String, String> {
-    let output = run_git_command(runner, cwd, fsmonitor, config_overrides, args).await?;
+    let output = run_git_command(commands, fsmonitor, config_overrides, args).await?;
     if output.success() || output.exit_code == 1 {
         Ok(output.stdout)
     } else {
@@ -163,8 +191,7 @@ async fn run_git_capture_diff(
 /// Return Git configuration overrides that prevent configured filter drivers
 /// from executing while generating diffs.
 async fn diff_filter_config_overrides(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
+    commands: &DiffCommands<'_>,
     fsmonitor: FsmonitorOverride,
 ) -> Result<Vec<(String, String)>, String> {
     let args = [
@@ -174,7 +201,7 @@ async fn diff_filter_config_overrides(
         "--get-regexp",
         EXECUTABLE_FILTER_CONFIG_PATTERN,
     ];
-    let output = run_git_command(runner, cwd, fsmonitor, &[], &args).await?;
+    let output = run_git_command(commands, fsmonitor, &[], &args).await?;
     if output.exit_code != 0 && output.exit_code != 1 {
         return Err(format!(
             "git {:?} failed with status {}",
@@ -207,26 +234,34 @@ async fn diff_filter_config_overrides(
 }
 
 /// Determine if the current directory is inside a Git repository.
-async fn inside_git_repo(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
-) -> Result<bool, String> {
+async fn inside_git_repo(commands: &DiffCommands<'_>) -> Result<bool, String> {
     // `rev-parse` does not inspect the worktree, and probing before this check
     // would also run extra Git commands outside repositories.
     let output = run_git_command(
-        runner,
-        cwd,
+        commands,
         FsmonitorOverride::Disabled,
         &[],
         &["rev-parse", "--is-inside-work-tree"],
     )
     .await?;
+    // Exit 128 also covers inaccessible worktree metadata. Recognize the
+    // ordinary discovery miss and preserve other (including localized) diagnostics.
+    let stderr = output.stderr.trim_end();
+    if commands.permission_profile.is_some()
+        && !output.success()
+        && !(output.exit_code == 128
+            && stderr == "fatal: not a git repository (or any of the parent directories): .git")
+    {
+        return Err(format!(
+            "git rev-parse failed under the session permission profile (exit {}).\n{stderr}",
+            output.exit_code,
+        ));
+    }
     Ok(output.success())
 }
 
 async fn run_git_command(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
+    commands: &DiffCommands<'_>,
     fsmonitor: FsmonitorOverride,
     config_overrides: &[(String, String)],
     args: &[&str],
@@ -242,7 +277,8 @@ async fn run_git_command(
     ]
     .into_iter()
     .chain(args.iter().copied());
-    let mut command = WorkspaceCommand::new(argv, cwd.to_path_buf())
+    let mut command = commands
+        .command(argv)
         .timeout(DIFF_COMMAND_TIMEOUT)
         .disable_output_cap();
     if !config_overrides.is_empty() {
@@ -253,7 +289,11 @@ async fn run_git_command(
                 .env(format!("GIT_CONFIG_VALUE_{index}"), value);
         }
     }
-    runner.run(command).await.map_err(|err| err.to_string())
+    commands
+        .runner
+        .run(command)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -273,21 +313,112 @@ mod tests {
     use std::sync::Mutex;
 
     #[tokio::test]
+    async fn diff_profile_after_live_reattachment() -> color_eyre::Result<()> {
+        use crate::app_server_session::ResumeModelSettings;
+        use crate::legacy_core::config::ConfigBuilder;
+        use crate::local_settings::LocalSettings;
+        use crate::workspace_command::AppServerWorkspaceCommandRunner;
+
+        let home = tempfile::tempdir()?;
+        let repo = tempfile::tempdir()?;
+        let cwd = dunce::canonicalize(repo.path())?;
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&cwd)
+                .status()?
+                .success()
+        );
+        std::fs::write(
+            home.path().join("config.toml"),
+            "default_permissions = ':danger-full-access'\n[permissions.disk]\nextends = ':read-only'\n",
+        )?;
+        let config = || {
+            ConfigBuilder::default()
+                .codex_home(home.path().into())
+                .fallback_cwd(Some(cwd.clone()))
+        };
+        let disk_config = config().build().await?;
+        let mut server = crate::start_embedded_app_server_for_picker(&disk_config).await?;
+        let first = config()
+            .cli_overrides(vec![
+                (
+                    "permissions.session-only.extends".into(),
+                    ":read-only".into(),
+                ),
+                ("default_permissions".into(), "session-only".into()),
+            ])
+            .build()
+            .await?;
+        let thread_id = server.start_thread(&first).await?.session.thread_id;
+        // Materialize history so the thread can be resumed without unloading it.
+        server.thread_inject_items(thread_id, vec![serde_json::from_value(serde_json::json!({
+            "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "saved history"}]
+        }))?]).await?;
+
+        // Rejoin the running thread with a fresh client's settings, without the CLI definition.
+        let mut second = server.request_view();
+        let resumed = second
+            .resume_thread(
+                &LocalSettings::from(&disk_config),
+                disk_config,
+                thread_id,
+                ResumeModelSettings::PreserveExistingThread,
+            )
+            .await?;
+        let profile = resumed.session.active_permission_profile.unwrap();
+        assert_eq!(profile.id, "session-only");
+        let runner = AppServerWorkspaceCommandRunner::new(second.request_handle());
+        let cwd = resumed.session.cwd.to_path_buf();
+        assert!(runner.has_permission_profile(&cwd, "disk").await?);
+        assert_eq!(
+            get_git_diff(&runner, &cwd, Some(&profile.id)).await,
+            Ok((true, String::new()))
+        );
+        server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_git_diff_returns_not_git_for_non_git_cwd() {
         let cwd = PathBuf::from("/workspace");
-        let runner = FakeRunner::new(vec![response(
+        let mut probe = response(
             git_command(
                 FsmonitorOverride::Disabled,
                 &["rev-parse", "--is-inside-work-tree"],
             ),
             /*exit_code*/ 128,
             "",
-        )]);
-
-        let result = get_git_diff(&runner, &cwd).await;
+        );
+        probe.output.stderr =
+            "fatal: not a git repository (or any of the parent directories): .git\n".into();
+        let runner = FakeRunner::new(vec![probe]);
+        let result = get_git_diff(&runner, &cwd, Some(":workspace")).await;
 
         assert_eq!(result, Ok((false, String::new())));
         assert_command_metadata(&runner.commands(), &cwd);
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_preserves_profiled_worktree_discovery_errors() {
+        let mut probe = response(
+            git_command(
+                FsmonitorOverride::Disabled,
+                &["rev-parse", "--is-inside-work-tree"],
+            ),
+            /*exit_code*/ 128,
+            "",
+        );
+        probe.output.stderr =
+            "fatal: gitfile does not point to a valid repository: /linked/.git\n".into();
+        let runner = FakeRunner::new(vec![probe]);
+        let error = get_git_diff(&runner, Path::new("/linked"), Some(":workspace"))
+            .await
+            .unwrap_err();
+        insta::assert_snapshot!(error, @r"
+        git rev-parse failed under the session permission profile (exit 128).
+        fatal: gitfile does not point to a valid repository: /linked/.git
+        ");
     }
 
     #[tokio::test]
@@ -378,11 +509,16 @@ mod tests {
             ),
         ]);
 
-        let result = get_git_diff(&runner, &cwd).await;
+        let result = get_git_diff(&runner, &cwd, Some(":workspace")).await;
 
         assert_eq!(result, Ok((true, "tracked\nuntracked\n".to_string())));
         let commands = runner.commands();
         assert_command_metadata(&commands, &cwd);
+        assert!(
+            commands
+                .iter()
+                .all(|command| command.permission_profile.as_deref() == Some(":workspace"))
+        );
         assert_eq!(commands[4].env, filter_override_env("filter.evil"));
         assert_eq!(commands[6].env, filter_override_env("filter.evil"));
     }
@@ -467,7 +603,7 @@ mod tests {
             ),
         ]);
 
-        let result = get_git_diff(&runner, &cwd).await;
+        let result = get_git_diff(&runner, &cwd, /*permission_profile*/ None).await;
 
         assert_eq!(result, Ok((true, "tracked\nuntracked\n".to_string())));
         assert_command_metadata(&runner.commands(), &cwd);
@@ -529,7 +665,7 @@ mod tests {
             ),
         ]);
 
-        let result = get_git_diff(&runner, &cwd).await;
+        let result = get_git_diff(&runner, &cwd, /*permission_profile*/ None).await;
 
         assert_eq!(result, Ok((true, "tracked\n".to_string())));
         assert_command_metadata(&runner.commands(), &cwd);
@@ -591,7 +727,7 @@ mod tests {
             ),
         ]);
 
-        let error = get_git_diff(&runner, &cwd)
+        let error = get_git_diff(&runner, &cwd, /*permission_profile*/ None)
             .await
             .expect_err("unexpected git diff status should fail");
 
@@ -600,6 +736,32 @@ mod tests {
             "git [\"diff\", \"--no-textconv\", \"--no-ext-diff\", \"--submodule=short\", \"--ignore-submodules=dirty\", \"--color\"] failed with status 2"
         );
         assert_command_metadata(&runner.commands(), &cwd);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn get_git_diff_with_thread_permissions_does_not_fetch_missing_blobs() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = tempdir.path();
+        run_git_setup(repo, &["init", "-q"]);
+        run_git_setup(repo, &["config", "remote.origin.promisor", "true"]);
+        run_git_setup(repo, &["config", "remote.origin.url", "ext::touch fetched"]);
+        run_git_setup(repo, &["config", "protocol.ext.allow", "always"]);
+        run_git_setup(
+            repo,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "100644,1111111111111111111111111111111111111111,missing",
+            ],
+        );
+        fs::write(repo.join("missing"), "changed").unwrap();
+
+        get_git_diff(&LocalRunner, repo, Some(":workspace"))
+            .await
+            .expect_err("missing blob");
+        assert!(!repo.join("fetched").exists());
     }
 
     #[cfg(unix)]
@@ -665,7 +827,7 @@ mod tests {
         fs::write(repo.join("unchanged.txt"), "unchanged\n").expect("refresh unchanged file");
         fs::write(repo.join("tracked.txt"), "after\n").expect("modify tracked file");
 
-        let result = get_git_diff(&LocalRunner, &repo)
+        let result = get_git_diff(&LocalRunner, &repo, /*permission_profile*/ None)
             .await
             .expect("generate diff without invoking helpers");
 
@@ -732,7 +894,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(/*secs*/ 1));
         fs::write(checkout.join("tracked.txt"), "before\n").expect("refresh child tracked file");
 
-        let result = get_git_diff(&LocalRunner, &repo)
+        let result = get_git_diff(&LocalRunner, &repo, /*permission_profile*/ None)
             .await
             .expect("generate diff without inspecting submodule worktrees");
 
@@ -768,6 +930,8 @@ mod tests {
 
     fn filter_override_env(driver: &str) -> HashMap<String, Option<String>> {
         HashMap::from([
+            ("GIT_NO_LAZY_FETCH".to_string(), Some("1".to_string())),
+            ("GIT_ALLOW_PROTOCOL".to_string(), Some(String::new())),
             ("GIT_CONFIG_COUNT".to_string(), Some("3".to_string())),
             (
                 "GIT_CONFIG_KEY_0".to_string(),
@@ -834,7 +998,7 @@ mod tests {
                 command.argv.get(3).map(String::as_str),
                 Some("config" | "version")
             ) {
-                assert_eq!(command.env, HashMap::new());
+                assert!(!command.env.contains_key("GIT_CONFIG_COUNT"));
                 assert_eq!(command.timeout, Duration::from_secs(/*secs*/ 5));
                 assert_eq!(command.disable_output_cap, false);
             } else {

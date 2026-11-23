@@ -170,6 +170,7 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     chat.primary_environment_cwd = Some(crate::session_state::EnvironmentCwd {
         path: chat.config.cwd.join("executor-checkout").into(),
         is_server_local: false,
+        cwd_is_only_root: true,
     });
     chat.refresh_status_line();
     assert!(read_events(&mut rx).is_empty());

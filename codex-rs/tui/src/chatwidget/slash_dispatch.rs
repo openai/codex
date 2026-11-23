@@ -85,6 +85,49 @@ impl ChatWidget {
         self.bottom_pane.record_pending_slash_command_history();
     }
 
+    /// Re-anchor the local daemon's sandbox at the session cwd. A profile ID
+    /// cannot carry extra runtime roots or permissions from a remote executor.
+    pub(super) fn diff_permission_profile(&self) -> Option<String> {
+        if !self.remote_connection.as_ref()?.is_local_daemon {
+            return None;
+        }
+        let matches_workspace = match &self.primary_environment_cwd {
+            // History and inferred sessions can borrow another thread's settings.
+            Some(primary) => {
+                self.thread_settings_confirmed
+                    && !self.read_only_history
+                    && primary.is_server_local
+                    && primary.cwd_is_only_root
+                    && primary.path.to_path_buf() == self.session_cwd().to_path_buf()
+            }
+            // Before thread creation, the TUI only has the startup workspace.
+            None => {
+                self.thread_id().is_none()
+                    && self.session_workspace_roots() == std::slice::from_ref(self.session_cwd())
+            }
+        };
+        // command/exec can reload a profile by ID, but cannot replay the
+        // permission definitions that thread/start received from CLI flags.
+        if !matches_workspace
+            || self
+                .config
+                .config_layer_stack
+                .layers_high_to_low()
+                .any(|layer| {
+                    matches!(layer.name, codex_config::ConfigLayerSource::SessionFlags)
+                        && ["permissions", "sandbox_workspace_write", "network"]
+                            .iter()
+                            .any(|key| layer.config.get(*key).is_some())
+                })
+        {
+            return None;
+        }
+        self.config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id)
+    }
+
     fn apply_plan_slash_command(&mut self) -> bool {
         if !self.collaboration_modes_enabled() {
             self.add_info_message(
@@ -503,11 +546,19 @@ impl ChatWidget {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
                 let runner = self.workspace_command_runner.clone();
+                let thread_id = self.thread_id();
                 let cwd = self.session_cwd().clone();
+                let profile = self.diff_permission_profile();
                 tokio::spawn(async move {
                     let text = match runner {
                         Some(runner) => {
-                            match get_git_diff(runner.as_ref(), &cwd.to_path_buf()).await {
+                            match get_git_diff(
+                                runner.as_ref(),
+                                &cwd.to_path_buf(),
+                                profile.as_deref(),
+                            )
+                            .await
+                            {
                                 Ok((is_git_repo, diff_text)) => {
                                     if is_git_repo {
                                         diff_text
@@ -521,7 +572,11 @@ impl ChatWidget {
                         None => "Failed to compute diff: workspace command runner unavailable"
                             .to_string(),
                     };
-                    tx.send(AppEvent::DiffResult(cwd, text));
+                    tx.send(AppEvent::DiffResult {
+                        thread_id,
+                        cwd,
+                        text,
+                    });
                 });
             }
             SlashCommand::Mention => {

@@ -68,6 +68,7 @@ pub(crate) struct ThreadSessionState {
 pub(crate) struct EnvironmentCwd {
     pub(crate) path: LegacyAppPathString,
     pub(crate) is_server_local: bool,
+    pub(crate) cwd_is_only_root: bool,
 }
 
 pub(crate) fn primary_environment_cwd(
@@ -75,6 +76,7 @@ pub(crate) fn primary_environment_cwd(
 ) -> Option<EnvironmentCwd> {
     environments.first().map(|primary| EnvironmentCwd {
         path: primary.cwd.clone(),
+        cwd_is_only_root: primary.runtime_workspace_roots == std::slice::from_ref(&primary.cwd),
         is_server_local: primary.environment_id == codex_exec_server::LOCAL_ENVIRONMENT_ID,
     })
 }
