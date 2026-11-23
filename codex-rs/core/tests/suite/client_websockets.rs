@@ -308,7 +308,7 @@ async fn responses_websocket_streams_request() {
     );
     assert_eq!(
         handshake.header("x-codex-exclude-stream-fields").as_deref(),
-        Some("reasoning.added.encrypted_content")
+        Some("delta.sequence_number,reasoning.added.encrypted_content")
     );
     assert_eq!(
         handshake.header("session-id"),

@@ -122,7 +122,7 @@ async fn output_token_replay_respects_provider_and_preserves_history(
         requests[0]
             .header("x-codex-exclude-stream-fields")
             .as_deref(),
-        Some("reasoning.added.encrypted_content")
+        Some("delta.sequence_number,reasoning.added.encrypted_content")
     );
     let expected_include = if enabled && openai_provider {
         json!(["reasoning.encrypted_content", "output.encrypted_content"])

@@ -2984,13 +2984,14 @@ fn build_responses_headers(
 
 /// Apply Responses stream defaults after resolving provider headers so explicit exclusions win.
 fn with_default_stream_exclusions(mut provider: ApiProvider) -> ApiProvider {
+    // Text and custom tool input deltas don't need sequence numbers.
     // Reasoning replay only needs the ciphertext on the finished item.
     // Negotiate separately so older servers still recognize x-codex-exclude.
     provider
         .headers
         .entry("x-codex-exclude-stream-fields")
         .or_insert(HeaderValue::from_static(
-            "reasoning.added.encrypted_content",
+            "delta.sequence_number,reasoning.added.encrypted_content",
         ));
     provider
 }
