@@ -58,6 +58,7 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
@@ -697,6 +698,19 @@ pub(super) async fn run_onboarding_screen(
     result.and_then(|result| restore.map(|()| result).map_err(Into::into))
 }
 
+// A queued confirmation must not accept a disconnected folder, even when opening
+// restricted would complete without an RPC. Leave the disconnect event for the app.
+async fn folder_input(
+    closed: impl Future<Output = ()>,
+    input: impl Future<Output = Option<TuiEvent>>,
+) -> ControlFlow<(), Option<TuiEvent>> {
+    tokio::select! {
+        biased;
+        () = closed => ControlFlow::Break(()),
+        event = input => ControlFlow::Continue(event),
+    }
+}
+
 async fn run_onboarding_screen_inner(
     mut onboarding_screen: OnboardingScreen,
     app_server_request_handle: Option<AppServerRequestHandle>,
@@ -718,6 +732,14 @@ async fn run_onboarding_screen_inner(
     tokio::pin!(tui_events);
     let mut trust_step_was_active = onboarding_screen.is_trust_step_active();
 
+    let folder_connection = match (
+        &app_server_request_handle,
+        onboarding_screen.steps.as_slice(),
+    ) {
+        (Some(AppServerRequestHandle::Remote(handle)), [Step::TrustDirectory(_)]) => Some(handle),
+        _ => None,
+    };
+
     while !onboarding_screen.is_done() {
         tokio::select! {
             () = async {
@@ -726,7 +748,20 @@ async fn run_onboarding_screen_inner(
                     None => std::future::pending().await,
                 }
             } => {}
-            event = tui_events.next() => {
+            event = async {
+                let input = tui_events.next();
+                match folder_connection {
+                    Some(handle) => folder_input(handle.closed(), input).await,
+                    None => ControlFlow::Continue(input.await),
+                }
+            } => {
+                let ControlFlow::Continue(event) = event else {
+                    tui.discard_pending_input_before_interactive_screen()?;
+                    return Ok(OnboardingResult {
+                        should_exit: true,
+                        ..Default::default()
+                    });
+                };
                 if let Some(event) = event {
                     tui.screen_size_for_event(&event)?;
                     match event {
@@ -1012,6 +1047,14 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn folder_disconnect_wins_over_queued_enter() {
+        let enter = super::TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let event =
+            super::folder_input(std::future::ready(()), std::future::ready(Some(enter))).await;
+        assert!(event.is_break());
+    }
 
     #[test]
     fn suppresses_printable_quit_key_during_api_key_entry() {

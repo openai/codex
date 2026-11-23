@@ -34,6 +34,18 @@ async fn agents_defers_launch_directory_trust_until_starting_a_task() -> Result<
 
 #[tokio::test]
 #[cfg(unix)]
+async fn agents_cancels_folder_consent_when_daemon_restarts() -> Result<()> {
+    daemon_startup("agents-trust-restart").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn startup_folder_consent_explains_connection_loss() -> Result<()> {
+    daemon_startup("startup-trust-restart").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
 async fn discovered_managed_daemon_can_restart_with_auto_start_disabled() -> Result<()> {
     daemon_startup("discovered").await
 }
@@ -177,6 +189,14 @@ async fn daemon_startup(command: &str) -> Result<()> {
         "failed to prepare CLI test executable"
     );
     let bedrock_onboarding = matches!(command, "bedrock" | "bedrock-running");
+    let trust_restart = matches!(command, "agents-trust-restart" | "startup-trust-restart");
+    if trust_restart {
+        fs::create_dir(workspace_path.join(".codex"))?;
+        fs::write(
+            workspace_path.join(".codex/config.toml"),
+            "# project settings\n",
+        )?;
+    }
     fs::write(
         home.path().join("config.toml"),
         format!(
@@ -187,7 +207,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
          tui.disable_paste_burst = true\n\
          {}\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\
-         [projects.{}]\ntrust_level = \"{}\"\n",
+         [projects.{}]\n{}\n",
             if command == "discovered" {
                 "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]\nfeatures.daemon_auto_start=false"
             } else if bedrock_onboarding {
@@ -196,10 +216,12 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 ""
             },
             serde_json::to_string(&workspace_path)?,
-            if command == "agents-untrusted" {
-                "untrusted"
+            if trust_restart {
+                ""
+            } else if command == "agents-untrusted" {
+                "trust_level = \"untrusted\""
             } else {
-                "trusted"
+                "trust_level = \"trusted\""
             },
         ),
     )?;
@@ -245,6 +267,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             | "bedrock-running"
             | "restrictive-job"
     ) || mismatch
+        || trust_restart
     {
         // A selected package with a stopped daemon avoids installing a release.
         let managed = home
@@ -314,6 +337,15 @@ async fn daemon_startup(command: &str) -> Result<()> {
             steps.push_back(("GPT-5.6-Terra", b"/daemon\r"));
             steps.push_back(("Restartbackgroundserver", b"\x1b[F\r"));
             "Restartbackgroundserver?"
+        } else if trust_restart {
+            steps.push_back(("Trustandcontinue", b""));
+            if command == "agents-trust-restart" {
+                args.push("agents".into());
+                steps.push_front(("Notasksyet", b"n"));
+                "Notasksyet"
+            } else {
+                "RestartCodextocontinue."
+            }
         } else if command == "agents-untrusted" {
             args.push("agents".into());
             steps.push_back(("Notasksyet", b"n"));
@@ -527,10 +559,26 @@ async fn daemon_startup(command: &str) -> Result<()> {
                             ensure!(settings["featureOverrides"]["auth_elicitation"].is_null());
                         }
                     }
-                    writer.send(input.to_vec()).await?;
+                    if trust_restart && *ready == "Trustandcontinue" {
+                        let restarted = tokio::process::Command::new(&codex)
+                            .env_clear()
+                            .envs(&env)
+                            .current_dir(&workspace_path)
+                            .args(["app-server", "daemon", "restart"])
+                            .kill_on_drop(true)
+                            .output()
+                            .await?;
+                        ensure!(restarted.status.success(), "{}", String::from_utf8_lossy(&restarted.stderr));
+                    } else {
+                        writer.send(input.to_vec()).await?;
+                    }
                     steps.pop_front();
                     output.clear();
                 } else if steps.is_empty() && text.contains(expected) {
+                    if trust_restart {
+                        let config = fs::read_to_string(home.path().join("config.toml"))?;
+                        ensure!(!config.contains("trust_level"), "restart must not grant trust");
+                    }
                     if command == "agents-untrusted" {
                         let transition = format!(
                             "{initial_agents_screen}\n\n--- Start a task ---\n\n{}",

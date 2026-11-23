@@ -2069,6 +2069,14 @@ async fn run_ratatui_app(
                 trust_decision_was_made = true;
             }
         } else if consent.should_exit {
+            // Startup cannot return to the overview's reconnect loop until bootstrap completes.
+            if let codex_app_server_client::AppServerRequestHandle::Remote(handle) =
+                app_server.request_handle()
+                && handle.is_closed()
+            {
+                shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
+                color_eyre::eyre::bail!(onboarding::SETUP_CONNECTION_LOST);
+            }
             if !uses_remote_workspace {
                 config = load_config_or_exit_with_fallback_cwd(
                     cli_kv_overrides.clone(),

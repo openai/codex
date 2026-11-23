@@ -637,6 +637,16 @@ impl RemoteAppServerClient {
 }
 
 impl RemoteAppServerRequestHandle {
+    /// Whether this connection has stopped accepting requests.
+    pub fn is_closed(&self) -> bool {
+        self.command_tx.is_closed()
+    }
+
+    /// Wait until this connection stops accepting requests without consuming client events.
+    pub async fn closed(&self) {
+        self.command_tx.closed().await;
+    }
+
     pub async fn resolve_server_request(
         &self,
         request_id: RequestId,
