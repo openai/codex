@@ -6082,8 +6082,12 @@ impl ThreadRequestProcessor {
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
+        let turns = std::mem::take(&mut thread.turns);
         let response = ThreadForkResponse {
-            thread: thread.clone(),
+            thread: Thread {
+                turns,
+                ..thread.clone()
+            },
             disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
             model: config_snapshot.model.clone(),
             model_provider: session_configured.model_provider_id,
