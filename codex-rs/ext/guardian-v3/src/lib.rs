@@ -40,9 +40,13 @@ pub fn board_retrieval(instructions: Option<&str>) -> codex_core::guardian_revie
     let strategy = instructions
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .unwrap_or(
-            "Use the guardian_board tools when you need more evidence for the exact action.",
-        );
+        .unwrap_or(concat!(
+            "Before your first verdict for each task, use the Guardian board even if the action appears low risk. ",
+            "The pending action does not include the user's instructions. ",
+            "Call guardian_board.get_channels, then call guardian_board.subscribe for the relevant channel ",
+            "if you do not already follow it. Read the user's original instructions there. ",
+            "On later reviews, use the subscribed updates and look up any missing or possibly stale instructions.",
+        ));
     let board_rules = concat!(
         "Search or read any live channel, including channels you do not follow. ",
         "Use subscribed_channels to see which channels you follow. Subscribe or unsubscribe to manage which channels feed new originals to this conversation. ",

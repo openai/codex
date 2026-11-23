@@ -1184,7 +1184,7 @@ async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle(
     assert!(routing_request.instructions_text().contains(ROUTING));
     let instructions = request.instructions_text();
     assert!(instructions.contains(RETRIEVAL));
-    assert!(!instructions.contains("Use the guardian_board tools when you need more evidence"));
+    assert!(!instructions.contains("call guardian_board.subscribe"));
     assert!(instructions.contains("Subscribing does not fetch a channel's earlier posts"));
     assert!(instructions.contains("carries the same authority as that message"));
     assert!(instructions.contains(

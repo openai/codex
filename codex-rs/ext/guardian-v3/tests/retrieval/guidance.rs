@@ -72,7 +72,7 @@ async fn blank_retrieval_instructions_use_default_board_guidance() -> anyhow::Re
     })
     .await;
     let instructions = response.single_request().instructions_text();
-    assert!(instructions.contains("Use the guardian_board tools when you need more evidence"));
+    assert!(instructions.contains("call guardian_board.subscribe"));
     assert!(!instructions.contains(V2_HISTORY_PROMPT));
 
     spawned.thread.shutdown_and_wait().await?;
