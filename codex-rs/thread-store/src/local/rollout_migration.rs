@@ -1233,6 +1233,7 @@ impl LocalThreadStore {
                 thread_history::apply_projection(
                     self,
                     thread_id,
+                    /*rollout_path*/ None,
                     batch_start,
                     offset,
                     /*initial_ordinal*/ 0,
@@ -1247,6 +1248,7 @@ impl LocalThreadStore {
             thread_history::apply_projection(
                 self,
                 thread_id,
+                /*rollout_path*/ None,
                 batch_start,
                 offset,
                 /*initial_ordinal*/ 0,

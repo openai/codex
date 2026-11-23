@@ -152,7 +152,13 @@ impl<'a> LineageWalk<'a> {
                     LineageResolutionMode::HistoryPage => {
                         bounds
                             .read_history_page_bounds(&path, requested_thread_id)
-                            .await?
+                            .await?;
+                        if store.config.sqlite.prefers_rollback_journal().await {
+                            super::super::thread_history_materialization::materialize_to_sqlite(
+                                store, rollout_id, &path,
+                            )
+                            .await?;
+                        }
                     }
                     LineageResolutionMode::PlainForReference if bounds.parent.is_none() => {
                         // A newly shared standalone source must remain readable by older binaries.

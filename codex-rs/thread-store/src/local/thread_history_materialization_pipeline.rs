@@ -1,5 +1,7 @@
 //! Pipes bounded rollout batches into short SQLite transactions, committing each checkpoint.
 
+use std::path::Path;
+
 use codex_protocol::ThreadId;
 
 use super::super::LocalThreadStore;
@@ -34,6 +36,7 @@ pub(super) async fn read_and_apply(
     // source bytes and step count; an oversized individual record remains indivisible.
     let (sender, receiver) = tokio::sync::mpsc::channel(QUEUED_BATCHES);
     let (stop, keep_running) = tokio::sync::oneshot::channel::<()>();
+    let rollout_path = rollout.path.clone();
     let span = tracing::Span::current();
     let worker = tokio::task::spawn_blocking(move || {
         let _entered = span.enter();
@@ -61,7 +64,15 @@ pub(super) async fn read_and_apply(
         };
         let _ = sender.blocking_send(completion);
     });
-    let result = apply_batches(store, thread_id, start_offset, initial_ordinal, receiver).await;
+    let result = apply_batches(
+        store,
+        thread_id,
+        &rollout_path,
+        start_offset,
+        initial_ordinal,
+        receiver,
+    )
+    .await;
     // apply_batches drops the receiver on error, unblocking any pending producer send.
     drop(keep_running);
     worker.await.map_err(|err| ThreadStoreError::Internal {
@@ -73,6 +84,7 @@ pub(super) async fn read_and_apply(
 pub(super) async fn apply_batches(
     store: &LocalThreadStore,
     thread_id: ThreadId,
+    rollout_path: &Path,
     mut start_offset: u64,
     initial_ordinal: u64,
     mut receiver: tokio::sync::mpsc::Receiver<ProjectionMessage>,
@@ -87,6 +99,7 @@ pub(super) async fn apply_batches(
                 apply_projection(
                     store,
                     thread_id,
+                    Some(rollout_path),
                     start_offset,
                     next_offset,
                     initial_ordinal,

@@ -2624,10 +2624,12 @@ async fn paused_projection_releases_writer_and_retains_progress_when_stopped() {
         )
         .expect("read batch");
         let consumer_store = Arc::clone(&store);
+        let consumer_path = rollout_path.clone();
         let consumer = tokio::spawn(async move {
             super::pipeline::apply_batches(
                 &consumer_store,
                 thread_id,
+                consumer_path.as_path(),
                 before.0 as u64,
                 /*initial_ordinal*/ 0,
                 receiver,

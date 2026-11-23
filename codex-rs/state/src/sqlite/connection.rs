@@ -7,16 +7,27 @@
     reason = "centralized SQLite connection initialization"
 )]
 
+use std::time::Duration;
+
 use sqlx::Error;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
+
+const ROLLBACK_JOURNAL_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+const ROLLBACK_JOURNAL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum JournalModePolicy {
     InitializeWal,
     InitializeDelete,
     RequireDelete,
+}
+
+impl JournalModePolicy {
+    pub(super) fn prefers_rollback(self) -> bool {
+        matches!(self, Self::InitializeDelete | Self::RequireDelete)
+    }
 }
 
 pub(super) async fn connect_once(
@@ -26,45 +37,54 @@ pub(super) async fn connect_once(
     // SQLx retries after_connect errors, eventually replacing them with PoolTimedOut.
     // Return the first initialization error directly while opening this pool.
     let (init_error_tx, mut init_error_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
-    let pool_options =
-        SqlitePoolOptions::new()
-            .max_connections(5)
-            .after_connect(move |connection, _metadata| {
-                let init_error_tx = init_error_tx.clone();
-                Box::pin(async move {
-                    let result = async {
-                        let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
-                            .fetch_one(&mut *connection)
-                            .await?;
-                        if journal_mode_policy == JournalModePolicy::RequireDelete
-                            && journal != "delete"
-                        {
-                            return Err(Error::Protocol(format!(
-                                "NFS database requires DELETE journaling, found {journal}"
-                            )));
-                        }
-                        if journal == "delete" {
-                            // If the filesystem honors sync requests, EXTRA syncs the directory
-                            // after SQLite deletes a rollback journal.
-                            sqlx::query("PRAGMA synchronous = EXTRA")
-                                .execute(connection)
-                                .await?;
-                        }
-                        Ok(())
-                    }
-                    .await;
-                    result.map_err(|error| match init_error_tx.try_send(error) {
-                        // The opener owns the original error and cancels connection retries.
-                        Ok(()) => Error::PoolClosed,
-                        // After opening, lazy connections retain SQLx's normal error handling.
-                        Err(error) => error.into_inner(),
-                    })
-                })
-            });
+    let (busy_timeout, pool_options) = if journal_mode_policy.prefers_rollback() {
+        (
+            ROLLBACK_JOURNAL_BUSY_TIMEOUT,
+            SqlitePoolOptions::new()
+                .max_connections(2)
+                .acquire_timeout(ROLLBACK_JOURNAL_ACQUIRE_TIMEOUT),
+        )
+    } else {
+        (
+            super::DEFAULT_BUSY_TIMEOUT,
+            SqlitePoolOptions::new().max_connections(5),
+        )
+    };
+    let options = options.clone().busy_timeout(busy_timeout);
+    let pool_options = pool_options.after_connect(move |connection, _metadata| {
+        let init_error_tx = init_error_tx.clone();
+        Box::pin(async move {
+            let result = async {
+                let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+                    .fetch_one(&mut *connection)
+                    .await?;
+                if journal_mode_policy == JournalModePolicy::RequireDelete && journal != "delete" {
+                    return Err(Error::Protocol(format!(
+                        "NFS database requires DELETE journaling, found {journal}"
+                    )));
+                }
+                if journal == "delete" {
+                    // If the filesystem honors sync requests, EXTRA syncs the directory
+                    // after SQLite deletes a rollback journal.
+                    sqlx::query("PRAGMA synchronous = EXTRA")
+                        .execute(connection)
+                        .await?;
+                }
+                Ok(())
+            }
+            .await;
+            result.map_err(|error| match init_error_tx.try_send(error) {
+                // The opener owns the original error and cancels connection retries.
+                Ok(()) => Error::PoolClosed,
+                // After opening, lazy connections retain SQLx's normal error handling.
+                Err(error) => error.into_inner(),
+            })
+        })
+    });
     let pool = tokio::select! {
         biased;
         Some(error) = init_error_rx.recv() => Err(error),
-        result = pool_options.connect_with(options.clone()) => result,
+        result = pool_options.connect_with(options) => result,
     }?;
     // Database settings persist on disk.
     // Initialize these settings once before callers can use the pool.

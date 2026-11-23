@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus;
@@ -111,6 +113,7 @@ WHERE thread_id = ?
 pub(super) async fn apply_projection(
     store: &LocalThreadStore,
     thread_id: ThreadId,
+    rollout_path: Option<&Path>,
     start_offset: u64,
     next_offset: u64,
     initial_ordinal: u64,
@@ -126,7 +129,7 @@ pub(super) async fn apply_projection(
         .await
         .map_err(thread_history_error)?;
     let mut transaction = pool.begin_immediate().await.map_err(thread_history_error)?;
-    let thread_id = thread_id.to_string();
+    let thread_id_string = thread_id.to_string();
     let projection_state = sqlx::query_as::<_, (i64, i64)>(
         r#"
 SELECT next_rollout_byte_offset, next_rollout_ordinal
@@ -134,22 +137,44 @@ FROM thread_history_projection_state
 WHERE thread_id = ?
         "#,
     )
-    .bind(thread_id.as_str())
+    .bind(thread_id_string.as_str())
     .fetch_optional(&mut *transaction)
     .await
     .map_err(thread_history_error)?;
-    let (expected_offset, mut next_ordinal) =
+    // Deletion removes the rollout before clearing this checkpoint. Once the checkpoint
+    // is gone, a batch already read from the deleted file must not recreate history.
+    if projection_state.is_none()
+        && let Some(rollout_path) = rollout_path
+        && codex_rollout::existing_rollout_path(rollout_path)
+            .await
+            .is_none()
+    {
+        return Err(ThreadStoreError::ThreadNotFound { thread_id });
+    }
+    let thread_id = thread_id_string;
+    let (expected_offset, committed_ordinal) =
         projection_state.unwrap_or((0, sqlite_integer(initial_ordinal, "rollout ordinal")?));
     let start_offset = sqlite_integer(start_offset, "rollout byte offset")?;
-    if expected_offset != start_offset {
+    let next_offset = sqlite_integer(next_offset, "rollout byte offset")?;
+    if expected_offset < start_offset {
         return Err(ThreadStoreError::Internal {
             message: format!("thread history projection for {thread_id} is behind durable rollout"),
         });
     }
 
+    let replaying = expected_offset > start_offset;
+    if replaying && expected_offset >= next_offset {
+        return transaction.rollback().await.map_err(thread_history_error);
+    }
+
+    let mut next_ordinal = committed_ordinal;
     for projection in projections {
         match projection {
             RolloutProjectionStep::Line(projection) => {
+                let line_end = sqlite_integer(projection.end_byte_offset, "rollout byte offset")?;
+                if replaying && line_end <= expected_offset {
+                    continue;
+                }
                 let ordinal = sqlite_integer(projection.ordinal, "rollout ordinal")?;
                 if ordinal != next_ordinal {
                     return Err(ThreadStoreError::Internal {
@@ -163,7 +188,7 @@ WHERE thread_id = ?
                     thread_id.as_str(),
                     ordinal,
                     sqlite_integer(projection.start_byte_offset, "rollout byte offset")?,
-                    sqlite_integer(projection.end_byte_offset, "rollout byte offset")?,
+                    line_end,
                     projection.fallback_created_at_ms,
                     projection.changes,
                 )
@@ -209,6 +234,12 @@ ON CONFLICT(thread_id, item_id) DO NOTHING
                 end_ordinal_exclusive,
             } => {
                 let start_ordinal = sqlite_integer(start_ordinal, "rollout ordinal")?;
+                let end_ordinal_exclusive =
+                    sqlite_integer(end_ordinal_exclusive, "rollout ordinal")?;
+                // skip ranges that the checkpoint already covers
+                if replaying && end_ordinal_exclusive <= committed_ordinal {
+                    continue;
+                }
                 if start_ordinal != next_ordinal {
                     return Err(ThreadStoreError::Internal {
                         message: format!(
@@ -216,8 +247,6 @@ ON CONFLICT(thread_id, item_id) DO NOTHING
                         ),
                     });
                 }
-                let end_ordinal_exclusive =
-                    sqlite_integer(end_ordinal_exclusive, "rollout ordinal")?;
                 if end_ordinal_exclusive <= start_ordinal {
                     return Err(ThreadStoreError::Internal {
                         message: format!(
@@ -243,7 +272,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
         "#,
     )
     .bind(thread_id.as_str())
-    .bind(sqlite_integer(next_offset, "rollout byte offset")?)
+    .bind(next_offset)
     .bind(next_ordinal)
     .execute(&mut *transaction)
     .await
@@ -251,19 +280,26 @@ ON CONFLICT(thread_id) DO UPDATE SET
     transaction.commit().await.map_err(thread_history_error)
 }
 
-pub(super) async fn delete_thread(
+pub(super) async fn history_db_for_delete(
     store: &LocalThreadStore,
-    thread_id: ThreadId,
-) -> ThreadStoreResult<()> {
+) -> ThreadStoreResult<Option<&sqlx::SqlitePool>> {
     let db_path = store.config.sqlite.thread_history_db_path();
     if !tokio::fs::try_exists(db_path.as_path())
         .await
         .map_err(thread_history_delete_error)?
     {
-        return Ok(());
+        return Ok(None);
     }
+    store.thread_history_db().await.map(Some)
+}
 
-    let pool = store.thread_history_db().await?;
+pub(super) async fn delete_thread(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<()> {
+    let Some(pool) = history_db_for_delete(store).await? else {
+        return Ok(());
+    };
     let _writer = store
         .thread_history_writer
         .acquire()

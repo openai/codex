@@ -566,7 +566,9 @@ async fn write_and_project(
         RolloutWriteOp::Persist => recorder.persist().await.map_err(thread_store_io_error)?,
         RolloutWriteOp::Flush => recorder.flush().await.map_err(thread_store_io_error)?,
     }
-    if matches!(history_mode, ThreadHistoryMode::Paginated) {
+    if matches!(history_mode, ThreadHistoryMode::Paginated)
+        && !store.config.sqlite.prefers_rollback_journal().await
+    {
         // SQLite is a rebuildable view and must never get ahead of canonical history.
         let rollout_path = recorder.rollout_path();
         // Only the plain file's length is a decoded JSONL byte offset.
