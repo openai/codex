@@ -1,0 +1,12 @@
+[package]
+name = "codex-plugin-archive-verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[lints]
+workspace = true

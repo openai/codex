@@ -4713,6 +4713,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-plugin-archive-verification"
+version = "0.0.0"
+
+[[package]]
 name = "codex-plugin-host"
 version = "0.0.0"
 dependencies = [
