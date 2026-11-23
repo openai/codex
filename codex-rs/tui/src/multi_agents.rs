@@ -4,6 +4,11 @@
 //! picker entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as
 //! deciding which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
+#[path = "multi_agents_history.rs"]
+mod history;
+pub(crate) use history::CollabHistoryCell;
+pub(crate) use history::tool_call_history_cell;
+
 use crate::history_cell::LabeledToolCell;
 use crate::history_cell::WebHyperlinkHistoryCell;
 use crate::style::accent_color;
@@ -61,6 +66,15 @@ pub(crate) struct AgentMetadata {
     pub(crate) agent_nickname: Option<String>,
     /// Agent type shown in brackets when present, for example `worker`.
     pub(crate) agent_role: Option<String>,
+}
+
+impl AgentMetadata {
+    fn nickname(&self) -> Option<&str> {
+        self.agent_nickname
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -204,7 +218,7 @@ pub(crate) fn spawn_request_summary(item: &ThreadItemPayload) -> Option<SpawnReq
     }
 }
 
-pub(crate) fn tool_call_history_cell(
+fn render_tool_call(
     item: &ThreadItemPayload,
     cached_spawn_request: Option<&SpawnRequestSummary>,
     mut agent_metadata: impl FnMut(ThreadId) -> AgentMetadata,
@@ -508,7 +522,7 @@ fn parse_thread_id(thread_id: &str) -> Option<ThreadId> {
 fn agent_label(thread_id: ThreadId, metadata: &AgentMetadata) -> AgentLabel<'_> {
     AgentLabel {
         thread_id: Some(thread_id),
-        nickname: metadata.agent_nickname.as_deref(),
+        nickname: metadata.nickname(),
         role: metadata.agent_role.as_deref(),
     }
 }
@@ -520,8 +534,7 @@ fn agent_label_line(agent: AgentLabel<'_>) -> HyperlinkLine {
 }
 
 fn append_agent(line: &mut HyperlinkLine, agent: AgentLabel<'_>) {
-    let nickname = agent.nickname.map(str::trim).filter(|n| !n.is_empty());
-    let name = if let Some(nickname) = nickname {
+    let name = if let Some(nickname) = agent.nickname {
         nickname.to_string().bold()
     } else if let Some(id) = agent.thread_id {
         Span::from(id.to_string())
@@ -950,7 +963,7 @@ mod tests {
     fn resume_cell(
         status: CollabAgentToolCallStatus,
         agent_status: CollabAgentStatus,
-    ) -> LabeledToolCell<WebHyperlinkHistoryCell> {
+    ) -> CollabHistoryCell {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
             .expect("valid sender thread id");
         let robie_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")

@@ -298,7 +298,8 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[derive(Debug, Default)]
 pub(crate) struct AgentPickerThreadRefresh {
     pub(crate) threads: Vec<Thread>,
-    pub(crate) archived_thread_ids: std::collections::HashSet<ThreadId>,
+    pub(crate) archived_threads:
+        std::collections::HashMap<ThreadId, crate::multi_agents::AgentMetadata>,
 }
 
 /// Source-backed replacement for the outgoing widget's width-bound streaming rows.

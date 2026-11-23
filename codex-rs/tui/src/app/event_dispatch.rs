@@ -1252,7 +1252,8 @@ impl App {
                 self.transcript_view.jump_to_latest();
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::InsertHistoryCell(cell) => {
+            AppEvent::InsertHistoryCell(mut cell) => {
+                self.prepare_collab_history(app_server, cell.as_mut());
                 self.insert_history_cell(tui, cell);
             }
             AppEvent::TurnTipReady { thread_id, turn_id } => {

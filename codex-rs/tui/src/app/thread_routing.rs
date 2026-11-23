@@ -1272,6 +1272,9 @@ impl App {
                 started.thread.agent_role.clone(),
                 /*is_closed*/ false,
             );
+            if started.thread.agent_nickname.is_some() {
+                self.refresh_collab_history();
+            }
             self.agent_navigation.set_agent_path(
                 thread_id,
                 crate::app_server_session::source_agent_path(&started.thread.source),

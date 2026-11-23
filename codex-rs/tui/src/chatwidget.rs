@@ -996,7 +996,7 @@ impl ChatWidget {
     }
 
     /// Returns the cached metadata for a thread, defaulting to empty if none has been registered.
-    fn collab_agent_metadata(&self, thread_id: ThreadId) -> AgentMetadata {
+    pub(crate) fn collab_agent_metadata(&self, thread_id: ThreadId) -> AgentMetadata {
         self.collab_agent_metadata
             .get(&thread_id)
             .cloned()

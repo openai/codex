@@ -128,7 +128,7 @@ impl App {
                 pane.cells.as_slice()
             });
         let split_insertion = split_image_insertion(existing, split_turn);
-        let (cells, split_images) = self.project_older_history_cells(
+        let (mut cells, split_images) = self.project_older_history_cells(
             items,
             &turns,
             &hidden_item_ids,
@@ -137,6 +137,11 @@ impl App {
             visibility,
             split_insertion.is_some(),
         );
+        for cell in &mut cells {
+            if let Some(cell) = Arc::get_mut(cell) {
+                self.prepare_collab_history(app_server, cell);
+            }
+        }
         if let Some(pane) = self.side_companions.get_mut(&thread_id).filter(|_| parked) {
             let images = split_insertion.and_then(|index| {
                 if split_images.is_empty() {

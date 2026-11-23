@@ -581,3 +581,126 @@ fn thread_links_navigate_and_missing_threads_preserve_the_draft() -> Result<()> 
         .join()
         .expect("thread-link navigation test panicked")
 }
+
+#[tokio::test]
+async fn collab_history_resolves_replayed_and_live_names_in_background() -> Result<()> {
+    let (mut app, mut rx, _ops) = Box::pin(make_test_app_with_channels()).await;
+    let root = ThreadId::new();
+    let receiver_thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_parented_rollout_with_source(
+            app.config.codex_home.as_path(),
+            "2026-01-01T00-00-01",
+            "2026-01-01T00:00:01Z",
+            "Child",
+            Some(&app.config.model_provider_id),
+            /*git_info*/ None,
+            RolloutSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: Some("Kepler".into()),
+                agent_role: Some("explorer".into()),
+            }),
+            root.into(),
+            root,
+        )
+        .expect("create child rollout"),
+    )?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.primary_thread_id = Some(root);
+
+    let call = |id: &str, tool, status| ThreadItemPayload::CollabAgentToolCall {
+        id: id.to_string(),
+        tool,
+        status,
+        sender_thread_id: root.to_string(),
+        receiver_thread_ids: vec![receiver_thread_id.to_string()],
+        prompt: None,
+        model: None,
+        reasoning_effort: None,
+        agents_states: HashMap::new(),
+    };
+    let spawn = call(
+        "spawn-1",
+        codex_app_server_protocol::CollabAgentTool::SpawnAgent,
+        codex_app_server_protocol::CollabAgentToolCallStatus::Completed,
+    );
+    app.chat_widget.replay_thread_turns(
+        vec![test_turn("saved-turn", TurnStatus::Completed, vec![spawn])],
+        ReplayKind::ResumeInitialMessages,
+    );
+    let completion = loop {
+        let event = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), rx.recv())
+            .await?
+            .expect("app event channel");
+        if matches!(event, AppEvent::AgentPickerThreadsLoaded { .. }) {
+            break event;
+        }
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    };
+    let mut parked = SideCompanion::empty(app.config.cwd.to_path_buf());
+    parked.cells = app.transcript_cells.clone();
+    let parked_id = ThreadId::new();
+    app.side_companions.insert(parked_id, parked);
+    // The wait is queued before the name arrives, but inserted after the lookup completes.
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            root.to_string(),
+            "turn-1".to_string(),
+            call(
+                "wait-1",
+                codex_app_server_protocol::CollabAgentTool::Wait,
+                codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
+            ),
+            /*started_at_ms*/ 0,
+        )),
+    )));
+
+    assert_eq!(
+        app.agent_navigation.get(&receiver_thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+            is_running: false,
+            is_closed: false,
+        })
+    );
+    app.enqueue_thread_notification(
+        receiver_thread_id,
+        thread_closed_notification(receiver_thread_id),
+    )
+    .await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, completion)).await?;
+    assert!(
+        app.agent_navigation
+            .get(&receiver_thread_id)
+            .unwrap()
+            .is_closed
+    );
+    drain_app_events(&mut app, &mut tui, &mut server, &mut rx).await?;
+    let text = |lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>| {
+        lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let transcript = text(app.render_transcript_lines_for_reflow(/*width*/ 80).lines);
+    insta::assert_snapshot!(transcript, @r"
+    • Spawned Kepler [explorer]
+
+    • Waiting for Kepler [explorer]
+    ");
+    assert_eq!(
+        text(app.side_companions[&parked_id].cells[0].transcript_hyperlink_lines(/*width*/ 80)),
+        "• Spawned Kepler [explorer]"
+    );
+    assert_eq!(
+        text(tui.pending_history_lines_for_test()),
+        format!("• Spawned {receiver_thread_id}\n\n• Waiting for Kepler [explorer]")
+    );
+    server.shutdown().await?;
+    Ok(())
+}

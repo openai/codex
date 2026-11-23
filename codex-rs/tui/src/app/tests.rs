@@ -2260,43 +2260,6 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 }
 
 #[tokio::test]
-async fn collab_receiver_notification_caches_thread_without_app_server_read() {
-    let mut app = make_test_app().await;
-    let receiver_thread_id =
-        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
-
-    app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
-        ServerNotification::ItemStarted(ItemStartedNotification::new(
-            ThreadId::new().to_string(),
-            "turn-1".to_string(),
-            ThreadItemPayload::CollabAgentToolCall {
-                id: "wait-1".to_string(),
-                tool: codex_app_server_protocol::CollabAgentTool::Wait,
-                status: codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
-                sender_thread_id: ThreadId::new().to_string(),
-                receiver_thread_ids: vec![receiver_thread_id.to_string()],
-                prompt: None,
-                model: None,
-                reasoning_effort: None,
-                agents_states: HashMap::new(),
-            },
-            /*started_at_ms*/ 0,
-        )),
-    )));
-
-    assert_eq!(
-        app.agent_navigation.get(&receiver_thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: None,
-            is_running: false,
-            is_closed: false,
-        })
-    );
-}
-
-#[tokio::test]
 async fn collab_receiver_notification_does_not_cache_not_found_thread() {
     let mut app = make_test_app().await;
     let receiver_thread_id =
@@ -2389,6 +2352,11 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
     );
     app.thread_event_channels
         .insert(archived_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    let unloaded = ThreadId::new();
+    let metadata = crate::multi_agents::AgentMetadata {
+        agent_nickname: Some("Kepler".into()),
+        agent_role: Some("explorer".into()),
+    };
     let request_id = app
         .agent_navigation
         .begin_picker_refresh(primary_thread_id)
@@ -2400,11 +2368,15 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
             request_id,
             Ok(crate::app_event::AgentPickerThreadRefresh {
                 threads: Vec::new(),
-                archived_thread_ids: std::collections::HashSet::from([archived_thread_id]),
+                archived_threads: HashMap::from([
+                    (archived_thread_id, Default::default()),
+                    (unloaded, metadata.clone()),
+                ]),
             }),
         )
         .is_none()
     );
+    assert_eq!(app.chat_widget.collab_agent_metadata(unloaded), metadata);
     assert_eq!(
         app.thread_event_channels[&archived_thread_id].attachment(),
         ThreadEventAttachment::ReplayOnly
