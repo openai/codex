@@ -16,6 +16,40 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 #[tokio::test]
+async fn remote_diff_preserves_slashes_in_the_default_branch_name() {
+    let repo = tempfile::tempdir().expect("create repository");
+    let cwd = repo.path();
+    git(cwd, &["init", "-b", "feature"]);
+    git(cwd, &["config", "user.name", "Codex Tests"]);
+    git(cwd, &["config", "user.email", "codex-tests@example.com"]);
+    git(cwd, &["config", "commit.gpgsign", "false"]);
+    git(
+        cwd,
+        &["config", "core.hooksPath", super::DISABLED_HOOKS_PATH],
+    );
+    git(cwd, &["remote", "add", "origin", "."]);
+    git(cwd, &["commit", "--allow-empty", "-m", "initial"]);
+    git(cwd, &["update-ref", "refs/remotes/origin/stable", "HEAD"]);
+    std::fs::write(cwd.join("release.txt"), "released\n").expect("write released file");
+    git(cwd, &["add", "release.txt"]);
+    git(cwd, &["commit", "-m", "release"]);
+    git(
+        cwd,
+        &["update-ref", "refs/remotes/origin/release/stable", "HEAD"],
+    );
+    git(cwd, &["remote", "set-head", "origin", "release/stable"]);
+    let release = super::get_head_commit_hash(cwd).await.expect("release SHA");
+    std::fs::write(cwd.join("feature.txt"), "feature\n").expect("write feature file");
+    git(cwd, &["add", "feature.txt"]);
+    git(cwd, &["commit", "-m", "unpushed"]);
+
+    let diff = super::git_diff_to_remote(cwd).await.expect("remote diff");
+    assert_eq!(diff.sha, release);
+    assert!(diff.diff.contains("feature.txt"));
+    assert!(!diff.diff.contains("release.txt"));
+}
+
+#[tokio::test]
 async fn tracked_and_untracked_patches_preserve_order_and_apply() {
     let repo = tempfile::tempdir().expect("create repository");
     git(repo.path(), &["init", "-q"]);

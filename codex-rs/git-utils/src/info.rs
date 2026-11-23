@@ -450,7 +450,7 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
             && let Ok(sym) = String::from_utf8(symref_output.stdout)
         {
             let trimmed = sym.trim();
-            if let Some((_, name)) = trimmed.rsplit_once('/') {
+            if let Some(name) = trimmed.strip_prefix(&format!("refs/remotes/{remote}/")) {
                 return Some(name.to_string());
             }
         }
