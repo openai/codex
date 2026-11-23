@@ -100,6 +100,7 @@ pub fn build_provider(
         .as_ref()
         .map(|command| OtelHeadersHelper {
             command: command.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             managed: managed_otel.is_some_and(|otel| otel.headers_helper.is_some()),
             apply_to_logs: helper_targets.is_none_or(|targets| targets.logs),
             apply_to_traces: helper_targets.is_none_or(|targets| targets.traces),
@@ -116,7 +117,6 @@ pub fn build_provider(
         http_client_factory: config.http_client_factory(),
         service_name: service_name.to_string(),
         service_version: service_version.to_string(),
-        codex_home: config.codex_home.to_path_buf(),
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,

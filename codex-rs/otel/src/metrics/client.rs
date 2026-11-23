@@ -12,6 +12,8 @@ use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
+use crate::provider::AllExporters;
+use crate::provider::ExporterScope;
 use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
@@ -350,12 +352,10 @@ pub struct MetricsClient {
 impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
-        Self::new_with_transport::<true>(config)
+        Self::new_with_exporters::<AllExporters>(config)
     }
 
-    pub(crate) fn new_with_transport<const ALLOW_GRPC: bool>(
-        config: MetricsConfig,
-    ) -> Result<Self> {
+    pub(crate) fn new_with_exporters<E: ExporterScope>(config: MetricsConfig) -> Result<Self> {
         let MetricsConfig {
             headers_helper,
             http_client_factory,
@@ -406,7 +406,7 @@ impl MetricsClient {
                         .as_deref(),
                 );
                 let exporter = crate::network_policy::PolicyExporter {
-                    exporter: build_otlp_metric_exporter::<ALLOW_GRPC>(
+                    exporter: build_otlp_metric_exporter::<E>(
                         exporter,
                         temporality,
                         &http_client_factory,
@@ -668,7 +668,7 @@ fn otlp_metrics_temporality(exporter: &OtelExporter, preference: Option<&str>) -
     }
 }
 
-fn build_otlp_metric_exporter<const ALLOW_GRPC: bool>(
+fn build_otlp_metric_exporter<E: ExporterScope>(
     exporter: OtelExporter,
     temporality: Temporality,
     factory: &codex_http_client::HttpClientFactory,
@@ -688,7 +688,7 @@ fn build_otlp_metric_exporter<const ALLOW_GRPC: bool>(
             .into_iter()
             .all(|key| std::env::var_os(key).is_none())
             .then_some(Compression::Zstd);
-            build_otlp_metric_exporter::<ALLOW_GRPC>(
+            build_otlp_metric_exporter::<E>(
                 crate::config::resolve_exporter(&OtelExporter::Statsig),
                 temporality,
                 factory,
@@ -696,7 +696,7 @@ fn build_otlp_metric_exporter<const ALLOW_GRPC: bool>(
                 compression,
             )
         }
-        OtelExporter::OtlpGrpc { .. } if !ALLOW_GRPC => Err(MetricsError::InvalidConfig {
+        OtelExporter::OtlpGrpc { .. } if !E::ALL => Err(MetricsError::InvalidConfig {
             message: "this provider requires OTLP/HTTP for metrics".into(),
         }),
         OtelExporter::OtlpGrpc {
@@ -753,24 +753,26 @@ fn build_otlp_metric_exporter<const ALLOW_GRPC: bool>(
                 exporter_builder = exporter_builder.with_compression(compression);
             }
 
-            if headers_helper.is_some() || factory.network_policy().is_managed() {
-                let client = crate::otlp::build_async_http_client(
-                    factory,
-                    tls.as_ref(),
-                    OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
-                    headers_helper,
-                )
-                .map_err(|err| MetricsError::InvalidConfig {
-                    message: err.to_string(),
-                })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            } else if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
+            if E::CONFIGURE_HTTP_CLIENT {
+                if headers_helper.is_some() || factory.network_policy().is_managed() {
+                    let client = crate::otlp::build_async_http_client(
+                        factory,
+                        tls.as_ref(),
+                        OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+                        headers_helper,
+                    )
+                    .map_err(|err| MetricsError::InvalidConfig {
+                        message: err.to_string(),
+                    })?;
+                    exporter_builder = exporter_builder.with_http_client(client);
+                } else if let Some(tls) = tls.as_ref() {
+                    let client =
+                        crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
+                            .map_err(|err| MetricsError::InvalidConfig {
+                                message: err.to_string(),
+                            })?;
+                    exporter_builder = exporter_builder.with_http_client(client);
+                }
             }
 
             exporter_builder

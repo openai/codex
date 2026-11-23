@@ -17,7 +17,6 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-codex-http-client = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 clap = { workspace = true, features = ["derive"] }
@@ -39,6 +38,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 codex-core = { workspace = true }
+codex-http-client = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 codex-plugin-host = { workspace = true }
 codex-code-mode = { workspace = true }

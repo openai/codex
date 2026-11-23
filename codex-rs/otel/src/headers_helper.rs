@@ -31,7 +31,6 @@ impl fmt::Debug for HeadersHelper {
 impl HeadersHelper {
     pub(crate) fn start(
         config: &OtelHeadersHelper,
-        cwd: &Path,
         policy: NetworkPolicy,
     ) -> io::Result<Arc<Self>> {
         if config.command.trim().is_empty() || config.refresh_interval.is_zero() {
@@ -49,14 +48,13 @@ impl HeadersHelper {
         let (tx, rx) = watch::channel(None);
         let (stop, stopped) = oneshot::channel();
         let config = config.clone();
-        let cwd = cwd.to_path_buf();
         std::thread::Builder::new()
             .name("otel-headers-helper".to_string())
             .spawn(move || {
                 runtime.block_on(async move {
                     tokio::select! {
                         _ = stopped => {}
-                        _ = refresh_headers(&config, &cwd, &policy, tx) => {}
+                        _ = refresh_headers(&config, &policy, tx) => {}
                     }
                 });
             })?;
@@ -96,7 +94,6 @@ impl Drop for HeadersHelper {
 
 async fn refresh_headers(
     config: &OtelHeadersHelper,
-    cwd: &Path,
     policy: &NetworkPolicy,
     updates: watch::Sender<Option<HeaderResult>>,
 ) {
@@ -106,7 +103,7 @@ async fn refresh_headers(
         // permit as an SDK that cannot enforce individual destinations.
         let result = match policy.acquire_for_unsupported_sdk() {
             Ok(permit) => permit
-                .run(run_configured_helper(config, cwd))
+                .run(run_configured_helper(config))
                 .await
                 .unwrap_or_else(|error| Err(error.to_string())),
             Err(error) => Err(error.to_string()),
@@ -132,9 +129,9 @@ async fn refresh_headers(
     }
 }
 
-async fn run_configured_helper(config: &OtelHeadersHelper, cwd: &Path) -> HeaderResult {
+async fn run_configured_helper(config: &OtelHeadersHelper) -> HeaderResult {
     if !config.managed {
-        return run_helper(&config.command, cwd).await;
+        return run_helper(&config.command, &config.codex_home).await;
     }
     let executable = Path::new(&config.command);
     let parent = executable

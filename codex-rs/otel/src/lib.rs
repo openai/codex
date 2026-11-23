@@ -37,6 +37,8 @@ pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
 pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;
 pub use crate::metrics::*;
+pub use crate::provider::BlockingHttpService;
+pub use crate::provider::BlockingMetricsDestination;
 pub use crate::provider::OtelProvider;
 pub use crate::skill_invocation::SkillInvocationEvent;
 pub use crate::skill_invocation::SkillInvocationType;

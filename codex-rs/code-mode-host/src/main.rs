@@ -1,14 +1,8 @@
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Context;
 use clap::Parser;
-use codex_otel::OtelExporter;
-use codex_otel::OtelHttpProtocol;
+use codex_otel::BlockingHttpService;
 use codex_otel::OtelProvider;
-use codex_otel::OtelSettings;
 use codex_otel_trace_websocket::TraceWebSocket;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -103,27 +97,11 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {
-    OtelProvider::try_new_http_traces(&OtelSettings {
-        headers_helper: None,
-        http_client_factory: codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-        environment: "code-mode-host".to_string(),
-        service_name: "codex-code-mode-host".to_string(),
-        service_version: env!("CARGO_PKG_VERSION").to_string(),
-        codex_home: PathBuf::from("/tmp"),
-        exporter: OtelExporter::None,
-        trace_exporter: OtelExporter::OtlpHttp {
-            endpoint: endpoint.to_string(),
-            headers: HashMap::new(),
-            protocol: OtelHttpProtocol::Json,
-            tls: None,
-        },
-        metrics_exporter: OtelExporter::None,
-        runtime_metrics: false,
-        span_attributes: HashMap::new(),
-        tracestate: BTreeMap::new(),
-    })
-    .map_err(|error| anyhow::anyhow!("failed to build code-mode host OTEL provider: {error}"))?
-    .context("code-mode host OTEL trace provider was unexpectedly disabled")
+    BlockingHttpService {
+        environment: "code-mode-host",
+        name: "codex-code-mode-host",
+        version: env!("CARGO_PKG_VERSION"),
+    }
+    .traces(endpoint)
+    .map_err(|error| anyhow::anyhow!("failed to build code-mode host OTEL provider: {error}"))
 }

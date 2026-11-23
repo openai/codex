@@ -814,7 +814,6 @@ fn provision_sandbox(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> 
     let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
     configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
     let wfp_result = install_wfp_filters(
-        &payload.codex_home,
         &payload.offline_username,
         payload.otel.as_ref(),
         |message| {

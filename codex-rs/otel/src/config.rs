@@ -57,7 +57,6 @@ pub struct OtelSettings {
     pub environment: String,
     pub service_name: String,
     pub service_version: String,
-    pub codex_home: PathBuf,
     pub exporter: OtelExporter,
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
@@ -72,6 +71,7 @@ pub struct OtelSettings {
 #[derive(Clone)]
 pub struct OtelHeadersHelper {
     pub command: String,
+    pub codex_home: PathBuf,
     /// A managed executable runs directly from its parent directory. User commands run from Codex home.
     pub managed: bool,
     pub refresh_interval: Duration,

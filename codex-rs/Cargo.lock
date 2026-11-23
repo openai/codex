@@ -5907,7 +5907,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
- "codex-http-client",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",

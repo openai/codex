@@ -64,6 +64,7 @@ fn check_all_signals(protocol: OtelHttpProtocol, managed_logs: bool) {
         "cat headers.json"
     };
     let helper = OtelHeadersHelper {
+        codex_home: dir.path().to_path_buf(),
         managed: false,
         command: format!("echo invocation >> calls && {command}"),
         refresh_interval: Duration::from_secs(3600),
@@ -77,7 +78,6 @@ fn check_all_signals(protocol: OtelHttpProtocol, managed_logs: bool) {
         environment: "test".to_string(),
         service_name: "otel-helper-test".to_string(),
         service_version: "test".to_string(),
-        codex_home: dir.path().to_path_buf(),
         exporter: exporter("logs"),
         trace_exporter: exporter("traces"),
         metrics_exporter: exporter("metrics"),

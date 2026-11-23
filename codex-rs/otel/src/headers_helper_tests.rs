@@ -31,6 +31,7 @@ async fn restricted_policy_skips_command_until_a_refresh_is_permitted() {
     );
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            codex_home: dir.path().to_path_buf(),
             managed: false,
             command: format!("echo invocation >> calls && {}", read_command()),
             refresh_interval: Duration::from_millis(20),
@@ -38,7 +39,6 @@ async fn restricted_policy_skips_command_until_a_refresh_is_permitted() {
             apply_to_traces: true,
             apply_to_metrics: true,
         },
-        dir.path(),
         policy,
     )
     .unwrap();
@@ -67,6 +67,7 @@ async fn concurrent_exports_share_one_helper_execution() {
     .unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            codex_home: dir.path().to_path_buf(),
             managed: false,
             command: format!("echo invocation >> calls && {}", read_command()),
             refresh_interval: Duration::from_secs(3600),
@@ -74,7 +75,6 @@ async fn concurrent_exports_share_one_helper_execution() {
             apply_to_traces: true,
             apply_to_metrics: true,
         },
-        dir.path(),
         NetworkPolicy::unmanaged(),
     )
     .unwrap();
@@ -103,6 +103,7 @@ async fn periodic_refresh_replaces_credentials_and_recovers_after_failure() {
     std::fs::write(&path, r#"{"Authorization":"first","X-Old":"old"}"#).unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            codex_home: dir.path().to_path_buf(),
             managed: false,
             command: read_command().to_string(),
             refresh_interval: Duration::from_millis(20),
@@ -110,7 +111,6 @@ async fn periodic_refresh_replaces_credentials_and_recovers_after_failure() {
             apply_to_traces: true,
             apply_to_metrics: true,
         },
-        dir.path(),
         NetworkPolicy::unmanaged(),
     )
     .unwrap();
@@ -146,6 +146,7 @@ async fn missing_managed_executable_reports_path_and_os_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("missing-helper.exe");
     let helper = OtelHeadersHelper {
+        codex_home: dir.path().to_path_buf(),
         command: path.to_str().unwrap().to_owned(),
         managed: true,
         refresh_interval: Duration::from_secs(60),
@@ -153,9 +154,7 @@ async fn missing_managed_executable_reports_path_and_os_error() {
         apply_to_traces: true,
         apply_to_metrics: true,
     };
-    let error = run_configured_helper(&helper, dir.path())
-        .await
-        .unwrap_err();
+    let error = run_configured_helper(&helper).await.unwrap_err();
     assert!(error.contains(path.to_str().unwrap()), "{error}");
     let os_error = std::fs::metadata(&path).unwrap_err();
     assert_eq!(os_error.kind(), std::io::ErrorKind::NotFound);
@@ -181,6 +180,7 @@ async fn failed_helper_prevents_http_export_even_with_static_credentials() {
     listener.set_nonblocking(true).unwrap();
     let helper = HeadersHelper::start(
         &OtelHeadersHelper {
+            codex_home: dir.path().to_path_buf(),
             managed: false,
             command: "exit 1".to_string(),
             refresh_interval: Duration::from_secs(3600),
@@ -188,7 +188,6 @@ async fn failed_helper_prevents_http_export_even_with_static_credentials() {
             apply_to_traces: true,
             apply_to_metrics: true,
         },
-        dir.path(),
         NetworkPolicy::unmanaged(),
     )
     .unwrap();
@@ -218,6 +217,7 @@ async fn failed_helper_prevents_http_export_even_with_static_credentials() {
 async fn grpc_and_builtin_metrics_do_not_start_the_helper() {
     use crate::config::OtelExporter;
     let helper = OtelHeadersHelper {
+        codex_home: ".".into(),
         managed: false,
         command: String::new(),
         refresh_interval: Duration::ZERO,
@@ -242,7 +242,6 @@ async fn grpc_and_builtin_metrics_do_not_start_the_helper() {
             environment: "test".to_string(),
             service_name: "test".to_string(),
             service_version: "test".to_string(),
-            codex_home: std::path::PathBuf::from("."),
             exporter: OtelExporter::None,
             trace_exporter: OtelExporter::None,
             metrics_exporter: exporter,
