@@ -3604,12 +3604,8 @@ impl AuthManager {
                             "Token data is not available.",
                         ))
                     })?;
-                    Box::pin(self.refresh_and_persist_chatgpt_token(
-                        chatgpt_auth,
-                        token_data,
-                        reason,
-                    ))
-                    .await
+                    self.refresh_and_persist_chatgpt_token(chatgpt_auth, token_data, reason)
+                        .await
                 }
                 Some(
                     CodexAuth::ApiKey(_)
@@ -3777,9 +3773,19 @@ impl AuthManager {
         .map_err(|error| external_auth.classify_error(std::io::Error::other(error)))
     }
 
+    // Erase the future's type so callers share the code that polls it.
+    fn refresh_and_persist_chatgpt_token<'a>(
+        &'a self,
+        auth: &'a ChatgptAuth,
+        tokens: TokenData,
+        reason: RefreshReason,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RefreshTokenError>> + Send + 'a>> {
+        Box::pin(self.refresh_and_persist_chatgpt_token_impl(auth, tokens, reason))
+    }
+
     // Refreshes ChatGPT OAuth tokens, persists the updated auth state, and
     // reloads the in-memory cache so callers immediately observe new tokens.
-    async fn refresh_and_persist_chatgpt_token(
+    async fn refresh_and_persist_chatgpt_token_impl(
         &self,
         auth: &ChatgptAuth,
         tokens: TokenData,
