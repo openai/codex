@@ -5,6 +5,7 @@
 #![recursion_limit = "256"]
 #![deny(clippy::print_stdout)]
 
+mod approval_warning;
 mod cli;
 mod daybreak;
 mod event_processor;
@@ -103,7 +104,6 @@ use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY;
@@ -167,7 +167,6 @@ pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
@@ -236,7 +235,6 @@ struct ExecRunArgs {
     command: Option<ExecCommand>,
     config: Config,
     overrides: ConfigOverrides,
-    resume_approvals_reviewer_override: Option<codex_app_server_protocol::ApprovalsReviewer>,
     daybreak_override: Option<bool>,
     dangerously_bypass_approvals_and_sandbox: bool,
     exec_span: tracing::Span,
@@ -650,9 +648,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let overrides = ConfigOverrides {
         model,
         review_model: None,
-        // Default to never ask for approvals in headless mode. Rebuild below if
-        // the fully resolved reviewer is AutoReview.
-        approval_policy: Some(AskForApproval::Never),
+        approval_policy: dangerously_bypass_approvals_and_sandbox.then_some(AskForApproval::Never),
         approvals_reviewer: None,
         sandbox_mode,
         permission_profile: None,
@@ -677,22 +673,15 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
     };
 
-    let build_config = |overrides| {
-        ConfigBuilder::default()
-            .codex_home(codex_home.to_path_buf())
-            .cli_overrides(cli_kv_overrides.clone())
-            .harness_overrides(overrides)
-            .loader_overrides(loader_overrides.clone())
-            .strict_config(strict_config)
-            .cloud_config_bundle(cloud_config_bundle.clone())
-            .build()
-    };
-    let mut config = build_exec_config(
-        overrides.clone(),
-        dangerously_bypass_approvals_and_sandbox,
-        build_config,
-    )
-    .await?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .cli_overrides(cli_kv_overrides.clone())
+        .harness_overrides(overrides.clone())
+        .loader_overrides(loader_overrides.clone())
+        .strict_config(strict_config)
+        .cloud_config_bundle(cloud_config_bundle.clone())
+        .build()
+        .await?;
     embedded_network_policy.activate(&mut config);
     #[allow(clippy::print_stderr)]
     if config
@@ -711,10 +700,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .iter()
         .any(|(key, _)| key == "daybreak")
         .then_some(config.daybreak_enabled);
-    let resume_approvals_reviewer_override = cli_kv_overrides
-        .iter()
-        .any(|(key, _)| key == "approvals_reviewer")
-        .then(|| config.approvals_reviewer.into());
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -844,7 +829,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         command,
         config,
         overrides,
-        resume_approvals_reviewer_override,
         daybreak_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span: exec_span.clone(),
@@ -863,41 +847,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     })
     .instrument(exec_span)
     .await
-}
-
-async fn build_exec_config<BuildConfig, BuildFuture>(
-    overrides: ConfigOverrides,
-    preserve_headless_approval_policy: bool,
-    build_config: BuildConfig,
-) -> std::io::Result<Config>
-where
-    BuildConfig: Fn(ConfigOverrides) -> BuildFuture,
-    BuildFuture: Future<Output = std::io::Result<Config>>,
-{
-    let build_without_headless_approval_policy = || {
-        build_config(ConfigOverrides {
-            approval_policy: None,
-            ..overrides.clone()
-        })
-    };
-    match build_config(overrides.clone()).await {
-        Ok(config)
-            if config.approvals_reviewer == ApprovalsReviewer::AutoReview
-                && !preserve_headless_approval_policy =>
-        {
-            build_without_headless_approval_policy().await
-        }
-        Ok(config) => Ok(config),
-        Err(headless_error) if !preserve_headless_approval_policy => {
-            match build_without_headless_approval_policy().await {
-                Ok(config) if config.approvals_reviewer == ApprovalsReviewer::AutoReview => {
-                    Ok(config)
-                }
-                Ok(_) | Err(_) => Err(headless_error),
-            }
-        }
-        Err(headless_error) => Err(headless_error),
-    }
 }
 
 #[allow(clippy::print_stderr)]
@@ -947,7 +896,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         command,
         config,
         overrides,
-        resume_approvals_reviewer_override,
         daybreak_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span,
@@ -1004,7 +952,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     }
 
     let default_cwd = config.cwd.to_path_buf();
-    let default_approval_policy = config.permissions.approval_policy.value();
     let default_effort = config.model_reasoning_effort.clone();
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
@@ -1142,12 +1089,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadResume {
                     request_id: request_ids.next(),
-                    params: thread_resume_params_from_config(
-                        &config,
-                        thread_id,
-                        &overrides,
-                        resume_approvals_reviewer_override,
-                    ),
+                    params: thread_resume_params_from_config(&config, thread_id, &overrides)?,
                 },
                 "thread/resume",
             )
@@ -1219,13 +1161,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         } else {
             None
         };
-        let permissions = permissions_selection_from_config(&config);
-        let sandbox = permissions.is_none().then(|| {
-            sandbox_mode_from_permission_profile(
-                &config.permissions.effective_permission_profile(),
-                config.cwd.as_path(),
-            )
-        });
+        let settings = inherited_thread_permissions(&config, &overrides)?;
         let response: ThreadForkResponse = send_request_with_response(
             &client,
             ClientRequest::ThreadFork {
@@ -1238,10 +1174,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     runtime_workspace_roots: Some(LegacyAppPathString::from_abs_paths(
                         &config.workspace_roots,
                     )),
-                    approval_policy: Some(config.permissions.approval_policy.value().into()),
-                    approvals_reviewer: resume_approvals_reviewer_override,
-                    sandbox: sandbox.flatten(),
-                    permissions,
+                    approval_policy: settings.approval_policy,
+                    approvals_reviewer: settings.approvals_reviewer,
+                    sandbox: settings.sandbox,
+                    permissions: settings.permissions,
                     config: thread_config_overrides_from_config(&config),
                     ephemeral: config.ephemeral,
                     thread_source: Some(thread_source.clone()),
@@ -1299,6 +1235,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Waiting for a later streamed `SessionConfigured` event adds up to 10s of
     // avoidable startup latency on the in-process path.
     let mut session_configured = fallback_session_configured;
+    if matches!(initial_operation, InitialOperation::UserTurn { .. }) {
+        approval_warning::warn_if_human_approval(
+            session_configured.approval_policy.into(),
+            session_configured.approvals_reviewer.into(),
+            /*flags_supported*/ true,
+        );
+    }
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
@@ -1388,7 +1331,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         environments: None,
                         cwd: first_turn_cwd,
                         runtime_workspace_roots: first_turn_workspace_roots,
-                        approval_policy: Some(default_approval_policy.into()),
+                        approval_policy: None,
                         approvals_reviewer: None,
                         sandbox_policy: None,
                         permissions: None,
@@ -1672,14 +1615,23 @@ fn thread_start_params_from_config(
     }
 }
 
-fn thread_resume_params_from_config(
+struct InheritedThreadPermissions {
+    approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+    approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
+    sandbox: Option<codex_app_server_protocol::SandboxMode>,
+    permissions: Option<String>,
+    explicit_permissions: bool,
+    runtime_workspace_roots: Option<Vec<LegacyAppPathString>>,
+}
+
+// Fork and resume both inherit approvals. Fork keeps the launch sandbox and
+// workspace roots, while resume changes those only when explicitly requested.
+fn inherited_thread_permissions(
     config: &Config,
-    thread_id: String,
     overrides: &ConfigOverrides,
-    approvals_reviewer_override: Option<codex_app_server_protocol::ApprovalsReviewer>,
-) -> ThreadResumeParams {
-    let permissions = permissions_selection_from_config(config);
-    let sandbox = if permissions.is_none() {
+) -> std::io::Result<InheritedThreadPermissions> {
+    let mut permissions = permissions_selection_from_config(config);
+    let mut sandbox = if permissions.is_none() {
         sandbox_mode_from_permission_profile(
             &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
@@ -1687,7 +1639,9 @@ fn thread_resume_params_from_config(
     } else {
         None
     };
-    // A process default is not a new choice for an existing thread.
+    // Only explicit approval choices should override the source thread.
+    let mut explicit_approval_policy = overrides.approval_policy.is_some();
+    let mut explicit_reviewer = overrides.approvals_reviewer.is_some();
     let mut explicit_permissions = overrides.sandbox_mode.is_some();
     let mut runtime_workspace_roots = None;
     for layer in config
@@ -1704,6 +1658,8 @@ fn thread_resume_params_from_config(
             )
         })
     {
+        explicit_approval_policy |= layer.config.get("approval_policy").is_some();
+        explicit_reviewer |= layer.config.get("approvals_reviewer").is_some();
         let legacy_workspace = layer
             .config
             .get("sandbox_workspace_write")
@@ -1719,21 +1675,70 @@ fn thread_resume_params_from_config(
                 Some(LegacyAppPathString::from_abs_paths(&config.workspace_roots));
         }
     }
-    ThreadResumeParams {
+    // If requirements downgraded an explicit sandbox to read-only, the server
+    // must validate the original selector with the saved approval policy. Sending
+    // the fallback would hide a disallowed full-access request paired with Never.
+    if explicit_permissions && sandbox == Some(codex_app_server_protocol::SandboxMode::ReadOnly) {
+        let layers = &config.config_layer_stack;
+        let toml = codex_core::config::deserialize_config_toml_with_base(
+            layers.effective_config(),
+            config.codex_home.as_path(),
+        )?;
+        match codex_config::resolve_permission_config(layers, &toml, overrides.sandbox_mode) {
+            Some(codex_config::PermissionConfig::Legacy { mode, .. }) => {
+                sandbox = Some(mode.into())
+            }
+            Some(codex_config::PermissionConfig::Named { id }) => {
+                permissions = Some(id.to_owned());
+                sandbox = None;
+            }
+            None => {}
+        }
+    }
+    Ok(InheritedThreadPermissions {
+        approval_policy: explicit_approval_policy
+            .then(|| config.permissions.approval_policy.value().into()),
+        approvals_reviewer: explicit_reviewer.then(|| {
+            config
+                .requested_approvals_reviewer
+                .unwrap_or(config.approvals_reviewer)
+                .into()
+        }),
+        sandbox,
+        permissions,
+        explicit_permissions,
+        runtime_workspace_roots,
+    })
+}
+
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    overrides: &ConfigOverrides,
+) -> std::io::Result<ThreadResumeParams> {
+    let InheritedThreadPermissions {
+        approval_policy,
+        approvals_reviewer,
+        sandbox,
+        permissions,
+        explicit_permissions,
+        runtime_workspace_roots,
+    } = inherited_thread_permissions(config, overrides)?;
+    Ok(ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: (overrides.cwd.is_some() || runtime_workspace_roots.is_some())
             .then(|| config.cwd.to_string_lossy().into_owned()),
         runtime_workspace_roots,
-        approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: approvals_reviewer_override,
+        approval_policy,
+        approvals_reviewer,
         sandbox: sandbox.filter(|_| explicit_permissions),
         permissions: permissions.filter(|_| explicit_permissions),
         config: thread_config_overrides_from_config(config),
         exclude_turns: true,
         ..ThreadResumeParams::default()
-    }
+    })
 }
 
 fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {

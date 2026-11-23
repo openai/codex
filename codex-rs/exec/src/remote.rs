@@ -106,8 +106,8 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
         .await?,
     );
     let mut ids = RequestIdSequencer::new();
-    let thread = if let Some(thread_id) = session_id {
-        client
+    let (thread, policy, reviewer) = if let Some(thread_id) = session_id {
+        let response = client
             .request_typed::<ThreadResumeResponse>(ClientRequest::ThreadResume {
                 request_id: ids.next(),
                 params: ThreadResumeParams {
@@ -116,20 +116,27 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
                     ..Default::default()
                 },
             })
-            .await?
-            .thread
+            .await?;
+        (
+            response.thread,
+            response.approval_policy,
+            response.approvals_reviewer,
+        )
     } else {
-        client
+        let response = client
             .request_typed::<ThreadStartResponse>(ClientRequest::ThreadStart {
                 request_id: ids.next(),
                 params: ThreadStartParams {
                     model: model.clone(),
-                    approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
                     ..Default::default()
                 },
             })
-            .await?
-            .thread
+            .await?;
+        (
+            response.thread,
+            response.approval_policy,
+            response.approvals_reviewer,
+        )
     };
     anyhow::ensure!(
         !matches!(
@@ -139,6 +146,7 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
         "remote thread already has an active turn"
     );
     processor.print_thread_started(&thread.id);
+    approval_warning::warn_if_human_approval(policy, reviewer, /*flags_supported*/ false);
     let (interrupt_tx, interrupt_rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -155,7 +163,6 @@ pub(super) async fn run(cli: Cli, endpoint: RemoteAppServerEndpoint) -> anyhow::
                     text: prompt,
                     text_elements: Vec::new(),
                 }],
-                approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
                 // Like other app-server clients, explicit overrides apply to this
                 // turn and subsequent turns. Omission preserves the thread settings.
                 model,

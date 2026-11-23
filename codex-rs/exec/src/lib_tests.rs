@@ -549,12 +549,14 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
 }
 
 #[tokio::test]
-async fn thread_resume_params_only_include_explicit_review_policy_override() {
+async fn thread_resume_params_only_include_explicit_approval_overrides() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .harness_overrides(ConfigOverrides {
+            approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             ..Default::default()
         })
@@ -567,15 +569,24 @@ async fn thread_resume_params_only_include_explicit_review_policy_override() {
         &config,
         "thread-id".to_string(),
         &ConfigOverrides::default(),
-        /*approvals_reviewer_override*/ None,
-    );
+    )
+    .expect("build resume params");
     let params_with_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        &ConfigOverrides::default(),
-        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview),
-    );
+        &ConfigOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            ..Default::default()
+        },
+    )
+    .expect("build resume params");
 
+    assert_eq!(params_without_override.approval_policy, None);
+    assert_eq!(
+        params_with_override.approval_policy,
+        Some(codex_app_server_protocol::AskForApproval::Never)
+    );
     assert_eq!(params_without_override.approvals_reviewer, None);
     assert_eq!(
         params_with_override.approvals_reviewer,
@@ -584,7 +595,7 @@ async fn thread_resume_params_only_include_explicit_review_policy_override() {
 }
 
 #[tokio::test]
-async fn build_exec_config_retries_without_invalid_headless_policy_for_auto_review() {
+async fn inherited_permissions_preserve_managed_validation_with_saved_never() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     std::fs::write(
@@ -606,67 +617,61 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     .expect("write requirements");
     let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     loader_overrides.system_requirements_path = Some(requirements_path);
-    let overrides = ConfigOverrides {
+    let resume_overrides = ConfigOverrides {
         cwd: Some(cwd.path().to_path_buf()),
-        approval_policy: Some(AskForApproval::Never),
         sandbox_mode: Some(SandboxMode::DangerFullAccess),
         ..Default::default()
     };
-    let build_config = |overrides| {
+    let builder = |overrides| {
         ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .loader_overrides(loader_overrides.clone())
             .harness_overrides(overrides)
-            .build()
     };
-
-    let error = build_config(overrides.clone())
+    let config = builder(resume_overrides.clone())
+        .build()
         .await
-        .expect_err("synthetic headless approval policy should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("`approval_policy = \"never\"` cannot be used")
-    );
+        .expect("preflight with on-request allows managed downgrade");
+    let legacy = thread_resume_params_from_config(&config, "thread-id".into(), &resume_overrides)
+        .expect("build legacy resume params");
 
-    let config = build_exec_config(
-        overrides,
-        /*preserve_headless_approval_policy*/ false,
-        build_config,
-    )
-    .await
-    .expect("auto-review config should retry without the synthetic approval policy");
-
-    assert_eq!(
-        config.permissions.approval_policy.value(),
-        AskForApproval::OnRequest
-    );
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
-}
-
-#[tokio::test]
-async fn build_exec_config_preserves_headless_error_when_retry_fails() {
-    let overrides = ConfigOverrides {
-        approval_policy: Some(AskForApproval::Never),
-        ..Default::default()
+    let resume_overrides = ConfigOverrides {
+        sandbox_mode: None,
+        ..resume_overrides
     };
+    let named_config = builder(resume_overrides.clone())
+        .cli_overrides(vec![(
+            "default_permissions".into(),
+            ":danger-full-access".into(),
+        )])
+        .build()
+        .await
+        .expect("preflight with on-request allows managed downgrade");
+    let named =
+        thread_resume_params_from_config(&named_config, "thread-id".into(), &resume_overrides)
+            .expect("build named resume params");
+    assert_eq!(named.permissions.as_deref(), Some(":danger-full-access"));
 
-    let error = build_exec_config(
-        overrides,
-        /*preserve_headless_approval_policy*/ false,
-        |overrides| async move {
-            let message = if overrides.approval_policy == Some(AskForApproval::Never) {
-                "headless error"
-            } else {
-                "retry error"
-            };
-            Err(std::io::Error::other(message))
-        },
-    )
-    .await
-    .expect_err("failed speculative retry should preserve the original error");
-
-    assert_eq!(error.to_string(), "headless error");
+    // As on cold resume, validate the transmitted selector against the saved policy.
+    for params in [legacy, named] {
+        assert_eq!(params.approval_policy, None);
+        let error = builder(ConfigOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_mode: params
+                .sandbox
+                .map(codex_app_server_protocol::SandboxMode::to_core),
+            default_permissions: params.permissions,
+            ..resume_overrides.clone()
+        })
+        .build()
+        .await
+        .expect_err("saved Never must reject a managed downgrade of full access");
+        assert!(
+            error
+                .to_string()
+                .contains("`approval_policy = \"never\"` cannot be used")
+        );
+    }
 }
 
 #[tokio::test]
@@ -723,8 +728,8 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
         &config,
         "thread-id".to_string(),
         &ConfigOverrides::default(),
-        /*approvals_reviewer_override*/ None,
-    );
+    )
+    .expect("build resume params");
 
     assert_eq!(start_params.config, expected_config);
     assert_eq!(resume_params.config, expected_config);
@@ -763,8 +768,8 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
             sandbox_mode: Some(SandboxMode::DangerFullAccess),
             ..Default::default()
         },
-        /*approvals_reviewer_override*/ None,
-    );
+    )
+    .expect("build resume params");
 
     assert_eq!(config.permissions.active_permission_profile(), None);
     assert_eq!(

@@ -1226,6 +1226,12 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
+        .args([
+            "-c",
+            "approval_policy='on-request'",
+            "-c",
+            "approvals_reviewer='user'",
+        ])
         .arg("--thread-source")
         .arg("source_feature")
         .arg(format!("echo {source_marker}"))
@@ -1273,6 +1279,11 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
         promptless_output.status.success(),
         "promptless fork failed: {}",
         String::from_utf8_lossy(&promptless_output.stderr)
+    );
+    let stderr = String::from_utf8(promptless_output.stderr)?;
+    assert!(
+        !stderr.contains("WARNING: This thread is configured to ask a human"),
+        "{stderr}"
     );
     let promptless_events = String::from_utf8(promptless_output.stdout)?
         .lines()

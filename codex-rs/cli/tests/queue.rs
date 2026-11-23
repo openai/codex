@@ -263,6 +263,235 @@ async fn run_remote_queue_command(response: QueueResponse) -> Result<(Output, Va
 }
 
 #[cfg(unix)]
+async fn wait_for_socket(socket_path: &Path) -> Result<()> {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    timeout(Duration::from_secs(30), async {
+        while !socket_path.try_exists()? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_keeps_saved_approval_settings_for_local_and_remote() -> Result<()> {
+    use app_test_support::MockResponsesConfig;
+    use app_test_support::TestAppServer;
+    use app_test_support::create_escalated_command_execution_sse_response;
+    use app_test_support::create_final_assistant_message_sse_response;
+    use codex_app_server_protocol::ApprovalsReviewer::AutoReview;
+    use codex_app_server_protocol::ApprovalsReviewer::User;
+    use codex_app_server_protocol::AskForApproval::Never;
+    use codex_app_server_protocol::AskForApproval::OnRequest;
+    use codex_app_server_protocol::ThreadResumeParams;
+    use codex_app_server_protocol::ThreadResumeResponse;
+    use codex_app_server_protocol::ThreadStartParams;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::UserInput;
+    use core_test_support::responses;
+    use tokio::process::Command;
+
+    let home = socket_test_home()?;
+    let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let model = responses::start_mock_server().await;
+    let server_config = || {
+        MockResponsesConfig::new(&model.uri())
+            .with_root_config("features.plugins = false\nanalytics.enabled = false")
+    };
+    let human_review = r#"approvals_reviewer="user""#;
+    server_config()
+        .with_root_config(human_review)
+        .with_approval_policy("never")
+        .write(home.path())?;
+    let config = core_test_support::load_default_config_for_test(&home).await;
+    let mut model_info =
+        codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model_info.auto_review_model_override = Some("mock-model".into());
+    app_test_support::write_models_cache_with_models(home.path(), vec![model_info]).await?;
+    let server = || {
+        TestAppServer::builder()
+            .with_program(&codex)
+            .with_codex_home(home.path())
+            .with_plugin_startup_tasks()
+            .without_managed_config()
+            .with_args(&["app-server"])
+    };
+    let done = create_final_assistant_message_sse_response("done")?;
+    let mut seed = server().build_initialized().await?;
+    let mut seed_thread = async |reviewer| -> Result<String> {
+        let id = seed
+            .start_thread(ThreadStartParams {
+                approval_policy: Some(OnRequest),
+                approvals_reviewer: Some(reviewer),
+                ..Default::default()
+            })
+            .await?
+            .thread
+            .id;
+        let _mock = responses::mount_sse_once(&model, done.clone()).await;
+        seed.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed saved settings".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+        Ok(id)
+    };
+    let human = seed_thread(User).await?;
+    let auto = seed_thread(AutoReview).await?;
+    drop(seed);
+
+    let deny = create_final_assistant_message_sse_response(
+        r#"{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"Test reviewer denied this action."}"#,
+    )?;
+    let auto_review = r#"approvals_reviewer="auto_review""#;
+    let never = r#"approval_policy="never""#;
+    // Check warning counts on every turn. Only request escalation when checking the denial.
+    let human_denial = (1, Some("approval request failed"));
+    let auto_denial = (0, Some("test reviewer denied this action"));
+    let never_denial = (0, Some("approval policy is never"));
+    let human_warning = (1, None);
+    let mut count = 0;
+    let mut run = async |args: &[&str], expected| -> Result<(String, String)> {
+        let (expected_warnings, denial): (usize, Option<&str>) = expected;
+        count += 1;
+        let call_id = format!("action_{count}");
+        let mut bodies = Vec::new();
+        if denial.is_some() {
+            bodies.push(create_escalated_command_execution_sse_response(
+                vec!["echo".into(), call_id.clone()],
+                /*workdir*/ None,
+                /*timeout_ms*/ Some(500),
+                &call_id,
+            )?);
+            if expected == auto_denial {
+                bodies.push(deny.clone());
+            }
+        }
+        bodies.push(done.clone());
+        let mock = responses::mount_sse_sequence(&model, bodies).await;
+        let output = Command::new(&codex)
+            .env("CODEX_HOME", home.path())
+            .current_dir(home.path())
+            .arg("exec")
+            .args(args)
+            .args(["--skip-git-repo-check", "--json", "test approval"])
+            .output()
+            .await?;
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(output.status.success(), "{args:?}: {stderr}");
+        let header = "WARNING: This thread is configured to ask a human";
+        let warnings = stderr.matches(header).count();
+        assert_eq!(warnings, expected_warnings, "{args:?}: {stderr}");
+        if let Some(expected) = denial {
+            let denied = mock
+                .function_call_output_text(&call_id)
+                .context("missing denied tool output")?
+                .to_lowercase();
+            assert!(denied.contains(expected), "{args:?}: {denied}");
+        }
+        let events = std::str::from_utf8(&output.stdout)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        let id = serde_json::from_value(events[0]["thread_id"].clone())?;
+        let warning = stderr
+            .lines()
+            .skip_while(|line| !line.starts_with(header))
+            .take_while(|line| line.starts_with(header) || line.starts_with("- "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok((id, warning))
+    };
+    let (_, warning) = run(&["resume", &human], human_denial).await?;
+    insta::assert_snapshot!(warning, @r#"
+    WARNING: This thread is configured to ask a human for approval. `codex exec` runs non-interactively and immediately rejects approval requests it receives.
+    - To review requests yourself, run this turn from the TUI.
+    - To change the thread's saved reviewer, pass `--config 'approvals_reviewer="auto_review"'` to `codex exec resume`.
+    - To disable approval prompts for this and future turns, pass `--config 'approval_policy="never"'` to `codex exec resume`.
+    "#);
+    run(&["resume", &auto], auto_denial).await?;
+
+    // An explicit change persists. Each resume inherits the field left unspecified.
+    let on_request = r#"approval_policy="on-request""#;
+    let (explicit_fresh, _) = run(&["-c", on_request], human_denial).await?;
+    let (fresh, _) = run(&[], never_denial).await?;
+    run(&["-c", on_request, "resume", &fresh], human_warning).await?;
+    run(&["-c", auto_review, "resume", &fresh], auto_denial).await?;
+    std::fs::write(home.path().join("bot.config.toml"), never)?;
+    run(&["--profile", "bot", "resume", &fresh], never_denial).await?;
+
+    // Forks inherit each field independently. The source threads must stay unchanged.
+    let (inherited_fork, _) = run(&["fork", &auto], auto_denial).await?;
+    let (human_fork, _) = run(&["fork", &human], human_warning).await?;
+    let (reviewer_fork, _) = run(&["-c", auto_review, "fork", &human], auto_denial).await?;
+    let (never_fork, _) = run(&["-c", never, "fork", &auto], never_denial).await?;
+
+    let socket = codex_app_server::app_server_control_socket_path(home.path())?;
+    let endpoint = format!("unix://{}", socket.as_path().display());
+    let remote = server().with_args(&["--listen", "unix://"]).build().await?;
+    wait_for_socket(socket.as_path()).await?;
+    let (remote_fresh, _) = run(&["--remote", &endpoint], never_denial).await?;
+    let (_, warning) = run(&["--remote", &endpoint, "resume", &human], human_denial).await?;
+    insta::assert_snapshot!(warning, @r#"
+    WARNING: This thread is configured to ask a human for approval. `codex exec` runs non-interactively and immediately rejects approval requests it receives.
+    - To review requests yourself, run this turn from the TUI.
+    "#);
+    run(&["--remote", &endpoint, "resume", &auto], auto_denial).await?;
+
+    // Fresh threads use the configured policy and reviewer on the first turn.
+    server_config()
+        .with_root_config(human_review)
+        .with_approval_policy("on-request")
+        .write(home.path())?;
+    let (local_human, _) = run(&[], human_denial).await?;
+    let (remote_human, _) = run(&["--remote", &endpoint], human_denial).await?;
+    server_config()
+        .with_approval_policy("on-request")
+        .with_root_config(auto_review)
+        .write(home.path())?;
+    let (remote_auto, _) = run(&["--remote", &endpoint], auto_denial).await?;
+    drop(remote);
+
+    let automatic = (OnRequest, AutoReview);
+    let manual = (OnRequest, User);
+    let default = (Never, User);
+    let mut cold = server().build_initialized().await?;
+    for (id, saved) in [
+        (human, manual),
+        (auto, automatic),
+        (explicit_fresh, manual),
+        (fresh, (Never, AutoReview)),
+        (remote_fresh, default),
+        (local_human, manual),
+        (remote_human, manual),
+        (remote_auto, automatic),
+        (inherited_fork, automatic),
+        (human_fork, manual),
+        (reviewer_fork, automatic),
+        (never_fork, (Never, AutoReview)),
+    ] {
+        let request = cold
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: id,
+                exclude_turns: true,
+                ..Default::default()
+            })
+            .await?;
+        let resumed: ThreadResumeResponse = cold.read_response(request).await?;
+        assert_eq!((resumed.approval_policy, resumed.approvals_reviewer), saved);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn remote_session_commands_with_workload_identity_use_server_auth() -> Result<()> {
     use std::time::Duration;

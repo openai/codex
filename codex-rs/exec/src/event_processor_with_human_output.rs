@@ -462,7 +462,7 @@ fn config_summary_entries(
         ),
         (
             "approval",
-            config.permissions.approval_policy.value().to_string(),
+            session_configured_event.approval_policy.to_string(),
         ),
         (
             "sandbox",
