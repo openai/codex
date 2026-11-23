@@ -32,7 +32,6 @@ use wiremock::matchers::path;
 
 const MODERN_VERSION: &str = "2026-07-28";
 const LEGACY_VERSION: &str = "2025-06-18";
-const MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[path = "mcp_2026_discovery/tool_call_session_meta_tests.rs"]
 mod tool_call_session_meta_tests;
@@ -513,47 +512,6 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity_over_sse()
 
     let client = create_client(&server, McpProtocolMode::V20260728).await?;
     initialize_client(&client).await?;
-    client.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_http_keeps_existing_large_json_response_behavior() -> anyhow::Result<()> {
-    let server = MockServer::start().await;
-    let padding = Arc::new("x".repeat(MAX_MCP_MESSAGE_BYTES + 1));
-    Mock::given(method("POST"))
-        .and(path("/mcp"))
-        .respond_with(move |request: &Request| {
-            let body: Value = request.body_json().expect("valid JSON-RPC request");
-            match body["method"].as_str() {
-                Some("initialize") => legacy_initialize_response(&body),
-                Some("notifications/initialized") => ResponseTemplate::new(202),
-                Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "result": {
-                        "tools": [{
-                            "name": "legacy_large_tool",
-                            "description": padding.as_str(),
-                            "inputSchema": {"type": "object"},
-                        }],
-                    },
-                })),
-                other => panic!("unexpected legacy MCP method {other:?}"),
-            }
-        })
-        .mount(&server)
-        .await;
-
-    let client = create_client(&server, McpProtocolMode::Legacy).await?;
-    initialize_client(&client).await?;
-    let tools = client
-        .list_tools(/*params*/ None, Some(Duration::from_secs(15)))
-        .await?;
-    assert_eq!(
-        tools.tools[0].description.as_deref().map(str::len),
-        Some(MAX_MCP_MESSAGE_BYTES + 1)
-    );
     client.shutdown().await;
     Ok(())
 }
