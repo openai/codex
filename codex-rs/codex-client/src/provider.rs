@@ -10,6 +10,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
 
+/// Whether the provider name alone identifies Azure, regardless of the endpoint URL.
+pub fn is_azure_provider_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("azure")
+}
+
 /// High-level retry configuration for a provider.
 ///
 /// This is converted into a `RetryPolicy` used by `codex-client` to drive

@@ -16,17 +16,14 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
-use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_NAME;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
-use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME;
 use codex_model_provider_info::GCP_PROVIDER_ID;
-use codex_model_provider_info::GCP_PROVIDER_NAME;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
-use codex_model_provider_info::OPENAI_PROVIDER_NAME;
 use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::uses_builtin_auth;
 use std::collections::BTreeSet;
 
 fn string_field(config: Option<&TomlValue>, key: &str) -> Option<String> {
@@ -226,16 +223,6 @@ pub(super) fn summarize_provider(
         base_url,
         settings,
     }
-}
-
-pub(super) fn uses_builtin_auth(name: &str) -> bool {
-    matches!(
-        name,
-        OPENAI_PROVIDER_NAME
-            | AMAZON_BEDROCK_PROVIDER_NAME
-            | AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME
-            | GCP_PROVIDER_NAME
-    )
 }
 
 pub(super) fn writable_user_layer<'a>(

@@ -2224,6 +2224,128 @@ request_headers = [{ name = "x-old", value = "old" }]"#,
     }
 }
 
+const GATEWAY_AUTH: &str = r#"
+authorization_url = "https://login.example/authorize"
+token_url = "https://login.example/token"
+client_id = "native-client"
+scopes = ["gateway.access", "offline_access"]
+"#;
+
+fn mdm_gateway() -> RequirementsLayerEntry {
+    RequirementsLayerEntry::from_toml(
+        RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".into(),
+            key: "requirements_toml_base64".into(),
+        },
+        format!(
+            "[gateway]\nbase_url = 'https://new.example/team/'\n[gateway.auth]\n{GATEWAY_AUTH}"
+        ),
+    )
+}
+
+#[test]
+fn mdm_gateway_replaces_system_enrollment_as_a_unit() {
+    let system = RequirementsLayerEntry::from_toml(
+        RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::from_absolute_path(
+                std::env::temp_dir().join("requirements.toml"),
+            )
+            .unwrap(),
+        },
+        format!(
+            "[gateway]\nname = 'Acme Gateway'\nbase_url = 'https://old.example'\n[gateway.auth]\nresource = 'old-audience'\n{GATEWAY_AUTH}"
+        ),
+    );
+    let system_only = compose(vec![system.clone()]).unwrap().unwrap();
+    assert_eq!(system_only.model_provider.as_deref(), Some("gateway"));
+    assert_eq!(
+        system_only.model_providers.unwrap()["gateway"].name,
+        "Acme Gateway"
+    );
+
+    let actual = compose(vec![
+        system,
+        layer("remote", "Policy", "allow_login_shell = false"),
+        mdm_gateway(),
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        actual,
+        expected_requirements(format!(
+            r#"
+allow_login_shell = false
+model_provider = "gateway"
+
+[config_server]
+base_url = "https://new.example/team"
+[config_server.oauth]
+{GATEWAY_AUTH}
+[model_providers.gateway]
+name = "Gateway"
+base_url = "https://new.example/team/v1"
+model_catalog_url = "https://new.example/team/v1/models"
+wire_api = "responses"
+requires_openai_auth = false
+[model_providers.gateway.gateway_oauth]
+{GATEWAY_AUTH}
+"#
+        ))
+    );
+}
+
+#[test]
+fn remote_requirements_cannot_enroll_or_reroute_gateway() {
+    for (contents, field) in [
+        (
+            "[gateway]\nbase_url = 'https://other.example'",
+            "local managed requirements",
+        ),
+        ("model_provider = 'other'", "model_provider"),
+        (
+            "[model_providers.gateway]\nbase_url = 'https://other.example/v1'",
+            "model_providers.gateway",
+        ),
+    ] {
+        let err = compose(vec![mdm_gateway(), layer("remote", "Policy", contents)]).unwrap_err();
+        assert!(err.to_string().contains(field), "{err}");
+    }
+}
+
+#[test]
+fn gateway_rejects_invalid_enrollment() {
+    let named_gateway = |name: &str| {
+        format!(
+            "[gateway]\nname = '{name}'\nbase_url = 'https://gateway.example'\n[gateway.auth]\n{GATEWAY_AUTH}"
+        )
+    };
+    for (contents, error) in [
+        (named_gateway(" "), "gateway.name"),
+        (named_gateway("OpenAI"), "gateway.name"),
+        (named_gateway("Azure"), "gateway.name"),
+        (
+            "[gateway]\nbase_url = 'https://gateway.example'".to_string(),
+            "auth",
+        ),
+        (
+            format!(
+                "[gateway]\nbase_url = 'http://gateway.example'\n[gateway.auth]\n{GATEWAY_AUTH}"
+            ),
+            "HTTPS",
+        ),
+        (
+            format!(
+                "[config_server]\nbase_url = 'https://other.example'\n[gateway]\nbase_url = 'https://gateway.example'\n[gateway.auth]\n{GATEWAY_AUTH}"
+            ),
+            "config_server",
+        ),
+    ] {
+        let layer = RequirementsLayerEntry::from_toml(mdm_gateway().source, contents);
+        let err = compose(vec![layer]).unwrap_err();
+        assert!(err.to_string().contains(error), "{err}");
+    }
+}
+
 #[test]
 fn higher_priority_config_server_replaces_previous_oauth_settings() {
     let actual = crate::compose_requirements([

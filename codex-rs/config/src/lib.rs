@@ -230,6 +230,7 @@ pub use requirements_exec_policy::RequirementsExecPolicyParseError;
 pub use requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
 pub use requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
 pub use requirements_exec_policy::RequirementsExecPolicyToml;
+pub use requirements_layers::GatewayRequirementsToml;
 pub use requirements_layers::RequirementsLayerEntry;
 pub use requirements_layers::compose_requirements;
 pub use requirements_layers::compose_requirements_for_hostname;

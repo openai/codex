@@ -5,6 +5,7 @@ mod telemetry;
 
 pub use crate::provider::Provider;
 pub use crate::provider::RetryConfig;
+pub use crate::provider::is_azure_provider_name;
 pub use crate::retry::RetryOn;
 pub use crate::retry::RetryOperation;
 pub use crate::retry::RetryPolicy;

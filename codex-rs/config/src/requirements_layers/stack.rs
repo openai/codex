@@ -177,6 +177,7 @@ impl RequirementsLayerStack {
             hook_directory_field,
         } = self;
 
+        super::gateway::expand(&mut layers)?;
         let network = super::network::compose(&mut layers)?;
         let mut merged_toml = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
@@ -264,6 +265,7 @@ fn populate_merged_regular_fields_with_sources(
     // Destructure without `..` so every new requirements field must choose
     // whether it belongs in the regular TOML merge path or in a special merger.
     let ConfigRequirementsToml {
+        gateway: _,
         config_server,
         allowed_login_methods,
         allowed_chatgpt_workspaces,

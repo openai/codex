@@ -1230,6 +1230,8 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    /// Local shorthand expanded into config-server and model-provider requirements before merging.
+    pub gateway: Option<Box<crate::GatewayRequirementsToml>>,
     /// Required customer-hosted configuration server. Only local managed requirements may configure it.
     pub config_server: Option<crate::ConfigServer>,
     pub allowed_login_methods: Option<Vec<ForcedLoginMethod>>,
@@ -1506,6 +1508,7 @@ impl ConfigRequirementsWithSources {
         Ok(())
     }
 
+    /// Fill gaps in composed requirements. Expand local shorthand before calling this method.
     pub fn merge_unset_fields(&mut self, source: RequirementSource, other: ConfigRequirementsToml) {
         // For every field in `other` that is `Some`, if the corresponding field
         // in `self` is `None`, copy the value from `other` into `self`.
@@ -1524,6 +1527,7 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            gateway: _,
             config_server: _,
             allowed_login_methods: _,
             allowed_chatgpt_workspaces: _,
@@ -1752,6 +1756,7 @@ impl ConfigRequirementsWithSources {
                 .cloned()
         });
         ConfigRequirementsToml {
+            gateway: None,
             config_server: config_server.map(|sourced| sourced.value),
             allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
             allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
@@ -1848,7 +1853,7 @@ impl From<SandboxMode> for SandboxModeRequirement {
 impl ConfigRequirementsToml {
     /// Whether local administration requires a remotely delivered managed bundle.
     pub fn requires_remote_config(&self) -> bool {
-        self.config_server.is_some()
+        self.config_server.is_some() || self.gateway.is_some()
     }
 
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
@@ -1868,7 +1873,8 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.config_server.is_none()
+        self.gateway.is_none()
+            && self.config_server.is_none()
             && self.allowed_login_methods.is_none()
             && self.allowed_chatgpt_workspaces.is_none()
             && self.cli_auth_credentials_store.is_none()
@@ -2971,6 +2977,7 @@ tracestate = { managed = { tenant = "enterprise", region = "us" }, other = { kee
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            gateway: _,
             config_server,
             allowed_login_methods,
             allowed_chatgpt_workspaces,
@@ -3587,6 +3594,7 @@ tracestate = { managed = { tenant = "enterprise", region = "us" }, other = { kee
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
+            gateway: None,
             config_server: None,
             allowed_login_methods: Some(vec![ForcedLoginMethod::Chatgpt]),
             allowed_chatgpt_workspaces: Some(vec!["managed-workspace".to_string()]),

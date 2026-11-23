@@ -10,7 +10,6 @@ use super::model_providers::field_is_writable;
 use super::model_providers::has_external_auth;
 use super::model_providers::summarize_provider;
 use super::model_providers::supported_fields;
-use super::model_providers::uses_builtin_auth;
 use super::model_providers::valid_endpoint;
 use super::model_providers::writable_user_layer;
 use codex_app_server_protocol::BedrockProviderId;
@@ -29,6 +28,7 @@ use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::uses_builtin_auth;
 use std::collections::HashMap;
 
 impl ConfigManager {

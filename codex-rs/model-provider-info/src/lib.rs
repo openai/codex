@@ -12,6 +12,7 @@ use codex_client::OPENAI_ORGANIZATION_HEADER;
 use codex_client::OPENAI_PROJECT_HEADER;
 use codex_client::Provider as ApiProvider;
 use codex_client::RetryConfig as ApiRetryConfig;
+pub use codex_client::is_azure_provider_name;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
@@ -754,6 +755,17 @@ pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
+
+/// Whether the provider name selects built-in authentication, even with a custom ID.
+pub fn uses_builtin_auth(name: &str) -> bool {
+    matches!(
+        name,
+        OPENAI_PROVIDER_NAME
+            | AMAZON_BEDROCK_PROVIDER_NAME
+            | AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME
+            | GCP_PROVIDER_NAME
+    )
+}
 
 /// Built-in default provider list.
 pub fn built_in_model_providers(

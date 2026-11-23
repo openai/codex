@@ -102,6 +102,19 @@ impl ComposableRequirementsLayer {
                 .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
             let mut regular_toml = parse_layer_toml(toml, &source)?;
 
+            if regular_toml.get("gateway").is_some()
+                && !matches!(
+                    source,
+                    RequirementSource::SystemRequirementsToml { .. }
+                        | RequirementSource::MdmManagedPreferences { .. }
+                )
+            {
+                return Err(RequirementsCompositionError::Parse {
+                    layer_source: source,
+                    message: "gateway may only be configured in local managed requirements".into(),
+                });
+            }
+
             if matches!(source, RequirementSource::EnterpriseManaged { .. })
                 && regular_toml.get("config_server").is_some()
             {
@@ -234,6 +247,7 @@ impl ComposableRequirementsLayer {
             source,
             regular_toml,
             domain_fields: DomainMergedRequirementsFields {
+                gateway: requirements.gateway,
                 rules: requirements.rules,
                 hooks: requirements.hooks,
                 permissions: requirements.permissions,
@@ -246,6 +260,7 @@ impl ComposableRequirementsLayer {
 
 #[derive(Clone, Debug)]
 pub(super) struct DomainMergedRequirementsFields {
+    pub(super) gateway: Option<Box<crate::GatewayRequirementsToml>>,
     pub(super) rules: Option<RequirementsExecPolicyToml>,
     pub(super) hooks: Option<ManagedHooksRequirementsToml>,
     pub(super) permissions: Option<crate::config_requirements::PermissionsRequirementsToml>,
@@ -345,6 +360,7 @@ fn toml_value_from_serializable<T: serde::Serialize>(
 }
 
 fn strip_special_fields(layer_toml: &mut TomlValue) {
+    remove_top_level_field(layer_toml, "gateway");
     remove_top_level_field(layer_toml, "rules");
     remove_top_level_field(layer_toml, "hooks");
     remove_top_level_field(layer_toml, "otel");
