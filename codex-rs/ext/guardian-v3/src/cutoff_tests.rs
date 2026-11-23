@@ -303,7 +303,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
     let binding = thread
         .get::<crate::ActorReviewer>()
         .context("attached reviewer")?
-        .binding(Arc::clone(board), &evidence.delivery)?;
+        .binding(Arc::clone(board))?;
     let inbox = &binding.inbox;
     for channel in ["release", "releases-copy"] {
         inbox
@@ -373,7 +373,8 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
 }
 
 #[tokio::test]
-async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Result<()> {
+async fn committed_posts_reach_current_subscribers_once_across_channel_retries()
+-> anyhow::Result<()> {
     use crate::EvidenceId;
     use crate::inbox::ActorInbox;
     use crate::inbox::LiveDelivery;
@@ -386,6 +387,7 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
     use codex_protocol::protocol::TruncationPolicy;
     use serde_json::json;
     use std::future::ready;
+    use std::sync::atomic::Ordering;
     use tokio_util::sync::CancellationToken;
 
     let root = ThreadId::new();
@@ -404,68 +406,72 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
     )
     .await?;
     let reader = writer.read_only_handle();
-    writer
-        .upsert_channel(
-            root,
-            UpsertChannelRequest {
-                channel_name: "release".into(),
-                description: String::new().try_into()?,
-            },
-        )
-        .await?;
+    for channel in ["release", "audit"] {
+        writer
+            .upsert_channel(
+                root,
+                UpsertChannelRequest {
+                    channel_name: channel.into(),
+                    description: String::new().try_into()?,
+                },
+            )
+            .await?;
+    }
     let delivery = Arc::new(LiveDelivery::new(root));
-    let inbox = delivery.register(root);
+    let inbox = delivery.register(subscriber);
     let subscribe = async |inbox: &Arc<ActorInbox>| {
         inbox
             .set_subscription("release".into(), SubscriptionChange::Subscribe)
             .await
     };
     let cancellation = CancellationToken::new();
-    let append = async |ordinal, text: &str| {
-        let mut recipients = crate::inbox::Recipients::default();
+    let append = async |ordinal, channel: &str, text: &str| {
+        let id = EvidenceId { ordinal };
         delivery
             .append(
                 &writer,
                 AppendRequest {
-                    request_id: format!("source-{ordinal}"),
-                    destination: PostDestination::Channel("release".into()),
+                    request_id: id.request_id(channel)?,
+                    destination: PostDestination::Channel(channel.into()),
                     text: serde_json::to_string(
                         &json!({"id":{"ordinal":ordinal}, "original":text}),
                     )?,
                 },
-                &mut recipients,
+                id,
                 ReviewDeadline::Unlimited,
                 &cancellation,
             )
-            .await?;
-        anyhow::Ok(recipients)
+            .await
     };
 
-    let before = append(1, "before subscription").await?;
+    append(/*ordinal*/ 1, "release", "before subscription").await?;
     subscribe(&inbox).await?;
-    before.publish(EvidenceId { ordinal: 1 })?;
     let large = "é".repeat(20_010);
-    append(2, &large)
-        .await?
-        .publish(EvidenceId { ordinal: 2 })?;
+    append(/*ordinal*/ 2, "release", &large).await?;
     let through = inbox.len();
     assert_eq!(through, 1);
+    let audit_only = delivery.register(ThreadId::new());
+    for subscriber in [&inbox, &audit_only] {
+        subscriber
+            .set_subscription("audit".into(), SubscriptionChange::Subscribe)
+            .await?;
+    }
     let mut wake = inbox.subscribe();
-    let child_inbox = delivery.register(subscriber);
-    subscribe(&child_inbox).await?;
-    let later = append(3, "later").await?;
-    inbox
-        .set_subscription("release".into(), SubscriptionChange::Unsubscribe)
-        .await?;
-    later.publish(EvidenceId { ordinal: 3 })?;
-    wake.changed().await?;
+    let root_inbox = delivery.register(root);
+    subscribe(&root_inbox).await?;
+    let revoke = async |channel: &str| append(/*ordinal*/ 3, channel, "stop the release").await;
+    revoke("release").await?;
+    host.fail_clock.store(true, Ordering::SeqCst);
+    assert!(revoke("audit").await.is_err());
+    assert!(audit_only.queued_posts().is_empty());
     assert_eq!(*wake.borrow_and_update(), 2);
-    assert_eq!(child_inbox.len(), 1);
+    assert_eq!(root_inbox.len(), 1);
+    host.fail_clock.store(false, Ordering::SeqCst);
 
-    // Pause after the append chooses the child, then reload the same child ID.
-    let pending = append(4, "during eviction").await?;
-    child_inbox.close();
-    let reloaded_inbox = delivery.register(subscriber);
+    // The root subscribes again after reload. Only the surviving child followed
+    // release at the first write and still has that inbox when audit succeeds.
+    root_inbox.close();
+    let reloaded_inbox = delivery.register(root);
     assert!(
         reloaded_inbox
             .subscribed_channels(&Default::default())?
@@ -473,12 +479,17 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
             .is_empty()
     );
     subscribe(&reloaded_inbox).await?;
-    pending.publish(EvidenceId { ordinal: 4 })?;
-    assert_eq!(child_inbox.len(), 0);
+    revoke("release").await?;
+    assert!(audit_only.queued_posts().is_empty());
+    revoke("audit").await?;
+    assert!(matches!(audit_only.queued_posts().as_slice(), [(3, _)]));
+    assert!(!wake.has_changed()?);
+    assert_eq!(root_inbox.len(), 0);
     assert_eq!(reloaded_inbox.len(), 0);
-    append(5, "after reload")
-        .await?
-        .publish(EvidenceId { ordinal: 5 })?;
+    inbox
+        .set_subscription("release".into(), SubscriptionChange::Unsubscribe)
+        .await?;
+    append(/*ordinal*/ 4, "release", "after reload").await?;
     assert_eq!(reloaded_inbox.len(), 1);
     assert!(host.notifications.lock().unwrap().is_empty());
 
@@ -486,9 +497,9 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
     let policy = TruncationPolicy::Bytes(64 * 1024);
     assert!(
         inbox
-            .deliver(root, &reader, &mut delivered, through, policy, |_| ready(
-                Err(anyhow::anyhow!("reviewer busy"))
-            ))
+            .deliver(subscriber, &reader, &mut delivered, through, policy, |_| {
+                ready(Err(anyhow::anyhow!("reviewer busy")))
+            })
             .await
             .is_err()
     );
@@ -501,13 +512,20 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
     };
     for target in [through, inbox.len(), inbox.len()] {
         inbox
-            .deliver(root, &reader, &mut delivered, target, policy, &mut accept)
+            .deliver(
+                subscriber,
+                &reader,
+                &mut delivered,
+                target,
+                policy,
+                &mut accept,
+            )
             .await?;
     }
     let mut replacement = 0;
     inbox
         .deliver(
-            root,
+            subscriber,
             &reader,
             &mut replacement,
             inbox.len(),
@@ -516,7 +534,7 @@ async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Resu
         )
         .await?;
     let first = json!({"id":{"ordinal":2}, "original":large});
-    let next = json!({"id":{"ordinal":3}, "original":"later"});
+    let next = json!({"id":{"ordinal":3}, "original":"stop the release"});
     let expected = |sources| {
         crate::sampling::context_input(
             "guardian_original_evidence",

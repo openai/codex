@@ -87,6 +87,17 @@ pub struct EvidenceCursor {
 }
 
 impl EvidenceCursor {
+    pub(super) fn start(thread_id: ThreadId) -> Self {
+        Self {
+            thread_id,
+            position: HistoryPosition {
+                thread_id,
+                end_ordinal_exclusive: 0,
+                end_byte_offset: 0,
+            },
+        }
+    }
+
     /// Fresh roots have no prior evidence. Resumed roots start at their durable tail.
     pub async fn at_thread_ready(
         store: &dyn ThreadStore,
@@ -99,14 +110,9 @@ impl EvidenceCursor {
             "Guardian evidence requires paginated root history"
         );
         match initialization {
-            HistoryInitialization::New | HistoryInitialization::Cleared => Ok(Self {
-                thread_id,
-                position: HistoryPosition {
-                    thread_id,
-                    end_ordinal_exclusive: 0,
-                    end_byte_offset: 0,
-                },
-            }),
+            HistoryInitialization::New | HistoryInitialization::Cleared => {
+                Ok(Self::start(thread_id))
+            }
             HistoryInitialization::ColdResume
             | HistoryInitialization::SuppliedHistory
             | HistoryInitialization::WarmFork
@@ -127,6 +133,10 @@ impl EvidenceCursor {
 
     pub fn thread_id(&self) -> ThreadId {
         self.thread_id
+    }
+
+    pub(super) fn position(&self) -> HistoryPosition {
+        self.position
     }
 
     /// Read the unread suffix through a fixed cutoff without advancing progress.

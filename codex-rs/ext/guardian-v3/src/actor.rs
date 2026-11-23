@@ -13,6 +13,7 @@ use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::ReviewRetrieval;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_guardian_reviewer::SessionDisposition;
+use codex_message_board::AgentMessageBoard;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use tokio::sync::Mutex;
@@ -23,9 +24,8 @@ use crate::LiveRetrievalBinding;
 use crate::RootEvidence;
 use crate::conversation::Conversation;
 use crate::host::RootWorker;
+use crate::host::TreeDelivery;
 use crate::inbox::ActorInbox;
-use crate::inbox::LiveDelivery;
-use codex_message_board::AgentMessageBoard;
 
 pub struct ActorReviewer {
     manager: Weak<ThreadManager>,
@@ -33,9 +33,15 @@ pub struct ActorReviewer {
     actor: ThreadId,
     path: AgentPath,
     retrieval: ReviewRetrieval,
-    binding: std::sync::Mutex<Option<Arc<LiveRetrievalBinding>>>,
+    // Release the tree on actor shutdown, even if a pending request still holds this reviewer.
+    delivery: std::sync::Mutex<Option<ActorDelivery>>,
     slot: Arc<Mutex<Option<Conversation>>>,
     lifetime: ReviewerTasks,
+}
+
+struct ActorDelivery {
+    tree: Arc<TreeDelivery>,
+    binding: Option<LiveRetrievalBinding>,
 }
 
 pub struct PreparedReviewer {
@@ -63,6 +69,7 @@ impl ActorReviewer {
         actor: ThreadId,
         path: AgentPath,
         retrieval: ReviewRetrieval,
+        tree: Arc<TreeDelivery>,
     ) -> Self {
         Self {
             manager,
@@ -70,7 +77,10 @@ impl ActorReviewer {
             actor,
             path,
             retrieval,
-            binding: Default::default(),
+            delivery: std::sync::Mutex::new(Some(ActorDelivery {
+                tree,
+                binding: None,
+            })),
             slot: Default::default(),
             lifetime: Default::default(),
         }
@@ -78,41 +88,34 @@ impl ActorReviewer {
 
     pub(super) async fn shutdown(&self) {
         self.lifetime.cancellation.cancel();
-        if let Some(binding) = self
-            .binding
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            binding.inbox.close();
-        }
         self.lifetime.tasks.close();
         self.lifetime.tasks.wait().await;
+        let delivery = self
+            .delivery
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(binding) = delivery.and_then(|delivery| delivery.binding) {
+            binding.inbox.close();
+        }
     }
 
     pub(super) fn binding(
         &self,
         board: Arc<dyn AgentMessageBoard>,
-        delivery: &Arc<LiveDelivery>,
-    ) -> Result<Arc<LiveRetrievalBinding>, ReviewPreparationError> {
-        let mut current = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.lifetime.cancellation.is_cancelled() {
-            return Err(ReviewPreparationError::Cancelled);
+    ) -> Result<LiveRetrievalBinding, ReviewPreparationError> {
+        let mut current = self.delivery.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = current.as_mut().ok_or(ReviewPreparationError::Cancelled)?;
+        if let Some(binding) = &state.binding {
+            return Ok(binding.clone());
         }
-        if let Some(binding) = current.as_ref()
-            && Arc::ptr_eq(&binding.inbox.delivery, delivery)
-        {
-            return Ok(Arc::clone(binding));
-        }
-        // A reactivated root starts a fresh delivery stream.
-        let binding = Arc::new(
-            LiveRetrievalBinding::new(board, self.actor, self.path.clone(), delivery)
-                .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?,
-        );
-        if let Some(previous) = current.replace(Arc::clone(&binding)) {
-            previous.inbox.close();
-        }
-        Ok(binding)
+        let delivery = state
+            .tree
+            .get()
+            .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
+        let binding = LiveRetrievalBinding::new(board, self.actor, self.path.clone(), delivery)
+            .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
+        Ok(state.binding.insert(binding).clone())
     }
 
     #[expect(
@@ -156,9 +159,10 @@ impl ActorReviewer {
         });
     }
 
-    /// Reserve this actor's reviewer for one verdict without starting a model turn.
+    /// Reserve this actor's reviewer for a verdict against the root intake that caught up.
     pub async fn reserve(
         &self,
+        routed: &RootEvidence,
         setup: &PreparedGuardianContext,
         cancel: &CancellationToken,
     ) -> Result<PreparedReviewer, ReviewPreparationError> {
@@ -180,28 +184,23 @@ impl ActorReviewer {
             let evidence = data
                 .get::<RootEvidence>()
                 .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
-            let binding = self.binding(Arc::clone(&worker.reader), &evidence.delivery)?;
+            if !std::ptr::eq(routed, evidence.as_ref()) {
+                return Err(ReviewPreparationError::EvidenceUnavailable);
+            }
             let (mut conversation, kind) = match slot.take() {
-                Some(previous)
-                    if Arc::ptr_eq(&previous.inbox, &binding.inbox)
-                        && setup.matches_session_configuration(&previous.runtime) =>
-                {
+                Some(previous) if setup.matches_session_configuration(&previous.runtime) => {
                     (previous, GuardianReviewSessionKind::TrunkReused)
                 }
                 _ => {
+                    let binding = self.binding(Arc::clone(&worker.reader))?;
                     let stop = self.lifetime.cancellation.child_token();
-                    let conversation = Conversation::start(
-                        &manager,
-                        setup,
-                        &self.lifetime,
-                        binding.as_ref().clone(),
-                        stop.clone(),
-                    )
-                    .await
-                    .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
+                    let conversation =
+                        Conversation::start(&manager, setup, &self.lifetime, binding, stop.clone())
+                            .await
+                            .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
                     self.observe_inbox(
                         Arc::clone(&worker.reader),
-                        &binding.inbox,
+                        &conversation.inbox,
                         Arc::clone(&conversation.thread),
                         stop,
                     );
@@ -231,7 +230,7 @@ impl ActorReviewer {
 /// One intake request shared by all verdict attempts for the same action.
 struct BoundActorReview {
     actor: Arc<ActorReviewer>,
-    routed: tokio::sync::watch::Receiver<Option<Arc<LiveDelivery>>>,
+    routed: tokio::sync::watch::Receiver<Option<Weak<RootEvidence>>>,
 }
 
 impl codex_core::guardian_review::AttachedReviewer for ActorReviewer {
@@ -248,15 +247,15 @@ impl codex_core::guardian_review::AttachedReviewer for ActorReviewer {
                     .get::<RootEvidence>()
                     .context("Guardian intake unavailable")?;
                 evidence.request_catch_up().await?.await?;
-                anyhow::Ok(Arc::clone(&evidence.delivery))
+                anyhow::Ok(Arc::downgrade(&evidence))
             };
             tokio::select! {
                 biased;
                 _ = routed.closed() => (),
                 _ = actor.lifetime.cancellation.cancelled() => (),
                 result = catch_up => {
-                    if let Ok(delivery) = result {
-                        routed.send_replace(Some(delivery));
+                    if let Ok(evidence) = result {
+                        routed.send_replace(Some(evidence));
                     }
                 }
             }
@@ -282,18 +281,15 @@ impl codex_core::guardian_review::ReviewerPreparation for BoundActorReview {
     > {
         Box::pin(async move {
             let mut routed = self.routed.clone();
-            let delivery = tokio::select! {
+            let evidence = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(ReviewPreparationError::Cancelled),
                 _ = setup.history_reset.cancelled() => return Err(ReviewPreparationError::Cancelled),
-                result = routed.wait_for(Option::is_some) => result.ok().and_then(|value| value.clone()),
+                result = routed.wait_for(Option::is_some) => result.ok().and_then(|value| value.as_ref()?.upgrade()),
             }.ok_or(ReviewPreparationError::EvidenceUnavailable)?;
             // All matching originals through the requested position are queued. The
             // reservation drains this guardian's inbox before submitting the action.
-            let reviewer = self.actor.reserve(setup, cancel).await?;
-            if !Arc::ptr_eq(&delivery, &reviewer.conversation.inbox.delivery) {
-                return Err(ReviewPreparationError::EvidenceUnavailable);
-            }
+            let reviewer = self.actor.reserve(&evidence, setup, cancel).await?;
             Ok(Box::new(reviewer) as Box<dyn codex_core::guardian_review::PreparedAssessment>)
         })
     }

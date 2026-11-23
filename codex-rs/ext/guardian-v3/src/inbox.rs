@@ -1,7 +1,10 @@
 //! Each acting agent's reviewer owns its channel subscriptions and inbox of post IDs.
+//! Each committed channel post reaches its current subscribers once per original.
 //! Replacement model conversations replay the inbox with their own admission cursor.
 
+use crate::EvidenceCursor;
 use crate::EvidenceId;
+use crate::EvidenceSnapshot;
 use crate::GUARDIAN_BOARD_NAMESPACE;
 use crate::delivery::evidence_batch;
 use anyhow::ensure;
@@ -19,6 +22,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -32,21 +36,56 @@ use uuid::Uuid;
 
 type Subscribers = HashMap<String, HashMap<Uuid, Weak<ActorInbox>>>;
 
+// A retry of an already committed channel post must not notify later subscribers.
+// Only the current original can be retried by the serial housekeeper.
+#[derive(Default)]
+struct PublishedPosts {
+    original: Option<EvidenceId>,
+    post_ids: HashSet<Uuid>,
+}
+
 /// Routes one root's posts to live reviewers, indexed by channel and inbox identity.
 pub struct LiveDelivery {
     pub(super) root: ThreadId,
+    // The sole housekeeper advances this after publishing. Resumed intake starts here.
+    routed: Mutex<EvidenceCursor>,
     subscribers: Mutex<Subscribers>,
-    // Keep membership changes from landing between an append and recipient capture.
-    posting: RwLock<()>,
+    // Keep membership changes from landing between an append and inbox delivery.
+    posting: RwLock<PublishedPosts>,
 }
 
 impl LiveDelivery {
+    /// Start delivery at the beginning of a fresh root's history.
     pub fn new(root: ThreadId) -> Self {
+        Self::from_cursor(EvidenceCursor::start(root))
+    }
+
+    /// Initialize a tree at the intake position selected on its first activation.
+    pub fn from_cursor(cursor: EvidenceCursor) -> Self {
         Self {
-            root,
+            root: cursor.thread_id(),
+            routed: Mutex::new(cursor),
             subscribers: Mutex::default(),
             posting: RwLock::default(),
         }
+    }
+
+    pub(super) fn cursor(&self) -> EvidenceCursor {
+        self.routed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn acknowledge(
+        &self,
+        snapshot: &EvidenceSnapshot,
+        count: usize,
+    ) -> anyhow::Result<()> {
+        self.routed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .acknowledge(snapshot, count)
     }
 
     pub(super) fn register(self: &Arc<Self>, actor: ThreadId) -> Arc<ActorInbox> {
@@ -67,61 +106,43 @@ impl LiveDelivery {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "serialize each append and recipient capture with subscription changes"
+        reason = "serialize each append and inbox delivery with subscription changes"
     )]
     pub(super) async fn append(
         &self,
         board: &dyn AgentMessageBoard,
         request: AppendRequest,
-        recipients: &mut Recipients,
+        id: EvidenceId,
         deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> anyhow::Result<()> {
-        let _guard = run_before_review_deadline(deadline, Some(cancellation), self.posting.write())
-            .await
-            .map_err(|reason| anyhow::anyhow!("waiting to append evidence: {reason:?}"))?;
+        let mut published =
+            run_before_review_deadline(deadline, Some(cancellation), self.posting.write())
+                .await
+                .map_err(|reason| anyhow::anyhow!("waiting to append evidence: {reason:?}"))?;
         crate::housekeeper::check_active(deadline, cancellation)?;
-        // The housekeeper appends each original once per channel and stops on failure.
-        // Await the accepted write even if the housekeeper is shutting down.
+        // Finish the accepted write and delivery even during shutdown.
         let post = board.append(self.root, request).await?;
-        if let Some(subscribers) = self.subscribers().get(&post.channel_name) {
-            for (id, inbox) in subscribers {
-                recipients
-                    .0
-                    .entry(*id)
-                    .or_insert_with(|| (inbox.clone(), post.message_id));
-            }
+        if published.original != Some(id) {
+            published.original = Some(id);
+            published.post_ids.clear();
         }
-        Ok(())
-    }
-}
-
-/// One post reference per live inbox, even when several channels matched the original.
-#[derive(Default)]
-pub(super) struct Recipients(HashMap<Uuid, (Weak<ActorInbox>, Uuid)>);
-
-impl Recipients {
-    /// Only publish after all destinations commit. A queued delivery belongs to the
-    /// original inbox even if the same agent has since loaded a fresh reviewer.
-    pub(super) fn publish(self, id: EvidenceId) -> anyhow::Result<()> {
-        for (inbox, post) in self.0.into_values() {
-            let Some(inbox) = inbox.upgrade() else {
-                continue;
-            };
-            let mut state = inbox.state();
-            let Some(state) = state.as_mut() else {
-                continue;
-            };
-            ensure!(
-                state
-                    .posts
-                    .last()
-                    .is_none_or(|(last, _)| *last < id.ordinal),
-                "Guardian inbox received evidence out of source order"
-            );
-            state.posts.push((id.ordinal, post));
-            inbox.length.send_replace(state.posts.len());
+        if published.post_ids.contains(&post.message_id) {
+            return Ok(());
         }
+        // Release the subscriber lock before touching inboxes. Dropping the last
+        // reference to an inbox can unregister it from the same index.
+        let inboxes: Vec<_> = self
+            .subscribers()
+            .get(&post.channel_name)
+            .into_iter()
+            .flat_map(HashMap::values)
+            .filter_map(Weak::upgrade)
+            .collect();
+        for inbox in inboxes {
+            inbox.enqueue(id, post.message_id)?;
+        }
+        published.post_ids.insert(post.message_id);
         Ok(())
     }
 }
@@ -159,6 +180,26 @@ fn unsubscribe(subscribers: &mut Subscribers, channel: &str, id: Uuid) {
 impl ActorInbox {
     fn state(&self) -> MutexGuard<'_, Option<InboxState>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn enqueue(&self, id: EvidenceId, post: Uuid) -> anyhow::Result<()> {
+        let mut state = self.state();
+        let Some(state) = state.as_mut() else {
+            return Ok(());
+        };
+        if let Some(&(last, _)) = state.posts.last() {
+            // Another subscribed channel may already have delivered this original.
+            if last == id.ordinal {
+                return Ok(());
+            }
+            ensure!(
+                last < id.ordinal,
+                "Guardian inbox received evidence out of source order"
+            );
+        }
+        state.posts.push((id.ordinal, post));
+        self.length.send_replace(state.posts.len());
+        Ok(())
     }
 
     pub(super) fn close(&self) {

@@ -12,7 +12,6 @@ use tokio::sync::oneshot;
 
 use crate::EvidenceCursor;
 use crate::EvidenceSnapshot;
-use crate::inbox::LiveDelivery;
 
 #[cfg(test)]
 #[path = "cutoff_tests.rs"]
@@ -26,7 +25,6 @@ pub struct RootEvidence {
     // A rejected durable record keeps its reason for subsequent reviews of this root.
     enqueued: Mutex<Result<EvidenceCursor, String>>,
     pending: mpsc::Sender<Capture>,
-    pub(super) delivery: Arc<LiveDelivery>,
 }
 
 pub(super) struct Capture {
@@ -50,14 +48,12 @@ impl RootEvidence {
         cursor: EvidenceCursor,
     ) -> (Arc<Self>, mpsc::Receiver<Capture>) {
         let (pending, requests) = mpsc::channel(1);
-        let delivery = Arc::new(LiveDelivery::new(cursor.thread_id()));
         (
             Arc::new(Self {
                 lifetime,
                 history,
                 enqueued: Mutex::new(Ok(cursor)),
                 pending,
-                delivery,
             }),
             requests,
         )
