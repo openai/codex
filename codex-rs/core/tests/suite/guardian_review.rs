@@ -699,7 +699,7 @@ async fn guardian_review_recovers_after_compaction(
         .await;
     }
     let command = json!({
-        "cmd": "true",
+        "cmd": "printf POST_COMPACTION_APPROVED",
         "sandbox_permissions": "require_escalated",
         "justification": "Read the internal samples the user authorized.",
     });
@@ -782,6 +782,20 @@ async fn guardian_review_recovers_after_compaction(
         })
         .collect::<Vec<_>>();
     assert_eq!(guardian_requests.len(), 3);
+    let verdict_format = json!({
+        "type": "json_schema",
+        "name": "codex_output_schema",
+        "strict": false,
+        "schema": codex_guardian_reviewer::guardian_output_schema(),
+    });
+    assert_eq!(
+        guardian_requests
+            .iter()
+            .map(|request| request.body_json()["text"]["format"].clone())
+            .collect::<Vec<_>>(),
+        vec![verdict_format.clone(); guardian_requests.len()],
+        "reviews before and after compaction must retain the verdict format"
+    );
     assert_eq!(
         guardian_requests[0].body_json()["client_metadata"]["thread_id"]
             == guardian_requests[1].body_json()["client_metadata"]["thread_id"],
@@ -803,6 +817,14 @@ async fn guardian_review_recovers_after_compaction(
     assert_eq!(
         compact_requests.len(),
         usize::from(!with_parent_checkpoint) + compaction_errors.len(),
+    );
+    assert_eq!(
+        compact_requests
+            .iter()
+            .map(|request| request.body_json()["text"]["format"].clone())
+            .collect::<Vec<_>>(),
+        vec![verdict_format; compact_requests.len()],
+        "compaction and retries must preserve the verdict format"
     );
     if let Some(compact_request) = compact_requests.first() {
         assert!(
@@ -881,6 +903,16 @@ async fn guardian_review_recovers_after_compaction(
             }
         }
     }
+
+    assert!(
+        requests
+            .last()
+            .expect("parent continuation after the reviews")
+            .function_call_output("exec-second")
+            .to_string()
+            .contains("POST_COMPACTION_APPROVED"),
+        "the verdict after compaction must approve execution"
+    );
 
     Ok(())
 }

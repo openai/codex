@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::RequestCountry;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
@@ -568,11 +569,14 @@ enum CompactionProvider {
     Gcp,
 }
 
-#[test_case(CompactionProvider::AmazonBedrock; "bedrock")]
-#[test_case(CompactionProvider::Gcp; "gcp")]
+#[test_case(CompactionProvider::AmazonBedrock, false; "bedrock")]
+#[test_case(CompactionProvider::Gcp, false; "gcp")]
+#[test_case(CompactionProvider::AmazonBedrock, true; "bedrock with output schema")]
+#[test_case(CompactionProvider::Gcp, true; "gcp with output schema")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_automatic_compaction_uses_v2_responses_endpoint(
     provider: CompactionProvider,
+    with_output_schema: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -625,7 +629,10 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
         &server,
         vec![
             sse(vec![
-                responses::ev_assistant_message("message-1", "before automatic compaction"),
+                responses::ev_assistant_message(
+                    "message-1",
+                    r#"{"result":"before automatic compaction"}"#,
+                ),
                 responses::ev_completed_with_tokens("response-1", /*total_tokens*/ 500),
             ]),
             sse(vec![
@@ -639,18 +646,70 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
                 responses::ev_completed("response-compact"),
             ]),
             sse(vec![
-                responses::ev_assistant_message("message-2", "after automatic compaction"),
+                responses::ev_assistant_message(
+                    "message-2",
+                    r#"{"result":"after automatic compaction"}"#,
+                ),
                 responses::ev_completed("response-2"),
             ]),
         ],
     )
     .await;
 
-    test.submit_turn("before automatic compact").await?;
-    test.submit_turn("after automatic compact").await?;
+    let output_schema = with_output_schema.then(|| {
+        json!({
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "required": ["result"],
+            "additionalProperties": false,
+        })
+    });
+    for text in ["before automatic compact", "after automatic compact"] {
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }])
+                .on_start(TurnStartOptions {
+                    final_output_json_schema: output_schema.clone(),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        wait_for_turn_complete(&test.codex).await;
+    }
 
     let response_requests = response_mock.requests();
     assert_eq!(response_requests.len(), 3);
+    let expected_format = output_schema.map_or(Value::Null, |schema| {
+        json!({
+            "type": "json_schema",
+            "name": "codex_output_schema",
+            "strict": true,
+            "schema": schema,
+        })
+    });
+    assert_eq!(
+        response_requests
+            .iter()
+            .map(|request| request.body_json()["text"]["format"].clone())
+            .collect::<Vec<_>>(),
+        vec![expected_format; 3],
+        "sampling and compaction must use the same output format"
+    );
+    let cache_key = response_requests[0].body_json()["prompt_cache_key"]
+        .as_str()
+        .expect("session cache key")
+        .to_string();
+    assert_eq!(
+        response_requests
+            .iter()
+            .map(|request| request.body_json()["prompt_cache_key"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(cache_key); 3],
+        "compaction must preserve the session cache key"
+    );
     assert!(
         response_requests
             .iter()

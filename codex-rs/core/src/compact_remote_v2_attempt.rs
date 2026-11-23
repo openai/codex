@@ -192,8 +192,12 @@ pub(super) async fn run_remote_compact_v2_attempt(
         },
         parallel_tool_calls: true,
         base_instructions,
-        output_schema: None,
-        output_schema_strict: true,
+        // Preserve the cached output-format prefix. Responses generates compaction
+        // summaries independently of this final-answer schema.
+        output_schema: turn_context.final_output_json_schema.clone(),
+        output_schema_strict: !crate::guardian::is_basic_session_source(
+            &turn_context.session_source,
+        ),
         prompt_cache_ttl: turn_context.prompt_cache_ttl,
         cyber_access_program: turn_context.cyber_access_program,
     });
