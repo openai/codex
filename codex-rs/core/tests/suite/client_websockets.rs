@@ -423,28 +423,6 @@ async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_streams_without_feature_flag_when_provider_supports_websockets() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
-    .await;
-
-    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
-    let mut client_session = harness.client.new_session();
-    let prompt = prompt_with_input(vec![message_item("hello")]);
-
-    stream_until_complete(&mut client_session, &harness, &prompt).await;
-
-    assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_streams_with_system_proxy_feature() {
     skip_if_no_network!();
 
@@ -1718,6 +1696,7 @@ async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_di
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
+    assert_eq!(server.single_connection().len(), 1);
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
