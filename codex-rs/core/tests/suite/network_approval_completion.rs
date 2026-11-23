@@ -41,6 +41,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::io::AsyncReadExt;
@@ -440,6 +441,156 @@ async fn respond_to_setup_or_hook_request(
         _ => panic!("unexpected setup or hook request: {request}"),
     };
     send_exec_server_json(websocket, json!({"id": request["id"], "result": result})).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Result<()> {
+    let server = start_mock_server().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let home = Arc::new(tempfile::TempDir::new()?);
+    super::super::plugins::write_remote_plugin_script_and_config(home.as_ref());
+    let _response = core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_function_call(
+                "interrupted-startup",
+                "exec_command",
+                &json!({
+                    "cmd": "/bin/sh /opt/plugins/cache/openai-curated-remote/sample/1.2.3/scripts/run.sh",
+                    "login": false,
+                }).to_string(),
+            ),
+            ev_completed("start"),
+        ]),
+    ).await;
+    let (startup_blocked, blocked) = tokio::sync::oneshot::channel();
+    let (terminated, termination) = tokio::sync::oneshot::channel();
+    let exec_server =
+        tokio::spawn(async move {
+            let mut websocket = accept_initialized_exec_server(listener).await;
+            let mut started_process = None;
+            let mut startup_blocked = Some(startup_blocked);
+            loop {
+                let request = read_exec_server_json(&mut websocket, STARTUP_TIMEOUT).await;
+                match request["method"].as_str() {
+                    Some("environment/info") => {
+                        send_exec_server_json(&mut websocket, json!({
+                        "id": request["id"], "result": {
+                            "shell": {"name": "bash", "path": "/bin/bash"},
+                            "platformOs": "linux", "capabilities": {"networkProxyLaunch": true}
+                        }
+                    })).await;
+                    }
+                    Some("process/start") => {
+                        let params: ExecParams =
+                            serde_json::from_value(request["params"].clone()).unwrap();
+                        assert!(
+                            params.network_proxy.is_some(),
+                            "the command needs a network observer"
+                        );
+                        assert!(started_process.replace(params.process_id.clone()).is_none());
+                        send_exec_server_json(
+                            &mut websocket,
+                            json!({
+                                "id": request["id"], "result": {"processId": params.process_id}
+                            }),
+                        )
+                        .await;
+                    }
+                    Some("fs/canonicalize") if started_process.is_some() => {
+                        // Attribution runs after the process and its network observer start,
+                        // but before the process is handed to the terminal registry.
+                        startup_blocked
+                            .take()
+                            .expect("one blocked lookup")
+                            .send(())
+                            .unwrap();
+                        // Leave this RPC pending until the tool call is interrupted.
+                    }
+                    Some("process/read") => {
+                        send_exec_server_json(
+                            &mut websocket,
+                            json!({
+                                "id": request["id"], "result": {
+                                    "chunks": [], "nextSeq": 1, "exited": false, "closed": false
+                                }
+                            }),
+                        )
+                        .await;
+                    }
+                    Some("process/terminate") => {
+                        assert_eq!(
+                            request["params"]["processId"],
+                            json!(started_process.unwrap())
+                        );
+                        send_exec_server_json(
+                            &mut websocket,
+                            json!({
+                                "id": request["id"], "result": {"running": false}
+                            }),
+                        )
+                        .await;
+                        terminated.send(()).unwrap();
+                        return;
+                    }
+                    _ => respond_to_setup_or_hook_request(&mut websocket, &request).await,
+                }
+            }
+        });
+    let test = test_codex()
+        .with_home(home)
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_exec_server_url(exec_server_url)
+        .with_config(|config| {
+            config.permissions.network = None;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write())
+                .unwrap();
+            config.project_doc_max_bytes = 0;
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            #[cfg(windows)]
+            config.set_windows_sandbox_enabled(/*value*/ true);
+        })
+        // The existing fake executor provides a deterministic RPC boundary for interruption.
+        .build(&server)
+        .await?;
+    let selection = test.codex.environment_selections().await.pop().unwrap();
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.network_policy = Some(EnvironmentNetworkPolicy::from_config(
+        &NetworkProxyConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        /*managed_allowed_domains_only*/ false,
+    ));
+    test.codex.environment_ready(&selection, config).await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run the plugin".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    timeout(STARTUP_TIMEOUT, blocked)
+        .await
+        .context("startup did not reach attribution")??;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let cleanup = timeout(Duration::from_secs(/*secs*/ 5), termination).await;
+    exec_server.abort();
+    let _ = exec_server.await;
+    cleanup.context("interruption left an unregistered process running")??;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

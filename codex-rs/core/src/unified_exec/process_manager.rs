@@ -403,15 +403,20 @@ async fn emit_failed_initial_exec_end_if_unstored(
 }
 
 fn terminate_process_on_network_denial(
-    process: Arc<UnifiedExecProcess>,
+    process: &Arc<UnifiedExecProcess>,
     deferred: DeferredNetworkApproval,
 ) -> tokio::task::JoinHandle<()> {
     let network_cancelled = deferred.cancellation_token();
     let process_exited = process.cancellation_token();
+    // Startup and the terminal registry own the process; observing it must not keep it alive.
+    let process = Arc::downgrade(process);
     tokio::spawn(async move {
         let denied = tokio::select! {
             _ = network_cancelled.cancelled() => true,
             _ = process_exited.cancelled() => {
+                if process.upgrade().is_none() {
+                    return;
+                }
                 // A yielded process stays registered until its next poll.
                 wait_for_late_network_denial(&network_cancelled).await
             }
@@ -420,7 +425,9 @@ fn terminate_process_on_network_denial(
             return;
         }
         let message = network_denial_message(Some(deferred));
-        process.fail_and_terminate(message);
+        if let Some(process) = process.upgrade() {
+            process.fail_and_terminate(message);
+        }
     })
 }
 
@@ -537,9 +544,9 @@ impl UnifiedExecProcessManager {
         if let Some(completion) = completion.as_ref() {
             let _ = completion.process.set(Arc::clone(&process));
         }
-        let network_denial_monitor = deferred_network_approval.as_ref().map(|deferred| {
-            terminate_process_on_network_denial(Arc::clone(&process), deferred.clone())
-        });
+        let network_denial_monitor = deferred_network_approval
+            .as_ref()
+            .map(|deferred| terminate_process_on_network_denial(&process, deferred.clone()));
 
         let output_buffer = Arc::clone(&process.output_handles().output_buffer);
         let model_context = context.step_context.model_context();
