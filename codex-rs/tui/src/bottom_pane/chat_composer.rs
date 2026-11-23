@@ -194,10 +194,11 @@
 //! navigation slash commands remain available so users can leave or manage the view.
 //! Exports and local display commands (`/title` and `/statusline`) also accept arguments.
 //!
-//! During reconnection, `handle_restricted_key` edits the draft directly without popup dispatch,
-//! composer shortcuts, or submission; `?` becomes literal input. Enter and Tab leave the draft
-//! intact until reconnection succeeds, except for `/warnings`, `/config`, `/rc` (alias `/remote`,
-//! including `stop`), `/quit`, and `/exit`.
+//! While disconnected, `handle_restricted_key` keeps the draft editable without submission.
+//! The slash popup supports navigation, Tab and submission of local commands.
+//! Local commands include `/warnings`, `/config`, `/rc` (alias `/remote`, including `stop`),
+//! `/feedback` (thread ID and reconnection guidance), `/quit`, and `/exit`. Searching for
+//! other commands shows that they require a server connection. `?` becomes literal input.
 //! When connected but the thread is unavailable, configured
 //! submit keys may dispatch explicitly allowed recovery and local commands; other drafts stay put.
 //! Escape dismisses command and argument popups while preserving the Vim Insert-to-Normal transition.
@@ -4192,13 +4193,17 @@ impl ChatComposer {
         let cursor = self.draft.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
-        let is_editing_slash_command_name = caret_on_first_line
-            && self
-                .slash_input()
-                .is_editing_command_name(first_line, cursor);
         let command_filter_text = caret_on_first_line
             .then(|| slash_input::command_popup_filter_text(first_line, cursor))
             .flatten();
+        let disconnected =
+            self.popups.restricted_input_mode == Some(RestrictedInputMode::Disconnected);
+        // Completing `/q` offline must not erase the rest of a draft like `/question`.
+        let is_editing_slash_command_name = caret_on_first_line
+            && (!disconnected || command_filter_text.as_deref() == Some(text.trim_end()))
+            && self
+                .slash_input()
+                .is_editing_command_name(first_line, cursor);
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -4223,7 +4228,9 @@ impl ChatComposer {
                 if is_editing_slash_command_name
                     && let Some(command_filter_text) = command_filter_text.as_deref()
                 {
-                    let command_popup = self.slash_input().command_popup(command_filter_text);
+                    let command_popup = self
+                        .slash_input()
+                        .command_popup(command_filter_text, disconnected);
                     self.popups.active = ActivePopup::Command(command_popup);
                 }
             }

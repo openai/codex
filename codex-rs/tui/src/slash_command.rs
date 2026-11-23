@@ -230,6 +230,14 @@ impl SlashCommand {
         matches!(self, SlashCommand::Fork | SlashCommand::Review)
     }
 
+    /// Commands the TUI can handle locally while disconnected from its app server.
+    pub(crate) fn available_when_disconnected(self) -> bool {
+        matches!(
+            self,
+            Self::Warnings | Self::Config | Self::Rc | Self::Feedback | Self::Quit | Self::Exit
+        )
+    }
+
     /// Commands that do not require a writable current thread. The server must still be connected.
     pub(crate) fn available_when_thread_unavailable(self) -> bool {
         matches!(

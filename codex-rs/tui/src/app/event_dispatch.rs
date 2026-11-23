@@ -91,6 +91,17 @@ impl App {
         if self.reconnect.offline && matches!(event, AppEvent::Exit(ExitMode::ShutdownFirst)) {
             return Ok(AppRunControl::Exit(ExitReason::UserRequested));
         }
+        if self.reconnect.offline && matches!(event, AppEvent::OpenFeedback) {
+            let thread = self.current_displayed_thread_id().map_or_else(
+                || "Thread ID unavailable.".to_string(),
+                |id| format!("Thread ID {id}"),
+            );
+            self.chat_widget.add_info_message(
+                thread,
+                Some("Reconnect to send feedback or save a ZIP.".into()),
+            );
+            return Ok(AppRunControl::Continue);
+        }
         if self.reconnect.offline
             && !matches!(
                 &event,

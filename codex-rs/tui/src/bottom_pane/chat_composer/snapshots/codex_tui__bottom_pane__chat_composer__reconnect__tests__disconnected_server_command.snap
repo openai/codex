@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer/reconnect_tests.rs
+expression: terminal.backend()
+---
+"  /model (disabled)  choose what model and reasoning effort to use (disabled:   "
+"                     requires a server connection)                              "
+"                                                                                "
+"› /model                                                                        "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                             100% context left  "

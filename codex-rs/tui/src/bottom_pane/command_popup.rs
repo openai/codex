@@ -33,6 +33,7 @@ pub(crate) enum CommandItem {
 }
 
 pub(crate) struct CommandPopup {
+    disconnected: bool,
     command_filter: String,
     commands: Vec<CommandItem>,
     side_conversation_active: bool,
@@ -42,6 +43,7 @@ pub(crate) struct CommandPopup {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
+    pub(crate) disconnected: bool,
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
@@ -95,6 +97,7 @@ impl CommandPopup {
         })
         .collect();
         Self {
+            disconnected: flags.disconnected,
             command_filter: String::new(),
             commands,
             side_conversation_active: flags.side_conversation_active,
@@ -164,7 +167,7 @@ impl CommandPopup {
                 if matches!(command, CommandItem::Builtin(cmd) if ALIAS_COMMANDS.contains(cmd)) {
                     continue;
                 }
-                if self.is_unavailable(command) {
+                if self.unavailable_reason(command).is_some() {
                     continue;
                 }
                 out.push((command.clone(), None));
@@ -206,8 +209,8 @@ impl CommandPopup {
 
         out.extend(exact);
         out.extend(prefix);
-        if self.side_conversation_active {
-            out.sort_by_key(|(item, _)| self.is_unavailable(item));
+        if self.side_conversation_active || self.disconnected {
+            out.sort_by_key(|(item, _)| self.unavailable_reason(item).is_some());
         }
         out
     }
@@ -225,18 +228,21 @@ impl CommandPopup {
             .enumerate()
             .map(|(index, (item, indices))| {
                 let name = format!("/{}", item.command());
-                let description = if matches!(item, CommandItem::Builtin(SlashCommand::Daybreak)) {
-                    self.daybreak_command_description
-                        .unwrap_or(item.description())
-                } else {
-                    item.description()
+                let description = match item {
+                    CommandItem::Builtin(SlashCommand::Feedback) if self.disconnected => {
+                        "show the thread ID and how to send feedback"
+                    }
+                    CommandItem::Builtin(SlashCommand::Daybreak) => self
+                        .daybreak_command_description
+                        .unwrap_or(item.description()),
+                    _ => item.description(),
                 }
                 .to_string();
-                let unavailable = self.is_unavailable(&item);
+                let disabled_reason = self.unavailable_reason(&item);
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: vec![if self.state.selected_idx == Some(index)
-                        && !unavailable
+                        && disabled_reason.is_none()
                     {
                         "› ".into()
                     } else {
@@ -245,9 +251,8 @@ impl CommandPopup {
                     selection_style: Some(selection_style()),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     description: Some(description),
-                    is_disabled: unavailable,
-                    disabled_reason: unavailable
-                        .then(|| "not available in a side conversation".to_string()),
+                    is_disabled: disabled_reason.is_some(),
+                    disabled_reason: disabled_reason.map(str::to_owned),
                     ..Default::default()
                 }
             })
@@ -285,15 +290,21 @@ impl CommandPopup {
         self.state
             .selected_idx
             .and_then(|idx| matches.get(idx).cloned())
-            .filter(|item| !self.is_unavailable(item))
+            .filter(|item| self.unavailable_reason(item).is_none())
     }
 
-    fn is_unavailable(&self, item: &CommandItem) -> bool {
-        self.side_conversation_active
-            && match item {
-                CommandItem::Builtin(cmd) => !cmd.available_in_side_conversation(),
-                CommandItem::ServiceTier(_) => true,
-            }
+    fn unavailable_reason(&self, item: &CommandItem) -> Option<&'static str> {
+        if self.disconnected
+            && !matches!(item, CommandItem::Builtin(cmd) if cmd.available_when_disconnected())
+        {
+            return Some("requires a server connection");
+        }
+        if self.side_conversation_active
+            && !matches!(item, CommandItem::Builtin(cmd) if cmd.available_in_side_conversation())
+        {
+            return Some("not available in a side conversation");
+        }
+        None
     }
 }
 
@@ -666,6 +677,7 @@ mod tests {
     fn plan_command_visible_when_collaboration_modes_enabled() {
         let mut popup = CommandPopup::new(
             CommandPopupFlags {
+                disconnected: false,
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,

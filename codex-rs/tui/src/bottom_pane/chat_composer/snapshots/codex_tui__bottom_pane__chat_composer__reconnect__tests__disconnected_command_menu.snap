@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer/reconnect_tests.rs
+expression: terminal.backend()
+---
+"  /config    configure Codex preferences                                        "
+"› /rc        manage remote control for the local background server              "
+"  /warnings  view retained warnings and diagnostic details                      "
+"  /exit      exit Codex                                                         "
+"  /feedback  show the thread ID and how to send feedback                        "
+"                                                                                "
+"› /                                                                             "
+"                                                                                "
+"                                                                                "
+"                                                             100% context left  "

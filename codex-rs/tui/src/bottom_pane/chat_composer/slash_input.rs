@@ -33,7 +33,7 @@ pub(super) enum SlashValidation {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SlashPopupInputMode {
     Normal,
-    UnavailableThread,
+    Restricted,
 }
 
 pub(super) enum SubmissionValidation {
@@ -172,9 +172,10 @@ impl<'a> SlashInput<'a> {
         has_slash_command_prefix(name, self.command_flags, self.service_tier_commands)
     }
 
-    pub(super) fn command_popup(&self, filter_text: &str) -> CommandPopup {
+    pub(super) fn command_popup(&self, filter_text: &str, disconnected: bool) -> CommandPopup {
         let mut command_popup = CommandPopup::new(
             CommandPopupFlags {
+                disconnected,
                 collaboration_modes_enabled: self.command_flags.collaboration_modes_enabled,
                 connectors_enabled: self.command_flags.connectors_enabled,
                 plugins_command_enabled: self.command_flags.plugins_command_enabled,
