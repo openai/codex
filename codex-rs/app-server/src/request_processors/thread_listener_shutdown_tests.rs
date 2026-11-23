@@ -617,12 +617,15 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
     use crate::outgoing_message::OutgoingError;
     use codex_app_server_protocol::ThreadRevertParams;
     use codex_app_server_protocol::TurnInterruptParams;
+    use codex_config::CloudConfigBundleLoader;
+    use codex_config::LoaderOverrides;
     use codex_core::TurnInputRequest;
     use codex_core::TurnInputSubmission;
     use codex_extension_api::ExtensionFuture;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::TurnLifecycleContributor;
     use codex_extension_api::TurnStopInput;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::protocol::MultiAgentVersion;
     use codex_protocol::protocol::ThreadHistoryMode;
     use tokio::sync::Notify;
@@ -647,11 +650,29 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
     extensions.turn_lifecycle_contributor(gate.clone());
     let server = responses::start_mock_server().await;
     responses::mount_sse_once(&server, responses::sse_completed("first")).await;
+    let home = Arc::new(tempfile::tempdir()?);
+    let requirements = home.path().join("requirements.toml");
+    std::fs::write(
+        &requirements,
+        "allowed_approvals_reviewers = ['auto_review']",
+    )?;
+    let guardian_loader = Arc::new(ConfigManager::new_for_tests(
+        home.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides {
+            system_requirements_path: Some(requirements.clone()),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        },
+        CloudConfigBundleLoader::default(),
+    ));
     let test = test_codex()
+        .with_home(home)
+        .with_thread_manager(move |manager| manager.with_guardian_policy_loader(guardian_loader))
         .with_extensions(Arc::new(extensions.build()))
         .with_history_mode(ThreadHistoryMode::Paginated)
         .with_config(|config| {
             config.agents_enabled = false;
+            config.requested_approvals_reviewer = Some(ApprovalsReviewer::User);
             config
                 .features
                 .disable(codex_features::Feature::MultiAgentV2)
@@ -789,6 +810,18 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
         invalid_request("thread runtime is no longer accepting interrupts")
     );
 
+    // Revert has captured the old settings. Its replacement must use the new allowlist.
+    let settings = test.codex.thread_settings_snapshot().await;
+    assert_eq!(
+        (
+            settings.approvals_reviewer,
+            settings.requested_approvals_reviewer
+        ),
+        (ApprovalsReviewer::AutoReview, Some(ApprovalsReviewer::User))
+    );
+    std::fs::write(&requirements, "allowed_approvals_reviewers = ['user']")?;
+    test.thread_manager.refresh_guardian_policy().await?;
+
     gate.release.notify_one();
     wait_for_event(
         &test.codex,
@@ -807,6 +840,14 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
     ));
     let replacement = test.thread_manager.get_thread(thread_id).await?;
     assert!(!Arc::ptr_eq(&test.codex, &replacement));
+    let settings = replacement.thread_settings_snapshot().await;
+    assert_eq!(
+        (
+            settings.approvals_reviewer,
+            settings.requested_approvals_reviewer
+        ),
+        (ApprovalsReviewer::User, Some(ApprovalsReviewer::User))
+    );
 
     responses::mount_sse_once(&server, responses::sse_completed("second")).await;
     let second = start(&replacement, "second").await?;

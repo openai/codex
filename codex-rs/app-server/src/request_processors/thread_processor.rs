@@ -2521,9 +2521,14 @@ impl ThreadRequestProcessor {
     ) -> Result<ThreadRevertResponse, JSONRPCErrorError> {
         let ThreadRevertRuntimeSnapshot {
             mut config,
-            settings,
+            mut settings,
             client_mcp_extensions,
         } = runtime_snapshot;
+        // Resolve the saved reviewer request against the replacement's Guardian policy at startup.
+        config.requested_approvals_reviewer = settings
+            .requested_approvals_reviewer
+            .or(settings.approvals_reviewer);
+        settings.approvals_reviewer = None;
         if let Some(collaboration_mode) = settings.collaboration_mode.as_ref() {
             config.model = Some(collaboration_mode.model().to_string());
         }
