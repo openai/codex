@@ -6,7 +6,24 @@ license.workspace = true
 
 [lib]
 doctest = false
-test = false
 
 [lints]
 workspace = true
+
+[dependencies]
+aws-lc-rs = { workspace = true }
+base64 = { workspace = true }
+codex-http-client = { workspace = true }
+codex-otel = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+wiremock = { workspace = true }

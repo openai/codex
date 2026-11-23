@@ -1,0 +1,21 @@
+{
+  "description": "RSA-2048 PKCS#1 v1.5 SHA-256 test vector generated with OpenSSL 3.0.13. The private test key was discarded. The signature signs the SHA-256 digest of the decoded deterministic plugin.tar.gz bytes.",
+  "archive_base64": "H4sIAAAAAAAC/+3Wy4rbMBQGYK/zFEbrxNHVivMGpbMbuipl0OUoVus4wXKGKUPevUo8hGHaLgqDocz5NjLy5YDRf6TKHTw8rY7daRf79TRU39OhL94PzWopr2P2dqSMidv1dZ7xmqqipMUMTmk0Qy5ffEzPpDd7IFvSxR7MQJbkEYYUD32eYhWvRJ7xkNwQj+M0ex93PfjSDK6Nj1CG+DSeBiDnRYH+P7EfYTfE8ed7h/4f8i8FfZN/WiuB+Z8n/yF2kMj26zM5mrHNAa/+tiXkVpBaw1WdH1LMq9oFwbWwxnLDBZeNdV4bYE2gXsh811lqNTPebpiTuhabRtmgN7rhnJyXt4LpR+y6tJ460Pr+86e7u2rvX1czxknHgXmtNHjlvFVAg3TGbhojLZOcMmFcCAChdpqxhjaWmsCcrymAIudvS9Ka1D6YbnfIy73dX+pOn891XAt783DrfOzjNLM///t5889+yz/TjGP+57BarRaXE8C2nJbA4tVmvy1f9vqpB5QjpLG8LpjF5bUvCcqxhTJND13vvpwGKjwMIIQQQgghhBBCCCGEEEIIIYTQzH4BZxmiTgAoAAA=",
+  "signing": {
+    "sha256": "3f0d376e6758f2379ed5696596b59e4fa3957f25d2015cffa44401fada829590",
+    "signature": "P1LLi/22J5NqCDXKJPiARSfCLHmzkyWCdT065UxE3yiojn9U1bbO1BN6KU5bk3/5/xGttr1n0kFwxeH7gW7jak1UZ5r0vDkFgA78c8QJ5ErAIKa1w9pTZ7rSFV4pnl1+ZMlew4BYAdZnuEhZNccDDrMG9Bb6USAjTs4+TDs/dyLvl9gdEFT0Bo04M9yHbp1t64VwxXjKrbB6hMpqZma2kFoM6UEG1W6jGo7ZCbvM2IDsVZM/ZNrPX28kKgnLGDDO3xnIDonp+hhkudA+KfSjKMWsQI1fU9gClCTR7bTx1mKL5PCImTfpG0a0pS+PNyZGh1JzBkdUGB6ZsdB/RfgGbQ==",
+    "key_id": "codex-test-rsa-2048-v1",
+    "algorithm": "RSA_PKCS1_SHA256"
+  },
+  "signing_keys_response": {
+    "keys": [
+      {
+        "key_id": "codex-test-rsa-2048-v1",
+        "purpose": "PLUGIN_RELEASE_ARCHIVE_SIGNING",
+        "algorithm": "RSA_PKCS1_SHA256",
+        "public_key_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzg1qvekIGyZ4p23hH9TmW/SkfkkKNxZZuhcbIbDz/TUa0NmrGGSZgVqEnzGAlX/x1gFTNwbM+jEgzyRrE/XSu7WdCuLKqAXz8PGKoIszJoaCjXj4EHLWG2w5YNdG+L+wo9/1Rw+gmg3rcQZR7V0SQw1i710CF9B5e8LpLEISSzZ9sMk3iUEj7XJbmWJyBrL4ZCePT9sYXKUU4OLKOWl2DPKyB1qzbrvN7cIG+hd+MFaqyeChPfLHWat9G7SoVYHkPQJPoay7IfWRe6OqJg8bBoobNefl0Exy4upT+0MQvRiinqV6dvjB1+YfUp31ThoDN2xqxWSIsYAUw10RCQ7G0QIDAQAB"
+      }
+    ],
+    "cache_ttl_seconds": 600
+  }
+}

@@ -2,5 +2,6 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "plugin-archive-verification",
+    compile_data = ["testdata/plugin_archive_signing_v1.json"],
     crate_name = "codex_plugin_archive_verification",
 )

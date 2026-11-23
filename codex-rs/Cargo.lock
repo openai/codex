@@ -4715,6 +4715,21 @@ dependencies = [
 [[package]]
 name = "codex-plugin-archive-verification"
 version = "0.0.0"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "codex-http-client",
+ "codex-otel",
+ "hex",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
 
 [[package]]
 name = "codex-plugin-host"
