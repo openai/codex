@@ -133,6 +133,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -5177,6 +5178,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "codex-statsig"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "codex-http-client",
+ "http 1.4.0",
+ "oai-statsig-rust-client",
+ "pretty_assertions",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -11271,6 +11286,27 @@ name = "numtoa"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
+
+[[package]]
+name = "oai-statsig-rust-client"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5adc8fe6756bcf80f8039f2312efe1a6f268406f1e9647e8e5ed16ef4fcf60d"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "bytes",
+ "dashmap",
+ "http 1.4.0",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "oauth2"
