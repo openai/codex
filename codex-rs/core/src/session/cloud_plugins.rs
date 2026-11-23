@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
+use tokio::sync::MutexGuard;
 
 #[derive(Default)]
 pub(super) struct CloudCatalogPreparation {
@@ -23,6 +24,19 @@ pub(crate) struct CatalogRefreshState {
     startup_retry_pending: bool,
 }
 
+#[tracing::instrument(
+    name = "cloud_catalog.refresh.acquire_lock",
+    skip_all,
+    fields(acquired)
+)]
+async fn acquire_refresh_lock(
+    lock: &Mutex<CatalogRefreshState>,
+) -> MutexGuard<'_, CatalogRefreshState> {
+    let guard = lock.lock().await;
+    tracing::Span::current().record("acquired", true);
+    guard
+}
+
 impl Session {
     fn finish_catalog_startup(&self, catalogs: &mut CatalogRefreshState) {
         if std::mem::take(&mut catalogs.startup_retry_pending)
@@ -32,11 +46,14 @@ impl Session {
         }
     }
 
-    pub(crate) async fn lock_cloud_catalogs(
-        &self,
-    ) -> tokio::sync::MutexGuard<'_, CatalogRefreshState> {
+    pub(crate) async fn lock_cloud_catalogs(&self) -> MutexGuard<'_, CatalogRefreshState> {
         let mut guard = self.cloud_catalog_preparation.refresh_lock.lock().await;
-        self.finish_catalog_startup(&mut guard);
+        self.prepare_locked_catalogs(&mut guard);
+        guard
+    }
+
+    fn prepare_locked_catalogs(&self, catalogs: &mut CatalogRefreshState) {
+        self.finish_catalog_startup(catalogs);
         if self
             .cloud_catalog_preparation
             .refresh_pending
@@ -44,7 +61,6 @@ impl Session {
         {
             self.services.mcp_runtime.invalidate_resource_caches();
         }
-        guard
     }
 
     #[expect(
@@ -55,7 +71,8 @@ impl Session {
         self.cloud_catalog_preparation
             .refresh_pending
             .store(true, Ordering::Release);
-        let mut catalogs = self.lock_cloud_catalogs().await;
+        let mut catalogs = acquire_refresh_lock(&self.cloud_catalog_preparation.refresh_lock).await;
+        self.prepare_locked_catalogs(&mut catalogs);
         catalogs.startup_retry_pending = true;
         self.refresh_mcp_if_dirty().await;
         let results = futures::future::join_all(
