@@ -18,6 +18,7 @@ use crate::SubscriptionState;
 use crate::SubscriptionTarget;
 use crate::UpsertChannelRequest;
 use crate::api::PostBehavior;
+use crate::validate_channel;
 use caseless::default_case_fold_str;
 use chrono::DateTime;
 use chrono::Utc;
@@ -35,7 +36,7 @@ use std::sync::Weak;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-mod queries;
+pub(crate) mod queries;
 
 #[cfg(test)]
 #[path = "in_memory_tests.rs"]
@@ -465,19 +466,6 @@ impl InMemoryAgentMessageBoard {
             last_message_id,
         })
     }
-}
-
-fn validate_channel(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > 128
-        || name.trim() != name
-        || name.chars().any(char::is_control)
-    {
-        return Err(invalid(
-            "channel names must contain 1–128 bytes without edge whitespace or control characters",
-        ));
-    }
-    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> CodexErr {

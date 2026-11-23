@@ -106,7 +106,6 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
     }
     fn supports_parallel_tool_calls(&self) -> bool {
         MessageBoardTool::READ_ONLY.contains(&self.tool)
-            || self.tool == MessageBoardTool::SubscribedChannels
     }
 
     fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
@@ -217,15 +216,6 @@ impl BoardTool {
                         page: page(limit, cursor.clone(), scale),
                     };
                     board.list_channels(caller, request)
-                })
-                .await
-            }
-            MessageBoardTool::SubscribedChannels => {
-                let arguments::SubscribedChannels { limit, cursor } =
-                    serde_json::from_str(raw).map_err(model_error)?;
-                let limit = page_limit(limit);
-                bounded_read(budget, limit, |scale| {
-                    board.subscribed_channels(caller, page(limit, cursor.clone(), scale))
                 })
                 .await
             }

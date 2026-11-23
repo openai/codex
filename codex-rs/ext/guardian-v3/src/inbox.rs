@@ -1,91 +1,217 @@
-//! Deliver committed posts to the actors subscribed when each post was written. An inbox
-//! retains only board references; each live or replacement reviewer owns its admission cursor.
+//! Each acting agent's reviewer owns its channel subscriptions and inbox of post IDs.
+//! Replacement model conversations replay the inbox with their own admission cursor.
 
 use crate::EvidenceId;
 use crate::GUARDIAN_BOARD_NAMESPACE;
 use crate::delivery::evidence_batch;
 use anyhow::ensure;
+use codex_guardian_reviewer::ReviewDeadline;
+use codex_guardian_reviewer::run_before_review_deadline;
 use codex_message_board::AgentMessageBoard;
+use codex_message_board::AppendRequest;
+use codex_message_board::Page;
 use codex_message_board::PageRequest;
+use codex_message_board::SubscriptionChange;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::PoisonError;
+use std::sync::Weak;
+use tokio::sync::RwLock;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-/// Subscriber inboxes for originals routed by one root thread's housekeeper.
+type Subscribers = HashMap<String, HashMap<Uuid, Weak<ActorInbox>>>;
+
+/// Routes one root's posts to live reviewers, indexed by channel and inbox identity.
 pub struct LiveDelivery {
     pub(super) root: ThreadId,
-    actors: Mutex<HashMap<ThreadId, Arc<ActorInbox>>>,
+    subscribers: Mutex<Subscribers>,
+    // Keep membership changes from landing between an append and recipient capture.
+    posting: RwLock<()>,
 }
 
 impl LiveDelivery {
     pub fn new(root: ThreadId) -> Self {
         Self {
             root,
-            actors: Mutex::default(),
+            subscribers: Mutex::default(),
+            posting: RwLock::default(),
         }
     }
 
-    /// A persisted subscription can receive a post before the actor's reviewer starts.
-    pub(super) fn inbox(&self, actor: ThreadId) -> Arc<ActorInbox> {
-        self.actors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(actor)
-            .or_insert_with(|| {
-                Arc::new(ActorInbox {
-                    root: self.root,
-                    actor,
-                    posts: Mutex::default(),
-                    length: watch::Sender::new(0),
-                })
-            })
-            .clone()
+    pub(super) fn register(self: &Arc<Self>, actor: ThreadId) -> Arc<ActorInbox> {
+        Arc::new(ActorInbox {
+            id: Uuid::now_v7(),
+            delivery: Arc::clone(self),
+            actor,
+            state: Mutex::new(Some(InboxState::default())),
+            length: watch::Sender::new(0),
+        })
     }
 
-    /// Single root writer: all destinations for this original have committed. Each
-    /// recipient occurs once even when several matching channels got the same original.
-    pub(super) fn publish(
+    fn subscribers(&self) -> MutexGuard<'_, Subscribers> {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "serialize each append and recipient capture with subscription changes"
+    )]
+    pub(super) async fn append(
         &self,
-        id: EvidenceId,
-        recipients: HashMap<ThreadId, Uuid>,
+        board: &dyn AgentMessageBoard,
+        request: AppendRequest,
+        recipients: &mut Recipients,
+        deadline: ReviewDeadline,
+        cancellation: &CancellationToken,
     ) -> anyhow::Result<()> {
-        for (actor, post) in recipients {
-            let inbox = self.inbox(actor);
-            let mut posts = inbox.posts.lock().unwrap_or_else(PoisonError::into_inner);
+        let _guard = run_before_review_deadline(deadline, Some(cancellation), self.posting.write())
+            .await
+            .map_err(|reason| anyhow::anyhow!("waiting to append evidence: {reason:?}"))?;
+        crate::housekeeper::check_active(deadline, cancellation)?;
+        // The housekeeper appends each original once per channel and stops on failure.
+        // Await the accepted write even if the housekeeper is shutting down.
+        let post = board.append(self.root, request).await?;
+        if let Some(subscribers) = self.subscribers().get(&post.channel_name) {
+            for (id, inbox) in subscribers {
+                recipients
+                    .0
+                    .entry(*id)
+                    .or_insert_with(|| (inbox.clone(), post.message_id));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One post reference per live inbox, even when several channels matched the original.
+#[derive(Default)]
+pub(super) struct Recipients(HashMap<Uuid, (Weak<ActorInbox>, Uuid)>);
+
+impl Recipients {
+    /// Only publish after all destinations commit. A queued delivery belongs to the
+    /// original inbox even if the same agent has since loaded a fresh reviewer.
+    pub(super) fn publish(self, id: EvidenceId) -> anyhow::Result<()> {
+        for (inbox, post) in self.0.into_values() {
+            let Some(inbox) = inbox.upgrade() else {
+                continue;
+            };
+            let mut state = inbox.state();
+            let Some(state) = state.as_mut() else {
+                continue;
+            };
             ensure!(
-                posts.last().is_none_or(|(last, _)| *last < id.ordinal),
+                state
+                    .posts
+                    .last()
+                    .is_none_or(|(last, _)| *last < id.ordinal),
                 "Guardian inbox received evidence out of source order"
             );
-            posts.push((id.ordinal, post));
-            let len = posts.len();
-            drop(posts);
-            inbox.length.send_replace(len);
+            state.posts.push((id.ordinal, post));
+            inbox.length.send_replace(state.posts.len());
         }
         Ok(())
     }
 }
 
 pub(super) struct ActorInbox {
-    root: ThreadId,
-    actor: ThreadId,
-    posts: Mutex<Vec<(u64, Uuid)>>,
+    id: Uuid,
+    pub(super) delivery: Arc<LiveDelivery>,
+    pub(super) actor: ThreadId,
+    // None once the owning ActorReviewer has shut down.
+    state: Mutex<Option<InboxState>>,
     length: watch::Sender<usize>,
 }
 
+#[derive(Default)]
+struct InboxState {
+    channels: BTreeSet<String>,
+    posts: Vec<(u64, Uuid)>,
+}
+
+impl Drop for ActorInbox {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn unsubscribe(subscribers: &mut Subscribers, channel: &str, id: Uuid) {
+    if let Some(members) = subscribers.get_mut(channel) {
+        members.remove(&id);
+        if members.is_empty() {
+            subscribers.remove(channel);
+        }
+    }
+}
+
 impl ActorInbox {
+    fn state(&self) -> MutexGuard<'_, Option<InboxState>> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn close(&self) {
+        let Some(state) = self.state().take() else {
+            return;
+        };
+        self.length.send_replace(0);
+        let mut subscribers = self.delivery.subscribers();
+        for channel in state.channels {
+            unsubscribe(&mut subscribers, &channel, self.id);
+        }
+    }
+
+    pub(super) fn subscribed_channels(&self, page: &PageRequest) -> CodexResult<Page<String>> {
+        let state = self.state();
+        let state = state.as_ref().ok_or(CodexErr::ThreadNotFound(self.actor))?;
+        codex_message_board::paginate(page, state.channels.iter().cloned())
+    }
+
+    pub(super) async fn set_subscription(
+        self: &Arc<Self>,
+        channel: String,
+        change: SubscriptionChange,
+    ) -> CodexResult<()> {
+        if change == SubscriptionChange::Subscribe {
+            codex_message_board::validate_channel(&channel)?;
+        }
+        let _guard = self.delivery.posting.read().await;
+        let mut state = self.state();
+        let state = state.as_mut().ok_or(CodexErr::ThreadNotFound(self.actor))?;
+        let mut subscribers = self.delivery.subscribers();
+        match change {
+            SubscriptionChange::Subscribe => {
+                state.channels.insert(channel.clone());
+                subscribers
+                    .entry(channel)
+                    .or_default()
+                    .insert(self.id, Arc::downgrade(self));
+            }
+            SubscriptionChange::Unsubscribe => {
+                state.channels.remove(&channel);
+                unsubscribe(&mut subscribers, &channel, self.id);
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn queued_posts(&self) -> Vec<(u64, Uuid)> {
-        self.posts
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.state()
+            .as_ref()
+            .map(|state| state.posts.clone())
+            .unwrap_or_default()
     }
 
     pub(super) fn subscribe(&self) -> watch::Receiver<usize> {
@@ -113,7 +239,7 @@ impl ActorInbox {
     {
         ensure!(
             actor == self.actor
-                && board.identity() == self.root.into()
+                && board.identity() == self.delivery.root.into()
                 && board.storage_namespace() == Some(GUARDIAN_BOARD_NAMESPACE),
             "Guardian inbox opened with the wrong board or caller"
         );
@@ -125,8 +251,12 @@ impl ActorInbox {
         while *delivered < through {
             let start = *delivered;
             let end = through.min(start.saturating_add(page_size));
-            let positions =
-                self.posts.lock().unwrap_or_else(PoisonError::into_inner)[start..end].to_vec();
+            let positions = self
+                .state()
+                .as_ref()
+                .ok_or(CodexErr::ThreadNotFound(self.actor))?
+                .posts[start..end]
+                .to_vec();
             let ids: Vec<_> = positions.iter().map(|(_, id)| *id).collect();
             let texts = board.read_post_texts_by_id(actor, &ids).await?;
             ensure!(

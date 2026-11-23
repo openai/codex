@@ -61,7 +61,6 @@ impl Conversation {
         prepared: &PreparedGuardianContext,
         owner: &ReviewerTasks,
         binding: LiveRetrievalBinding,
-        inbox: Arc<ActorInbox>,
         stop: CancellationToken,
     ) -> anyhow::Result<Self> {
         let key = prepared.reuse_key(/*previous*/ None);
@@ -84,6 +83,7 @@ impl Conversation {
         options
             .thread_extension_init
             .insert(SessionIsolation::Isolated);
+        let inbox = Arc::clone(&binding.inbox);
         options.thread_extension_init.insert(binding);
         options.thread_extension_init.insert(ToolPolicy {
             allowed_tools: Some(allowed),

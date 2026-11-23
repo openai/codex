@@ -270,7 +270,8 @@ impl AgentMessageBoard for InMemoryAgentMessageBoard {
     }
 }
 
-fn page<T>(request: &PageRequest, results: Vec<T>) -> Result<Page<T>> {
+/// Paginate an ordered collection with the board's cursor format and page limit.
+pub fn page<T>(request: &PageRequest, results: impl IntoIterator<Item = T>) -> Result<Page<T>> {
     let offset = match &request.cursor {
         Some(cursor) => {
             let mut bytes = [0; 4];

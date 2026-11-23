@@ -13,8 +13,6 @@ use codex_history::RetainedUserMessage;
 use codex_history::RolloutItem;
 use codex_history::UserInputOrigin;
 use codex_message_board::SubscriptionChange;
-use codex_message_board::SubscriptionRequest;
-use codex_message_board::SubscriptionTarget;
 use codex_message_board::UpsertChannelRequest;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -286,7 +284,7 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
             .await?;
         Ok(original)
     };
-    // Create the channels through the housekeeper and subscribe through the reviewer's handle.
+    // Create the channels through the housekeeper and subscribe the live reviewer.
     let _seed_route = mount_sse_once(
         &server,
         sse(vec![
@@ -302,19 +300,16 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
         .home()
         .join("message_board_guardian_1.sqlite");
     assert_eq!(tokio::fs::try_exists(database).await?, !in_memory);
+    let binding = thread
+        .get::<crate::ActorReviewer>()
+        .context("attached reviewer")?
+        .binding(Arc::clone(board), &evidence.delivery)?;
+    let inbox = &binding.inbox;
     for channel in ["release", "releases-copy"] {
-        board
-            .set_subscription(
-                root,
-                SubscriptionRequest {
-                    target: SubscriptionTarget::Channel(channel.into()),
-                    target_agent: None,
-                    change: SubscriptionChange::Subscribe,
-                },
-            )
+        inbox
+            .set_subscription(channel.into(), SubscriptionChange::Subscribe)
             .await?;
     }
-    let inbox = evidence.delivery.inbox(root);
     let _first_route = mount_sse_once(
         &server,
         sse(vec![
@@ -378,26 +373,22 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
 }
 
 #[tokio::test]
-async fn a_pending_post_survives_unsubscribe_and_is_admitted_once_per_conversation()
--> anyhow::Result<()> {
+async fn pending_posts_belong_to_the_original_subscriber_inbox() -> anyhow::Result<()> {
     use crate::EvidenceId;
+    use crate::inbox::ActorInbox;
     use crate::inbox::LiveDelivery;
-    use codex_message_board::AgentMessageBoard;
+    use codex_guardian_reviewer::ReviewDeadline;
     use codex_message_board::AppendRequest;
+    use codex_message_board::LocalAgentMessageBoard;
     use codex_message_board::PostDestination;
     use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::TruncationPolicy;
-    use codex_state::SqliteConfig;
     use serde_json::json;
     use std::future::ready;
+    use tokio_util::sync::CancellationToken;
 
     let root = ThreadId::new();
-    let directory = tempfile::tempdir()?;
-    let storage = crate::local_board(
-        SqliteConfig::new_for_testing(directory.path().to_path_buf().try_into()?),
-        root.into(),
-    );
     let subscriber = ThreadId::new();
     let subscriber_path = AgentPath::root()
         .join("subscriber")
@@ -406,8 +397,13 @@ async fn a_pending_post_survives_unsubscribe_and_is_admitted_once_per_conversati
         (root, AgentPath::root()),
         (subscriber, subscriber_path),
     ]);
-    let writer = storage.read_write().open(host.clone()).await?;
-    let reader = storage.read_only().open(host.clone()).await?;
+    let writer = LocalAgentMessageBoard::open_in_memory(
+        &crate::local_board_options(),
+        root.into(),
+        host.clone(),
+    )
+    .await?;
+    let reader = writer.read_only_handle();
     writer
         .upsert_channel(
             root,
@@ -417,22 +413,19 @@ async fn a_pending_post_survives_unsubscribe_and_is_admitted_once_per_conversati
             },
         )
         .await?;
-    let subscribe = async |actor, change| {
-        reader
-            .set_subscription(
-                actor,
-                SubscriptionRequest {
-                    target: SubscriptionTarget::Channel("release".into()),
-                    target_agent: None,
-                    change,
-                },
-            )
+    let delivery = Arc::new(LiveDelivery::new(root));
+    let inbox = delivery.register(root);
+    let subscribe = async |inbox: &Arc<ActorInbox>| {
+        inbox
+            .set_subscription("release".into(), SubscriptionChange::Subscribe)
             .await
     };
+    let cancellation = CancellationToken::new();
     let append = async |ordinal, text: &str| {
-        writer
-            .append_with_subscribers(
-                root,
+        let mut recipients = crate::inbox::Recipients::default();
+        delivery
+            .append(
+                &writer,
                 AppendRequest {
                     request_id: format!("source-{ordinal}"),
                     destination: PostDestination::Channel("release".into()),
@@ -440,46 +433,53 @@ async fn a_pending_post_survives_unsubscribe_and_is_admitted_once_per_conversati
                         &json!({"id":{"ordinal":ordinal}, "original":text}),
                     )?,
                 },
+                &mut recipients,
+                ReviewDeadline::Unlimited,
+                &cancellation,
             )
-            .await
-            .map_err(anyhow::Error::from)
+            .await?;
+        anyhow::Ok(recipients)
     };
 
-    assert!(append(1, "before subscription").await?.1.is_empty());
-    subscribe(root, SubscriptionChange::Subscribe).await?;
+    let before = append(1, "before subscription").await?;
+    subscribe(&inbox).await?;
+    before.publish(EvidenceId { ordinal: 1 })?;
     let large = "é".repeat(20_010);
-    let (post, recipients) = append(2, &large).await?;
-    assert_eq!(recipients, [root]);
-    let delivery = LiveDelivery::new(root);
-    delivery.publish(
-        EvidenceId { ordinal: 2 },
-        recipients
-            .into_iter()
-            .map(|actor| (actor, post.message_id))
-            .collect(),
-    )?;
-    // The subscription was already persisted before anyone attached to this inbox.
-    let inbox = delivery.inbox(root);
+    append(2, &large)
+        .await?
+        .publish(EvidenceId { ordinal: 2 })?;
     let through = inbox.len();
     assert_eq!(through, 1);
     let mut wake = inbox.subscribe();
-    subscribe(subscriber, SubscriptionChange::Subscribe).await?;
-    let (second, recipients) = append(3, "later").await?;
-    assert_eq!(recipients.len(), 2);
-    delivery.publish(
-        EvidenceId { ordinal: 3 },
-        recipients
-            .into_iter()
-            .map(|actor| (actor, second.message_id))
-            .collect(),
-    )?;
+    let child_inbox = delivery.register(subscriber);
+    subscribe(&child_inbox).await?;
+    let later = append(3, "later").await?;
+    inbox
+        .set_subscription("release".into(), SubscriptionChange::Unsubscribe)
+        .await?;
+    later.publish(EvidenceId { ordinal: 3 })?;
     wake.changed().await?;
     assert_eq!(*wake.borrow_and_update(), 2);
-    assert_eq!(delivery.inbox(subscriber).len(), 1);
-    subscribe(root, SubscriptionChange::Unsubscribe).await?;
-    let (post, recipients) = append(4, "after unsubscribe").await?;
-    assert_eq!(recipients, [subscriber]);
-    assert_eq!(append(4, "after unsubscribe").await?, (post, Vec::new()));
+    assert_eq!(child_inbox.len(), 1);
+
+    // Pause after the append chooses the child, then reload the same child ID.
+    let pending = append(4, "during eviction").await?;
+    child_inbox.close();
+    let reloaded_inbox = delivery.register(subscriber);
+    assert!(
+        reloaded_inbox
+            .subscribed_channels(&Default::default())?
+            .results
+            .is_empty()
+    );
+    subscribe(&reloaded_inbox).await?;
+    pending.publish(EvidenceId { ordinal: 4 })?;
+    assert_eq!(child_inbox.len(), 0);
+    assert_eq!(reloaded_inbox.len(), 0);
+    append(5, "after reload")
+        .await?
+        .publish(EvidenceId { ordinal: 5 })?;
+    assert_eq!(reloaded_inbox.len(), 1);
     assert!(host.notifications.lock().unwrap().is_empty());
 
     let mut delivered = 0;

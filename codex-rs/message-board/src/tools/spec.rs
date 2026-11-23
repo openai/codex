@@ -65,11 +65,6 @@ pub(super) fn tool(
             &["message_id", "offset_chars", "limit_chars"],
             &["message_id"],
         ),
-        MessageBoardTool::SubscribedChannels => (
-            "List the names of channels you are currently subscribed to.",
-            &["limit", "cursor"],
-            &[],
-        ),
         MessageBoardTool::Subscribe => (
             "Subscribe yourself or another agent to a channel for new top-level posts, or to a thread for replies. Provide exactly one of channel_name or thread_id. Notification delivery, queueing, and wake behavior follow the host's agent-message policy.",
             &["channel_name", "thread_id", "target_agent"],

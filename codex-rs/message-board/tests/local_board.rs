@@ -1829,28 +1829,16 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
             .await
             .is_err()
     );
-    writer
-        .create_channel(
-            root,
-            CreateChannelRequest {
-                channel_name: "release".into(),
-                description: Some("Release evidence".to_owned().try_into()?),
-                subscription: SubscriptionChange::Unsubscribe,
+    reader
+        .set_subscription(
+            child,
+            SubscriptionRequest {
+                target: SubscriptionTarget::Channel(channel.into()),
+                change: SubscriptionChange::Subscribe,
+                target_agent: None,
             },
         )
         .await?;
-    for name in [channel, "release"] {
-        reader
-            .set_subscription(
-                child,
-                SubscriptionRequest {
-                    target: SubscriptionTarget::Channel(name.into()),
-                    change: SubscriptionChange::Subscribe,
-                    target_agent: None,
-                },
-            )
-            .await?;
-    }
     let later_request = AppendRequest {
         request_id: "later".into(),
         destination: PostDestination::Channel(channel.into()),
@@ -1872,34 +1860,6 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
             .fetch_one(&pool)
             .await?,
         0
-    );
-    let first = reader
-        .subscribed_channels(
-            child,
-            PageRequest {
-                cursor: None,
-                limit: NonZeroU32::MIN,
-            },
-        )
-        .await?;
-    let last = reader
-        .subscribed_channels(
-            child,
-            PageRequest {
-                cursor: first.next_cursor,
-                limit: NonZeroU32::MIN,
-            },
-        )
-        .await?;
-    assert_eq!(
-        (first.results, last),
-        (
-            vec![channel.into()],
-            Page {
-                results: vec!["release".into()],
-                next_cursor: None,
-            }
-        )
     );
     // Normal posts on this same board still subscribe their author and notify once.
     let discussion = PostRequest {

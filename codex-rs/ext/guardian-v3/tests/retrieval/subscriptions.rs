@@ -1,5 +1,6 @@
 //! Guardian can change its own live channel subscriptions and cannot change another actor's.
 
+use codex_guardian_v3::LiveDelivery;
 use codex_guardian_v3::LiveRetrievalBinding;
 use codex_guardian_v3::local_board;
 use codex_message_board::AgentMessageBoard;
@@ -8,9 +9,7 @@ use codex_message_board::LocalBoard;
 use codex_message_board::PostDestination;
 use codex_message_board::SubscriptionChange::Subscribe;
 use codex_message_board::SubscriptionRequest;
-use codex_message_board::SubscriptionState;
 use codex_message_board::SubscriptionTarget;
-use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_state::SqliteConfig;
@@ -18,6 +17,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::invoke;
 use crate::retrieval_host;
 use crate::reviewer_tool_call;
 
@@ -35,8 +35,12 @@ async fn subscription_tools_only_change_the_callers_channels() -> anyhow::Result
         .read_only()
         .open(host.clone())
         .await?;
+    let delivery = Arc::new(LiveDelivery::new(owner));
     // A Guardian reviewer must reject the ordinary board, even for the same root.
-    assert!(LiveRetrievalBinding::new(Arc::new(agent_board), reviewer, path.clone()).is_err());
+    assert!(
+        LiveRetrievalBinding::new(Arc::new(agent_board), reviewer, path.clone(), &delivery)
+            .is_err()
+    );
     let storage = local_board(sqlite, owner.into());
     let writer = storage.read_write().open(host.clone()).await?;
     let original = writer
@@ -50,9 +54,10 @@ async fn subscription_tools_only_change_the_callers_channels() -> anyhow::Result
         )
         .await?;
     let board: Arc<dyn AgentMessageBoard> = Arc::new(storage.read_only().open(host.clone()).await?);
+    // An upgraded board may already hold subscriptions from a previous reviewer.
     board
         .set_subscription(
-            owner,
+            reviewer,
             SubscriptionRequest {
                 target: SubscriptionTarget::Channel("release".into()),
                 change: Subscribe,
@@ -60,33 +65,18 @@ async fn subscription_tools_only_change_the_callers_channels() -> anyhow::Result
             },
         )
         .await?;
-    let tools = LiveRetrievalBinding::new(board.clone(), reviewer, path.clone())?.tools();
-    writer
-        .upsert_channel(
-            owner,
-            UpsertChannelRequest {
-                channel_name: "later".into(),
-                description: "Later channel".to_owned().try_into()?,
-            },
-        )
-        .await?;
-    let later = writer
-        .append(
-            owner,
-            AppendRequest {
-                request_id: "later".into(),
-                destination: PostDestination::Channel("release".into()),
-                text: "Later evidence".into(),
-            },
-        )
-        .await?;
-    assert_ne!(original.message_id, later.message_id);
+    let binding = LiveRetrievalBinding::new(board, reviewer, path.clone(), &delivery)?;
+    let tools = binding.tools();
+    let channels = async || -> anyhow::Result<serde_json::Value> {
+        Ok(invoke(&binding, "subscribed_channels", json!({})).await?["results"].take())
+    };
+    assert_eq!(channels().await?, json!([]));
     for (name, arguments, succeeds) in [
         ("subscribe", json!({"channel_name":"release"}), true),
         ("unsubscribe", json!({"channel_name":"release"}), true),
-        ("subscribe", json!({"channel_name":"release"}), true),
         ("subscribe", json!({"channel_name":"later"}), true),
-        ("unsubscribe", json!({"channel_name":"later"}), true),
+        ("subscribe", json!({"channel_name":"release "}), false),
+        ("unsubscribe", json!({"channel_name":"missing"}), true),
         (
             "subscribe",
             json!({"thread_id": original.message_id}),
@@ -108,48 +98,20 @@ async fn subscription_tools_only_change_the_callers_channels() -> anyhow::Result
             let result = result?;
             let response = result.code_mode_result(&call.payload);
             assert_eq!(result.log_output(), response.to_string());
-            let output: SubscriptionState = serde_json::from_value(response)?;
-            let channel = arguments["channel_name"]
-                .as_str()
-                .expect("channel subscription");
-            let last_message_id = (channel == "release").then_some(later.message_id);
             assert_eq!(
-                output,
-                SubscriptionState {
-                    channel_name: channel.into(),
-                    thread_id: None,
-                    target_agent: path.clone(),
-                    enabled: name == "subscribe",
-                    last_message_id,
-                }
+                response,
+                json!({
+                    "channel_name": arguments["channel_name"],
+                    "thread_id": null,
+                    "target_agent": path,
+                    "enabled": name == "subscribe",
+                })
             );
-            if name == "unsubscribe" && channel == "release" {
-                assert!(
-                    board
-                        .subscribed_channels(reviewer, Default::default())
-                        .await?
-                        .results
-                        .is_empty()
-                );
-            }
         } else {
             assert!(result.is_err());
         }
     }
-    assert_eq!(
-        board
-            .subscribed_channels(reviewer, Default::default())
-            .await?
-            .results,
-        vec!["release".to_owned()]
-    );
-    assert_eq!(
-        board
-            .subscribed_channels(owner, Default::default())
-            .await?
-            .results,
-        vec!["release".to_owned()]
-    );
+    assert_eq!(channels().await?, json!(["later"]));
     assert!(
         host.notifications
             .lock()

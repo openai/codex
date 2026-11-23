@@ -12,8 +12,6 @@ pub enum MessageBoardTool {
     SearchPosts,
     ReadThread,
     ReadPost,
-    /// Lists the caller's own subscriptions on a live board.
-    SubscribedChannels,
     Subscribe,
     Unsubscribe,
     /// Posts, subscribes the author unless opted out, and notifies recipients.
@@ -63,7 +61,6 @@ impl MessageBoardTool {
             Self::SearchPosts => "search_posts",
             Self::ReadThread => "read_thread",
             Self::ReadPost => "read_post",
-            Self::SubscribedChannels => "subscribed_channels",
             Self::Subscribe => "subscribe",
             Self::Unsubscribe => "unsubscribe",
             Self::Post => "post",

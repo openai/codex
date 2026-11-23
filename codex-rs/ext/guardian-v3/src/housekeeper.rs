@@ -29,7 +29,6 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -246,16 +245,13 @@ impl Housekeeper {
                         anyhow::anyhow!("upserting housekeeper channel: {reason:?}")
                     })??;
             }
-            // The local board finishes an accepted append in its own task. Await it even
-            // during shutdown so the root joins the last write before releasing this worker.
             for ((source, destinations), mut text) in sources.iter().zip(output.routes).zip(texts) {
-                let mut recipients = HashMap::new();
+                let mut recipients = crate::inbox::Recipients::default();
                 let mut remaining: BTreeSet<_> = destinations.iter().collect();
                 for channel in &destinations {
                     if !remaining.remove(channel) {
                         continue;
                     }
-                    check_active(deadline, cancellation)?;
                     let request = AppendRequest {
                         request_id: source.id.request_id(channel)?,
                         destination: PostDestination::Channel(channel.clone()),
@@ -266,15 +262,17 @@ impl Housekeeper {
                             text.clone()
                         },
                     };
-                    let (post, subscribers) = self
-                        .board
-                        .append_with_subscribers(self.owner, request)
+                    self.delivery
+                        .append(
+                            self.board.as_ref(),
+                            request,
+                            &mut recipients,
+                            deadline,
+                            cancellation,
+                        )
                         .await?;
-                    for actor in subscribers {
-                        recipients.entry(actor).or_insert(post.message_id);
-                    }
                 }
-                self.delivery.publish(source.id, recipients)?;
+                recipients.publish(source.id)?;
             }
             // Acknowledge only after every write succeeds. Returned errors leave this batch
             // unread and stop this instance; no replay is attempted.
@@ -314,7 +312,10 @@ fn routing_schema(source_count: usize) -> serde_json::Value {
     })
 }
 
-fn check_active(deadline: ReviewDeadline, cancellation: &CancellationToken) -> anyhow::Result<()> {
+pub(super) fn check_active(
+    deadline: ReviewDeadline,
+    cancellation: &CancellationToken,
+) -> anyhow::Result<()> {
     ensure!(!cancellation.is_cancelled(), "housekeeping cancelled");
     ensure!(
         !matches!(deadline, ReviewDeadline::At(at) if Instant::now() >= at),

@@ -45,6 +45,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "common/board_host.rs"]
 mod board_host;
 
+#[path = "common/reviewer_tool_call.rs"]
+mod reviewer_tool_call;
+
 use board_host::PausedClockHost;
 use board_host::board_host;
 
@@ -880,15 +883,14 @@ async fn subscribed_evidence_reaches_the_retained_reviewer_when_it_becomes_idle(
     use codex_extension_api::ThreadReadyInput;
     use codex_extension_api::ThreadStopInput;
     use codex_guardian_reviewer::SessionDisposition;
-    use codex_message_board::SubscriptionChange;
-    use codex_message_board::SubscriptionRequest;
-    use codex_message_board::SubscriptionTarget;
+    use codex_guardian_v3::LiveRetrievalBinding;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::turn_input::TurnInputRequest;
     use codex_protocol::user_input::UserInput;
     use core_test_support::wait_for_successful_turn;
+    use reviewer_tool_call::invoke;
 
     core_test_support::skip_if_no_network!(Ok(()));
     const ROUTING: &str = "Route release activity to a release channel.";
@@ -965,38 +967,28 @@ retrieval_instructions = "{RETRIEVAL}"
     let cancel = CancellationToken::new();
     let first = actor.reserve(&context, &cancel).await?;
     let id = first.thread_id();
-    let reviewer = test
-        .thread_manager
-        .get_thread_with_extension::<codex_guardian_v3::LiveRetrievalBinding>(id, |_| true)
-        .await?;
-    let board = local_board(test.config.sqlite_config().clone(), root.into())
-        .read_write()
-        .open(board_host(root))
-        .await?;
-    board
-        .upsert_channel(
-            root,
-            UpsertChannelRequest {
-                channel_name: "release".into(),
-                description: "Release policy".to_owned().try_into()?,
-            },
-        )
-        .await?;
-    board
-        .set_subscription(
-            root,
-            SubscriptionRequest {
-                target: SubscriptionTarget::Channel("release".into()),
-                target_agent: None,
-                change: SubscriptionChange::Subscribe,
-            },
-        )
-        .await?;
+    let load_reviewer = async |id| {
+        let reviewer = test
+            .thread_manager
+            .get_thread_with_extension::<LiveRetrievalBinding>(id, |_| true)
+            .await?;
+        let binding = reviewer
+            .thread_extension_data()
+            .get::<LiveRetrievalBinding>()
+            .expect("live reviewer tools");
+        anyhow::Ok((reviewer, binding))
+    };
+    let (reviewer, binding) = load_reviewer(id).await?;
+    // Follow the channel before the housekeeper creates it with the first routed original.
+    invoke(&binding, "subscribe", json!({"channel_name":"release"})).await?;
     let model = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
-                ev_assistant_message("route", r#"{"routes":[["release"]],"descriptions":[]}"#),
+                ev_assistant_message(
+                    "route",
+                    r#"{"routes":[["release"]],"descriptions":[{"channel":"release","description":"Release policy"}]}"#,
+                ),
                 ev_completed("route"),
             ]),
             sse(vec![
@@ -1074,6 +1066,14 @@ retrieval_instructions = "{RETRIEVAL}"
     drop(second);
     let third = actor.reserve(&context, &cancel).await?;
     assert_ne!(id, third.thread_id());
+    let (replacement, binding) = load_reviewer(third.thread_id()).await?;
+    assert!(has_delivery(
+        replacement.conversation_history_snapshot().await.as_ref()
+    ));
+    assert_eq!(
+        invoke(&binding, "subscribed_channels", json!({})).await?["results"],
+        json!(["release"])
+    );
     third.finish(SessionDisposition::Discard);
     lifecycle
         .on_thread_stop(ThreadStopInput {
@@ -1081,6 +1081,11 @@ retrieval_instructions = "{RETRIEVAL}"
             session_store: &session,
         })
         .await;
+    assert!(
+        invoke(&binding, "subscribe", json!({"channel_name":"release"}))
+            .await
+            .is_err()
+    );
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

@@ -2,22 +2,16 @@
 
 #![allow(clippy::expect_used)]
 
+use codex_guardian_v3::LiveDelivery;
 use codex_guardian_v3::LiveRetrievalBinding;
 use codex_guardian_v3::local_board;
 use codex_message_board::AppendRequest;
-use codex_message_board::CreateChannelRequest;
 use codex_message_board::Page;
-use codex_message_board::PageRequest;
 use codex_message_board::PostDestination;
-use codex_message_board::SubscriptionChange;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_state::SqliteConfig;
-use codex_tools::ToolCall;
-use codex_tools::ToolCallSource;
 use codex_tools::ToolName;
-use codex_tools::ToolPayload;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -33,6 +27,11 @@ mod board_host;
 mod guidance;
 #[path = "retrieval/subscriptions.rs"]
 mod subscriptions;
+#[path = "common/reviewer_tool_call.rs"]
+mod tool_calls;
+
+use tool_calls::invoke;
+use tool_calls::reviewer_tool_call;
 
 fn retrieval_host(
     members: impl IntoIterator<Item = (ThreadId, AgentPath)>,
@@ -100,7 +99,9 @@ async fn searches_live_and_unsubscribed_guardian_posts() -> anyhow::Result<()> {
         )
         .await?;
     let reader = Arc::new(storage.read_only().open(host).await?);
-    let tools = LiveRetrievalBinding::new(reader, owner, AgentPath::root())?.tools();
+    let delivery = Arc::new(LiveDelivery::new(owner));
+    let binding = LiveRetrievalBinding::new(reader, owner, AgentPath::root(), &delivery)?;
+    let tools = binding.tools();
     let latest = routed(3, r#"Publish "prod" from C:\work\draft now."#);
     let third = board
         .append(
@@ -112,12 +113,9 @@ async fn searches_live_and_unsubscribed_guardian_posts() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert!(
-        board
-            .subscribed_channels(owner, PageRequest::default())
-            .await?
-            .results
-            .is_empty()
+    assert_eq!(
+        invoke(&binding, "subscribed_channels", json!({})).await?["results"],
+        json!([])
     );
 
     let expected_names = [
@@ -190,28 +188,10 @@ async fn searches_live_and_unsubscribed_guardian_posts() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn reviewer_tool_call(name: &ToolName, arguments: &Value, byte_limit: i64) -> ToolCall<'static> {
-    ToolCall {
-        turn_id: "review".into(),
-        call_id: name.name.clone(),
-        tool_name: name.clone(),
-        model: "test".into(),
-        codex_turn_metadata: None,
-        truncation_policy: TruncationPolicyConfig::bytes(byte_limit).into(),
-        source: ToolCallSource::Direct,
-        conversation_history: Default::default(),
-        turn_item_emitter: Arc::new(codex_tools::NoopTurnItemEmitter),
-        attachment_store: Arc::new(codex_attachment_store::InlineAttachmentStore),
-        ephemeral: false,
-        environments: Vec::new(),
-        payload: ToolPayload::Function {
-            arguments: arguments.to_string(),
-        },
-    }
-}
-
 #[tokio::test]
 async fn lists_only_the_reviewers_own_subscriptions_across_pages() -> anyhow::Result<()> {
+    let build = "build-instructions-for-release";
+    let release = "release-approvals-and-revocations";
     let root = ThreadId::new();
     let actor = ThreadId::new();
     let path = AgentPath::root()
@@ -223,42 +203,40 @@ async fn lists_only_the_reviewers_own_subscriptions_across_pages() -> anyhow::Re
         SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?),
         root.into(),
     );
-    let writer = storage.read_write().open(host.clone()).await?;
-    for (owner, channel) in [(actor, "build"), (root, "private"), (actor, "release")] {
-        writer
-            .create_channel(
-                owner,
-                CreateChannelRequest {
-                    channel_name: channel.into(),
-                    description: None,
-                    subscription: SubscriptionChange::Subscribe,
-                },
-            )
-            .await?;
-    }
     let board = Arc::new(storage.read_only().open(host).await?);
+    let delivery = Arc::new(LiveDelivery::new(root));
+    let reviewer = LiveRetrievalBinding::new(board.clone(), actor, path, &delivery)?;
+    let other = LiveRetrievalBinding::new(board, root, AgentPath::root(), &delivery)?;
+    for (binding, channel) in [
+        (&reviewer, build),
+        (&other, "private"),
+        (&reviewer, release),
+    ] {
+        invoke(binding, "subscribe", json!({"channel_name":channel})).await?;
+    }
     let name = ToolName::namespaced("guardian_board", "subscribed_channels");
-    let tool = LiveRetrievalBinding::new(board, actor, path)?
+    let tool = reviewer
         .tools()
         .into_iter()
         .find(|tool| tool.tool_name() == name)
-        .expect("live reviewer subscription lookup");
+        .expect("subscription listing");
     let list = async |arguments: Value| -> anyhow::Result<Page<String>> {
-        let call = reviewer_tool_call(&name, &arguments, /*byte_limit*/ 8_000);
+        // The output budget fits one channel name and its cursor.
+        let call = reviewer_tool_call(&name, &arguments, /*byte_limit*/ 96);
         let result = tool.handle(call.clone()).await?;
         Ok(serde_json::from_value(
             result.code_mode_result(&call.payload),
         )?)
     };
 
-    let first = list(json!({ "limit": 1 })).await?;
+    let first = list(json!({ "limit": 2 })).await?;
     let last = list(json!({ "limit": 1, "cursor": first.next_cursor })).await?;
     assert_eq!(
         (first.results, last),
         (
-            vec!["build".to_owned()],
+            vec![build.to_owned()],
             Page {
-                results: vec!["release".to_owned()],
+                results: vec![release.to_owned()],
                 next_cursor: None,
             }
         )

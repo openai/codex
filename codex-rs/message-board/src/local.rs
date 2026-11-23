@@ -23,6 +23,7 @@ use crate::SubscriptionRequest;
 use crate::SubscriptionState;
 use crate::SubscriptionTarget;
 use crate::api::PostBehavior;
+use crate::validate_channel;
 use caseless::default_case_fold_str;
 use chrono::DateTime;
 use chrono::Utc;
@@ -58,7 +59,6 @@ mod subscriptions;
 mod pools_tests;
 
 const MAX_POST_BYTES: usize = 64 * 1024;
-const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
 
 #[derive(Clone)]
@@ -169,28 +169,13 @@ impl LocalAgentMessageBoard {
     /// into a recipient's later turn. Once committed, notification failures are
     /// logged without failing the post; the persisted content remains readable.
     pub async fn post(&self, caller: ThreadId, request: PostRequest) -> Result<PostMetadata> {
-        Ok(self
-            .write(caller, request, PostBehavior::Discussion)
-            .await?
-            .0)
+        self.write(caller, request, PostBehavior::Discussion).await
     }
 
     /// Appends evidence without automatic subscriptions or notifications, even on a discussion board.
     /// Uses the same access checks, caller-scoped request IDs and durable write path as posting.
     /// Reusing a request ID for a different payload or operation is an error.
     pub async fn append(&self, caller: ThreadId, request: AppendRequest) -> Result<PostMetadata> {
-        Ok(self
-            .write_append(caller, request, PostBehavior::SilentAppend)
-            .await?
-            .0)
-    }
-
-    async fn write_append(
-        &self,
-        caller: ThreadId,
-        request: AppendRequest,
-        behavior: PostBehavior,
-    ) -> Result<(PostMetadata, Vec<ThreadId>)> {
         self.write(
             caller,
             PostRequest {
@@ -199,7 +184,7 @@ impl LocalAgentMessageBoard {
                 text: request.text,
                 agents_to_notify: Vec::new(),
             },
-            behavior,
+            PostBehavior::SilentAppend,
         )
         .await
     }
@@ -209,7 +194,7 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: PostRequest,
         behavior: PostBehavior,
-    ) -> Result<(PostMetadata, Vec<ThreadId>)> {
+    ) -> Result<PostMetadata> {
         if let Some(access) = self.access {
             access.require_write(
                 self.identity,
@@ -230,7 +215,7 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: PostRequest,
         behavior: PostBehavior,
-    ) -> Result<(PostMetadata, Vec<ThreadId>)> {
+    ) -> Result<PostMetadata> {
         if request.text.len() > MAX_POST_BYTES
             || request.text.is_empty()
             || request.request_id.is_empty()
@@ -246,9 +231,7 @@ impl LocalAgentMessageBoard {
         let request_json = match behavior {
             // Keep existing post fingerprints compatible with persisted retries.
             PostBehavior::Discussion => serde_json::to_string(&request),
-            PostBehavior::SilentAppend | PostBehavior::SilentAppendWithSubscribers => {
-                serde_json::to_string(&("append", &request))
-            }
+            PostBehavior::SilentAppend => serde_json::to_string(&("append", &request)),
         }
         .map_err(storage_error)?;
         let mut conn = self.pool.acquire().await.map_err(storage_error)?;
@@ -256,7 +239,7 @@ impl LocalAgentMessageBoard {
             .existing_post(&mut conn, &request_id, &request_json)
             .await?
         {
-            return Ok((post.metadata, Vec::new()));
+            return Ok(post.metadata);
         }
         drop(conn);
         let notify_recipients = if behavior == PostBehavior::Discussion {
@@ -274,7 +257,7 @@ impl LocalAgentMessageBoard {
             .existing_post(&mut tx, &request_id, &request_json)
             .await?
         {
-            return Ok((post.metadata, Vec::new()));
+            return Ok(post.metadata);
         }
         let id = Uuid::now_v7();
         let (channel, root, target) = match &request.destination {
@@ -371,7 +354,7 @@ impl LocalAgentMessageBoard {
         tx.commit().await.map_err(storage_error)?;
 
         let Some(mut recipients) = notify_recipients else {
-            return Ok((post.metadata, subscribers));
+            return Ok(post.metadata);
         };
         recipients.extend(subscribers);
         recipients.remove(&caller);
@@ -387,7 +370,7 @@ impl LocalAgentMessageBoard {
                 }
             })
             .await;
-        Ok((post.metadata, Vec::new()))
+        Ok(post.metadata)
     }
 
     pub async fn set_subscription(
@@ -499,19 +482,6 @@ async fn insert_channel(
         .execute(conn).await.map_err(storage_error)?.rows_affected();
     if inserted == 0 {
         return Err(invalid("channel already exists"));
-    }
-    Ok(())
-}
-
-fn validate_channel(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > MAX_CHANNEL_BYTES
-        || name.trim() != name
-        || name.chars().any(char::is_control)
-    {
-        return Err(invalid(
-            "channel names must contain 1–128 bytes without edge whitespace or control characters",
-        ));
     }
     Ok(())
 }

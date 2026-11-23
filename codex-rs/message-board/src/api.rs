@@ -22,6 +22,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use uuid::Uuid;
 
+const MAX_CHANNEL_BYTES: usize = 128;
+
 // Local and remote implementations must remain usable through the same handle.
 const _: Option<&dyn AgentMessageBoard> = None;
 
@@ -89,16 +91,6 @@ pub trait AgentMessageBoard: Send + Sync {
         request: AppendRequest,
     ) -> BoxFuture<'_, Result<PostMetadata>>;
 
-    /// Like a silent append, also returns the subscribers at the moment of insertion.
-    /// An idempotent retry returns the existing post and no new deliveries.
-    fn append_with_subscribers(
-        &self,
-        _caller: ThreadId,
-        _request: AppendRequest,
-    ) -> BoxFuture<'_, Result<(PostMetadata, Vec<ThreadId>)>> {
-        unsupported("appending with subscribers")
-    }
-
     fn list_threads(
         &self,
         caller: ThreadId,
@@ -142,15 +134,6 @@ pub trait AgentMessageBoard: Send + Sync {
         caller: ThreadId,
         request: SubscriptionRequest,
     ) -> BoxFuture<'_, Result<SubscriptionState>>;
-
-    /// List a caller's current channel subscriptions on a live board.
-    fn subscribed_channels(
-        &self,
-        _caller: ThreadId,
-        _page: PageRequest,
-    ) -> BoxFuture<'_, Result<Page<String>>> {
-        unsupported("listing channel subscriptions")
-    }
 }
 
 fn unsupported<T>(operation: &'static str) -> BoxFuture<'static, Result<T>> {
@@ -182,6 +165,21 @@ pub enum SortDirection {
 pub enum SubscriptionChange {
     Subscribe,
     Unsubscribe,
+}
+
+/// Checks whether a name is valid for channel creation, independent of board contents.
+pub fn validate_channel(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > MAX_CHANNEL_BYTES
+        || name.trim() != name
+        || name.chars().any(char::is_control)
+    {
+        return Err(CodexErr::InvalidRequest(
+            "channel names must contain 1–128 bytes without edge whitespace or control characters"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,7 +258,6 @@ pub struct PostRequest {
 pub(crate) enum PostBehavior {
     Discussion,
     SilentAppend,
-    SilentAppendWithSubscribers,
 }
 
 /// Request to append evidence without subscribing its author or notifying anyone.

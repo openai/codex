@@ -127,31 +127,6 @@ impl LocalAgentMessageBoard {
             .execute(&mut *tx).await.map_err(storage_error)?;
         tx.commit().await.map_err(storage_error)
     }
-
-    /// Lists the caller's channel subscriptions within the existing page budget.
-    pub async fn subscribed_channels(
-        &self,
-        caller: ThreadId,
-        page: PageRequest,
-    ) -> Result<Page<String>> {
-        self.host.agent_path(caller).await?;
-        let window = Window::new(&page)?;
-        // Probe the existing subscriptions primary key for each channel.
-        let channels = sqlx::query_scalar::<_, String>(
-            "SELECT c.name FROM channels AS c WHERE c.board=? AND EXISTS (
-                SELECT 1 FROM subscriptions AS s
-                WHERE s.board=c.board AND s.target=json_object('Channel',c.name) AND s.agent=?
-             ) ORDER BY c.name LIMIT ? OFFSET ?",
-        )
-        .bind(self.identity.to_string())
-        .bind(caller.to_string())
-        .bind((window.limit + 1) as i64)
-        .bind(window.offset())
-        .fetch_all(self.pool.as_ref())
-        .await
-        .map_err(storage_error)?;
-        window.finish(channels)
-    }
 }
 
 impl AgentMessageBoard for LocalAgentMessageBoard {
@@ -202,18 +177,6 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         Box::pin(LocalAgentMessageBoard::append(self, caller, request))
     }
 
-    fn append_with_subscribers(
-        &self,
-        caller: ThreadId,
-        request: AppendRequest,
-    ) -> BoxFuture<'_, Result<(PostMetadata, Vec<ThreadId>)>> {
-        Box::pin(self.write_append(
-            caller,
-            request,
-            crate::api::PostBehavior::SilentAppendWithSubscribers,
-        ))
-    }
-
     fn set_subscription(
         &self,
         caller: ThreadId,
@@ -221,16 +184,6 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
     ) -> BoxFuture<'_, Result<SubscriptionState>> {
         Box::pin(LocalAgentMessageBoard::set_subscription(
             self, caller, request,
-        ))
-    }
-
-    fn subscribed_channels(
-        &self,
-        caller: ThreadId,
-        page: PageRequest,
-    ) -> BoxFuture<'_, Result<Page<String>>> {
-        Box::pin(LocalAgentMessageBoard::subscribed_channels(
-            self, caller, page,
         ))
     }
 
