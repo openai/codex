@@ -56,7 +56,7 @@ pub(crate) async fn fetch_measurement_reference_bundle(
         REMOTE_GLOBAL_MARKETPLACE_NAME,
         &plugin.name,
         plugin.release.version.as_deref(),
-        plugin.release.bundle_download_url.as_deref(),
+        &plugin.release.archive_download,
         plugin.release.app_manifest,
     )?;
     Ok(Some((plugin.id, bundle)))

@@ -292,6 +292,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-otel-trace-websocket = { path = "otel-trace-websocket" }
 codex-plugin = { path = "plugin" }
+codex-plugin-archive-verification = { path = "plugin-archive-verification" }
 codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }

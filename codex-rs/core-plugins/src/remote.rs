@@ -33,8 +33,11 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_plugin_archive_verification::ArchiveVerificationFailure;
+use codex_plugin_archive_verification::RemotePluginArchiveDownload;
 use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use futures::future::BoxFuture;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
@@ -225,19 +228,25 @@ impl RemotePluginServiceConfig {
         config
     }
 
+    pub(crate) async fn authenticated_request(
+        &self,
+        method: Method,
+        url: &str,
+        auth: &CodexAuth,
+    ) -> Result<RequestBuilder, codex_api::AuthError> {
+        let (request, headers) = self
+            .prepare_authenticated_request(method, url, auth)
+            .await?;
+        Ok(request.headers(headers))
+    }
+
     // Keep runtime registration out of callers' async stack frames.
-    pub(crate) fn authenticated_request<'a>(
+    fn prepare_authenticated_request<'a>(
         &'a self,
         method: Method,
         url: &'a str,
         auth: &'a CodexAuth,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<RequestBuilder, codex_api::AuthError>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<(RequestBuilder, HeaderMap), codex_api::AuthError>> {
         Box::pin(async move {
             if self.runtime_auth.is_some() {
                 codex_model_provider::validate_runtime_destination(Some(&self.chatgpt_base_url))
@@ -279,7 +288,7 @@ impl RemotePluginServiceConfig {
                 None => self.http_clients.request(method, url),
             };
             let headers = resolved.auth.apply_auth_headers(HeaderMap::new()).await?;
-            Ok(request.headers(default_headers()).headers(headers))
+            Ok((request.headers(default_headers()), headers))
         })
     }
 
@@ -427,7 +436,7 @@ pub struct RemotePluginDetail {
     pub share_url: Option<String>,
     pub description: Option<String>,
     pub release_version: Option<String>,
-    pub bundle_download_url: Option<String>,
+    pub archive_download: RemotePluginArchiveDownload,
     pub app_manifest: Option<JsonValue>,
     pub skills: Vec<RemotePluginSkill>,
     pub onboarding_skill_name: Option<String>,
@@ -757,8 +766,8 @@ struct RemotePluginReleaseResponse {
     version: Option<String>,
     display_name: String,
     description: String,
-    #[serde(default)]
-    bundle_download_url: Option<String>,
+    #[serde(flatten)]
+    archive_download: RemotePluginArchiveDownload,
     #[serde(default)]
     app_ids: Vec<String>,
     #[serde(default)]
@@ -1632,7 +1641,7 @@ async fn build_remote_plugin_detail(
         share_url: plugin.share_url,
         description: non_empty_string(Some(&plugin.release.description)),
         release_version: plugin.release.version,
-        bundle_download_url: plugin.release.bundle_download_url,
+        archive_download: plugin.release.archive_download,
         app_manifest: plugin.release.app_manifest,
         skills,
         onboarding_skill_name: plugin.release.onboarding_skill_name,
@@ -2485,13 +2494,36 @@ async fn authenticated_request(
     url: &str,
     auth: &CodexAuth,
 ) -> Result<RequestBuilder, RemotePluginCatalogError> {
-    Ok(config
+    let request = config
         .authenticated_request(method, url, auth)
         .await
         .map_err(std::io::Error::other)
-        .map_err(RemotePluginCatalogError::AuthToken)?
+        .map_err(RemotePluginCatalogError::AuthToken)?;
+    Ok(with_catalog_request_options(config, request))
+}
+
+/// Pair the selected transport with the exact credentials used to scope the signing-key cache.
+pub(crate) async fn prepare_signing_key_request(
+    config: &RemotePluginServiceConfig,
+    url: String,
+    auth: Option<&CodexAuth>,
+) -> Result<(RequestBuilder, HeaderMap), ArchiveVerificationFailure> {
+    let auth = ensure_chatgpt_auth(auth)
+        .map_err(|_| ArchiveVerificationFailure::AuthenticationRequired)?;
+    let (request, headers) = config
+        .prepare_authenticated_request(Method::GET, &url, auth)
+        .await
+        .map_err(|_| ArchiveVerificationFailure::AuthenticationRequired)?;
+    Ok((with_catalog_request_options(config, request), headers))
+}
+
+fn with_catalog_request_options(
+    config: &RemotePluginServiceConfig,
+    request: RequestBuilder,
+) -> RequestBuilder {
+    request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .header(OAI_PRODUCT_SKU_HEADER, &config.product_sku))
+        .header(OAI_PRODUCT_SKU_HEADER, &config.product_sku)
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(

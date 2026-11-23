@@ -196,6 +196,7 @@ impl RemotePluginMeasurementCache {
             return Ok(None);
         };
         if let Some(sender) = initializer {
+            let auth = auth.clone();
             // The cache keeps the receiver alive when individual callers cancel.
             // Once the cache and all callers disappear, stop waiting/downloading.
             tokio::spawn(async move {
@@ -203,7 +204,7 @@ impl RemotePluginMeasurementCache {
                     biased;
                     _ = sender.closed() => return,
                     reference = async {
-                        let bytes = download_remote_plugin_bundle(&service, &bundle).await?;
+                        let bytes = download_remote_plugin_bundle(&service, Some(&auth), &bundle).await?;
                         // Blocking extraction cannot be aborted once started. Its
                         // owner must keep the store alive even if this task stops.
                         tokio::task::spawn_blocking(move || {

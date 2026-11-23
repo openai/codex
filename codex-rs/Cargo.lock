@@ -3261,6 +3261,7 @@ dependencies = [
  "codex-model-provider",
  "codex-otel",
  "codex-plugin",
+ "codex-plugin-archive-verification",
  "codex-protocol",
  "codex-runtime-agent-instance",
  "codex-shell-command",

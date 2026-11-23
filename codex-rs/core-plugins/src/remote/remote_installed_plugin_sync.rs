@@ -267,7 +267,7 @@ pub(crate) async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
             &marketplace_name,
             &plugin.name,
             release_version,
-            plugin.release.bundle_download_url.as_deref(),
+            &plugin.release.archive_download,
             plugin.release.app_manifest.clone(),
         ) {
             Ok(bundle) => bundle,
@@ -292,6 +292,7 @@ pub(crate) async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
         capabilities.include_active_bundle(&store, &plugin_id).await;
         match crate::remote_bundle::download_and_install_remote_plugin_bundle(
             config,
+            Some(auth),
             codex_home.clone(),
             bundle,
         )

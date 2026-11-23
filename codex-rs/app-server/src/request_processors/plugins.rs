@@ -2550,6 +2550,9 @@ fn remote_plugin_bundle_install_error_type(err: &RemotePluginBundleInstallError)
         RemotePluginBundleInstallError::UnsupportedBundleDownloadFinalUrl { .. } => {
             "remote_bundle_unsupported_download_final_url"
         }
+        RemotePluginBundleInstallError::ArchiveVerification { .. } => {
+            "remote_bundle_archive_verification"
+        }
         RemotePluginBundleInstallError::ExtractedBundleTooLarge { .. } => {
             "remote_bundle_extracted_too_large"
         }

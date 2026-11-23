@@ -85,7 +85,7 @@ pub async fn checkout_remote_plugin_share(
             &detail.marketplace_name,
             &plugin_name,
             detail.release_version.as_deref(),
-            detail.bundle_download_url.as_deref(),
+            &detail.archive_download,
             /*app_manifest*/ None,
         )
         .map_err(|err| {
@@ -95,6 +95,7 @@ pub async fn checkout_remote_plugin_share(
         })?;
         crate::remote_bundle::download_and_extract_remote_plugin_bundle_to_path(
             config,
+            auth,
             bundle,
             local_plugin_path.clone(),
         )

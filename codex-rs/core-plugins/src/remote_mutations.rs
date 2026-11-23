@@ -143,7 +143,7 @@ impl PluginsManager {
             &detail.marketplace_name,
             &detail.summary.name,
             detail.release_version.as_deref(),
-            detail.bundle_download_url.as_deref(),
+            &detail.archive_download,
             detail.app_manifest.clone(),
         )
         .map_err(|err| resolved(Error::Bundle(err)))?;
@@ -164,6 +164,7 @@ impl PluginsManager {
         // Materialize first: a failed download must never leave a backend installation behind.
         let installed = remote_bundle::download_and_install_remote_plugin_bundle(
             &service,
+            auth,
             self.codex_home.clone(),
             bundle,
         )

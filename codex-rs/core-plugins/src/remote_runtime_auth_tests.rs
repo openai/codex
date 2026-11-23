@@ -22,6 +22,7 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::path;
 
 #[tokio::test]
@@ -53,7 +54,13 @@ async fn plugin_runtime_auth_shares_registration_and_strips_cross_origin_auth() 
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "plugins": [], "pagination": {"next_page_token": null},
             })))
-            .expect(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/backend-api/ps/plugins/signing-keys"))
+            .and(header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(path("/backend-api/plugins/featured"))
@@ -175,24 +182,20 @@ async fn plugin_runtime_auth_shares_registration_and_strips_cross_origin_auth() 
                 .contains_key("x-openai-agent-assertion")
         );
         destination.verify().await;
-        let url = format!("{}/backend-api/ps/plugins/list", server.uri());
-        let pending = config
-            .authenticated_request(Method::GET, &url, &auth)
+        let url = format!("{}/backend-api/ps/plugins/signing-keys", server.uri());
+        let (pending, headers) = prepare_signing_key_request(&config, url.clone(), Some(&auth))
             .await
             .unwrap();
         policy.invalidate();
         assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
         assert!(matches!(
-            pending.send().await,
+            pending.headers(headers).send().await,
             Err(RouteAwareRequestError::Policy(NetworkPolicyDenied::Revoked))
         ));
-        let response = config
-            .authenticated_request(Method::GET, &url, &auth)
-            .await
-            .unwrap()
-            .send()
+        let (request, headers) = prepare_signing_key_request(&config, url, Some(&auth))
             .await
             .unwrap();
+        let response = request.headers(headers).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let requests = server.received_requests().await.unwrap();
         let mut proof_ids = HashSet::new();

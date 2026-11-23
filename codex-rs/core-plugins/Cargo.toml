@@ -32,6 +32,7 @@ codex-mcp = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
+codex-plugin-archive-verification = { workspace = true }
 codex-protocol = { workspace = true }
 codex-runtime-agent-instance = { workspace = true }
 codex-shell-command = { workspace = true }
