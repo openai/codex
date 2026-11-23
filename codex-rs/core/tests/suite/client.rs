@@ -4573,7 +4573,10 @@ async fn env_var_overrides_loaded_auth() {
             "Custom-Header".to_string(),
             "Value".into(),
         )])),
-        env_http_headers: None,
+        env_http_headers: Some(std::collections::HashMap::from([(
+            "X-Codex-Exclude-Stream-Fields".to_string(),
+            EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string(),
+        )])),
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
@@ -4618,6 +4621,10 @@ async fn env_var_overrides_loaded_auth() {
         .find(|request| request.url.path() == "/openai/responses")
         .expect("missing provider request");
     assert_eq!(request.headers.get(X_CODEX_ROUTING_HINT_HEADER), None);
+    assert_eq!(
+        request.headers["x-codex-exclude-stream-fields"],
+        std::env::var(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE).unwrap()
+    );
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {

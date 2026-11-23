@@ -7,6 +7,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -28,6 +29,11 @@ async fn output_token_replay_respects_provider_and_preserves_history(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
+    let mut started = ev_reasoning_item_added("reasoning", &[]);
+    if !openai_provider {
+        // A provider that ignores the opt-in may still send a preliminary ciphertext.
+        started["item"]["encrypted_content"] = json!("preliminary");
+    }
     let mut reasoning = ev_reasoning_item("reasoning", &["I will check the result."], &[]);
     reasoning["item"]["content"] = json!(null);
     let mut commentary = ev_assistant_message("commentary", "I will record the completed step.");
@@ -67,6 +73,7 @@ async fn output_token_replay_respects_provider_and_preserves_history(
         &server,
         vec![
             sse(vec![
+                started,
                 reasoning,
                 commentary,
                 call,
@@ -111,6 +118,12 @@ async fn output_token_replay_respects_provider_and_preserves_history(
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[0]
+            .header("x-codex-exclude-stream-fields")
+            .as_deref(),
+        Some("reasoning.added.encrypted_content")
+    );
     let expected_include = if enabled && openai_provider {
         json!(["reasoning.encrypted_content", "output.encrypted_content"])
     } else {
