@@ -42,6 +42,7 @@ pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_GET_METADATA_BATCH_METHOD: &str = "fs/getMetadataBatch";
 pub const FS_WATCH_MISSING_METHOD: &str = "fs/watchMissing";
 pub const FS_MISSING_CHANGED_METHOD: &str = "fs/missingChanged";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
@@ -170,6 +171,9 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
+    /// Whether this executor supports ordered per-path metadata results in one request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fs_metadata_batch: bool,
     /// Whether missing metadata paths can be watched on this physical connection.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fs_watch_missing: bool,
@@ -330,6 +334,7 @@ impl EnvironmentInfo {
                 credential_masking,
                 credential_masking_custom_providers: credential_masking,
                 capability_discovery_sandbox: true,
+                fs_metadata_batch: true,
                 fs_watch_missing: cfg!(target_os = "linux"),
                 capability_discovery_v2: true,
                 environment_config_read: true,
@@ -794,6 +799,21 @@ pub struct FsGetMetadataParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchParams {
+    pub paths: Vec<PathUri>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_symlinks: Option<bool>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchResponse {
+    pub results: Vec<Result<codex_file_system::FileMetadata, JSONRPCErrorError>>,
 }
 
 /// One unsandboxed metadata observation per connection. A newer id supersedes the prior watch.
@@ -1612,6 +1632,7 @@ mod tests {
                 credential_masking: false,
                 credential_masking_custom_providers: false,
                 capability_discovery_sandbox: true,
+                fs_metadata_batch: false,
                 fs_watch_missing: false,
                 capability_discovery_v2: false,
                 environment_config_read: false,

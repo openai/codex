@@ -26,6 +26,8 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataBatchParams;
+use crate::protocol::FsGetMetadataBatchResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsOpenParams;
@@ -233,6 +235,38 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsCreateDirectoryResponse {})
+    }
+
+    pub(crate) async fn get_metadata_batch(
+        &self,
+        params: FsGetMetadataBatchParams,
+    ) -> Result<FsGetMetadataBatchResponse, JSONRPCErrorError> {
+        if !codex_file_system::metadata_batch_fits(&params.paths) {
+            return Err(invalid_request(
+                "metadata batch exceeds size limit".to_string(),
+            ));
+        }
+        let options = GetMetadataOptions {
+            follow_symlinks: params.follow_symlinks.unwrap_or(true),
+        };
+        let results = match self
+            .file_system
+            .get_metadata_batch(&params.paths, options, params.sandbox.as_ref())
+            .await
+        {
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                codex_file_system::resolve_metadata_batch(
+                    &self.file_system,
+                    &params.paths,
+                    options,
+                    params.sandbox.as_ref(),
+                )
+                .await
+            }
+            result => result,
+        }
+        .map_err(map_fs_error)?;
+        Ok(crate::fs_helper::encode_metadata_batch(results))
     }
 
     pub(crate) async fn get_metadata(

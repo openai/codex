@@ -1,6 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_file_system::metadata_batch_fits;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
 use tokio_util::io::ReaderStream;
@@ -32,6 +33,7 @@ use crate::fs_sandbox::FileSystemSandboxRunner;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsOpenMode;
 use crate::protocol::FsReadDirectoryParams;
@@ -412,6 +414,36 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         ))
     }
 
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<FileMetadata>>> {
+        Box::pin(async move {
+            if paths.is_empty() {
+                return Ok(Vec::new());
+            }
+            if !metadata_batch_fits(paths) {
+                return Err(io::ErrorKind::Unsupported.into());
+            }
+            let sandbox = require_platform_sandbox(sandbox)?;
+            let response = self
+                .run_sandboxed(
+                    sandbox,
+                    FsHelperRequest::GetMetadataBatch(FsGetMetadataBatchParams {
+                        paths: paths.to_vec(),
+                        follow_symlinks: (!options.follow_symlinks).then_some(false),
+                        sandbox: None,
+                    }),
+                )
+                .await?
+                .expect_get_metadata_batch()
+                .map_err(map_sandbox_error)?;
+            crate::fs_helper::decode_metadata_batch(response, paths.len())
+        })
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -477,7 +509,7 @@ fn require_platform_sandbox(
         })
 }
 
-fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
+pub(crate) fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
     match error.code {
         -32004 => io::Error::new(io::ErrorKind::NotFound, error.message),
         -32600 => io::Error::new(io::ErrorKind::InvalidInput, error.message),

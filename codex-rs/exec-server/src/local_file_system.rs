@@ -344,6 +344,18 @@ impl ExecutorFileSystem for LocalFileSystem {
         Box::pin(LocalFileSystem::get_metadata(self, path, options, sandbox))
     }
 
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        options: GetMetadataOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<io::Result<FileMetadata>>> {
+        Box::pin(async move {
+            let (fs, sandbox) = self.file_system_for_reads(sandbox)?;
+            fs.get_metadata_batch(paths, options, sandbox).await
+        })
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,

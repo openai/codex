@@ -21,6 +21,7 @@ use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_BATCH_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_BLOCK_METHOD;
@@ -31,6 +32,7 @@ use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_BLOCK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCloseParams;
+use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsReadBlockParams;
 use crate::protocol::FsWriteBlockParams;
 use crate::protocol::HTTP_REQUEST_METHOD;
@@ -191,6 +193,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         crate::protocol::FS_WATCH_MISSING_METHOD,
         |handler: Arc<ExecServerHandler>, params: crate::protocol::FsWatchMissingParams| async move {
             handler.fs_watch_missing(params).await
+        },
+    );
+    router.request(
+        FS_GET_METADATA_BATCH_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsGetMetadataBatchParams| async move {
+            handler.fs_get_metadata_batch(params).await
         },
     );
     router.request(
