@@ -83,26 +83,9 @@ impl SidebarImage {
         area: Rect,
         buf: &mut Buffer,
         protocol: Option<ImageProtocol>,
-        resize_hint: Option<&str>,
     ) -> Option<ImagePlacement> {
         Line::from(self.label.as_str()).dim().render(area, buf);
-        let available_rows = area.height.saturating_sub(2 + u16::from(area.height > 3));
-        if area.height > 1 {
-            let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-            if let Some(hint) = resize_hint {
-                crate::sidebar_chooser::resize_hint(hint, footer.width).render(footer, buf);
-            } else {
-                crate::footer_hint::HintLine::new(
-                    [
-                        crate::footer_hint::shortcut("←/→", "tabs"),
-                        crate::footer_hint::shortcut("Esc", "close"),
-                    ],
-                    footer.width,
-                )
-                .line
-                .render(footer, buf);
-            }
-        }
+        let available_rows = area.height.saturating_sub(1 + u16::from(area.height > 2));
         // tmux uses Kitty's virtual placements. The shared placeholder renderer
         // currently emits row marks for up to six rows.
         let rows = if crate::tui::tmux_fullscreen_image_base().is_some() {

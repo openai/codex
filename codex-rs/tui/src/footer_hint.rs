@@ -35,6 +35,27 @@ pub(crate) struct HintLine {
 }
 
 impl HintLine {
+    /// Wrap complete shortcuts into at most `max_rows`, marking any remaining overflow.
+    pub(crate) fn wrapped(
+        hints: impl IntoIterator<Item = Line<'static>>,
+        width: u16,
+        max_rows: usize,
+    ) -> Vec<Self> {
+        if max_rows == 0 {
+            return Vec::new();
+        }
+        let mut rows = wrap_hint_rows(hints, width, /*separator_width*/ 3, Line::width).into_iter();
+        let mut lines = Vec::new();
+        while let Some(row) = rows.next() {
+            if lines.len() + 1 == max_rows {
+                lines.push(Self::new(row.into_iter().chain(rows.flatten()), width));
+                break;
+            }
+            lines.push(Self::new(row, width));
+        }
+        lines
+    }
+
     pub(crate) fn new(hints: impl IntoIterator<Item = Line<'static>>, width: u16) -> Self {
         let mut hints = hints.into_iter().peekable();
         let mut line = Line::default();

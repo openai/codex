@@ -582,8 +582,8 @@ pub(crate) fn file_path_key_available(keymap: &RuntimeKeymap) -> bool {
         .is_none()
 }
 
-pub(crate) fn scroll_file_path(area: Rect, path: &str, top: usize, action: ListAction) -> usize {
-    let (path_rows, height) = file_path_layout(area, path);
+pub(crate) fn scroll_file_path(body: Rect, path: &str, top: usize, action: ListAction) -> usize {
+    let (path_rows, height) = file_path_layout(body, path);
     let limit = path_rows.len().saturating_sub(height);
     let top = top.min(limit);
     match action {
@@ -597,15 +597,44 @@ pub(crate) fn scroll_file_path(area: Rect, path: &str, top: usize, action: ListA
     }
 }
 
-fn file_path_layout(area: Rect, path: &str) -> (Vec<std::borrow::Cow<'_, str>>, usize) {
-    let body = area
-        .height
-        .saturating_sub(u16::from(area.height > 2) * 2 + 1);
-    let visible = usize::from(body.saturating_sub(u16::from(body > 2) * 2));
-    (
-        textwrap::wrap(path, usize::from(body_row(area, area.y).width.max(1))),
-        visible,
-    )
+pub(crate) fn file_path_areas(area: Rect) -> [Rect; 2] {
+    let footer_height = area.height.min(1);
+    let top = footer_height + u16::from(area.height > 3);
+    [
+        Rect {
+            height: area.height.saturating_sub(top + footer_height),
+            ..body_row(area, area.y + top)
+        },
+        Rect {
+            height: footer_height,
+            ..body_row(area, area.bottom() - footer_height)
+        },
+    ]
+}
+
+fn file_path_layout(body: Rect, path: &str) -> (Vec<std::borrow::Cow<'_, str>>, usize) {
+    let visible = usize::from(body.height.saturating_sub(u16::from(body.height > 2) * 2));
+    let options = textwrap::Options::new(usize::from(body.width.max(1)))
+        .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit)
+        .word_splitter(textwrap::WordSplitter::NoHyphenation)
+        .word_separator(textwrap::WordSeparator::Custom(|path| {
+            Box::new(
+                path.split_inclusive(['/', '\\'])
+                    .map(textwrap::core::Word::from),
+            )
+        }));
+    (textwrap::wrap(path, options), visible)
+}
+
+pub(crate) fn paint_file_path(body: Rect, path: &str, top: usize, buf: &mut Buffer) {
+    let mut lines = Vec::new();
+    if body.height > 2 {
+        lines.extend([Line::from("File path").bold(), Line::default()]);
+    }
+    let (path, visible) = file_path_layout(body, path);
+    let top = top.min(path.len().saturating_sub(visible));
+    lines.extend(path.into_iter().skip(top).take(visible).map(Line::from));
+    ratatui::widgets::Paragraph::new(lines).render(body, buf);
 }
 
 pub(crate) struct SidebarStyle<'a> {
@@ -640,21 +669,9 @@ pub(crate) fn paint(
     let width = usize::from(row(area.y).width.saturating_sub(1));
     let footer_y = area.bottom() - 1;
     if let Some(path) = sidebar_style.full_path {
-        let mut body = body_row(area, area.y + u16::from(area.height > 2) * 2);
-        body.height = area
-            .height
-            .saturating_sub(u16::from(area.height > 2) * 2 + 1);
-        let mut lines = Vec::new();
-        if body.height > 2 {
-            lines.extend([Line::from("File path").bold(), Line::default()]);
-        }
-        let (path, visible) = file_path_layout(area, path);
-        let top = sidebar_style
-            .path_scroll
-            .min(path.len().saturating_sub(visible));
-        lines.extend(path.into_iter().skip(top).take(visible).map(Line::from));
-        ratatui::widgets::Paragraph::new(lines).render(body, buf);
-        footer.render(row(footer_y), buf);
+        let [body, footer_area] = file_path_areas(area);
+        paint_file_path(body, path, sidebar_style.path_scroll, buf);
+        footer.render(footer_area, buf);
         return;
     }
     let rows = ChoiceRows::new(area, tabs);

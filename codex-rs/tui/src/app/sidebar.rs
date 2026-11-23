@@ -136,12 +136,11 @@ impl SidebarPane {
         let selected = self.visible_content();
         let visible = visible && self.close.is_none();
         for (&id, doc) in &mut self.documents {
+            let visible = visible && selected == Some(SidebarContent::Document(id));
+            let path_visible = visible && doc.path_actions_available();
+            doc.path_actions.finish_copy(completion, path_visible);
             if let Some((view, cells)) = doc.reader()
-                && view.finish_copy(
-                    cells,
-                    completion,
-                    visible && selected == Some(SidebarContent::Document(id)),
-                ) == Some(true)
+                && view.finish_copy(cells, completion, visible) == Some(true)
             {
                 view.jump_to_latest();
             }

@@ -12,5 +12,5 @@ expression: sidebar.trim_end()
 
 
 
-
- ↑/↓ read · f3 find · Tab link …
+ esc clear highlight · c copy path
+ p show path · ↑/↓ read · f3 find …

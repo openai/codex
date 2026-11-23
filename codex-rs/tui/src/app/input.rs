@@ -121,7 +121,7 @@ impl App {
                     },
                     |document| {
                         document.owns_interaction_key(key_event)
-                            && (!document.allows_tab_shortcut(key_event)
+                            && (!document.allows_tab_shortcut(key_event, &self.keymap)
                                 || crate::transcript_view::JumpTarget::from_key(key_event)
                                     .is_none())
                     },
@@ -347,7 +347,9 @@ impl App {
         if self.chat_widget.no_modal_or_popup_active()
             && let Some(doc) = self.focused_document()
         {
-            return if doc.is_search_editing() {
+            return if doc.path_actions.scroll.is_some() {
+                KeymapContextSet::new(KeymapContext::List)
+            } else if doc.is_search_editing() {
                 KeymapContextSet::new(KeymapContext::Editor)
             } else {
                 KeymapContextSet::transcript()

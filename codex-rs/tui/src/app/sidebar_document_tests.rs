@@ -7,6 +7,7 @@ use crate::app::test_support::enable_side_retention;
 use crate::app::test_support::side_frame;
 use crate::app::tests::make_test_app_with_channels;
 use crate::history_cell::AgentMarkdownCell;
+use crate::keymap::KeymapContext;
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
 use crossterm::event::MouseEvent;
@@ -87,6 +88,10 @@ async fn document_preview_scenario() -> Result<()> {
         Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x end".into())));
     app.local_settings.tui.keymap.global.select_transcript =
         Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x [".into())));
+    app.local_settings.tui.keymap.list.move_down =
+        Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x j".into())));
+    app.local_settings.tui.keymap.list.cancel =
+        Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x q".into())));
     enable_side_retention(&mut app)?;
     crate::markdown_render::preferences::set_document_links(/*enabled*/ true);
     let enabled = side_frame(&mut app, &mut tui, size)?;
@@ -132,7 +137,43 @@ async fn document_preview_scenario() -> Result<()> {
         "{error}"
     );
 
-    assert!(pane_text.ends_with("esc close"), "{error}");
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    insta::assert_snapshot!(visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1), @"esc close · c copy path · p show path");
+
+    Box::pin(app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Char('p').into()),
+    ))
+    .await?;
+    let revealed = side_frame(&mut app, &mut tui, size)?;
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    let rows = (sidebar.y + 1..sidebar.bottom())
+        .map(|row| visible_sidebar_row(&tui, sidebar, row))
+        .filter(|row| !row.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows[1..rows.len() - 1].join(""),
+        directory.join("guide.md").to_string_lossy(),
+        "{revealed}"
+    );
+    insta::assert_snapshot!(format!("{}\n{}", rows[0], rows.last().unwrap()), @"
+    File path
+    p/esc hide path · c copy path
+    ");
+    let prefix = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+    assert_eq!(app.route_key_chord_event(&mut tui, prefix), None);
+    let scroll = app
+        .route_key_chord_event(&mut tui, KeyCode::Char('j').into())
+        .and_then(|key| app.keymap.list.action_for(key));
+    assert_eq!(scroll, Some(crate::keymap::ListAction::MoveDown));
+    for key in [prefix, KeyCode::Char('q').into()] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+    }
+    assert!(app.active_keymap_contexts().contains(KeymapContext::Pager));
+    let dismissed = side_frame(&mut app, &mut tui, size)?;
+    assert!(dismissed.contains("File not found"), "{dismissed}");
+    assert_eq!(app.sidebar().unwrap().documents.len(), 1);
 
     std::fs::write(
         dir.path().join("guide.md"),
@@ -185,12 +226,22 @@ async fn document_preview_scenario() -> Result<()> {
     ");
     let sidebar = app.conversation_frame.panel_area().expect("document panel");
     assert!(!screen.contains("Back to bottom"), "{screen}");
-    let gap = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 2);
-    let hints = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
-    insta::assert_snapshot!(format!("{gap:?}\n{hints}"), @r#"
+    let gap = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 3);
+    let hints = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 2);
+    let actions = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
+    insta::assert_snapshot!(format!("{gap:?}\n{hints}\n{actions}"), @r#"
     ""
-    ↑/↓ read · f3 find · Tab link · ⌃x [ select · Esc close
+    esc close · c copy path · p show path · ↑/↓ read · f3 find · Tab link
+    ⌃x [ select
     "#);
+    let scroll_up = std::mem::replace(
+        &mut app.keymap.pager.scroll_up,
+        vec![crate::key_hint::plain(KeyCode::Char('p'))],
+    );
+    let remapped = side_frame(&mut app, &mut tui, size)?;
+    assert!(remapped.contains("c copy path"), "{remapped}");
+    assert!(!remapped.contains("p show path"), "{remapped}");
+    app.keymap.pager.scroll_up = scroll_up;
     let original_scroll = app.keymap.pager.scroll_down.clone();
     for key in [
         KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
@@ -466,7 +517,8 @@ async fn document_preview_scenario() -> Result<()> {
     insta::assert_snapshot!(preview, @"
     guide.md       ×   main.rs        ×                           +
     3 let value = 3;                                               ↑
-    ↑/↓ read · f3 find · Tab link · f8 select · Esc clear highlight
+    esc clear highlight · c copy path · p show path · ↑/↓ read
+    f3 find · Tab link · f8 select
     ");
     let panel = app.conversation_frame.panel_area().unwrap();
     let buffer = tui.terminal.previous_buffer();
@@ -531,13 +583,14 @@ async fn document_preview_scenario() -> Result<()> {
             row.contains("PNG ·")
                 || row.contains("Image preview unavailable")
                 || row.contains("←/→ tabs")
+                || row.contains("c copy path")
         })
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(image_rows, @"
     PNG · 24 × 16
     Image preview unavailable in this terminal
-    ←/→ tabs · Esc close
+    esc close · c copy path · p show path · ←/→ tabs
     ");
     assert_eq!(app.sidebar().unwrap().documents.len(), 2);
     app.open_document(
