@@ -60,7 +60,7 @@ async fn skips_a_partial_delivery_once_across_wakes_and_catch_up() -> anyhow::Re
     history
         .persist_thread(root, PersistContext::Standard)
         .await?;
-    evidence.enqueue(/*routed*/ None).await?;
+    evidence.enqueue(/*cutoff*/ None).await?;
     let first = writer.try_recv()?;
     assert!(first.snapshot.records().is_empty());
 
@@ -87,9 +87,27 @@ async fn skips_a_partial_delivery_once_across_wakes_and_catch_up() -> anyhow::Re
             items,
         })
         .await?;
+    // A request can go to a human after binding. Capturing its source position alone
+    // must leave the worker idle, even when there are unread originals.
+    let bound = evidence.capture_cutoff().await?;
+    assert!(matches!(writer.try_recv(), Err(TryRecvError::Empty)));
+    history
+        .append_items(AppendThreadItemsParams {
+            thread_id: root,
+            items: vec![RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: user_message_item("Later authorization"),
+                metadata: Some(CodexHarnessMetadata {
+                    user_input_order: Some(3),
+                    ..Default::default()
+                }),
+            })],
+        })
+        .await?;
+    history.flush_thread(root).await?;
     let mut warnings = NamedTraceEvents::subscribe("guardian_v3.evidence_skipped");
-    evidence.enqueue(/*routed*/ None).await?;
-    let routed = writer.try_recv()?.snapshot;
+    evidence.enqueue(Some(bound)).await?;
+    let capture = writer.try_recv()?;
+    let routed = &capture.snapshot;
     let [next] = routed.records() else {
         anyhow::bail!("expected only the complete delivery")
     };
@@ -98,14 +116,38 @@ async fn skips_a_partial_delivery_once_across_wakes_and_catch_up() -> anyhow::Re
     assert_eq!(next.id.ordinal, skipped + 1);
     warnings.next().await?;
 
-    evidence.enqueue(/*routed*/ None).await?;
+    // A second waiter at the same cutoff shares the writer's progress, even though
+    // a newer original is already durable.
+    let ready = evidence.request_through(Some(bound)).await?;
     assert!(matches!(writer.try_recv(), Err(TryRecvError::Empty)));
-
-    // A review at that very same position still needs a response from the writer.
-    let mut ready = evidence.request_catch_up().await?;
+    tokio::pin!(ready);
     assert!(futures::poll!(&mut ready).is_pending());
-    writer.try_recv()?.finish();
-    assert_eq!(ready.await?, routed.cutoff());
+    let cutoff = routed.cutoff();
+    capture.finish();
+    assert_eq!(ready.await?, cutoff);
+    let latest = evidence.request_catch_up().await?;
+    let later = writer.try_recv()?;
+    assert_eq!(later.snapshot.records().len(), 1);
+    assert!(later.snapshot.cutoff().end_ordinal_exclusive > cutoff.end_ordinal_exclusive);
+    let end = later.snapshot.cutoff();
+    {
+        // A later enqueue may hold the cursor while the queue is full.
+        let _guard = evidence.enqueued.try_lock()?;
+        let through = async |target| evidence.request_through(Some(target)).await?.await;
+        assert_eq!(
+            through(bound).now_or_never().context("already routed")??,
+            bound
+        );
+        let waiting = through(end);
+        tokio::pin!(waiting);
+        assert!(waiting.as_mut().now_or_never().is_none());
+        later.finish();
+        assert_eq!(
+            waiting.now_or_never().context("blocked after routing")??,
+            end
+        );
+    }
+    assert_eq!(latest.await?, end);
     assert!(warnings.next().now_or_never().is_none());
     test.codex.shutdown_and_wait().await?;
     Ok(())
@@ -125,6 +167,7 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
         .persist_thread(root, PersistContext::Standard)
         .await?;
     let cursor = EvidenceCursor::from_now(history.as_ref(), root).await?;
+    let delivered = cursor.position();
     let (evidence, _writer) = RootEvidence::new(Default::default(), history.clone(), cursor);
 
     let path = test
@@ -134,10 +177,10 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
         .context("rollout path")?;
     let hidden = path.with_extension("unavailable");
     tokio::fs::rename(path, &hidden).await?;
-    let unavailable = evidence.enqueue(/*routed*/ None).await;
+    let unavailable = evidence.enqueue(/*cutoff*/ None).await;
     tokio::fs::rename(hidden, path).await?;
     assert!(unavailable.is_err());
-    evidence.enqueue(/*routed*/ None).await?;
+    evidence.enqueue(/*cutoff*/ None).await?;
 
     history
         .append_items(AppendThreadItemsParams {
@@ -148,7 +191,7 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
         })
         .await?;
     let rejected = evidence
-        .enqueue(/*routed*/ None)
+        .enqueue(/*cutoff*/ None)
         .await
         .err()
         .context("expected rejected evidence")?;
@@ -158,11 +201,19 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
     // A fresh flush would now fail. The review must still get the original rejection.
     assert!(history.flush_thread(root).await.is_err());
     let error = evidence
-        .request_catch_up()
+        .capture_cutoff()
         .await
         .err()
         .context("expected a rejected cutoff")?;
     assert_eq!(error.to_string(), reason);
+    for cutoff in [None, Some(delivered)] {
+        let error = evidence
+            .request_through(cutoff)
+            .await
+            .err()
+            .context("expected a rejected cutoff")?;
+        assert_eq!(error.to_string(), reason);
+    }
     Ok(())
 }
 
@@ -325,7 +376,8 @@ async fn catch_up_waits_for_committed_delivery_and_allows_later_posts(
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let first_original = append_user_message(2, "Stop the release.").await?;
     let wait = Duration::from_secs(15);
-    let mut first = evidence.request_catch_up().await?;
+    let first = evidence.request_catch_up().await?;
+    tokio::pin!(first);
     tokio::time::timeout(wait, host.started.notified()).await?;
     assert!(futures::poll!(&mut first).is_pending());
     assert_eq!(inbox.len(), 0);

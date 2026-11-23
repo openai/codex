@@ -62,27 +62,43 @@ pub(super) async fn read(
                 "original history requires a paginated root",
             ));
         }
-        let end_byte_offset = complete_end(&mut file)?;
-        let end_ordinal_exclusive = {
-            let mut scanner = ReverseJsonlScanner::new_at(&mut file, end_byte_offset)?;
-            let Some(ScanOutcome::Parsed(last)) = scanner.scan_next_rollout_line()? else {
-                return Err(io::Error::other("original history has an invalid tail"));
-            };
-            last.ordinal
-                .and_then(|ordinal| ordinal.checked_add(1))
-                .ok_or_else(|| io::Error::other("original history tail has no next ordinal"))?
-        };
-        let end = HistoryPosition {
-            thread_id,
-            end_ordinal_exclusive,
-            end_byte_offset,
+        let end = match &request {
+            OriginalHistoryRequest::Range { end, .. } => {
+                if end.thread_id != thread_id
+                    || end.end_byte_offset > file.seek(SeekFrom::End(0))?
+                {
+                    return Err(io::Error::other(
+                        "original history cutoff no longer applies",
+                    ));
+                }
+                *end
+            }
+            OriginalHistoryRequest::Tail | OriginalHistoryRequest::After(_) => {
+                let end_byte_offset = complete_end(&mut file)?;
+                let end_ordinal_exclusive = {
+                    let mut scanner = ReverseJsonlScanner::new_at(&mut file, end_byte_offset)?;
+                    let Some(ScanOutcome::Parsed(last)) = scanner.scan_next_rollout_line()? else {
+                        return Err(io::Error::other("original history has an invalid tail"));
+                    };
+                    last.ordinal
+                        .and_then(|ordinal| ordinal.checked_add(1))
+                        .ok_or_else(|| {
+                            io::Error::other("original history tail has no next ordinal")
+                        })?
+                };
+                HistoryPosition {
+                    thread_id,
+                    end_ordinal_exclusive,
+                    end_byte_offset,
+                }
+            }
         };
         match request {
             OriginalHistoryRequest::Tail => Ok(OriginalHistoryRead {
                 items: Vec::new(),
                 end,
             }),
-            OriginalHistoryRequest::After(start) => {
+            OriginalHistoryRequest::After(start) | OriginalHistoryRequest::Range { start, .. } => {
                 if start.thread_id != thread_id
                     || start.end_byte_offset > end.end_byte_offset
                     || start.end_ordinal_exclusive > end.end_ordinal_exclusive

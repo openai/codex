@@ -12,6 +12,11 @@ pub enum OriginalHistoryRequest {
     /// Freeze the current complete tail and read originals after this position.
     /// Appends beyond that cutoff are excluded from the returned records.
     After(HistoryPosition),
+    /// Read only the records between two previously captured positions in this rollout.
+    Range {
+        start: HistoryPosition,
+        end: HistoryPosition,
+    },
 }
 
 /// One original record and the exclusive position immediately after it.

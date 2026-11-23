@@ -207,7 +207,9 @@ impl Host {
                         .route_next(&capture.snapshot, cancellation)
                         .await?
                         != 0
-                    {}
+                    {
+                        capture.routed_through(housekeeper.cursor().position());
+                    }
                     capture.finish();
                     let Some(next) = cancellation
                         .run_until_cancelled(captures.recv())

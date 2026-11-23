@@ -36,7 +36,8 @@ pub fn reviewer_headers(config: &crate::config::Config) -> crate::CodexResponses
     }
 }
 
-/// A thread's synchronous reviewer. Bind the evidence catch-up to the action before it waits.
+/// A thread's synchronous reviewer. Bind its evidence position before the action waits.
+/// Routing may hand the action to a human without ever requesting preparation.
 pub trait AttachedReviewer: Send + Sync {
     fn bind(self: std::sync::Arc<Self>) -> BoundReviewer;
 }
@@ -63,7 +64,8 @@ pub enum ReviewPreparationError {
     Cancelled,
 }
 
-/// Reserve the actor's reviewer after routing and delivery have covered the bound action.
+/// Reserve the actor's reviewer after routing and delivery have covered this attempt.
+/// A retry must cover authorization changes since the previous attempt.
 pub trait ReviewerPreparation: Send + Sync {
     fn prepare<'a>(
         &'a self,

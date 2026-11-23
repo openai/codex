@@ -64,6 +64,15 @@ async fn reads_complete_fixed_suffix_and_rejects_truncated_source()
     later["ordinal"] = json!(2);
     later["payload"]["content"][0]["text"] = json!("After the cutoff");
     writeln!(file, "{later}")?;
+    let bounded = store
+        .read_original_history(owner, OriginalHistoryRequest::Range { start, end })
+        .await?;
+    assert_eq!(bounded.end, end);
+    assert_eq!(bounded.items.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&bounded.items[0].item)?,
+        serde_json::to_value(&read.items[0].item)?
+    );
     assert_eq!(read.end, end);
     assert_eq!(read.items.len(), 1);
     assert_eq!(read.items[0].end, end);
