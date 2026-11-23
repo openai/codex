@@ -1,5 +1,6 @@
 //! Exercises missing-session recovery while the host's lease streams remain open.
 
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -19,7 +20,6 @@ use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHostServer;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::task::AbortOnDropHandle;
 use tonic::Code;
@@ -84,22 +84,25 @@ async fn last_failed_session_releases_the_shared_connection() -> Result<()> {
             Ok(req)
         }
     });
-    let host = TcpListener::bind("127.0.0.1:0").await?;
-    let host_addr = host.local_addr()?;
+    // Keep the host leg in memory so only the client socket can report a TCP reset.
+    let (mut host, server) = tokio::io::duplex(/*max_buf_size*/ 8192);
     let _server = AbortOnDropHandle::new(tokio::spawn(
         Server::builder()
             .add_service(service)
-            .serve_with_incoming(TcpListenerStream::new(host)),
+            .serve_with_incoming(tokio_stream::once(Ok::<_, std::io::Error>(server))),
     ));
 
-    // Forward exactly one TCP connection. Its EOF is the worker-release signal.
+    // Accept exactly one connection. The RPC assertions below rule out early disconnects.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let provider = GrpcCodeModeSessionProvider::new(format!("http://{}", listener.local_addr()?));
     let connection = AbortOnDropHandle::new(tokio::spawn(async move {
         let (mut client, _) = listener.accept().await?;
         drop(listener);
-        let mut host = TcpStream::connect(host_addr).await?;
-        tokio::io::copy_bidirectional(&mut client, &mut host).await
+        match tokio::io::copy_bidirectional(&mut client, &mut host).await {
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == ErrorKind::ConnectionReset => Ok(()),
+            Err(err) => Err(err),
+        }
     }));
     let first = provider
         .create_session()
