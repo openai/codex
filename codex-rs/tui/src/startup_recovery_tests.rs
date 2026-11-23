@@ -70,7 +70,10 @@ async fn recovery_after_handoff_preserves_pending_vim_replace_key() {
         insta::assert_snapshot!(take_unsent_text().unwrap(), @"Xbcd");
         assert_eq!(chat.composer_text_with_pending(), "abcd");
         tokio::time::advance(std::time::Duration::from_millis(100)).await;
-        assert!(chat.handle_paste_burst_tick(crate::tui::FrameRequester::test_dummy()));
+        assert!(
+            !chat.handle_paste_burst_tick(crate::tui::FrameRequester::test_dummy()),
+            "the draw that commits the replacement key should render it"
+        );
         assert_eq!(chat.composer_text_with_pending(), "Xbcd");
     })
     .await;
