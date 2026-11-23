@@ -7070,32 +7070,6 @@ fn summary_from_state_db_metadata(
     }
 }
 
-#[cfg(test)]
-fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
-    summary_from_state_db_metadata(
-        metadata.id,
-        metadata.rollout_path.clone(),
-        metadata.first_user_message.clone(),
-        metadata.preview.clone(),
-        metadata
-            .created_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata
-            .updated_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata.model_provider.clone(),
-        metadata.cwd.clone(),
-        metadata.cli_version.clone(),
-        metadata.source.clone(),
-        metadata.thread_source.clone(),
-        metadata.agent_nickname.clone(),
-        metadata.agent_role.clone(),
-        metadata.git_sha.clone(),
-        metadata.git_branch.clone(),
-        metadata.git_origin_url.clone().map(String::from),
-    )
-}
-
 fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
     items
         .iter()
