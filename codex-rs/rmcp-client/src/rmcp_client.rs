@@ -1430,7 +1430,14 @@ impl RmcpClient {
         Ok(())
     }
 
-    async fn create_pending_transport(
+    // Keep the transport future's polling code in this crate for both startup and recovery.
+    fn create_pending_transport(
+        transport_recipe: &TransportRecipe,
+    ) -> BoxFuture<'_, Result<PendingTransport>> {
+        Box::pin(Self::create_pending_transport_inner(transport_recipe))
+    }
+
+    async fn create_pending_transport_inner(
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
         match transport_recipe {
