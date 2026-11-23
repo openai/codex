@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
@@ -3779,6 +3780,12 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
     let server = MockServer::start().await;
     let previous_model = "gpt-5.4";
     let selected_model = "gpt-5.2";
+    let output_schema = json!({
+        "type": "object",
+        "properties": {"passed": {"type": "boolean"}},
+        "required": ["passed"],
+        "additionalProperties": false,
+    });
     let _models_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -3794,7 +3801,7 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
         .set_body_json(json!({ "error": { "code": "server_is_overloaded" } }));
     let mut responses = vec![
         sse_response(sse(vec![
-            ev_assistant_message("m1", "before switch"),
+            ev_assistant_message("m1", r#"{"passed":true}"#),
             ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
         ])),
         overload.clone(), // Old model: initial attempt and two retries.
@@ -3806,7 +3813,7 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
         responses.extend([
             sse_response(remote_v2_compaction_response()),
             sse_response(sse(vec![
-                ev_assistant_message("m3", "after switch"),
+                ev_assistant_message("m3", r#"{"passed":true}"#),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
             ])),
         ]);
@@ -3826,11 +3833,17 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
         .await
         .expect("build codex");
     test.codex
-        .start_or_steer_turn(disabled_permission_user_turn(
-            "before switch",
-            test.cwd.path().to_path_buf(),
-            previous_model.to_string(),
-        ))
+        .start_or_steer_turn(
+            disabled_permission_user_turn(
+                "before switch",
+                test.cwd.path().to_path_buf(),
+                previous_model.to_string(),
+            )
+            .on_start(TurnStartOptions {
+                final_output_json_schema: Some(output_schema.clone()),
+                ..Default::default()
+            }),
+        )
         .await
         .expect("submit first turn");
     wait_for_event(&test.codex, |event| {
@@ -3838,11 +3851,17 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
     })
     .await;
     test.codex
-        .start_or_steer_turn(disabled_permission_user_turn(
-            "after switch",
-            test.cwd.path().to_path_buf(),
-            selected_model.to_string(),
-        ))
+        .start_or_steer_turn(
+            disabled_permission_user_turn(
+                "after switch",
+                test.cwd.path().to_path_buf(),
+                selected_model.to_string(),
+            )
+            .on_start(TurnStartOptions {
+                final_output_json_schema: Some(output_schema.clone()),
+                ..Default::default()
+            }),
+        )
         .await
         .expect("submit selected-model turn");
     if selected_model_failures < 3 {
@@ -3887,6 +3906,26 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
         expected_models.push(selected_model); // Sampling after compaction succeeds.
     }
     assert_eq!(actual_models, expected_models);
+    let expected_format = json!({
+        "type": "json_schema",
+        "name": "codex_output_schema",
+        "strict": true,
+        "schema": output_schema,
+    });
+    let mut expected_formats = vec![expected_format.clone(); 4];
+    expected_formats.extend(vec![Value::Null; 3]);
+    if selected_model_failures < 3 {
+        expected_formats.push(expected_format);
+    }
+    assert_eq!(
+        request_log
+            .requests()
+            .iter()
+            .map(|request| request.body_json()["text"]["format"].clone())
+            .collect::<Vec<_>>(),
+        expected_formats,
+        "compaction retries must use each model's capability without changing normal sampling",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

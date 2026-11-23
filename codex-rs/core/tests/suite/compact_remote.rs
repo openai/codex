@@ -565,27 +565,53 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
 }
 
 enum CompactionProvider {
+    OpenAi,
     AmazonBedrock,
     Gcp,
 }
 
-#[test_case(CompactionProvider::AmazonBedrock, false; "bedrock")]
-#[test_case(CompactionProvider::Gcp, false; "gcp")]
-#[test_case(CompactionProvider::AmazonBedrock, true; "bedrock with output schema")]
-#[test_case(CompactionProvider::Gcp, true; "gcp with output schema")]
+#[test_case(CompactionProvider::AmazonBedrock, AMAZON_BEDROCK_GPT_5_5_MODEL_ID, false, true; "bedrock")]
+#[test_case(CompactionProvider::Gcp, "gpt-6.1-sol", false, true; "gcp")]
+#[test_case(CompactionProvider::AmazonBedrock, AMAZON_BEDROCK_GPT_5_5_MODEL_ID, true, true; "bedrock with output schema")]
+#[test_case(CompactionProvider::Gcp, "gpt-6.1-sol", true, true; "gcp with output schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-6.2-sol", true, true; "current model preserves compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "codex-auto-review", true, true; "guardian alias preserves compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5", true, false; "original legacy model omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5-mini", true, false; "original legacy variant omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.1", true, false; "previous legacy model omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.1-2025-11-13", true, false; "previous legacy snapshot omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.2", true, false; "legacy model omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.2-2025-12-11", true, false; "legacy snapshot omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.2-pro", true, false; "legacy pro omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.2-codex", true, true; "codex variant preserves compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.4-nano", true, false; "legacy nano omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.4-nano-2026-03-17", true, false; "legacy nano snapshot omits compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "gpt-5.20-sol", true, true; "future version preserves compaction schema")]
+#[test_case(CompactionProvider::OpenAi, "unknown-model", true, true; "unknown model preserves compaction schema")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_automatic_compaction_uses_v2_responses_endpoint(
     provider: CompactionProvider,
+    expected_model: &str,
     with_output_schema: bool,
+    preserve_compaction_schema: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let auth_fixture;
-    let (builder, expected_model, expected_path, expected_auth) = match provider {
+    let (builder, expected_path, expected_auth) = match provider {
+        CompactionProvider::OpenAi => (
+            test_codex().with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::RemoteCompactionV2)
+                    .expect("enable remote compaction");
+            }),
+            "/v1/responses",
+            "Bearer dummy",
+        ),
         CompactionProvider::AmazonBedrock => (
             amazon_bedrock_test_codex(),
-            AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
             "/v1/responses",
             "Bearer bedrock-test-api-key",
         ),
@@ -598,28 +624,26 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
             ));
             provider.auth = Some(auth_fixture.auth());
             (
-                test_codex()
-                    .with_model("gpt-6.1-sol")
-                    .with_config(move |config| {
-                        config.model_provider_id = GCP_PROVIDER_ID.to_string();
-                        config.model_provider = provider;
-                        config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
-                        config
-                            .features
-                            .enable(Feature::IncrementalToolsLegacyGcp)
-                            .expect("enable incremental tools on Vertex");
-                        config
-                            .features
-                            .enable(Feature::RemoteCompactionV2)
-                            .expect("test config should allow feature update");
-                    }),
-                "gpt-6.1-sol",
+                test_codex().with_config(move |config| {
+                    config.model_provider_id = GCP_PROVIDER_ID.to_string();
+                    config.model_provider = provider;
+                    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+                    config
+                        .features
+                        .enable(Feature::IncrementalToolsLegacyGcp)
+                        .expect("enable incremental tools on Vertex");
+                    config
+                        .features
+                        .enable(Feature::RemoteCompactionV2)
+                        .expect("test config should allow feature update");
+                }),
                 "/v1/projects/example-project/locations/global/publishers/openai/v1/responses",
                 "Bearer vertex-access-token",
             )
         }
     };
     let test = builder
+        .with_model(expected_model)
         .with_config(|config| {
             config.model_auto_compact_token_limit = Some(200);
         })
@@ -695,8 +719,16 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
             .iter()
             .map(|request| request.body_json()["text"]["format"].clone())
             .collect::<Vec<_>>(),
-        vec![expected_format; 3],
-        "sampling and compaction must use the same output format"
+        vec![
+            expected_format.clone(),
+            if preserve_compaction_schema {
+                expected_format.clone()
+            } else {
+                Value::Null
+            },
+            expected_format,
+        ],
+        "only known legacy compaction models must omit the final-answer format"
     );
     let cache_key = response_requests[0].body_json()["prompt_cache_key"]
         .as_str()
@@ -721,6 +753,7 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
         Some(expected_auth)
     );
     match provider {
+        CompactionProvider::OpenAi => {}
         CompactionProvider::AmazonBedrock => assert_eq!(
             compact_request
                 .header("x-amzn-mantle-client-agent")

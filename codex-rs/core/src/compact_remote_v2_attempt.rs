@@ -1,4 +1,5 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
+//! Only known legacy compaction models omit final-answer schemas.
 
 use crate::context::UserGoalUpdate;
 use codex_login::AuthOwner;
@@ -178,6 +179,21 @@ pub(super) async fn run_remote_compact_v2_attempt(
             .iter()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
     let tool_router = &step_context.tool_router;
+    // Bedrock uses the same model names with an `openai.` prefix.
+    let compaction_model = model_info
+        .slug
+        .strip_prefix("openai.")
+        .unwrap_or(&model_info.slug);
+    // These legacy families summarize on the final channel; GPT-5.2-Codex does not.
+    // All other models, including future names, are assumed to have a separate summary channel.
+    let uses_legacy_compaction = compaction_model == "gpt-5"
+        || compaction_model.starts_with("gpt-5-")
+        || compaction_model == "gpt-5.1"
+        || compaction_model.starts_with("gpt-5.1-")
+        || ((compaction_model == "gpt-5.2" || compaction_model.starts_with("gpt-5.2-"))
+            && !compaction_model.starts_with("gpt-5.2-codex"))
+        || compaction_model == "gpt-5.4-nano"
+        || compaction_model.starts_with("gpt-5.4-nano-");
     let mut prompt = Arc::new(Prompt {
         input,
         tools: if tools_in_history {
@@ -192,9 +208,12 @@ pub(super) async fn run_remote_compact_v2_attempt(
         },
         parallel_tool_calls: true,
         base_instructions,
-        // Preserve the cached output-format prefix. Responses generates compaction
-        // summaries independently of this final-answer schema.
-        output_schema: turn_context.final_output_json_schema.clone(),
+        // Preserve the cached output-format prefix except for known legacy compaction models.
+        output_schema: if uses_legacy_compaction {
+            None
+        } else {
+            turn_context.final_output_json_schema.clone()
+        },
         output_schema_strict: !crate::guardian::is_basic_session_source(
             &turn_context.session_source,
         ),
