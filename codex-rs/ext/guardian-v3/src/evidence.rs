@@ -2,14 +2,20 @@
 //! A capture has a fixed end; consumers acknowledge records only after their writes succeed.
 
 use anyhow::ensure;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_history::CodexHarnessMetadata;
 use codex_history::HistoryInitialization;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemProvenance;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::is_closing_media_label;
+use codex_protocol::models::is_opening_media_label;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -330,6 +336,26 @@ fn selected(envelope: &ResponseItemEnvelope) -> anyhow::Result<bool> {
     })
 }
 
+/// Keep captions and their provenance. Local images can also have a pair of harness labels.
+fn without_image_attachments(parts: Vec<AnnotatedContent>) -> Vec<AnnotatedContent> {
+    let mut retained = Vec::with_capacity(parts.len());
+    let mut parts = parts.into_iter();
+    while let Some(part) = parts.next() {
+        if let ContentItem::InputText { text: open } = part.content()
+            && let [image, close, ..] = parts.as_slice()
+            && matches!(image.content(), ContentItem::InputImage { .. })
+            && is_opening_media_label(open, image.content())
+            && matches!(close.content(), ContentItem::InputText { text } if is_closing_media_label(text, image.content()))
+        {
+            // Consume the image and its closing label together.
+            let _ = parts.nth(1);
+        } else if !matches!(part.content(), ContentItem::InputImage { .. }) {
+            retained.push(part);
+        }
+    }
+    retained
+}
+
 /// Select original evidence at intake and strip host-only metadata before routing.
 fn review_original(
     mut item: RolloutItem,
@@ -370,6 +396,26 @@ fn review_original(
         return Ok(None);
     }
     if let RolloutItem::ResponseItem(envelope) = &mut item {
+        // Ordinary user images are outside the sync reviewer's evidence. Omit
+        // them before the housekeeper budgets the record or serializes a board post.
+        if let ResponseItem::Message { role, content, .. } = &envelope.item
+            && role == "user"
+            && content
+                .iter()
+                .any(|part| matches!(part, ContentItem::InputImage { .. }))
+            && let Some(parts) = to_annotated_content(&mut envelope.item)
+        {
+            let retained = without_image_attachments(parts);
+            if retained.iter().all(|part| match part.content() {
+                ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
+                    text.trim().is_empty()
+                }
+                ContentItem::InputAudio { .. } | ContentItem::InputImage { .. } => false,
+            }) {
+                return Ok(None);
+            }
+            let _ = set_annotated_content(&mut envelope.item, retained);
+        }
         // Admission uses private host provenance. Keep only the source order in the
         // copy seen by the housekeeper, board readers and reviewer.
         envelope.metadata = envelope
