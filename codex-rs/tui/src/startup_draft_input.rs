@@ -23,6 +23,9 @@ use crate::tui::TuiEvent;
 impl StartupDraftPump {
     pub(super) fn handle_event(&mut self, tui: &mut Tui, event: TuiEvent) -> io::Result<()> {
         let screen_size = tui.screen_size_for_event(&event)?;
+        if matches!(&event, TuiEvent::Resize(_) | TuiEvent::Resume) {
+            self.blossom.get_mut().invalidate_window_size();
+        }
         if tui.dismiss_shortcut_on_input(&event, &mut self.key_chord_matcher) {
             return Ok(());
         }

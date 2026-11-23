@@ -447,6 +447,14 @@ fn onboarding_keeps_full_color_after_budget_and_pause() {
             );
             let start = Instant::now();
             let mut animation = EmptyStateAnimation::default();
+            // At 2x density, 22 × 51 physical pixels per cell are 11 × 25.5 logical pixels.
+            animation.renderer.get_or_insert_default().window_size =
+                Some(crossterm::terminal::WindowSize {
+                    columns: 80,
+                    rows: 40,
+                    width: 880,
+                    height: 1020,
+                });
             animation.start_fresh();
             let mut buffer = Buffer::empty(area);
             animation.render_in_at(area, &mut buffer, Presentation::Animated, start);

@@ -4,6 +4,8 @@
 
 use std::f64::consts::TAU;
 
+use crossterm::terminal::WindowSize;
+
 use super::geometry::EXTENT;
 use super::geometry::FIELDS;
 use super::geometry::GRID;
@@ -30,6 +32,7 @@ pub(super) struct Cell {
 }
 
 pub(super) struct Renderer {
+    pub(super) window_size: Option<WindowSize>,
     shape: Vec<f32>,
     depth: Vec<f32>,
     colors: Vec<u32>,
@@ -40,6 +43,7 @@ impl Default for Renderer {
     fn default() -> Self {
         let samples = usize::from(MAX_COLUMNS) * usize::from(MAX_ROWS) * 8;
         Self {
+            window_size: None,
             shape: vec![0.0; GRID * GRID],
             depth: vec![f32::NEG_INFINITY; samples],
             colors: vec![0; samples],
@@ -73,6 +77,24 @@ impl Renderer {
         let dot_rows = rows * 4;
         let dot_width = 800.0 / dot_columns as f64;
         let dot_height = 550.0 / dot_rows as f64;
+        // Fit the reference canvas uniformly in pixels, keeping its center fixed.
+        // Without pixel dimensions, keep the original mapping onto the full dot grid.
+        let (mut scale_x, mut scale_y) = (206.0, 206.0);
+        if let Some(size) = &self.window_size
+            && size.columns > 0
+            && size.rows > 0
+            && size.width > size.columns
+            && size.height > size.rows
+        {
+            // A HiDPI terminal can report fractional cell sizes in logical pixels.
+            let width = f64::from(size.width) / f64::from(size.columns);
+            let height = f64::from(size.height) / f64::from(size.rows);
+            let pixels_per_x = columns as f64 * width / 800.0;
+            let pixels_per_y = rows as f64 * height / 550.0;
+            let fit = pixels_per_x.min(pixels_per_y);
+            scale_x *= fit / pixels_per_x;
+            scale_y *= fit / pixels_per_y;
+        }
         self.depth.fill(f32::NEG_INFINITY);
         for (i, value) in self.shape.iter_mut().enumerate() {
             *value =
@@ -96,8 +118,8 @@ impl Renderer {
             let x3 = x1 * cz - y2 * sz;
             let y3 = x1 * sz + y2 * cz;
             let perspective = 4.4 / (4.4 - z2);
-            let column = ((400.0 + x3 * 206.0 * perspective) / dot_width).floor() as isize;
-            let row = ((275.0 + y3 * 206.0 * perspective) / dot_height).floor() as isize;
+            let column = ((400.0 + x3 * scale_x * perspective) / dot_width).floor() as isize;
+            let row = ((275.0 + y3 * scale_y * perspective) / dot_height).floor() as isize;
             if column < 0 || column >= dot_columns as isize || row < 0 || row >= dot_rows as isize {
                 return;
             }

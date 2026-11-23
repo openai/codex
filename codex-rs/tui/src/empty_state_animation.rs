@@ -18,6 +18,7 @@ use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::style::Color;
 
 use crate::motion::MotionMode;
@@ -49,6 +50,7 @@ pub(crate) struct EmptyStateAnimation {
     opacity: f32,
     fade_from: f32,
     renderer: Option<Renderer>,
+    measured_screen: Size,
     stage: Option<Rect>,
     replaying: bool,
 }
@@ -60,6 +62,7 @@ impl EmptyStateAnimation {
 
     pub(crate) fn start_fresh(&mut self) {
         self.cancel_replay();
+        self.invalidate_window_size();
         self.eligible = true;
         self.spin_elapsed = Duration::ZERO;
         self.last_frame = None;
@@ -112,6 +115,11 @@ impl EmptyStateAnimation {
     /// Resume (after process suspension) may call this after the interruption; phase is retained.
     pub(crate) fn pause_clock(&mut self) {
         self.last_frame = None;
+    }
+
+    /// A resize can change the pixel dimensions without changing the grid.
+    pub(crate) fn invalidate_window_size(&mut self) {
+        self.measured_screen = Size::default();
     }
 
     /// Paint the shared logo sequence inside a caller-owned, reserved rectangle.
@@ -242,12 +250,14 @@ impl EmptyStateAnimation {
         };
         let background = background.unwrap_or((15, 20, 37));
         let light = Lighting::terminal(foreground.unwrap_or((210, 221, 235)), background);
-        let cells = self.renderer.get_or_insert_with(Renderer::default).frame(
-            area.width,
-            area.height,
-            phase,
-            &light,
-        );
+        let renderer = self.renderer.get_or_insert_default();
+        // Recheck on grid resize, even if the capped stage stays the same size.
+        // Test buffers have no associated terminal.
+        if !cfg!(test) && self.measured_screen != buffer.area.as_size() {
+            renderer.window_size = crossterm::terminal::window_size().ok();
+            self.measured_screen = buffer.area.as_size();
+        }
+        let cells = renderer.frame(area.width, area.height, phase, &light);
         for (i, cell) in cells.iter().enumerate().filter(|(_, cell)| cell.dots != 0) {
             let [_, r, g, b] = cell.rgb.to_be_bytes();
             let target = &mut buffer[(

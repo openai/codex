@@ -833,10 +833,7 @@ async fn run_onboarding_screen_inner(
                             }
                             for step in &onboarding_screen.steps {
                                 if let Step::Welcome(widget) = step {
-                                    if matches!(&event, TuiEvent::Resume) {
-                                        widget.set_presentation(crate::empty_state_animation::Presentation::Hidden);
-                                    }
-                                    widget.set_focused(tui.is_terminal_focused());
+                                    widget.handle_draw_event(&event, tui.is_terminal_focused());
                                 }
                             }
                             if !did_full_clear_after_success

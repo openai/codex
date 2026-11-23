@@ -1058,6 +1058,12 @@ impl App {
         {
             return Ok(AppRunControl::Continue);
         }
+        if matches!(&event, TuiEvent::Resize(_) | TuiEvent::Resume) {
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .invalidate_window_size();
+        }
         // Resume arrives after suspension; retain the last painted phase across hidden owners.
         if matches!(&event, TuiEvent::Resume) || !tui.is_owned_screen() || self.overlay.is_some() {
             self.chat_widget
