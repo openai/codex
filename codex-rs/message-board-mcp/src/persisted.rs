@@ -1,6 +1,7 @@
 //! Reads persisted membership without starting runtimes or modifying Codex's registry.
-//! Standalone posts use system time; Core notification delivery is a separate integration.
+//! Posts use system time and optionally deliver notices through the existing app-server RPC.
 
+use crate::app_server::AppServer;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_message_board::MessageBoardHost;
@@ -10,12 +11,15 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::protocol::InterAgentCommunication;
 use futures::future::BoxFuture;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 
 pub(super) struct PersistedHost {
     pub registry: SqlitePool,
     pub root: ThreadId,
+    pub app_server: Option<Arc<AppServer>>,
 }
 
 impl MessageBoardHost for PersistedHost {
@@ -87,10 +91,27 @@ LIMIT 2
 
     fn notify(
         &self,
-        _recipient: ThreadId,
-        _post: PostPreview,
+        recipient: ThreadId,
+        post: PostPreview,
     ) -> BoxFuture<'_, Result<NotificationDelivery>> {
-        Box::pin(async { Ok(NotificationDelivery::SkippedInactive) })
+        Box::pin(async move {
+            let Some(app_server) = &self.app_server else {
+                return Ok(NotificationDelivery::SkippedInactive);
+            };
+            let path = self.agent_path(recipient).await?;
+            let notice = InterAgentCommunication::new(
+                post.metadata.author.clone(),
+                path,
+                Vec::new(),
+                post.notification_text(),
+                /*trigger_turn*/ false,
+            );
+            app_server
+                .inject(recipient, notice)
+                .await
+                .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?;
+            Ok(NotificationDelivery::Accepted)
+        })
     }
 }
 

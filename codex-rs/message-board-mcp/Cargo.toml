@@ -7,13 +7,11 @@ version.workspace = true
 [lib]
 name = "codex_message_board_mcp"
 path = "src/lib.rs"
-test = false
 doctest = false
 
 [[bin]]
 name = "codex-message-board-mcp"
 path = "src/main.rs"
-test = false
 
 [lints]
 workspace = true
@@ -23,6 +21,8 @@ anyhow = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
+codex-app-server-remote-client = { workspace = true }
 codex-attachment-store = { workspace = true }
 codex-message-board = { workspace = true }
 codex-protocol = { workspace = true }
@@ -37,9 +37,12 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7"] }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-process = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tokio-tungstenite = { workspace = true }
