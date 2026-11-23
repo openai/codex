@@ -30,7 +30,9 @@ use serde::Serialize;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::Weak;
+use tokio::sync::watch;
 use tracing::instrument;
 
 #[derive(Serialize)]
@@ -40,11 +42,15 @@ struct CodeModeSearchResult {
 }
 
 pub struct ToolSearchHandler {
-    search_infos: Vec<ToolSearchInfo>,
+    search_infos: Arc<Vec<ToolSearchInfo>>,
     source_listing: ToolSearchSourceListing,
     spec: ToolSpec,
-    search_embedder: Embedder,
-    search_scorer: Scorer<usize>,
+    index: OnceLock<watch::Receiver<Option<Arc<ToolSearchIndex>>>>,
+}
+
+struct ToolSearchIndex {
+    embedder: Embedder,
+    scorer: Scorer<usize>,
 }
 
 #[derive(Default)]
@@ -163,24 +169,33 @@ impl ToolSearchHandler {
             TOOL_SEARCH_DEFAULT_LIMIT,
             source_listing,
         );
+        Self {
+            search_infos: Arc::new(search_infos),
+            source_listing,
+            spec,
+            index: OnceLock::new(),
+        }
+    }
+}
+
+impl ToolSearchIndex {
+    #[instrument(
+        name = "tool_search.build_index",
+        level = "trace",
+        skip_all,
+        fields(search_info_count = search_infos.len())
+    )]
+    fn new(search_infos: &[ToolSearchInfo]) -> Self {
         let corpus = search_infos
             .iter()
             .map(|search_info| search_info.entry.search_text.as_str())
             .collect::<Vec<_>>();
-        let search_embedder =
-            EmbedderBuilder::with_fit_to_corpus(Language::English, &corpus).build();
-        let mut search_scorer = Scorer::new();
+        let embedder = EmbedderBuilder::with_fit_to_corpus(Language::English, &corpus).build();
+        let mut scorer = Scorer::new();
         for (id, text) in corpus.into_iter().enumerate() {
-            search_scorer.upsert(&id, search_embedder.embed(text));
+            scorer.upsert(&id, embedder.embed(text));
         }
-
-        Self {
-            search_infos,
-            source_listing,
-            spec,
-            search_embedder,
-            search_scorer,
-        }
+        Self { embedder, scorer }
     }
 }
 
@@ -249,27 +264,25 @@ impl ToolSearchHandler {
             .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
 
         if nested {
-            let tools = self.search_code_mode(
-                query,
-                limit,
-                &step_context.tool_router,
-                step_context
-                    .turn
-                    .config
-                    .code_mode
-                    .tool_input_schema_max_bytes,
-                &indirect_prefixes,
-            );
+            let tools = self
+                .search_code_mode(
+                    query,
+                    limit,
+                    &step_context.tool_router,
+                    step_context
+                        .turn
+                        .config
+                        .code_mode
+                        .tool_input_schema_max_bytes,
+                    &indirect_prefixes,
+                )
+                .await?;
             return Ok(boxed_tool_output(JsonToolOutput::new(serde_json::json!({
                 "tools": tools,
             }))));
         }
 
-        if self.search_infos.is_empty() {
-            return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
-        }
-
-        let mut tools = self.search(query, limit);
+        let mut tools = self.search(query, limit).await?;
         indirect_prefixes.apply_search(&mut tools);
 
         Ok(boxed_tool_output(ToolSearchOutput { tools }))
@@ -279,17 +292,17 @@ impl ToolSearchHandler {
 impl CoreToolRuntime for ToolSearchHandler {}
 
 impl ToolSearchHandler {
-    fn search_code_mode(
+    async fn search_code_mode(
         &self,
         query: &str,
         limit: usize,
         router: &ToolRouter,
         code_mode_input_schema_max_bytes: Option<usize>,
         indirect_prefixes: &IndirectNamespacePrefixes<'_>,
-    ) -> Vec<CodeModeSearchResult> {
+    ) -> Result<Vec<CodeModeSearchResult>, FunctionCallError> {
         let mut tools = Vec::new();
         // Apply the exact step's nested-tool policy before limiting ranked results.
-        for entry in self.search_entries(query) {
+        for entry in self.search_entries(query).await? {
             for candidate_name in entry.tool_names() {
                 let candidate_name = candidate_name.with_default_namespace();
                 let name = codex_code_mode::normalize_code_mode_identifier(
@@ -323,29 +336,69 @@ impl ToolSearchHandler {
                     .apply_code_mode_description(&definition.tool_name, &mut description);
                 tools.push(CodeModeSearchResult { name, description });
                 if tools.len() == limit {
-                    return tools;
+                    return Ok(tools);
                 }
             }
         }
-        tools
+        Ok(tools)
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<LoadableToolSpec> {
-        coalesce_loadable_tool_specs(
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
+        Ok(coalesce_loadable_tool_specs(
             self.search_entries(query)
+                .await?
                 .take(limit)
                 .map(ToolSearchEntry::to_loadable_spec),
-        )
+        ))
     }
 
-    fn search_entries(&self, query: &str) -> impl Iterator<Item = &ToolSearchEntry> + '_ {
-        self.search_scorer
-            .matches(&self.search_embedder.embed(query))
+    async fn search_entries(
+        &self,
+        query: &str,
+    ) -> Result<impl Iterator<Item = &ToolSearchEntry>, FunctionCallError> {
+        let matches = if self.search_infos.is_empty() {
+            Vec::new()
+        } else {
+            let mut index = self
+                .index
+                .get_or_init(|| {
+                    // The blocking worker publishes independently of the searches waiting
+                    // for it. The handler keeps a receiver so later searches can reuse it.
+                    let (index_tx, index_rx) = watch::channel(None);
+                    let search_infos = Arc::clone(&self.search_infos);
+                    tokio::task::spawn_blocking(move || {
+                        let index = Arc::new(ToolSearchIndex::new(&search_infos));
+                        let _ = index_tx.send(Some(index));
+                    });
+                    index_rx
+                })
+                .clone();
+            let index = index
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::Fatal(format!("tool search index task failed: {err}"))
+                })?
+                .clone()
+                .ok_or_else(|| {
+                    FunctionCallError::Fatal("tool search index task returned no index".into())
+                })?;
+            index.scorer.matches(&index.embedder.embed(query))
+        };
+        Ok(matches
             .into_iter()
             .filter_map(|result| self.search_infos.get(result.id))
-            .map(|search_info| &search_info.entry)
+            .map(|search_info| &search_info.entry))
     }
 }
+
+#[cfg(test)]
+#[path = "tool_search_index_tests.rs"]
+mod index_tests;
 
 #[cfg(test)]
 mod tests {
@@ -363,8 +416,8 @@ mod tests {
     use rmcp::model::Tool;
     use std::sync::Arc;
 
-    #[test]
-    fn cache_reuses_immutable_handlers_and_rebuilds_for_current_registry_changes() {
+    #[tokio::test]
+    async fn cache_reuses_immutable_handlers_and_rebuilds_for_current_registry_changes() {
         let cache = ToolSearchHandlerCache::default();
         let mut info = tool_info("calendar", "create_event", "Create events");
         info.callable_namespace = "functions".to_string();
@@ -376,6 +429,16 @@ mod tests {
         let first = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         let second = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         assert!(Arc::ptr_eq(&first, &second));
+        assert!(
+            first.index.get().is_none(),
+            "tool planning must defer indexing"
+        );
+        let (first_results, second_results) = tokio::try_join!(
+            first.search("Create events", /*limit*/ 1),
+            second.search("Create events", /*limit*/ 1),
+        )
+        .expect("both initial searches should succeed");
+        assert_eq!(first_results, second_results);
 
         let without_sources = cache.get_or_build(&registry, ToolSearchSourceListing::Omit);
         assert!(!Arc::ptr_eq(&first, &without_sources));
@@ -400,7 +463,7 @@ mod tests {
             prefixed.search_infos[0].entry.search_text,
             first.search_infos[0].entry.search_text
         );
-        let mut expected = first.search("Create events", /*limit*/ 1);
+        let mut expected = first_results;
         let LoadableToolSpec::Namespace(namespace) = &mut expected[0] else {
             panic!("namespace")
         };
@@ -408,12 +471,15 @@ mod tests {
             panic!("function")
         };
         tool.description = format!("Guidance.\n\n{}", tool.description);
-        assert_eq!(prefixed.search("Create events", /*limit*/ 1), expected);
+        assert_eq!(
+            prefixed.search("Create events", /*limit*/ 1).await.unwrap(),
+            expected
+        );
         registry.apply_functions_namespace_function_prefixes(/*prefixes*/ None);
         let cleared = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         assert_eq!(
-            cleared.search("Create events", /*limit*/ 1),
-            first.search("Create events", /*limit*/ 1)
+            cleared.search("Create events", /*limit*/ 1).await.unwrap(),
+            first.search("Create events", /*limit*/ 1).await.unwrap()
         );
 
         let mut disabled_registry = ToolRegistry::default();
@@ -580,7 +646,11 @@ mod tests {
         );
     }
 
-    fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
+    pub(super) fn tool_info(
+        server_name: &str,
+        tool_name: &str,
+        description_prefix: &str,
+    ) -> ToolInfo {
         ToolInfo {
             server_key: codex_mcp::McpServerKey::unscoped(server_name),
             supports_parallel_tool_calls: false,

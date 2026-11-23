@@ -87,7 +87,7 @@ use wiremock::matchers::path_regex;
 #[derive(Clone, Default)]
 struct McpCacheCounters {
     binding_captures: Arc<AtomicUsize>,
-    search_index_builds: Arc<AtomicUsize>,
+    search_handler_constructions: Arc<AtomicUsize>,
 }
 
 impl<S: Subscriber> Layer<S> for McpCacheCounters {
@@ -98,7 +98,8 @@ impl<S: Subscriber> Layer<S> for McpCacheCounters {
                 self.binding_captures.fetch_add(1, Ordering::SeqCst);
             }
             ("codex_core::tools::handlers::tool_search", "new") => {
-                self.search_index_builds.fetch_add(1, Ordering::SeqCst);
+                self.search_handler_constructions
+                    .fetch_add(1, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -1766,14 +1767,14 @@ async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespac
     test.submit_turn("inspect initially available deferred tools")
         .await?;
     let initial_captures = counters.binding_captures.load(Ordering::SeqCst);
-    let initial_index_builds = counters.search_index_builds.load(Ordering::SeqCst);
+    let initial_handlers = counters.search_handler_constructions.load(Ordering::SeqCst);
     assert!(
         initial_captures > 0,
         "the initial turn must capture an MCP binding"
     );
     assert!(
-        initial_index_builds > 0,
-        "the initial turn must build the search index"
+        initial_handlers > 0,
+        "the initial turn must construct a tool search handler"
     );
 
     // Publish a new catalog revision with the same metadata from the ready client.
@@ -1784,9 +1785,9 @@ async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespac
         "the follow-up must capture a new binding after the refresh"
     );
     assert_eq!(
-        counters.search_index_builds.load(Ordering::SeqCst),
-        initial_index_builds,
-        "equivalent bindings must preserve MCP handlers and reuse the search index"
+        counters.search_handler_constructions.load(Ordering::SeqCst),
+        initial_handlers,
+        "equivalent bindings must preserve MCP handlers and reuse the tool search handler"
     );
 
     let current_config = test.codex.config().await;
