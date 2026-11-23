@@ -81,7 +81,7 @@ impl SectionDelivery {
     }
 }
 
-/// JSON stays structured during admission; line mode keeps whole-entry truncation.
+/// JSON and audio records keep their labels during admission. Other line entries truncate whole.
 #[derive(Clone, PartialEq)]
 pub(crate) enum SectionContent {
     Transcript(TranscriptRecord),
@@ -91,8 +91,10 @@ pub(crate) enum SectionContent {
 impl From<TranscriptRecord> for SectionContent {
     fn from(record: TranscriptRecord) -> Self {
         match record.format() {
-            TranscriptFormat::Line => Self::Other(record.into_content_item()),
-            TranscriptFormat::Json => Self::Transcript(record),
+            TranscriptFormat::Line if !record.is_audio_transcript => {
+                Self::Other(record.into_content_item())
+            }
+            TranscriptFormat::Line | TranscriptFormat::Json => Self::Transcript(record),
         }
     }
 }

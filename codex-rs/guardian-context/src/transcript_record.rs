@@ -1,10 +1,11 @@
 //! Prepares attributed transcript records and their cached line/JSON rendering.
-//! JSON stays structured through recovery; line mode budgets the rendered entry.
+//! JSON and audio transcript records stay structured through recovery.
 //! Each record caches its rendered content and shared-estimator cost. Body or
 //! framing changes refresh both; selection, budgeting, metrics and delivery reuse them.
 //! JSON field order stays stable; recovery only replaces the message body.
 
 use std::fmt;
+use std::fmt::Write;
 use std::io;
 
 use codex_protocol::models::ContentItem;
@@ -30,6 +31,8 @@ pub struct TranscriptRecord {
     text: String,
     #[serde(skip)]
     format: TranscriptFormat,
+    #[serde(skip)]
+    pub(crate) is_audio_transcript: bool,
     #[serde(skip)]
     prefix: &'static str,
     #[serde(skip)]
@@ -57,6 +60,7 @@ impl TranscriptRecord {
     ) -> Self {
         let author = match kind {
             ConversationTranscriptEntryKind::User => "user",
+            ConversationTranscriptEntryKind::UserAudioTranscript(_) => "audio_transcript",
             ConversationTranscriptEntryKind::Developer => "developer",
             ConversationTranscriptEntryKind::Assistant
             | ConversationTranscriptEntryKind::ProtectedAssistant
@@ -65,6 +69,7 @@ impl TranscriptRecord {
             | ConversationTranscriptEntryKind::Reasoning => "assistant",
             ConversationTranscriptEntryKind::SelectedExecOutput
             | ConversationTranscriptEntryKind::ToolOutput(_)
+            | ConversationTranscriptEntryKind::ToolAudioTranscript(_)
             | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => "tool",
         };
         let mut record = Self {
@@ -74,6 +79,11 @@ impl TranscriptRecord {
             retained_source_order,
             text,
             format,
+            is_audio_transcript: matches!(
+                kind,
+                ConversationTranscriptEntryKind::UserAudioTranscript(_)
+                    | ConversationTranscriptEntryKind::ToolAudioTranscript(_)
+            ),
             prefix: "",
             suffix,
             rendered: RenderedTranscriptRecord {
@@ -150,11 +160,26 @@ impl fmt::Display for TranscriptRecord {
                 } else {
                     write!(
                         formatter,
-                        "[{}] {}: {}",
+                        "[{}] {}: ",
                         self.index,
                         self.label.as_deref().unwrap_or(self.author),
-                        self.text
                     )?;
+                    if self.is_audio_transcript {
+                        // Keep the transcript on one line so it cannot forge a role header.
+                        formatter.write_char('"')?;
+                        for character in self.text.chars() {
+                            if character.is_control()
+                                || matches!(character, '"' | '\\' | '\u{2028}' | '\u{2029}')
+                            {
+                                write!(formatter, "{}", character.escape_debug())?;
+                            } else {
+                                formatter.write_char(character)?;
+                            }
+                        }
+                        formatter.write_char('"')?;
+                    } else {
+                        formatter.write_str(&self.text)?;
+                    }
                 }
             }
         }

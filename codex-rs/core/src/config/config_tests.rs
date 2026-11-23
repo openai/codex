@@ -9215,6 +9215,55 @@ max_section_entry_tokens = 1
 }
 
 #[tokio::test]
+async fn transcript_audio_elastic_budget_loads_for_both_reviewers() {
+    use codex_guardian_context::ElasticSection;
+    use codex_guardian_context::ElasticSectionLimits;
+
+    const AUDIO_RESERVATION_TOKENS: usize = 2_000;
+    const AUDIO_ENTRY_TOKENS: usize = 500;
+    const AUDIO_MAXIMUM_TOKENS: usize = 4_000;
+    let mut policy = core_test_support::guardian::elastic_budget_config();
+    let messages = policy.sections[&ElasticSection::TranscriptMessages];
+    policy.sections.insert(
+        ElasticSection::TranscriptMessages,
+        ElasticSectionLimits::new(
+            messages.min_total_section_tokens() - AUDIO_RESERVATION_TOKENS,
+            messages.max_section_entry_tokens(),
+        )
+        .unwrap(),
+    );
+    policy.sections.insert(
+        ElasticSection::TranscriptAudio,
+        ElasticSectionLimits::new(AUDIO_RESERVATION_TOKENS, AUDIO_ENTRY_TOKENS)
+            .unwrap()
+            .with_max_total_section_tokens(AUDIO_MAXIMUM_TOKENS)
+            .unwrap(),
+    );
+    let sections = toml::Value::try_from(&policy.sections).unwrap();
+    let home = TempDir::new().unwrap();
+    let config = Config::load_from_base_config_with_overrides(
+        toml::from_str(&format!(
+            "[features.guardianv2]\nsync_elastic_budgeting = true\nasync_elastic_budgeting = true\nsync_elastic_sections = {sections}\nasync_elastic_sections = {sections}"
+        ))
+        .unwrap(),
+        ConfigOverrides {
+            cwd: Some(home.path().to_path_buf()),
+            ..Default::default()
+        },
+        home.abs(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            config.guardian_sync_elastic_budget,
+            config.guardian_async_elastic_budget
+        ),
+        (Some(policy.clone()), Some(policy)),
+    );
+}
+
+#[tokio::test]
 async fn async_elastic_opt_in_preserves_fixed_capture() {
     let mut config = super::test_config().await;
     config.guardian_async_elastic_budget =

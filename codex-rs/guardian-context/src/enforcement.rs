@@ -37,6 +37,7 @@ pub(crate) enum BudgetPriority {
     Commentary,
     Tool,
     SelectedExecResult,
+    AudioTranscript,
     Image,
 }
 

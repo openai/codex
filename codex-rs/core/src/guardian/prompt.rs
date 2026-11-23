@@ -1,4 +1,5 @@
 use codex_extension_api::ConversationHistorySnapshot;
+use codex_guardian_context::AudioTranscript;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::GuardianRootMessage;
@@ -265,6 +266,13 @@ impl SectionHistory for GuardianReviewHistory<'_> {
 struct FilteredGuardianHistory<'a>(&'a dyn SectionHistory);
 
 impl SectionHistory for FilteredGuardianHistory<'_> {
+    fn audio_transcripts_for<'a>(
+        &'a self,
+        item: &'a ResponseItem,
+    ) -> Box<dyn Iterator<Item = AudioTranscript<'a>> + Send + 'a> {
+        self.0.audio_transcripts_for(item)
+    }
+
     fn items_with_sources(
         &self,
     ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>

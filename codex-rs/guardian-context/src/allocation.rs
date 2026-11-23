@@ -141,6 +141,11 @@ pub(crate) fn allocation_section(
         {
             ElasticSection::TranscriptSelectedExecResults
         }
+        "conversation_transcript"
+            if retention == Retention::Optional(BudgetPriority::AudioTranscript) =>
+        {
+            ElasticSection::TranscriptAudio
+        }
         "conversation_transcript" if retention == Retention::Optional(BudgetPriority::Tool) => {
             ElasticSection::TranscriptTools
         }
