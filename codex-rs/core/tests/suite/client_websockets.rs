@@ -1427,6 +1427,8 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    assert_eq!(first["type"].as_str(), Some("response.create"));
     let second = connection.get(1).expect("missing request").body_json();
     assert_eq!(second["type"].as_str(), Some("response.create"));
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
@@ -2477,48 +2479,6 @@ async fn responses_websocket_creates_when_instructions_change() {
             ),
         ],
     );
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![
-        vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "assistant output"),
-            ev_completed("resp-1"),
-        ],
-        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
-    ]])
-    .await;
-
-    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
-    let prompt_one = prompt_with_input(vec![message_item("hello")]);
-    let prompt_two = prompt_with_input(vec![
-        message_item("hello"),
-        assistant_message_item("1", "assistant output"),
-        message_item("second"),
-    ]);
-
-    stream_until_complete(&mut session, &harness, &prompt_one).await;
-    stream_until_complete(&mut session, &harness, &prompt_two).await;
-
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
-    let first = connection.first().expect("missing request").body_json();
-    let second = connection.get(1).expect("missing request").body_json();
-
-    assert_eq!(first["type"].as_str(), Some("response.create"));
-    assert_eq!(second["type"].as_str(), Some("response.create"));
-    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
-    assert_eq!(
-        second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).unwrap()
-    );
-
     server.shutdown().await;
 }
 
