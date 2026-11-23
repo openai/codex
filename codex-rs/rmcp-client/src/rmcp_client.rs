@@ -2002,7 +2002,14 @@ impl RmcpClient {
             })
     }
 
-    async fn reinitialize_after_session_expiry(
+    fn reinitialize_after_session_expiry<'a>(
+        &'a self,
+        failed_service: &'a Arc<RunningService<RoleClient, ElicitationClientService>>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(self.reinitialize_after_session_expiry_inner(failed_service))
+    }
+
+    async fn reinitialize_after_session_expiry_inner(
         &self,
         failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
     ) -> Result<()> {
