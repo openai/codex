@@ -53,6 +53,7 @@ use codex_thread_store::PersistContext;
 use crate::context_manager::is_instruction_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::protocol::AgentStatus;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
@@ -271,9 +272,45 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    let local_reset = sess.enabled(Feature::TokenBudget);
+    // Reject invalid settings before interrupting. Ordinary turn construction
+    // validates again after teardown, when a Guardian refresh may have landed.
+    let admission = if local_reset {
+        Ok(())
+    } else {
+        let state = sess.state.lock().await;
+        let configuration = &state.session_configuration;
+        configuration.validate(&configuration.environments)
+    };
+    if let Err(error) = admission {
+        let message = format!("Cannot start /compact. {error}");
+        // Keep the active turn's status and order the notice with turn registration.
+        let active = sess.active_turn.lock().await;
+        let status = sess.agent_status.borrow();
+        let turn_in_progress = active
+            .as_ref()
+            .is_some_and(|turn| turn.task.is_some() || matches!(*status, AgentStatus::Running));
+        let msg = if turn_in_progress {
+            EventMsg::Warning(WarningEvent { message })
+        } else {
+            drop(status);
+            sess.agent_status
+                .send_replace(AgentStatus::Errored(message.clone()));
+            EventMsg::Error(ErrorEvent {
+                misalignment: None,
+                message,
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                rejected_audio_file_ids: Vec::new(),
+            })
+        };
+        if let Err(error) = sess.tx_event.try_send(Event { id: sub_id, msg }) {
+            debug!(%error, "dropping compaction rejection because the event channel is closed");
+        }
+        return;
+    }
     // Stop the old turn before the compact task picks up the next turn's environments.
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
-    let turn_context = if sess.enabled(Feature::TokenBudget) {
+    let turn_context = if local_reset {
         sess.new_turn_with_default_settings(sub_id, Default::default())
             .await
     } else {

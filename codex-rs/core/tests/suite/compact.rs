@@ -1,10 +1,15 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::ConfigRefreshOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
@@ -27,6 +32,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -50,6 +56,8 @@ use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -915,6 +923,86 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
     assert!(input.get("reason").is_none());
     assert!(input.get("phase").is_none());
     assert!(input.get("implementation").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_rejected_compaction_leaves_the_active_turn_running() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(gate),
+        body: sse(vec![ev_completed("active-turn")]),
+    }]])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.features.disable(Feature::TokenBudget).unwrap())
+        .build_with_streaming_server(&server)
+        .await?;
+    let codex = &test.codex;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Keep this turn running".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    server.wait_for_request_count(/*count*/ 1).await;
+
+    let model = &test.session_configured.model;
+    let requirements = CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+        "allowed_approvals_reviewers = ['user']\n[auto_review]\nrequired_on_models = [{model:?}]"
+    ));
+    let policy = load_guardian_policy_snapshot(
+        LOCAL_FS.as_ref(),
+        test.config.codex_home.as_path(),
+        &LoaderOverrides::without_managed_config_for_tests(),
+        &requirements,
+        /*revision*/ 1,
+    )
+    .await?;
+    assert_eq!(
+        codex.refresh_guardian_policy(&policy).await,
+        ConfigRefreshOutcome::Rejected
+    );
+
+    codex.submit(Op::Compact).await?;
+    let rejection = wait_for_event(codex, |event| {
+        matches!(event, EventMsg::Warning(warning) if warning.message.starts_with("Cannot start /compact."))
+            || matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_) | EventMsg::Error(_))
+    })
+    .await;
+    let EventMsg::Warning(rejection) = rejection else {
+        anyhow::bail!(
+            "expected a compaction rejection while the turn was active, got {rejection:?}"
+        );
+    };
+    assert_eq!(
+        rejection.message,
+        format!("Cannot start /compact. To use model `{model}`, you need to use auto review.")
+    );
+    release.send(()).expect("active request is still sampling");
+    let outcome = wait_for_event(codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+    })
+    .await;
+    assert!(
+        matches!(&outcome, EventMsg::TurnComplete(done) if done.error.is_none()),
+        "{outcome:?}"
+    );
+
+    codex.submit(Op::Compact).await?;
+    let idle_rejection = wait_for_event(codex, |event| {
+        matches!(event, EventMsg::Error(_) | EventMsg::Warning(_))
+    })
+    .await;
+    let EventMsg::Error(idle_rejection) = idle_rejection else {
+        anyhow::bail!("expected an idle compaction error, got {idle_rejection:?}");
+    };
+    assert_eq!(idle_rejection.message, rejection.message);
+    assert_eq!(
+        codex.agent_status().await,
+        AgentStatus::Errored(rejection.message)
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
