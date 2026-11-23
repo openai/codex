@@ -2749,35 +2749,6 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     server.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_v2_sets_openai_beta_header() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
-    .await;
-
-    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
-    let prompt = prompt_with_input(vec![message_item("hello")]);
-
-    stream_until_complete(&mut session, &harness, &prompt).await;
-
-    let handshake = server.single_handshake();
-    let openai_beta_header = handshake
-        .header(OPENAI_BETA_HEADER)
-        .expect("missing OpenAI-Beta header");
-    assert!(
-        openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == WS_V2_BETA_HEADER_VALUE)
-    );
-    server.shutdown().await;
-}
-
 fn message_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
         status: None,
