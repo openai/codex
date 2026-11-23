@@ -444,7 +444,6 @@ pub(super) fn stored_thread_from_state_metadata(
     let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
     let preview = metadata
         .preview
-        .clone()
         .or_else(|| metadata.first_user_message.clone())
         .unwrap_or_default();
     let permission_profile =

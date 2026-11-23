@@ -126,15 +126,10 @@ pub(super) fn stored_thread_from_rollout_item(
     let updated_at = parse_rfc3339(item.updated_at.as_deref()).unwrap_or(created_at);
     let recency_at = parse_rfc3339(item.recency_at.as_deref()).unwrap_or(updated_at);
     let archived_at = archived.then_some(updated_at);
-    let git_info = git_info_from_parts(
-        item.git_sha.clone(),
-        item.git_branch.clone(),
-        item.git_origin_url.clone(),
-    );
+    let git_info = git_info_from_parts(item.git_sha, item.git_branch, item.git_origin_url);
     let source = item.source.unwrap_or(SessionSource::Unknown);
     let preview = item
         .preview
-        .clone()
         .or_else(|| item.first_user_message.clone())
         .unwrap_or_default();
     let rollout_path = codex_rollout::plain_rollout_path(item.path.as_path());
