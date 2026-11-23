@@ -10,6 +10,6 @@ codex_rust_crate(
             "BUILD.bazel",
             "Cargo.toml",
         ],
-    ),
+    ) + ["//codex-rs/plugin-archive-verification:testdata/plugin_archive_signing_v1.json"],
     crate_name = "codex_core_plugins",
 )

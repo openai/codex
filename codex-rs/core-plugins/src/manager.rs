@@ -123,6 +123,7 @@ use codex_plugin::PluginIdError;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_plugin_archive_verification::SigningKeyCache;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
@@ -242,6 +243,14 @@ impl PluginsConfigInput {
         &self,
         runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
     ) -> RemotePluginServiceConfig {
+        self.remote_plugin_service_config_with_signing_key_cache(runtime_auth, Arc::default())
+    }
+
+    pub(crate) fn remote_plugin_service_config_with_signing_key_cache(
+        &self,
+        runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
+        signing_key_cache: Arc<SigningKeyCache>,
+    ) -> RemotePluginServiceConfig {
         let runtime_auth = runtime_auth.filter(|_| {
             codex_http_client::classify_openai_api_url(&self.chatgpt_base_url)
                 != codex_http_client::OpenAiDestination::Other
@@ -272,6 +281,7 @@ impl PluginsConfigInput {
                 .unwrap_or_else(|| CODEX_PRODUCT_SKU.to_string()),
             http_clients: Arc::clone(http_clients),
             runtime_auth,
+            signing_key_cache,
         }
     }
 }
@@ -712,6 +722,7 @@ pub struct PluginsManager {
     remote_installed_plugin_bundle_sync_gate: Arc<Semaphore>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_catalog_cache_refresh_state: RwLock<RemoteCatalogCacheRefreshState>,
+    signing_key_cache: Arc<SigningKeyCache>,
     restriction_product: Option<Product>,
     auth_manager: Arc<AuthManager>,
     runtime_auth: RuntimeAuthSlot,
@@ -829,10 +840,11 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
     ) -> RemotePluginServiceConfig {
-        config.remote_plugin_service_config(
+        config.remote_plugin_service_config_with_signing_key_cache(
             config
                 .runtime_auth_mode
                 .map(|mode| (Arc::clone(&self.runtime_auth), mode)),
+            Arc::clone(&self.signing_key_cache),
         )
     }
 
@@ -939,6 +951,7 @@ impl PluginsManager {
             remote_catalog_cache_refresh_state: RwLock::new(
                 RemoteCatalogCacheRefreshState::default(),
             ),
+            signing_key_cache: Arc::default(),
             restriction_product,
             auth_manager,
             runtime_auth,

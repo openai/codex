@@ -10,6 +10,7 @@ use crate::script_attribution::PluginMeasurementTarget;
 use codex_features::RuntimeAuthMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
+use codex_plugin_archive_verification::SigningKeyCache;
 use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_utils_path_uri::PathConvention;
 use std::sync::Arc;
@@ -67,6 +68,7 @@ fn is_preparing(cell: &ReferenceCell) -> bool {
 #[derive(Default)]
 pub struct RemotePluginMeasurementCache {
     references: Mutex<Vec<(ReferenceKey, ReferenceCell)>>,
+    signing_key_cache: Arc<SigningKeyCache>,
 }
 
 impl RemotePluginMeasurementCache {
@@ -96,7 +98,10 @@ impl RemotePluginMeasurementCache {
         // GLOBAL plugins have already passed server-side admission; local
         // marketplace product policy and skill capability loading are separate.
         let service = config
-            .remote_plugin_service_config(runtime_auth)
+            .remote_plugin_service_config_with_signing_key_cache(
+                runtime_auth,
+                Arc::clone(&self.signing_key_cache),
+            )
             .for_current_account();
         let Some((remote_id, bundle)) = fetch_measurement_reference_bundle(&service, auth, target)
             .await

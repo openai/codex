@@ -31,45 +31,39 @@ async fn unexpected_key_request(
     panic!("unexpected signing-key request to {url}");
 }
 
-async fn server_with_keys(keys: Value, request_count: u64) -> (MockServer, String) {
+async fn server_with_keys(keys: Value) -> (MockServer, String) {
     let server = MockServer::start().await;
-    // Give each signing-key mock its own endpoint.
-    static NEXT_ENDPOINT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let id = NEXT_ENDPOINT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base_path = format!("/test-{id}/backend-api");
     Mock::given(method("GET"))
-        .and(path(format!("{base_path}/ps/plugins/signing-keys")))
+        .and(path("/backend-api/ps/plugins/signing-keys"))
         .respond_with(ResponseTemplate::new(200).set_body_json(keys))
-        .expect(request_count)
+        .expect(1)
         .mount(&server)
         .await;
-    let base_url = format!("{}{base_path}", server.uri());
+    let base_url = format!("{}/backend-api", server.uri());
     (server, base_url)
 }
 
 #[tokio::test]
 async fn verifies_production_compatible_archive_and_rejects_tampering() {
+    let cache = SigningKeyCache::default();
     let (archive, fixture) = signed_fixture();
-    let (_server, base_url) = server_with_keys(
-        fixture["signing_keys_response"].clone(),
-        /*request_count*/ 2,
-    )
-    .await;
+    let (_server, base_url) = server_with_keys(fixture["signing_keys_response"].clone()).await;
     let auth = auth_headers("user-token", "account");
     let metadata = download(&fixture["signing"]);
 
     assert_eq!(
         metadata
-            .verify(archive.clone(), &base_url, key_request(auth.clone()))
+            .verify(
+                archive.clone(),
+                &base_url,
+                &cache,
+                key_request(auth.clone())
+            )
             .await,
         Ok((archive.clone(), PluginArchiveVerification::Verified))
     );
     let redirector = MockServer::start().await;
-    let (_target, target_url) = server_with_keys(
-        fixture["signing_keys_response"].clone(),
-        /*request_count*/ 1,
-    )
-    .await;
+    let (_target, target_url) = server_with_keys(fixture["signing_keys_response"].clone()).await;
     Mock::given(method("GET"))
         .and(path("/ps/plugins/signing-keys"))
         .respond_with(
@@ -85,6 +79,7 @@ async fn verifies_production_compatible_archive_and_rejects_tampering() {
             .verify(
                 archive.clone(),
                 &redirector.uri(),
+                &cache,
                 key_request(auth.clone())
             )
             .await,
@@ -95,7 +90,12 @@ async fn verifies_production_compatible_archive_and_rejects_tampering() {
     altered_archive[0] ^= 1;
     assert_eq!(
         metadata
-            .verify(altered_archive.clone(), &base_url, unexpected_key_request)
+            .verify(
+                altered_archive.clone(),
+                &base_url,
+                &cache,
+                unexpected_key_request
+            )
             .await,
         Err(ArchiveVerificationFailure::DigestMismatch)
     );
@@ -103,7 +103,12 @@ async fn verifies_production_compatible_archive_and_rejects_tampering() {
     altered_signing["sha256"] = json!(hex::encode(digest(&SHA256, &altered_archive)));
     assert_eq!(
         download(&altered_signing)
-            .verify(altered_archive, &base_url, key_request(auth.clone()))
+            .verify(
+                altered_archive,
+                &base_url,
+                &cache,
+                key_request(auth.clone())
+            )
             .await,
         Err(ArchiveVerificationFailure::SignatureMismatch)
     );
@@ -111,6 +116,7 @@ async fn verifies_production_compatible_archive_and_rejects_tampering() {
 
 #[tokio::test]
 async fn rejects_malformed_and_unsupported_signing_metadata() {
+    let cache = SigningKeyCache::default();
     let (archive, fixture) = signed_fixture();
     for (field, value, failure) in [
         (
@@ -138,7 +144,7 @@ async fn rejects_malformed_and_unsupported_signing_metadata() {
         signing[field] = value;
         assert_eq!(
             download(&signing)
-                .verify(archive.clone(), "", unexpected_key_request)
+                .verify(archive.clone(), "", &cache, unexpected_key_request)
                 .await,
             Err(failure)
         );
@@ -147,6 +153,7 @@ async fn rejects_malformed_and_unsupported_signing_metadata() {
 
 #[tokio::test]
 async fn applies_release_signing_presence_at_download() {
+    let cache = SigningKeyCache::default();
     let (archive, _) = signed_fixture();
     for (raw, expected) in [
         (
@@ -170,7 +177,7 @@ async fn applies_release_signing_presence_at_download() {
             serde_json::from_str(raw).expect("verification failures are deferred until download");
         assert_eq!(
             download
-                .verify(archive.clone(), "", unexpected_key_request)
+                .verify(archive.clone(), "", &cache, unexpected_key_request)
                 .await,
             expected
         );
@@ -200,10 +207,16 @@ async fn rejects_keys_with_unsupported_purpose_algorithm_or_invalid_material() {
     ] {
         let mut keys = fixture["signing_keys_response"].clone();
         keys["keys"][0][field] = json!(value);
-        let (_server, base_url) = server_with_keys(keys, /*request_count*/ 1).await;
+        let (_server, base_url) = server_with_keys(keys).await;
+        let cache = SigningKeyCache::default();
         assert_eq!(
             download(&fixture["signing"])
-                .verify(archive.clone(), &base_url, key_request(auth.clone()))
+                .verify(
+                    archive.clone(),
+                    &base_url,
+                    &cache,
+                    key_request(auth.clone())
+                )
                 .await,
             Err(failure)
         );

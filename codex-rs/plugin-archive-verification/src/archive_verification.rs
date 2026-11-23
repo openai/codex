@@ -2,7 +2,7 @@
 //! metadata. Missing signing metadata preserves legacy behavior, while malformed metadata fails at
 //! the download boundary. Diagnostics contain no signature or key material.
 
-use crate::archive_signing_keys::signing_key;
+use crate::SigningKeyCache;
 use aws_lc_rs::digest::SHA256;
 use aws_lc_rs::digest::digest;
 use aws_lc_rs::signature::ParsedPublicKey;
@@ -197,6 +197,7 @@ impl RemotePluginArchiveDownload {
         &self,
         archive_bytes: Vec<u8>,
         service_base_url: &str,
+        signing_key_cache: &SigningKeyCache,
         key_request: impl FnOnce(String) -> Fut,
     ) -> Result<(Vec<u8>, PluginArchiveVerification), ArchiveVerificationFailure>
     where
@@ -225,7 +226,9 @@ impl RemotePluginArchiveDownload {
             if archive_digest.as_ref() != signature.expected_digest {
                 return Err(ArchiveVerificationFailure::DigestMismatch);
             }
-            let key = signing_key(service_base_url, signature.key_id, key_request).await?;
+            let key = signing_key_cache
+                .key(service_base_url, signature.key_id, key_request)
+                .await?;
             archive_kind = key.archive_kind();
             if key.algorithm != ARCHIVE_SIGNING_ALGORITHM {
                 return Err(ArchiveVerificationFailure::UnsupportedKeyAlgorithm);

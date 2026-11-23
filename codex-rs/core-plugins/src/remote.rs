@@ -35,6 +35,7 @@ use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_plugin_archive_verification::ArchiveVerificationFailure;
 use codex_plugin_archive_verification::RemotePluginArchiveDownload;
+use codex_plugin_archive_verification::SigningKeyCache;
 use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -160,6 +161,7 @@ pub struct RemotePluginServiceConfig {
     pub(crate) product_sku: String,
     pub(crate) http_clients: Arc<dyn HttpClientSelector>,
     pub(crate) runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
+    pub(crate) signing_key_cache: Arc<SigningKeyCache>,
 }
 
 impl RemotePluginServiceConfig {
@@ -189,6 +191,7 @@ impl RemotePluginServiceConfig {
             product_sku: product_sku.unwrap_or_else(|| CODEX_PRODUCT_SKU.to_string()),
             http_clients,
             runtime_auth: None,
+            signing_key_cache: Arc::default(),
         }
     }
 

@@ -1,34 +1,99 @@
-//! Fetches and validates the signing keys returned by the authenticated Plugin Service endpoint.
+//! Fetches authenticated Plugin Service signing keys. The bounded cache reuses keys only within the
+//! same endpoint and credentials. Each lookup fetches at most once.
 
 use crate::ArchiveVerificationFailure;
+use aws_lc_rs::digest::Context;
+use aws_lc_rs::digest::SHA256;
 use codex_http_client::RequestBuilder;
 use http::HeaderMap;
+use http::header::AUTHORIZATION;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 
 const MARKETPLACE_ARCHIVE_PURPOSE: &str = "PLUGIN_RELEASE_ARCHIVE_SIGNING";
+const MAX_CACHED_SCOPES: usize = 8;
 const MAX_SIGNING_KEYS: usize = 64;
 const MAX_SIGNING_KEYS_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_PUBLIC_KEY_BASE64_BYTES: usize = 16 * 1024;
 
-pub(super) async fn signing_key<Fut>(
-    service_base_url: &str,
-    key_id: &str,
-    key_request: impl FnOnce(String) -> Fut,
-) -> Result<SigningKey, ArchiveVerificationFailure>
-where
-    Fut: Future<Output = Result<(RequestBuilder, HeaderMap), ArchiveVerificationFailure>>,
-{
-    let endpoint = service_base_url.trim_end_matches('/');
-    let key_url = format!("{endpoint}/ps/plugins/signing-keys");
-    let (request, headers) = key_request(key_url.clone()).await?;
-    let keys = fetch_signing_keys(request.headers(headers), &key_url).await?;
-    keys.get(key_id)
-        .cloned()
-        .unwrap_or(Err(ArchiveVerificationFailure::UnknownSigningKey))
+type SigningKeyCacheScope = (String, aws_lc_rs::digest::Digest);
+
+/// Reuses Plugin Service signing keys within one owner and credential scope.
+#[derive(Default)]
+pub struct SigningKeyCache {
+    scopes: Mutex<VecDeque<(SigningKeyCacheScope, Arc<ScopedSigningKeyCache>)>>,
+}
+
+impl fmt::Debug for SigningKeyCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SigningKeyCache")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SigningKeyCache {
+    fn scope(&self, endpoint: &str, headers: &HeaderMap) -> Arc<ScopedSigningKeyCache> {
+        if headers
+            .get(AUTHORIZATION)
+            .is_none_or(http::HeaderValue::is_empty)
+        {
+            // External providers can authenticate with custom headers. Always fetch in that case.
+            return Arc::default();
+        }
+        // Bind the cache entry to the exact outgoing auth,
+        // including account and provider-specific identity headers. A fresh runtime proof
+        // must select a fresh scope so the key service authorizes that request.
+        let mut fields: Vec<_> = headers.iter().collect();
+        fields.sort_by_key(|(name, _)| name.as_str());
+        let mut digest = Context::new(&SHA256);
+        for (name, value) in fields {
+            digest.update(name.as_str().as_bytes());
+            digest.update(b":");
+            digest.update(value.as_bytes());
+            digest.update(b"\n");
+        }
+        let fingerprint = digest.finish();
+        let mut scopes = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = scopes
+            .iter()
+            .position(|((url, hash), _)| url == endpoint && hash.as_ref() == fingerprint.as_ref())
+            .and_then(|position| scopes.remove(position))
+            .unwrap_or_else(|| ((endpoint.to_owned(), fingerprint), Arc::default()));
+        let scope = Arc::clone(&entry.1);
+        scopes.push_front(entry);
+        scopes.truncate(MAX_CACHED_SCOPES);
+        scope
+    }
+
+    pub(super) async fn key<Fut>(
+        &self,
+        service_base_url: &str,
+        key_id: &str,
+        key_request: impl FnOnce(String) -> Fut,
+    ) -> Result<SigningKey, ArchiveVerificationFailure>
+    where
+        Fut: Future<Output = Result<(RequestBuilder, HeaderMap), ArchiveVerificationFailure>>,
+    {
+        let endpoint = service_base_url.trim_end_matches('/');
+        let key_url = format!("{endpoint}/ps/plugins/signing-keys");
+        let (request, headers) = key_request(key_url.clone()).await?;
+        self.scope(endpoint, &headers)
+            .key(request.headers(headers), &key_url, key_id)
+            .await
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -59,16 +124,91 @@ struct SigningKeysResponse {
     keys: Vec<SigningKey>,
     #[serde(default)]
     eval_keys: Vec<SigningKey>,
-    #[serde(rename = "cache_ttl_seconds")]
-    _cache_ttl_seconds: u64,
+    cache_ttl_seconds: u64,
 }
 
-type SigningKeys = HashMap<String, Result<SigningKey, ArchiveVerificationFailure>>;
+struct CachedSigningKeys {
+    keys: HashMap<String, Result<SigningKey, ArchiveVerificationFailure>>,
+    expires_at: Instant,
+}
+
+impl CachedSigningKeys {
+    fn fresh_key(&self, key_id: &str) -> Option<&Result<SigningKey, ArchiveVerificationFailure>> {
+        if self.expires_at <= Instant::now() {
+            return None;
+        }
+        self.keys.get(key_id)
+    }
+
+    fn key(&self, key_id: &str) -> Result<SigningKey, ArchiveVerificationFailure> {
+        self.keys
+            .get(key_id)
+            .cloned()
+            .unwrap_or(Err(ArchiveVerificationFailure::UnknownSigningKey))
+    }
+}
+
+struct ScopedSigningKeyCache {
+    cached: Mutex<Option<CachedSigningKeys>>,
+    refresh: Semaphore,
+}
+
+impl Default for ScopedSigningKeyCache {
+    fn default() -> Self {
+        Self {
+            cached: Mutex::new(None),
+            refresh: Semaphore::new(/*permits*/ 1),
+        }
+    }
+}
+
+impl ScopedSigningKeyCache {
+    fn lock_cached(&self) -> MutexGuard<'_, Option<CachedSigningKeys>> {
+        self.cached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn key(
+        &self,
+        request: RequestBuilder,
+        key_url: &str,
+        key_id: &str,
+    ) -> Result<SigningKey, ArchiveVerificationFailure> {
+        if let Some(key) = self
+            .lock_cached()
+            .as_ref()
+            .and_then(|keys| keys.fresh_key(key_id))
+        {
+            return key.clone();
+        }
+
+        // Keep refreshes ordered without locking the cached data during the request.
+        // Dropping the permit lets a waiter retry after a cancelled refresh.
+        let _permit = self
+            .refresh
+            .acquire()
+            .await
+            .map_err(|_| ArchiveVerificationFailure::SigningKeysUnavailable)?;
+        {
+            let mut cached = self.lock_cached();
+            if let Some(key) = cached.as_ref().and_then(|keys| keys.fresh_key(key_id)) {
+                return key.clone();
+            }
+            // A failed refresh can mean that this caller has lost access to the published keys.
+            *cached = None;
+        }
+        let keys = fetch_signing_keys(request, key_url).await?;
+        let key = keys.key(key_id);
+        *self.lock_cached() = Some(keys);
+        key
+    }
+}
 
 async fn fetch_signing_keys(
     request: RequestBuilder,
     key_url: &str,
-) -> Result<SigningKeys, ArchiveVerificationFailure> {
+) -> Result<CachedSigningKeys, ArchiveVerificationFailure> {
     let started = Instant::now();
     let result = async {
         let mut response = request
@@ -121,7 +261,11 @@ async fn fetch_signing_keys(
                     .ok_or(ArchiveVerificationFailure::UnsupportedKeyPurpose),
             );
         }
-        Ok(keys)
+        let now = Instant::now();
+        let expires_at = now
+            .checked_add(Duration::from_secs(response.cache_ttl_seconds))
+            .unwrap_or(now);
+        Ok(CachedSigningKeys { keys, expires_at })
     }
     .await;
     if let Some(metrics) = codex_otel::global() {
@@ -143,3 +287,7 @@ async fn fetch_signing_keys(
     }
     result
 }
+
+#[cfg(test)]
+#[path = "archive_signing_keys_tests.rs"]
+mod tests;

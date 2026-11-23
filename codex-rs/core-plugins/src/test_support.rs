@@ -387,6 +387,7 @@ pub(crate) fn recording_remote_plugin_service_config(
     (
         RemotePluginServiceConfig {
             runtime_auth: None,
+            signing_key_cache: Arc::default(),
             chatgpt_base_url,
             product_sku: crate::remote::CODEX_PRODUCT_SKU.to_string(),
             http_clients,
@@ -400,6 +401,25 @@ pub(crate) fn recorded_http_client_urls(selected_urls: &Mutex<Vec<String>>) -> V
         Ok(selected_urls) => selected_urls.clone(),
         Err(error) => panic!("selected URL recorder lock should not be poisoned: {error}"),
     }
+}
+
+pub(crate) fn isolated_loopback_bundle_test(test_name: &str) -> anyhow::Result<bool> {
+    const CHILD: &str = "CODEX_LOOPBACK_BUNDLE_TEST";
+    if std::env::var(CHILD).as_deref() == Ok(test_name) {
+        return Ok(true);
+    }
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CHILD, test_name)
+        .env("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
+        .output()?;
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(false)
 }
 
 pub(crate) fn write_file(path: &Path, contents: &str) {

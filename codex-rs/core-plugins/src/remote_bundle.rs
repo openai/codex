@@ -334,9 +334,12 @@ pub(crate) async fn download_remote_plugin_bundle(
     .await?;
     bundle
         .archive_download
-        .verify(bytes, &config.chatgpt_base_url, |url| {
-            prepare_signing_key_request(config, url, auth)
-        })
+        .verify(
+            bytes,
+            &config.chatgpt_base_url,
+            &config.signing_key_cache,
+            |url| prepare_signing_key_request(config, url, auth),
+        )
         .await
         .map(|(bytes, _)| bytes)
         .map_err(
@@ -1193,3 +1196,7 @@ mod tests {
 #[cfg(test)]
 #[path = "remote_bundle_runtime_auth_tests.rs"]
 mod runtime_auth_tests;
+
+#[cfg(test)]
+#[path = "remote_bundle_signing_key_cache_tests.rs"]
+mod signing_key_cache_tests;

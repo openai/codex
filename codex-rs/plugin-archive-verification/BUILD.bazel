@@ -1,5 +1,10 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    ["testdata/plugin_archive_signing_v1.json"],
+    visibility = ["//codex-rs/core-plugins:__pkg__"],
+)
+
 codex_rust_crate(
     name = "plugin-archive-verification",
     compile_data = ["testdata/plugin_archive_signing_v1.json"],
