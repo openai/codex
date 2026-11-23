@@ -428,6 +428,7 @@ pub struct CloudConfigBundleLoader {
     snapshot_getter: Option<Arc<CloudConfigBundleSnapshotGetter>>,
     ema_policy: Option<CloudConfigBundlePolicy>,
     config_server: Option<crate::ConfigServer>,
+    config_server_resolution: Option<Arc<crate::ConfigServerResolution>>,
 }
 
 impl CloudConfigBundleLoader {
@@ -454,6 +455,7 @@ impl CloudConfigBundleLoader {
             snapshot_getter: None,
             ema_policy: None,
             config_server: None,
+            config_server_resolution: None,
         }
     }
 
@@ -503,7 +505,22 @@ impl CloudConfigBundleLoader {
 
     pub fn with_config_server(mut self, service_config: crate::ConfigServer) -> Self {
         self.config_server = Some(service_config);
+        self.config_server_resolution = None;
         self
+    }
+
+    pub fn with_config_server_resolution(
+        mut self,
+        resolution: crate::ConfigServerResolution,
+    ) -> Self {
+        self.config_server = Some(resolution.configured.clone());
+        self.config_server_resolution = Some(Arc::new(resolution));
+        self
+    }
+
+    /// Successful discovery, including anonymous configuration, for the retained loader.
+    pub fn config_server_resolution(&self) -> Option<&crate::ConfigServerResolution> {
+        self.config_server_resolution.as_deref()
     }
 
     pub fn config_server(&self) -> Option<&crate::ConfigServer> {

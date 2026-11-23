@@ -773,6 +773,7 @@ async fn load_plugin_command_context(
         overrides,
         LoaderOverrides::default(),
         ConfigOverrides::default(),
+        /*resolution*/ None,
     )
     .await?
     .build()

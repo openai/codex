@@ -446,6 +446,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                 .bind_bootstrap_auth(bootstrap_auth_config(&codex_home, &gate_bootstrap)?),
             gate_bootstrap.config_layer_stack.requirements_toml(),
             /*enable_codex_api_key_env*/ false,
+            /*resolution*/ None,
         )
         .await?;
         let gate_config = ConfigBuilder::default()
@@ -546,6 +547,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         bootstrap_auth_config,
         bootstrap_config.config_layer_stack.requirements_toml(),
         /*enable_codex_api_key_env*/ false,
+        /*resolution*/ None,
     )
     .await?;
     if let Some(worktree) = managed_worktree.as_ref() {

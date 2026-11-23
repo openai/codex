@@ -15,6 +15,15 @@ pub struct ConfigServer {
     pub oauth: Option<Box<ConfigServerOAuth>>,
 }
 
+/// Successful runtime resolution, kept separate from administrator requirements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigServerResolution {
+    pub outbound_proxy_policy: codex_http_client::OutboundProxyPolicy,
+    pub system_proxy_fallback: bool,
+    pub configured: ConfigServer,
+    pub resolved: ConfigServer,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigServerInput {

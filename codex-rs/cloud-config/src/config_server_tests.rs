@@ -119,6 +119,65 @@ async fn device_endpoint_failure_points_to_config_server_oauth() {
 }
 
 #[tokio::test]
+async fn policy_reload_reuses_discovery_only_for_the_same_config_server() {
+    let home = tempdir().unwrap();
+    let mut auth = codex_core::config::Config::load_default_with_cli_overrides_for_codex_home(
+        home.path().into(),
+        vec![],
+    )
+    .await
+    .unwrap()
+    .auth_config();
+    // Any attempt to rediscover metadata during reload will fail.
+    let default = HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault);
+    let blocked = default
+        .clone()
+        .with_network_policy(codex_http_client::NetworkPolicyController::default().policy());
+    auth.auth_route_config = AuthRouteConfig::from_http_client_factory(blocked);
+    let base_url = "https://config.example";
+    let server = |url: &str| ConfigServer {
+        base_url: url.into(),
+        oauth: None,
+    };
+    let requirements = codex_config::ConfigRequirementsToml {
+        config_server: Some(server(base_url)),
+        ..Default::default()
+    };
+    let oauth = Box::new(oauth_config("https://login.example"));
+    let system = HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::RespectSystemProxy);
+    let fallback = default.clone().with_system_proxy_fallback();
+    for (previous_url, discovered_oauth, factory, reuse) in [
+        (base_url, Some(oauth.clone()), &default, true),
+        (base_url, None, &default, true),
+        ("https://other.example", None, &default, false),
+        (base_url, Some(oauth), &system, false),
+        (base_url, None, &fallback, false),
+    ] {
+        let previous = ConfigServerResolution {
+            outbound_proxy_policy: factory.outbound_proxy_policy(),
+            system_proxy_fallback: factory.allows_system_proxy_fallback(),
+            configured: server(previous_url),
+            resolved: ConfigServer {
+                oauth: discovered_oauth,
+                ..server(previous_url)
+            },
+        };
+        let loader = crate::managed_config_bundle_loader_for_storage(
+            auth.clone(),
+            &requirements,
+            /*enable_codex_api_key_env*/ false,
+            Some(&previous),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            loader.config_server_resolution(),
+            reuse.then_some(&previous)
+        );
+    }
+}
+
+#[tokio::test]
 async fn policy_fetch_uses_replacement_config_server_credentials() {
     let server = MockServer::start().await;
     let resource = "https://config.example/audience";

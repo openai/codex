@@ -116,15 +116,18 @@ async fn read_startup_config(
         Ok(config) => config,
         // Recovery retains local credential settings when cloud policy is unavailable.
         Err(_) if sign_out => loaded.bootstrap.clone(),
-        Err(error)
-            if manager
-                .current_managed_config_loader()
-                .config_server()
-                .is_some_and(|server| server.oauth.is_some()) =>
-        {
-            return Err(config_server_error(error));
+        Err(error) => {
+            let loader = manager.current_managed_config_loader();
+            let server = loader
+                .config_server_resolution()
+                .map(|resolution| &resolution.resolved)
+                .or_else(|| loader.config_server());
+            return Err(if server.is_some_and(|server| server.oauth.is_some()) {
+                config_server_error(error)
+            } else {
+                startup_error(error)
+            });
         }
-        Err(error) => return Err(startup_error(error)),
     };
     let config = if sign_out {
         // Preserve local credential authority while using the effective HTTP route.

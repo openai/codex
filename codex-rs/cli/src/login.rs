@@ -187,10 +187,16 @@ async fn sign_in_to_config_server_and_reload_config(
     .await;
     let bootstrap_auth = network.bind_bootstrap_auth(config.auth_config());
     let auth_route_config = bootstrap_auth.auth_route_config.clone();
-    codex_cloud_config::ensure_config_server_login(bootstrap_auth, requirements, method).await?;
-    *config = crate::cloud_config::load_config(cli_config_overrides, Default::default())
-        .await
-        .map_err(|error| std::io::Error::other(format!("{error:#}")))?;
+    let resolution =
+        codex_cloud_config::ensure_config_server_login(bootstrap_auth, requirements, method)
+            .await?;
+    *config = crate::cloud_config::load_config_with_resolution(
+        cli_config_overrides,
+        Default::default(),
+        resolution.as_ref(),
+    )
+    .await
+    .map_err(|error| std::io::Error::other(format!("{error:#}")))?;
     network.activate(config);
     config.application_auth_route_config = Some(auth_route_config);
     Ok(())
@@ -592,8 +598,8 @@ async fn logout_config_server(
     )
     .await?
     {
-        Some(manager) => manager.logout().await,
-        None => Ok(false),
+        Some((_, Some(manager))) => manager.logout().await,
+        Some((_, None)) | None => Ok(false),
     }
 }
 

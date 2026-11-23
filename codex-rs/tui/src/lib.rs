@@ -1063,6 +1063,7 @@ async fn cloud_config_bundle_for_app_server_target(
     bootstrap_config: &ConfigTomlLoadResult,
     codex_home: &Path,
     embedded_network_policy: &codex_app_server_client::EmbeddedNetworkPolicy,
+    resolution: Option<&codex_config::ConfigServerResolution>,
 ) -> std::io::Result<CloudConfigBundleLoader> {
     managed_config_bundle_loader_for_storage(
         embedded_network_policy
@@ -1071,6 +1072,7 @@ async fn cloud_config_bundle_for_app_server_target(
             )),
         bootstrap_config.config_layer_stack.requirements_toml(),
         /*enable_codex_api_key_env*/ false,
+        resolution,
     )
     .await
 }
@@ -1505,6 +1507,10 @@ async fn run_ratatui_app(
                         embedded_network_policy.bind_bootstrap_auth(initial_config.auth_config()),
                         initial_config.config_layer_stack.requirements_toml(),
                         /*enable_codex_api_key_env*/ false,
+                        // The server may have started requiring OAuth during onboarding.
+                        cloud_config_bundle
+                            .config_server_resolution()
+                            .filter(|resolution| resolution.resolved.oauth.is_some()),
                     )
                     .await?;
                 }
