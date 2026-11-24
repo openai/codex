@@ -178,8 +178,20 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
     let hidden = path.with_extension("unavailable");
     tokio::fs::rename(path, &hidden).await?;
     let unavailable = evidence.enqueue(/*cutoff*/ None).await;
+    let mut batches = NamedTraceEvents::subscribe("guardian_v3.cutoff_batch");
+    let (initial, retry) = tokio::join!(evidence.capture_cutoff(), evidence.request_catch_up());
     tokio::fs::rename(hidden, path).await?;
     assert!(unavailable.is_err());
+    assert_eq!(
+        initial
+            .err()
+            .context("expected a failed capture")?
+            .to_string(),
+        retry.err().context("expected a failed retry")?.to_string()
+    );
+    batches.next().await?;
+    assert!(batches.next().now_or_never().is_none());
+    assert_eq!(evidence.capture_cutoff().await?, delivered);
     evidence.enqueue(/*cutoff*/ None).await?;
 
     history
@@ -214,6 +226,71 @@ async fn retries_unavailable_history_and_remembers_rejected_evidence() -> anyhow
             .context("expected a rejected cutoff")?;
         assert_eq!(error.to_string(), reason);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn retries_share_a_queued_cutoff_and_skip_the_tail_read_when_alone() -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&server)
+        .await?;
+    let root = test.session_configured.thread_id;
+    let history = &test.thread_store;
+    history
+        .persist_thread(root, PersistContext::Standard)
+        .await?;
+    let (evidence, mut writer) = RootEvidence::new(
+        Default::default(),
+        history.clone(),
+        EvidenceCursor::start(root),
+    );
+    let mut batches = NamedTraceEvents::subscribe("guardian_v3.cutoff_batch");
+
+    // Queue all three before the worker runs on this current-thread runtime.
+    let mut cancelled = Box::pin(evidence.capture_cutoff());
+    let mut initial = Box::pin(evidence.capture_cutoff());
+    let mut retry = Box::pin(evidence.request_catch_up());
+    assert!(futures::poll!(&mut cancelled).is_pending());
+    assert!(futures::poll!(&mut initial).is_pending());
+    assert!(futures::poll!(&mut retry).is_pending());
+    batches.next().await?;
+    drop(cancelled);
+
+    // A caller arriving after the flush starts needs another capture even at the same tail.
+    let late = evidence.capture_cutoff().await?;
+    let bound = initial.await?;
+    // Only the next, lone retry should see this revocation.
+    test.codex
+        .inject_response_items_for_turn(vec![user_message_item("Stop the release.")])
+        .await?;
+    let routed = retry.await?;
+    writer.try_recv()?.finish();
+    assert_eq!(routed.await?, bound);
+    assert_eq!(late, bound);
+    batches.next().await?;
+    assert!(batches.next().now_or_never().is_none());
+
+    // A caller that cancels while queued must not force a tail read for the retry.
+    let mut cancelled = Box::pin(evidence.capture_cutoff());
+    assert!(futures::poll!(&mut cancelled).is_pending());
+    drop(cancelled);
+    let routed = evidence.request_catch_up().await?;
+    let capture = writer.try_recv()?;
+    let [record] = capture.snapshot.records() else {
+        anyhow::bail!("expected the revocation");
+    };
+    assert_eq!(
+        serde_json::to_value(record)?["original"]["payload"]["content"][0]["text"],
+        "Stop the release."
+    );
+    let end = capture.snapshot.cutoff();
+    capture.finish();
+    assert_eq!(routed.await?, end);
+    assert!(batches.next().now_or_never().is_none());
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
