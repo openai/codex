@@ -20,13 +20,14 @@ fn pending_action_replays_the_encrypted_call_with_its_evidence_output() {
         reason: None,
         tool_descriptions: None,
     };
-    let messages = ComposedContext::for_pending_action(
-        action,
+    let pending = ComposedContext::for_pending_action(
+        action.clone(),
         /*permissions*/ None,
         crate::ContextBudgeting::Fixed,
+        /*frame_native_agent_actions*/ false,
     )
-    .unwrap()
-    .into_messages();
+    .unwrap();
+    let messages = pending.into_messages();
     let [ResponseItem::Message { .. }, replay, output] = messages.as_slice() else {
         panic!("expected the review instruction, exact call, and evidence-only output");
     };
@@ -34,6 +35,34 @@ fn pending_action_replays_the_encrypted_call_with_its_evidence_output() {
     assert_eq!(
         Some(output.clone()),
         crate::native_tool_call::evidence_output(&call)
+    );
+
+    // An earlier review may already contain this call. Keep the ID reference
+    // when delivery removes the duplicate instead of framing an empty request.
+    let mut pending = ComposedContext::for_pending_action(
+        action,
+        /*permissions*/ None,
+        crate::ContextBudgeting::Fixed,
+        /*frame_native_agent_actions*/ true,
+    )
+    .unwrap();
+    let mut first_attempt = pending.clone();
+    crate::prepare_sync_delivery(&mut first_attempt, &[ResponseItemEnvelope::new(call)]).unwrap();
+    assert_eq!(first_attempt.into_messages(), messages[..1]);
+
+    // A pre-turn compaction retry uses the same pending action with new history.
+    crate::prepare_sync_delivery(&mut pending, &[]).unwrap();
+    let framed = pending.into_messages();
+    assert!(
+        matches!(&framed[0], ResponseItem::Message { role, content, .. }
+        if role == "user" && matches!(content.last(), Some(ContentItem::InputText { text })
+            if text.starts_with(">>> APPROVAL REQUEST START")))
+    );
+    assert_eq!(framed[1..framed.len() - 1], messages[1..]);
+    assert!(
+        matches!(framed.last(), Some(ResponseItem::Message { role, content, .. })
+        if role == "user" && matches!(content.first(), Some(ContentItem::InputText { text })
+            if text.starts_with(">>> APPROVAL REQUEST END")))
     );
 }
 
@@ -57,7 +86,8 @@ fn elastic_pending_action_defers_the_exact_call_to_final_admission() {
         ComposedContext::for_pending_action(
             action.clone(),
             /*permissions*/ None,
-            crate::ContextBudgeting::Fixed
+            crate::ContextBudgeting::Fixed,
+            /*frame_native_agent_actions*/ false,
         ),
         Err(SectionError::EvidenceLimitExceeded {
             section: "native_tool_call"
@@ -68,6 +98,7 @@ fn elastic_pending_action_defers_the_exact_call_to_final_admission() {
         action,
         /*permissions*/ None,
         crate::ContextBudgeting::Elastic,
+        /*frame_native_agent_actions*/ false,
     )
     .unwrap();
     let config =
@@ -125,8 +156,7 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new(),
-            enclosing_call: None,
+            ..Default::default()
         }
         .into_messages(),
         vec![
@@ -147,8 +177,7 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new(),
-            enclosing_call: None,
+            ..Default::default()
         }
         .into_user_inputs(),
         Err(SectionError::UnsupportedDelivery {
@@ -174,8 +203,7 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
                 }),
             ]),
         }],
-        truncations: Vec::new(),
-        enclosing_call: None,
+        ..Default::default()
     };
     let estimated = context.estimated_tokens();
     let messages = context.clone().into_messages();

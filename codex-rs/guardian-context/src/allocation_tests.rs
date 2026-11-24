@@ -47,8 +47,7 @@ fn reserves_ids_for_user_messages_and_native_call_outputs() {
     let prepared = PreparedElasticContext {
         context: ComposedContext {
             sections: sections.to_vec(),
-            truncations: Vec::new(),
-            enclosing_call: None,
+            ..Default::default()
         },
         config: &ElasticBudgetConfig::default(),
         delivered_omissions: None,
@@ -231,8 +230,7 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
             delivery: SectionDelivery::UserContent(items),
         })
         .into(),
-        truncations: Vec::new(),
-        enclosing_call: None,
+        ..Default::default()
     };
     {
         let mut future = std::pin::pin!(crate::prepare_sync_images(

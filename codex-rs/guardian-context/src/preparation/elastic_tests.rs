@@ -74,8 +74,7 @@ fn entry_caps_bound_required_and_optional_text_preserving_metadata_and_opaque_pa
                 )),
             },
         ],
-        truncations: Vec::new(),
-        enclosing_call: None,
+        ..Default::default()
     };
     assert!(
         context

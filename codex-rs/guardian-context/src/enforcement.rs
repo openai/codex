@@ -138,7 +138,7 @@ pub enum HistoryTruncation {
 }
 
 impl ComposedContext {
-    fn planned_action_content(&mut self) -> Option<&mut Vec<Budgeted<SectionContent>>> {
+    pub(crate) fn planned_action_content(&mut self) -> Option<&mut Vec<Budgeted<SectionContent>>> {
         self.sections.iter_mut().find_map(|section| {
             if section.id == "planned_action"
                 && let SectionDelivery::UserContent(items) = &mut section.delivery
@@ -319,6 +319,9 @@ impl ComposedContext {
             index += 1;
             retain
         });
+        if std::mem::take(&mut self.frame_native_agent_actions) {
+            self.frame_native_agent_action();
+        }
         Ok(())
     }
 

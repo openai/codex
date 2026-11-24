@@ -29,6 +29,23 @@ use super::GuardianReviewContext;
 
 pub(super) use codex_guardian_reviewer::GUARDIAN_TRANSCRIPT_START;
 
+impl GuardianReviewContext {
+    fn native_agent_history_enabled(&self) -> bool {
+        let turn = self.turn();
+        turn.config.guardian_native_multi_agent_history_enabled()
+            && turn.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
+    }
+
+    pub(super) fn frame_native_agent_actions(&self) -> bool {
+        self.native_agent_history_enabled()
+            && self
+                .turn()
+                .config
+                .features
+                .enabled(codex_features::Feature::GuardianNativeActionFraming)
+    }
+}
+
 /// Selects transcript evidence using the checkpoint already loaded by the reviewer.
 pub(crate) enum GuardianTranscriptHistory<'a> {
     Retained(&'a dyn ConversationHistorySnapshot),
@@ -149,11 +166,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     let mut profile = ContextProfile::synchronous();
     profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
     profile.transcript.options.native_multi_agent_namespace = parent_context
-        .is_some_and(|context| {
-            let turn = context.turn();
-            turn.config.guardian_native_multi_agent_history_enabled()
-                && turn.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
-        })
+        .is_some_and(GuardianReviewContext::native_agent_history_enabled)
         .then(|| {
             config
                 .multi_agent_v2
@@ -162,6 +175,8 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
                 .filter(|namespace| !namespace.is_empty())
                 .unwrap_or_else(|| "functions".to_owned())
         });
+    profile.transcript.options.frame_native_agent_actions =
+        parent_context.is_some_and(GuardianReviewContext::frame_native_agent_actions);
     profile.transcript_format = match parent_context {
         Some(context) => context.turn().config.guardian_transcript_mode,
         None => config.guardian_transcript_mode,

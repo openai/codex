@@ -64,6 +64,8 @@ pub struct ConversationTranscriptOptions {
     /// Preserve calls in this MAv2 namespace for synchronous backend decryption.
     /// `None` keeps the existing text transcript; `functions` selects the default namespace.
     pub native_multi_agent_namespace: Option<String>,
+    /// Distinguish the pending native agent action from historical tool calls.
+    pub frame_native_agent_actions: bool,
 }
 
 impl Default for ConversationTranscriptOptions {
@@ -73,6 +75,7 @@ impl Default for ConversationTranscriptOptions {
             include_tool_outputs: true,
             include_reasoning: false,
             native_multi_agent_namespace: None,
+            frame_native_agent_actions: false,
         }
     }
 }
@@ -281,7 +284,11 @@ fn collect_transcript_for_review(
             {
                 (
                     ConversationTranscriptEntryKind::ToolCall(format!("tool {name} call")),
-                    TRANSCRIPT_OMISSION_NOTICE.to_owned(),
+                    if config.options.frame_native_agent_actions {
+                        "See the current approval request.".to_owned()
+                    } else {
+                        TRANSCRIPT_OMISSION_NOTICE.to_owned()
+                    },
                 )
             }
             ResponseItem::FunctionCall {

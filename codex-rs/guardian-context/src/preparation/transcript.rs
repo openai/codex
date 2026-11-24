@@ -76,6 +76,7 @@ impl ContextProfile {
                     include_tool_outputs: true,
                     include_reasoning: false,
                     native_multi_agent_namespace: None,
+                    frame_native_agent_actions: false,
                 },
                 entry_limits: TranscriptEntryLimits {
                     message_tokens: 5_000,
@@ -103,6 +104,7 @@ impl ContextProfile {
                     include_tool_outputs: true,
                     include_reasoning: false,
                     native_multi_agent_namespace: None,
+                    frame_native_agent_actions: false,
                 },
                 entry_limits: TranscriptEntryLimits {
                     message_tokens: 2_000,

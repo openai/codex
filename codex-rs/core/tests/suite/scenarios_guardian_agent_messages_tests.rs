@@ -207,6 +207,7 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
                 Feature::Collab,
                 Feature::MultiAgentV2,
                 Feature::GuardianNativeMultiAgentHistory,
+                Feature::GuardianNativeActionFraming,
             ] {
                 config
                     .features

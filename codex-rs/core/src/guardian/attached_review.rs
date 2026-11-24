@@ -132,6 +132,7 @@ impl AttachedApproval {
                 action,
                 permissions.as_ref(),
                 config.spawn_config.guardian_context_budgeting(),
+                approval.context.frame_native_agent_actions(),
             )
             .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?;
             let request = review_turn(

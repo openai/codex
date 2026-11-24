@@ -276,11 +276,13 @@ fn file_images_are_selected_from_history_sources() {
 }
 
 #[test]
-fn fixed_screenshot_admission_precedes_optional_enclosing_call() {
-    let profile = ContextProfile::synchronous();
+fn fixed_screenshot_admission_accounts_for_required_and_optional_calls() {
     let estimate =
         |item: &ResponseItem| i64::try_from(serde_json::to_vec(item).unwrap().len()).unwrap();
-    let prepare = |kind, context_window, screenshot| {
+    let prepare = |kind, action: &PlannedActionKind, context_window, screenshot: &str| {
+        let mut profile = ContextProfile::synchronous();
+        profile.transcript.options.frame_native_agent_actions =
+            matches!(action, PlannedActionKind::ToolCall(_));
         let arguments = r#"{"code":"await checkout()"}"#;
         let collected = CollectedContext {
             sections: vec![
@@ -297,11 +299,7 @@ fn fixed_screenshot_admission_precedes_optional_enclosing_call() {
                     omitted_bytes: 0,
                 }),
                 ContextSection::PlannedAction(PlannedAction {
-                    kind: PlannedActionKind::Nested {
-                        json: r#"{"tool_name":"submit_order","arguments":{}}"#.into(),
-                        enclosing_invocation_id: "active-wrapper".into(),
-                        enclosing_call: None,
-                    },
+                    kind: action.clone(),
                     reason: None,
                     tool_descriptions: None,
                 }),
@@ -339,7 +337,17 @@ fn fixed_screenshot_admission_precedes_optional_enclosing_call() {
 
     let ordinary = || ConversationTranscriptEntryKind::ToolCall("tool js call".into());
     let enclosing = || ConversationTranscriptEntryKind::EnclosingToolCall("tool js call".into());
-    let baseline = prepare(ordinary(), /*context_window*/ 10_000, "screenshot");
+    let nested = PlannedActionKind::Nested {
+        json: r#"{"tool_name":"submit_order","arguments":{}}"#.into(),
+        enclosing_invocation_id: "active-wrapper".into(),
+        enclosing_call: None,
+    };
+    let baseline = prepare(
+        ordinary(),
+        &nested,
+        /*context_window*/ 10_000,
+        "screenshot",
+    );
     assert_eq!(
         baseline
             .section_costs()
@@ -349,7 +357,12 @@ fn fixed_screenshot_admission_precedes_optional_enclosing_call() {
     );
     let screenshot_window = baseline.clone().into_messages().iter().map(estimate).sum();
     let max_input_tokens = baseline.estimated_tokens();
-    let context = prepare(enclosing(), /*context_window*/ 10_000, "screenshot");
+    let context = prepare(
+        enclosing(),
+        &nested,
+        /*context_window*/ 10_000,
+        "screenshot",
+    );
     let finalize = |context: crate::ComposedContext, max_input_tokens| {
         context
             .enforce_budget(
@@ -380,10 +393,38 @@ fn fixed_screenshot_admission_precedes_optional_enclosing_call() {
         (20_000, 10_000, screenshot.as_str()),
         (screenshot_window, screenshot_window, "screenshot"),
     ] {
-        let baseline = prepare(ordinary(), window, screenshot).into_messages();
+        let baseline = prepare(ordinary(), &nested, window, screenshot).into_messages();
         assert_eq!(baseline.iter().map(estimate).sum::<i64>(), cap);
-        let context = prepare(enclosing(), window, screenshot);
+        let context = prepare(enclosing(), &nested, window, screenshot);
         let roomy_budget = context.estimated_tokens() + 1_000;
         assert_eq!(finalize(context, roomy_budget), baseline);
+    }
+
+    // A pending send must fit with its approval markers even though delivery adds them later.
+    let send = PlannedActionKind::ToolCall(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "type": "function_call", "namespace": "collaboration", "name": "send_message",
+            "call_id": "send-1", "arguments": r#"{"target":"/root","message":"done"}"#
+        }))
+        .unwrap(),
+    ));
+    let mut framed = prepare(ordinary(), &send, /*context_window*/ 20_000, "x");
+    crate::prepare_sync_delivery(&mut framed, &[]).unwrap();
+    let cost: i64 = framed.into_messages().iter().map(estimate).sum();
+    let at_cap = 1 + usize::try_from(10_000 - cost).unwrap();
+    for (size, expected_images) in [(at_cap, 1), (at_cap + 1, 0)] {
+        let context = prepare(
+            ordinary(),
+            &send,
+            /*context_window*/ 20_000,
+            &"x".repeat(size),
+        );
+        assert_eq!(
+            context
+                .section_costs()
+                .map(|(_, cost)| cost.image_count)
+                .sum::<usize>(),
+            expected_images
+        );
     }
 }

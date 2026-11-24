@@ -231,7 +231,9 @@ fn prepare_context_with_caps(
         async_entries::apply(&mut context, config, &mut transcript.truncations);
     }
     prepare_sections(&mut context, budgeting)?;
-    context.compose_prepared(presentation, transcript)
+    let mut context = context.compose_prepared(presentation, transcript)?;
+    context.frame_native_agent_actions = profile.transcript.options.frame_native_agent_actions;
+    Ok(context)
 }
 
 /// Applies request section policy to the original collection snapshot.
@@ -433,8 +435,12 @@ pub async fn prepare_sync_images<'a, HistoryCost>(
     let mut image_budget = None;
     if let Some(context_window) = context_window {
         context.retain_new_images(history, prepare_image);
-        let prompt_tokens = context
-            .clone()
+        // Budget for replay even if a later delivery attempt deduplicates the call.
+        let mut estimate = context.clone();
+        if estimate.frame_native_agent_actions {
+            estimate.frame_native_agent_action();
+        }
+        let prompt_tokens = estimate
             .into_messages()
             .iter()
             .map(estimate_tokens)

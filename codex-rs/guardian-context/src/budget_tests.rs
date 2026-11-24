@@ -100,8 +100,7 @@ fn section_costs_keep_multimodal_payloads_separate() {
                 ))),
             },
         ],
-        truncations: Vec::new(),
-        enclosing_call: None,
+        ..Default::default()
     };
     assert_eq!(
         context.section_costs().collect::<Vec<_>>(),
@@ -184,8 +183,7 @@ fn section_estimate_bounds_the_delivered_message() {
                             count
                         ]),
                     }],
-                    truncations: Vec::new(),
-                    enclosing_call: None,
+                    ..Default::default()
                 };
                 assert_eq!(
                     context.section_costs().collect::<Vec<_>>(),

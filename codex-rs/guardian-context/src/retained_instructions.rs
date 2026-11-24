@@ -231,8 +231,7 @@ impl ComposedContext {
                 .filter(|section| section.id == "retained_user_instructions")
                 .cloned()
                 .collect(),
-            truncations: Vec::new(),
-            enclosing_call: None,
+            ..Default::default()
         }
     }
 
