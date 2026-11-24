@@ -274,6 +274,7 @@ pub use rollout::rollout_date_parts;
 mod feedback_config;
 mod function_tool;
 mod state;
+pub mod statsig;
 mod tasks;
 mod user_shell_command;
 pub mod util;

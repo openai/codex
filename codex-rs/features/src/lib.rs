@@ -113,6 +113,8 @@ pub enum Feature {
     DaybreakProgramPropagation,
     /// Restrict CLI resume of attributed local threads to their creator.
     CliResumeAccountCheck,
+    /// Fetch Statsig decisions for this harness.
+    StatsigGates,
     /// Removed no-op; use `tui.fullscreen_transcript` instead.
     TranscriptV2,
     // Stable.
@@ -1210,6 +1212,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CliResumeAccountCheck,
         key: "cli_resume_account_check",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StatsigGates,
+        key: "statsig_gates",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

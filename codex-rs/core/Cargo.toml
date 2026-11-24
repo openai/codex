@@ -71,6 +71,7 @@ codex-sandboxing = { workspace = true }
 codex-skills = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-state = { workspace = true }
+codex-statsig = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tool-call-id = { workspace = true }
@@ -115,6 +116,8 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+os_info = { workspace = true }
+sys-locale = { workspace = true }
 sha1 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }

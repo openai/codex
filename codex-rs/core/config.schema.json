@@ -1423,6 +1423,9 @@
             "standalone_web_search": {
               "type": "boolean"
             },
+            "statsig_gates": {
+              "type": "boolean"
+            },
             "steer": {
               "type": "boolean"
             },
@@ -8841,6 +8844,9 @@
           "type": "boolean"
         },
         "standalone_web_search": {
+          "type": "boolean"
+        },
+        "statsig_gates": {
           "type": "boolean"
         },
         "steer": {
