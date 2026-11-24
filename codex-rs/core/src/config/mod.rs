@@ -47,6 +47,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
+use codex_config::types::ImageGenerationSettings;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
@@ -1537,6 +1538,22 @@ pub enum TerminalResizeReflowMaxRows {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerminalResizeReflowConfig {
     pub max_rows: TerminalResizeReflowMaxRows,
+}
+
+impl From<&Config> for ImageGenerationSettings {
+    fn from(config: &Config) -> Self {
+        Self {
+            provider: config.model_provider.clone(),
+            http_client_factory: config.http_client_factory(),
+            gif_enabled: config.features.image_generation_animation_enabled(),
+            deferred: config.features.defer_image_generation_enabled()
+                && !config
+                    .code_mode
+                    .excluded_tool_namespaces
+                    .iter()
+                    .any(|namespace| namespace == Self::NAMESPACE),
+        }
+    }
 }
 
 impl AuthManagerConfig for Config {
@@ -3411,7 +3428,7 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
         "container",
         "file_search",
         "functions",
-        "image_gen",
+        ImageGenerationSettings::NAMESPACE,
         "multi_tool_use",
         "python",
         "python_user_visible",

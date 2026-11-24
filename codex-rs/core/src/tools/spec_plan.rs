@@ -60,6 +60,7 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
+use codex_config::types::ImageGenerationSettings;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
@@ -101,7 +102,6 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 use tracing::instrument;
 
-const IMAGE_GEN_NAMESPACE: &str = "image_gen";
 const IMAGEGEN_TOOL_NAME: &str = "imagegen";
 
 #[derive(Clone, Copy)]
@@ -1640,7 +1640,7 @@ fn append_extension_tool_executors(
         if is_standalone_web_search && (!standalone_web_search_enabled || !web_search_mode_on) {
             continue;
         }
-        if tool_name == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
+        if tool_name == ToolName::namespaced(ImageGenerationSettings::NAMESPACE, IMAGEGEN_TOOL_NAME)
             && !image_generation_available(turn_context, model_info)
         {
             continue;

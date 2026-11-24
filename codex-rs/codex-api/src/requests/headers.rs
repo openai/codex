@@ -4,6 +4,8 @@ use codex_utils_string::to_ascii_json_string;
 use http::HeaderMap;
 use http::HeaderValue;
 
+pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+
 /// Correlate both the media call and its observer with the same thread and session tree.
 pub fn build_realtime_thread_headers(
     session_id: String,
@@ -17,7 +19,7 @@ pub fn build_realtime_thread_headers(
         && let Ok(metadata) = to_ascii_json_string(&serde_json::json!({ "thread_source": source }))
         && let Ok(value) = HeaderValue::from_str(&metadata)
     {
-        headers.insert("x-codex-turn-metadata", value);
+        headers.insert(X_CODEX_TURN_METADATA_HEADER, value);
     }
     headers
 }

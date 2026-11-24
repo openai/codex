@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use codex_core::config::Config;
+use codex_config::types::ImageGenerationSettings;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
@@ -11,89 +11,46 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
-use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_tools::ToolExposure;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use crate::IMAGE_GEN_NAMESPACE;
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
 
-#[derive(Clone)]
-struct ImageGenerationExtension {
+struct ImageGenerationExtension<C> {
     auth_manager: Arc<AuthManager>,
-    resolve_save_root: Arc<SaveRootResolver>,
+    config_from_host: Box<dyn Fn(&C) -> ImageGenerationExtensionConfig + Send + Sync>,
 }
 
-type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync;
-
-#[derive(Clone)]
 struct ImageGenerationExtensionConfig {
-    available: bool,
-    gif_enabled: bool,
-    defer_image_generation: bool,
-    http_client_factory: HttpClientFactory,
-    provider: ModelProviderInfo,
+    settings: ImageGenerationSettings,
     save_root: Option<AbsolutePathBuf>,
 }
 
-impl ImageGenerationExtensionConfig {
-    /// Resolves the image provider and save root for a thread.
-    fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
-        Self {
-            available: config.model_provider.is_openai()
-                || config.model_provider.requires_openai_auth
-                || config.model_provider.uses_openai_actor_authorization(),
-            gif_enabled: config.features.image_generation_animation_enabled(),
-            defer_image_generation: config.features.defer_image_generation_enabled()
-                && !config
-                    .code_mode
-                    .excluded_tool_namespaces
-                    .iter()
-                    .any(|namespace| namespace == IMAGE_GEN_NAMESPACE),
-            http_client_factory: config.http_client_factory(),
-            provider: config.model_provider.clone(),
-            save_root: resolve_save_root(config),
-        }
-    }
-}
-
-impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
-    /// Seeds image-generation configuration when a thread begins.
-    fn on_thread_start<'a>(
-        &'a self,
-        input: ThreadStartInput<'a, Config>,
-    ) -> ExtensionFuture<'a, ()> {
+impl<C: Sync> ThreadLifecycleContributor<C> for ImageGenerationExtension<C> {
+    fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             input
                 .thread_store
-                .insert(ImageGenerationExtensionConfig::from_config(
-                    input.config,
-                    self.resolve_save_root.as_ref(),
-                ));
+                .insert((self.config_from_host)(input.config));
         })
     }
 }
 
-impl ConfigContributor<Config> for ImageGenerationExtension {
-    /// Refreshes image-generation configuration after thread configuration changes.
+impl<C> ConfigContributor<C> for ImageGenerationExtension<C> {
     fn on_config_changed(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _previous_config: &Config,
-        new_config: &Config,
+        _previous_config: &C,
+        new_config: &C,
     ) {
-        thread_store.insert(ImageGenerationExtensionConfig::from_config(
-            new_config,
-            self.resolve_save_root.as_ref(),
-        ));
+        thread_store.insert((self.config_from_host)(new_config));
     }
 }
 
-impl ToolContributor for ImageGenerationExtension {
+impl<C> ToolContributor for ImageGenerationExtension<C> {
     /// Creates the image-generation tool exposed by this installed extension.
     fn tools(
         &self,
@@ -103,7 +60,12 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available {
+        let settings = &config.settings;
+        let provider = &settings.provider;
+        if !provider.is_openai()
+            && !provider.requires_openai_auth
+            && !provider.uses_openai_actor_authorization()
+        {
             return Vec::new();
         }
         let auth = thread_store
@@ -115,36 +77,41 @@ impl ToolContributor for ImageGenerationExtension {
                 })
             });
 
-        let exposure = if config.defer_image_generation {
+        let exposure = if settings.deferred {
             ToolExposure::Deferred
         } else {
             ToolExposure::Direct
         };
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                auth.model_provider(config.provider.clone()),
-                config.http_client_factory.clone(),
+                auth.model_provider(provider.clone()),
+                settings.http_client_factory.clone(),
                 thread_store
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
             config.save_root.clone(),
             thread_store.level_id().to_string(),
-            config.gif_enabled,
+            settings.gif_enabled,
             exposure,
         ))]
     }
 }
 
-/// Installs the standalone image-generation extension contributors.
-pub fn install(
-    registry: &mut ExtensionRegistryBuilder<Config>,
+/// Installs image generation using the host's settings and artifact storage policy.
+pub fn install<C: Sync + 'static>(
+    registry: &mut ExtensionRegistryBuilder<C>,
     auth_manager: Arc<AuthManager>,
-    resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
-) {
+    resolve_save_root: impl Fn(&C) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
+) where
+    for<'a> ImageGenerationSettings: From<&'a C>,
+{
     let extension = Arc::new(ImageGenerationExtension {
         auth_manager,
-        resolve_save_root: Arc::new(resolve_save_root),
+        config_from_host: Box::new(move |config: &C| ImageGenerationExtensionConfig {
+            settings: ImageGenerationSettings::from(config),
+            save_root: resolve_save_root(config),
+        }),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
