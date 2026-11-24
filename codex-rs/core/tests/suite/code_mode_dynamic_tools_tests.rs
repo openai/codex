@@ -1,6 +1,7 @@
 //! Dynamic tool calls remain independent while waiting for client responses.
 
 use super::*;
+use codex_protocol::dynamic_tools::DynamicToolCallResult;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -48,6 +49,9 @@ async fn code_mode_dynamic_tool_calls_pending_together_resolve_in_reverse_order(
 const results = await Promise.all([
   tools.lookup({ key: "A" }),
   tools.lookup({ key: "B" }),
+  tools.lookup({ key: "C" }).then(r => [r.isError, r.structuredContent.items, r.structuredContent.body.length]),
+  tools.lookup({ key: "D" }),
+  tools.lookup({ key: "E" }).then(r => r.structuredContent),
 ]);
 text(JSON.stringify(results));
 "#,
@@ -67,14 +71,14 @@ text(JSON.stringify(results));
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Look up A and B concurrently.".to_string(),
+            text: "Look up five values concurrently.".to_string(),
             text_elements: Vec::new(),
         }]))
         .await?;
 
-    // Neither response is submitted until both calls are waiting for the client.
+    // No response is submitted until all calls are waiting for the client.
     let mut pending = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..5 {
         pending.push(
             wait_for_event_match(&test.codex, |event| match event {
                 EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
@@ -87,15 +91,32 @@ text(JSON.stringify(results));
 
     for request in pending.into_iter().rev() {
         let key = request.arguments["key"].as_str().unwrap();
+        let response = match key {
+            "C" => DynamicToolCallResult::StructuredContent {
+                success: true,
+                structured_content: serde_json::json!({
+                    "items": [{"id":"🌿","active":true,"value":null}],
+                    "body": "x".repeat(1_100_000),
+                }),
+            },
+            "D" => DynamicToolCallResult::Error {
+                error_message: "value-D".to_owned(),
+            },
+            "E" => DynamicToolCallResult::StructuredContent {
+                success: true,
+                structured_content: serde_json::json!([{}, [], "\n\\\""]),
+            },
+            _ => DynamicToolCallResult::ContentItems(DynamicToolResponse {
+                success: key == "A",
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: format!(r#"{{"key":"{key}"}}"#),
+                }],
+            }),
+        };
         test.codex
-            .submit(Op::DynamicToolResponse {
+            .submit(Op::DynamicToolResult {
                 id: request.call_id,
-                response: DynamicToolResponse {
-                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                        text: format!("value-{key}"),
-                    }],
-                    success: true,
-                },
+                response,
             })
             .await?;
     }
@@ -109,7 +130,7 @@ text(JSON.stringify(results));
         .expect("the completed program should emit its results");
     assert_eq!(
         serde_json::from_str::<Value>(&output)?,
-        serde_json::json!(["value-A", "value-B"])
+        serde_json::json!([r#"{"key":"A"}"#, r#"{"key":"B"}"#, [false, [{"id":"🌿","active":true,"value":null}], 1_100_000], {"isError":true,"content":[{"type":"text","text":"value-D"}]}, [{}, [], "\n\\\""]])
     );
     Ok(())
 }

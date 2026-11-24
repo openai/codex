@@ -5137,6 +5137,71 @@ fn codex_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case
 }
 
 #[test]
+fn dynamic_tool_native_wire_round_trip() {
+    let schema = serde_json::to_value(schemars::schema_for!(DynamicToolCallResult)).unwrap();
+    for wire in [
+        serde_json::json!({"success":true,"structuredContent":{"threads":[{"id":"🌿","text":"a\\n\\\"b"}]}}),
+        serde_json::json!({"success":true,"structuredContent":[]}),
+        serde_json::json!({"success":true,"structuredContent":{}}),
+        serde_json::json!({"success":true,"structuredContent":null}),
+        serde_json::json!({"success":false,"errorMessage":"History unavailable"}),
+        serde_json::json!({"success":true,"contentItems":[]}),
+    ] {
+        let mut extended = wire.clone();
+        extended["_meta"] = json!({"client": "extension"});
+        let response: DynamicToolCallResult = serde_json::from_value(extended).unwrap();
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+        let fields = wire.as_object().unwrap();
+        assert!(
+            schema["anyOf"].as_array().unwrap().iter().any(|variant| {
+                let variant = match variant["$ref"].as_str() {
+                    Some(reference) => schema
+                        .pointer(reference.strip_prefix('#').unwrap())
+                        .unwrap(),
+                    None => variant,
+                };
+                let required = variant["required"].as_array().unwrap();
+                required.len() == fields.len()
+                    && required
+                        .iter()
+                        .all(|key| fields.contains_key(key.as_str().unwrap()))
+            }),
+            "schema must accept the fields in {wire}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_tool_wire_rejects_ambiguous_results_and_inconsistent_errors() {
+    for wire in [
+        json!({"success":true,"contentItems":[],"structuredContent":null}),
+        json!({"success":true,"contentItems":[],"errorMessage":null}),
+        json!({"success":false,"contentItems":null,"structuredContent":{}}),
+        json!({"success":true,"_meta":{}}),
+        json!({"success":true,"structuredContent":{},"errorMessage":"error"}),
+        json!({"success":false,"contentItems":[],"errorMessage":"error"}),
+        json!({"success":true,"errorMessage":"error"}),
+    ] {
+        assert!(
+            serde_json::from_value::<DynamicToolCallResult>(wire.clone()).is_err(),
+            "unexpectedly accepted {wire}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_tool_call_advertises_native_result_format() {
+    let without_format = serde_json::json!({"threadId":"t","turnId":"u","callId":"c","namespace":null,"tool":"lookup","arguments":{}});
+    let mut params: super::DynamicToolCallParams =
+        serde_json::from_value(without_format.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&params).unwrap(), without_format);
+    params.supported_result_format = Some(super::DynamicToolResultFormat::StructuredContent);
+    let mut expected = without_format;
+    expected["supportedResultFormat"] = serde_json::json!("structuredContent");
+    assert_eq!(serde_json::to_value(params).unwrap(), expected);
+}
+
+#[test]
 fn dynamic_tool_response_serializes_content_items() {
     let value = serde_json::to_value(DynamicToolCallResponse {
         content_items: vec![DynamicToolCallOutputContentItem::InputText {

@@ -12,7 +12,7 @@ use tokio_util::task::AbortOnDropHandle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use codex_diagnostics::GaugeGuard;
-use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolCallResult;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -114,7 +114,7 @@ pub(crate) struct TurnState {
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, PendingUserInput>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
-    pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
+    pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolCallResult>>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     pub(crate) tool_calls: u64,
@@ -297,15 +297,15 @@ impl TurnState {
     pub(crate) fn insert_pending_dynamic_tool(
         &mut self,
         key: String,
-        tx: oneshot::Sender<DynamicToolResponse>,
-    ) -> Option<oneshot::Sender<DynamicToolResponse>> {
+        tx: oneshot::Sender<DynamicToolCallResult>,
+    ) -> Option<oneshot::Sender<DynamicToolCallResult>> {
         self.pending_dynamic_tools.insert(key, tx)
     }
 
     pub(crate) fn remove_pending_dynamic_tool(
         &mut self,
         key: &str,
-    ) -> Option<oneshot::Sender<DynamicToolResponse>> {
+    ) -> Option<oneshot::Sender<DynamicToolCallResult>> {
         self.pending_dynamic_tools.remove(key)
     }
 

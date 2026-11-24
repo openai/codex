@@ -263,6 +263,17 @@ impl Hooks {
         self.engine.max_permission_request_timeout()
     }
 
+    /// Check the same names used by PostToolUse before preparing a large tool response.
+    pub fn has_post_tool_use_match(&self, name: &str, aliases: &[String]) -> bool {
+        let inputs = crate::events::common::matcher_inputs(name, aliases);
+        !crate::engine::dispatcher::select_handlers_for_matcher_inputs(
+            &self.engine.handlers,
+            HookEventName::PostToolUse,
+            &inputs,
+        )
+        .is_empty()
+    }
+
     pub fn preview_post_tool_use(
         &self,
         request: &PostToolUseRequest,

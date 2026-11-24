@@ -2523,6 +2523,7 @@ async fn root_switch_preserves_idle_root_with_running_subagent() -> Result<()> {
         AppServerEvent::ServerRequest(Box::new(ServerRequest::DynamicToolCall {
             request_id: RequestId::Integer(99),
             params: DynamicToolCallParams {
+                supported_result_format: None,
                 thread_id: idle_child_id.to_string(),
                 turn_id: "turn".into(),
                 call_id: "call".into(),

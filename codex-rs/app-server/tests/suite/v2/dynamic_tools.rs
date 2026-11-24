@@ -16,16 +16,19 @@ use codex_app_server_protocol::DynamicToolNamespaceTool;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItemPayload;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -482,6 +485,9 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     };
 
     let expected = DynamicToolCallParams {
+        supported_result_format: Some(
+            codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+        ),
         thread_id: thread_id.clone(),
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
@@ -672,6 +678,9 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
     };
 
     let params = DynamicToolCallParams {
+        supported_result_format: Some(
+            codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+        ),
         thread_id,
         turn_id,
         call_id: call_id.to_string(),
@@ -687,6 +696,207 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
         request_id,
         params,
     })
+}
+
+#[test_case::test_case(false; "dedup_disabled")]
+#[test_case::test_case(true; "dedup_enabled")]
+#[tokio::test]
+async fn dynamic_tool_code_mode_round_trip_decodes_wire_results_and_errors(
+    dedup: bool,
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let script = r#"
+const keys = ["native", "content-items", "tool-error", "request-error", "malformed"];
+const results = await Promise.all(keys.map(key => tools.lookup({ key })));
+text(results[0]);
+text(results[2]);
+text(JSON.stringify(results));
+"#;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_custom_tool_call("cell", "exec", script),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up = responses::mount_sse_once(
+        &server,
+        create_final_assistant_message_sse_response("Done")?,
+    )
+    .await;
+
+    let home = TempDir::new()?;
+    let config = MockResponsesConfig::new(&server.uri()).enable_feature(Feature::CodeModeOnly);
+    if dedup {
+        config.enable_feature(Feature::CodeModeMcpResultDedup)
+    } else {
+        config.disable_feature(Feature::CodeModeMcpResultDedup)
+    }
+    .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "lookup".to_owned(),
+                description: "Look up a value.".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"],
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            })]),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    let start_id = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Run the lookups.".to_owned(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = app.read_response(start_id).await?;
+
+    let structured = json!({"threads": [{"id":"🌿", "attributes":[{}, [], "\n\""]}]});
+    let content_items_text = r#"{"threads":[]}"#;
+    let mut native_call_id = None;
+    for _ in 0..5 {
+        let ServerRequest::DynamicToolCall { request_id, params } = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_request_message(),
+        )
+        .await??
+        else {
+            anyhow::bail!("expected a dynamic tool request");
+        };
+        let result = match params.arguments["key"].as_str() {
+            Some("native") => {
+                native_call_id = Some(params.call_id);
+                json!({"success":true, "structuredContent": structured})
+            }
+            Some("content-items") => json!({
+                "success":true, "contentItems":[{"type": "inputText", "text": content_items_text}],
+                "_meta": {"client":"extension"}
+            }),
+            Some("tool-error") => json!({"success":false, "errorMessage": "History unavailable"}),
+            Some("request-error") => {
+                app.send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: -32000,
+                        message: "Client disconnected".to_owned(),
+                        data: None,
+                    },
+                )
+                .await?;
+                continue;
+            }
+            Some("malformed") => {
+                json!({"success":true, "contentItems":[], "structuredContent": {}})
+            }
+            key => anyhow::bail!("unexpected lookup key {key:?}"),
+        };
+        app.send_response(request_id, result).await?;
+    }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let body = follow_up.single_request().body_json();
+    let output = body["input"]
+        .as_array()
+        .context("expected request input")?
+        .iter()
+        .find(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == "cell")
+        .context("expected executed Code Mode cell")?;
+    let printed = output["output"]
+        .as_array()
+        .context("expected Code Mode output content")?
+        .iter()
+        .filter_map(|part| part["text"].as_str())
+        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+        .collect::<Vec<_>>();
+    let error = |message: &str| {
+        json!({
+            "content": [{"type": "text", "text": message}], "isError": true,
+        })
+    };
+    let native = json!({
+        "content": [{"type": "text", "text": structured.to_string()}],
+        "structuredContent": structured, "isError": false,
+    });
+    let printed_native = if dedup {
+        json!({"structuredContent": structured, "isError": false})
+    } else {
+        native.clone()
+    };
+    assert_eq!(
+        printed,
+        vec![
+            printed_native,
+            error("History unavailable"),
+            json!([
+                native,
+                content_items_text,
+                error("History unavailable"),
+                "dynamic tool request failed",
+                error("dynamic tool response was invalid"),
+            ]),
+        ],
+    );
+
+    let read_id = app
+        .send_request(
+            "thread/read",
+            Some(json!({
+                "threadId": thread.id, "includeTurns": true
+            })),
+        )
+        .await?;
+    let saved: ThreadReadResponse = app.read_response(read_id).await?;
+    let native_call_id = native_call_id.context("expected native tool request")?;
+    let saved_output = saved
+        .thread
+        .turns
+        .into_iter()
+        .flat_map(|turn| turn.items)
+        .find_map(|item| {
+            if let ThreadItemPayload::DynamicToolCall {
+                id,
+                success,
+                content_items,
+                ..
+            } = item.payload
+                && id == native_call_id
+            {
+                return Some((success, content_items));
+            }
+            None
+        })
+        .context("expected saved dynamic tool call")?;
+    assert_eq!(
+        saved_output,
+        (
+            Some(true),
+            Some(vec![DynamicToolCallOutputContentItem::InputText {
+                text: structured.to_string()
+            }])
+        )
+    );
+    Ok(())
 }
 
 /// Ensures dynamic tool call responses can include structured content items.

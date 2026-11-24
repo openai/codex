@@ -84,6 +84,11 @@ pub trait ToolOutput: Send {
         ))
     }
 
+    /// Hands the final result to JavaScript, moving an already prepared value when possible.
+    fn into_code_mode_result(self: Box<Self>, payload: &ToolPayload) -> CodeModeToolResult {
+        self.code_mode_result(payload)
+    }
+
     /// Returns the host-observed result fields for executed-tool passthrough.
     fn tool_result_metadata(&self) -> ToolResultMetadata {
         ToolResultMetadata::default()
@@ -144,6 +149,10 @@ where
 
     fn code_mode_result(&self, payload: &ToolPayload) -> CodeModeToolResult {
         (**self).code_mode_result(payload)
+    }
+
+    fn into_code_mode_result(self: Box<Self>, payload: &ToolPayload) -> CodeModeToolResult {
+        (*self).into_code_mode_result(payload)
     }
 
     fn tool_result_metadata(&self) -> ToolResultMetadata {

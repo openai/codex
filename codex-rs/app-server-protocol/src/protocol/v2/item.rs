@@ -1039,12 +1039,9 @@ impl From<CoreTurnItem> for ThreadItemPayload {
                 tool: call.tool,
                 arguments: call.arguments,
                 status: call.status.into(),
-                content_items: call.content_items.map(|items| {
-                    items
-                        .into_iter()
-                        .map(DynamicToolCallOutputContentItem::from)
-                        .collect()
-                }),
+                content_items: call
+                    .content_items
+                    .map(|items| items.into_iter().map(Into::into).collect()),
                 success: call.success,
                 duration_ms: call
                     .duration
@@ -1797,7 +1794,18 @@ pub struct FileChangeRequestApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub enum DynamicToolResultFormat {
+    StructuredContent,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct DynamicToolCallParams {
+    /// Optional response format supported by the runtime serving this call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub supported_result_format: Option<DynamicToolResultFormat>,
     pub thread_id: String,
     pub turn_id: String,
     pub call_id: String,
@@ -1809,6 +1817,8 @@ pub struct DynamicToolCallParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+// The RPC union occupies DynamicToolCallResponse in the bundled schema.
+#[schemars(rename = "DynamicToolCallContentItems")]
 pub struct DynamicToolCallResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
@@ -1859,6 +1869,102 @@ impl From<DynamicToolCallOutputContentItem>
             }
         }
     }
+}
+
+/// A dynamic tool reply carrying content items, structured JSON, or an error message.
+#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum DynamicToolCallResult {
+    ContentItems(DynamicToolCallResponse),
+    StructuredContent {
+        #[serde(rename = "structuredContent")]
+        structured_content: JsonValue,
+        success: bool,
+    },
+    Error {
+        #[serde(rename = "errorMessage")]
+        error_message: String,
+        #[schemars(schema_with = "dynamic_tool_error_success_schema")]
+        #[ts(type = "false")]
+        success: bool,
+    },
+}
+
+impl From<DynamicToolCallResult> for codex_protocol::dynamic_tools::DynamicToolCallResult {
+    fn from(result: DynamicToolCallResult) -> Self {
+        match result {
+            DynamicToolCallResult::ContentItems(response) => {
+                Self::ContentItems(codex_protocol::dynamic_tools::DynamicToolResponse {
+                    content_items: response.content_items.into_iter().map(Into::into).collect(),
+                    success: response.success,
+                })
+            }
+            DynamicToolCallResult::StructuredContent {
+                structured_content,
+                success,
+            } => Self::StructuredContent {
+                structured_content,
+                success,
+            },
+            DynamicToolCallResult::Error { error_message, .. } => Self::Error { error_message },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DynamicToolCallResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Ignore client extensions, but count each result field even when its value is null.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            success: bool,
+            #[serde(default, with = "serde_with::rust::unwrap_or_skip")]
+            content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+            #[serde(default, with = "serde_with::rust::unwrap_or_skip")]
+            structured_content: Option<JsonValue>,
+            #[serde(default, with = "serde_with::rust::unwrap_or_skip")]
+            error_message: Option<String>,
+        }
+        let Reply {
+            success,
+            content_items,
+            structured_content,
+            error_message,
+        } = Reply::deserialize(deserializer)?;
+        match (content_items, structured_content, error_message) {
+            (Some(content_items), None, None) => Ok(Self::ContentItems(DynamicToolCallResponse {
+                content_items,
+                success,
+            })),
+            (None, Some(structured_content), None) => Ok(Self::StructuredContent {
+                structured_content,
+                success,
+            }),
+            (None, None, Some(error_message)) if !success => Ok(Self::Error {
+                error_message,
+                success,
+            }),
+            (None, None, Some(_)) => Err(serde::de::Error::custom(
+                "a dynamic tool error requires success: false",
+            )),
+            _ => Err(serde::de::Error::custom(
+                "expected exactly one of contentItems, structuredContent or errorMessage",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+fn dynamic_tool_error_success_schema(
+    _: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    schemars::schema::SchemaObject {
+        instance_type: Some(schemars::schema::InstanceType::Boolean.into()),
+        const_value: Some(JsonValue::Bool(false)),
+        ..Default::default()
+    }
+    .into()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -1,8 +1,7 @@
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
-use codex_app_server_protocol::DynamicToolCallResponse;
+use codex_app_server_protocol::DynamicToolCallResult;
 use codex_core::CodexThread;
-use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
-use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolCallResult as CoreDynamicToolCallResult;
 use codex_protocol::protocol::Op;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -21,7 +20,7 @@ pub(crate) async fn on_call_response(
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
-    let (response, _error) = match response {
+    let response = match response {
         Ok(Ok(value)) => decode_response(value),
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
@@ -34,21 +33,10 @@ pub(crate) async fn on_call_response(
         }
     };
 
-    let DynamicToolCallResponse {
-        content_items,
-        success,
-    } = response.clone();
-    let core_response = CoreDynamicToolResponse {
-        content_items: content_items
-            .into_iter()
-            .map(CoreDynamicToolCallOutputContentItem::from)
-            .collect(),
-        success,
-    };
     if let Err(err) = conversation
-        .submit(Op::DynamicToolResponse {
+        .submit(Op::DynamicToolResult {
             id: call_id.clone(),
-            response: core_response,
+            response,
         })
         .await
     {
@@ -56,9 +44,11 @@ pub(crate) async fn on_call_response(
     }
 }
 
-fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option<String>) {
-    match serde_json::from_value::<DynamicToolCallResponse>(value) {
-        Ok(response)
+fn decode_response(value: serde_json::Value) -> CoreDynamicToolCallResult {
+    let structured =
+        value.get("structuredContent").is_some() || value.get("errorMessage").is_some();
+    match serde_json::from_value::<DynamicToolCallResult>(value) {
+        Ok(DynamicToolCallResult::ContentItems(response))
             if response.content_items.iter().any(|item| {
                 matches!(
                     item,
@@ -73,7 +63,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
             );
             fallback_response(REMOTE_IMAGE_URL_ERROR)
         }
-        Ok(response)
+        Ok(DynamicToolCallResult::ContentItems(response))
             if response.content_items.iter().any(|item| {
                 matches!(
                     item,
@@ -90,22 +80,29 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
             );
             fallback_response(INVALID_AUDIO_URL_ERROR)
         }
-        Ok(response) => (response, None),
+        Ok(response) => response.into(),
         Err(err) => {
-            error!("failed to deserialize DynamicToolCallResponse: {err}");
-            fallback_response("dynamic tool response was invalid")
+            error!("failed to deserialize DynamicToolCallResult: {err}");
+            let message = "dynamic tool response was invalid";
+            if structured {
+                CoreDynamicToolCallResult::Error {
+                    error_message: message.to_owned(),
+                }
+            } else {
+                fallback_response(message)
+            }
         }
     }
 }
 
-fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
-    (
-        DynamicToolCallResponse {
-            content_items: vec![DynamicToolCallOutputContentItem::InputText {
+fn fallback_response(message: &str) -> CoreDynamicToolCallResult {
+    // Advertising support does not mean the client selected structured results.
+    CoreDynamicToolCallResult::ContentItems(codex_protocol::dynamic_tools::DynamicToolResponse {
+        content_items: vec![
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputText {
                 text: message.to_string(),
-            }],
-            success: false,
-        },
-        Some(message.to_string()),
-    )
+            },
+        ],
+        success: false,
+    })
 }

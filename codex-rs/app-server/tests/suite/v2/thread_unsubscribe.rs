@@ -347,6 +347,9 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running(
     assert_eq!(
         params,
         DynamicToolCallParams {
+            supported_result_format: Some(
+                codex_app_server_protocol::DynamicToolResultFormat::StructuredContent
+            ),
             thread_id: thread_id.clone(),
             turn_id: started.turn_id,
             call_id: call_id.to_string(),

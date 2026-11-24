@@ -1972,7 +1972,7 @@ server_request_definitions! {
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
-        response: v2::DynamicToolCallResponse,
+        response: v2::DynamicToolCallResult,
     },
 
     ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {

@@ -47,16 +47,17 @@ async fn response_cancel_race_completes_once() {
         }
     });
     next_item(&receiver).await;
-    let response = DynamicToolResponse {
-        content_items: Vec::new(),
-        success: true,
-    };
+    let response =
+        DynamicToolCallResult::ContentItems(codex_protocol::dynamic_tools::DynamicToolResponse {
+            content_items: Vec::new(),
+            success: true,
+        });
     session
-        .notify_dynamic_tool_response("call-1", response.clone())
+        .notify_dynamic_tool_response("call-1", response)
         .await;
     cancellation.cancel();
     let result = lifecycle.await.expect("lifecycle joined");
-    assert!(result.is_none() || result == Some(response));
+    assert!(result.as_ref().is_none_or(ToolOutput::success_for_logging));
     let item = next_item(&receiver).await;
     assert_eq!(
         (item.status, item.success, item.error),
@@ -73,4 +74,58 @@ async fn response_cancel_race_completes_once() {
     while let Ok(event) = receiver.try_recv() {
         assert!(!matches!(event.msg, EventMsg::ItemCompleted(_)));
     }
+}
+
+#[test]
+fn native_reply_has_the_same_code_mode_and_hook_payload() {
+    let fields = json!({"threads": [{"id":"abc"}]});
+    let (output, items) =
+        DynamicToolOutput::from_response(DynamicToolCallResult::StructuredContent {
+            structured_content: fields.clone(),
+            success: true,
+        });
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let result = codex_protocol::mcp::CallToolResult {
+        content: vec![json!({"type": "text", "text": fields.to_string()})],
+        structured_content: Some(fields.clone()),
+        is_error: Some(false),
+        meta: None,
+    }
+    .code_mode_result(&payload);
+    assert_eq!(output.code_mode_result(&payload), result);
+    assert_eq!(
+        output.post_tool_use_response("call-1", &payload),
+        Some(result.clone().into_json())
+    );
+    assert_eq!(Box::new(output).into_code_mode_result(&payload), result);
+    assert_eq!(
+        items,
+        vec![DynamicToolCallOutputContentItem::InputText {
+            text: fields.to_string()
+        }]
+    );
+}
+
+#[test]
+fn native_reply_moves_the_original_payload_into_code_mode() {
+    let text = "large tool reply".repeat(1024);
+    let original = text.as_ptr();
+    let (output, _) = DynamicToolOutput::from_response(DynamicToolCallResult::StructuredContent {
+        structured_content: Value::String(text),
+        success: true,
+    });
+    let output: Box<dyn ToolOutput> = Box::new(output);
+    let CodeModeToolResult::McpCallToolResult(result) =
+        output.into_code_mode_result(&ToolPayload::Function {
+            arguments: "{}".to_owned(),
+        })
+    else {
+        panic!("native reply lost its MCP result tag");
+    };
+    assert_eq!(
+        result["structuredContent"].as_str().unwrap().as_ptr(),
+        original
+    );
 }

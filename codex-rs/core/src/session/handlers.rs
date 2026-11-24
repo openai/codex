@@ -51,7 +51,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_thread_store::PersistContext;
 
 use crate::context_manager::is_instruction_turn_boundary;
-use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolCallResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::protocol::AgentStatus;
 use codex_rmcp_client::ElicitationAction;
@@ -258,7 +258,11 @@ pub async fn request_permissions_response(
         .await;
 }
 
-pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
+pub async fn dynamic_tool_response(
+    sess: &Arc<Session>,
+    id: String,
+    response: DynamicToolCallResult,
+) {
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
@@ -929,6 +933,10 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::DynamicToolResponse { id, response } => {
+                    dynamic_tool_response(&sess, id, DynamicToolCallResult::ContentItems(response)).await;
+                    false
+                }
+                Op::DynamicToolResult { id, response } => {
                     dynamic_tool_response(&sess, id, response).await;
                     false
                 }

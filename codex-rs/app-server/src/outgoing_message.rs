@@ -1910,6 +1910,9 @@ mod tests {
         let (dynamic_tool_request_id, _dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
                 DynamicToolCallParams {
+                    supported_result_format: Some(
+                        codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+                    ),
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "call-0".to_string(),
@@ -1974,6 +1977,9 @@ mod tests {
         let (_dynamic_tool_request_id, dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
                 DynamicToolCallParams {
+                    supported_result_format: Some(
+                        codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+                    ),
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "call-0".to_string(),

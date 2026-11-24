@@ -484,6 +484,17 @@
             "null"
           ]
         },
+        "supportedResultFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DynamicToolResultFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional response format supported by the runtime serving this call."
+        },
         "threadId": {
           "type": "string"
         },
@@ -502,6 +513,12 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "DynamicToolResultFormat": {
+      "enum": [
+        "structuredContent"
+      ],
+      "type": "string"
     },
     "ExecCommandApprovalParams": {
       "properties": {

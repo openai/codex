@@ -62,6 +62,32 @@ pub struct DynamicToolResponse {
     pub success: bool,
 }
 
+/// The result delivered to a pending dynamic tool call in Core.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum DynamicToolCallResult {
+    ContentItems(DynamicToolResponse),
+    StructuredContent {
+        #[serde(rename = "structuredContent")]
+        structured_content: JsonValue,
+        success: bool,
+    },
+    Error {
+        #[serde(rename = "errorMessage")]
+        error_message: String,
+    },
+}
+
+impl DynamicToolCallResult {
+    pub fn success(&self) -> bool {
+        match self {
+            Self::ContentItems(response) => response.success,
+            Self::StructuredContent { success, .. } => *success,
+            Self::Error { .. } => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]

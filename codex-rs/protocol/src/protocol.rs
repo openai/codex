@@ -31,6 +31,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
+use crate::dynamic_tools::DynamicToolCallResult;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::error::Result as CodexResult;
@@ -921,6 +922,12 @@ pub enum Op {
         /// Tool output payload.
         response: DynamicToolResponse,
     },
+    /// Reply from a client that supports structured dynamic tool results.
+    #[debug("DynamicToolResult {{ id: {id:?}, success: {} }}", response.success())]
+    DynamicToolResult {
+        id: String,
+        response: DynamicToolCallResult,
+    },
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers,
@@ -1172,7 +1179,9 @@ impl Op {
             Self::ResolveElicitation { .. } => "resolve_elicitation",
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
-            Self::DynamicToolResponse { .. } => "dynamic_tool_response",
+            Self::DynamicToolResponse { .. } | Self::DynamicToolResult { .. } => {
+                "dynamic_tool_response"
+            }
             Self::RefreshMcpServers => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",

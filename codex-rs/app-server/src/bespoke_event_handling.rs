@@ -1135,6 +1135,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let dynamic_tool_call_params = match &event.item {
                 CoreTurnItem::DynamicToolCall(item) => Some(DynamicToolCallParams {
+                    supported_result_format: Some(
+                        codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+                    ),
                     thread_id: conversation_id.to_string(),
                     turn_id: event.turn_id.clone(),
                     call_id: item.id.clone(),
@@ -3500,6 +3503,9 @@ mod tests {
         assert_eq!(
             params,
             DynamicToolCallParams {
+                supported_result_format: Some(
+                    codex_app_server_protocol::DynamicToolResultFormat::StructuredContent
+                ),
                 thread_id: conversation_id.to_string(),
                 turn_id: "turn-1".to_string(),
                 call_id: "dynamic-1".to_string(),

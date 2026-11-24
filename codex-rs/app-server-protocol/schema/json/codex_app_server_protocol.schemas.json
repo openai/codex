@@ -3096,6 +3096,24 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
+    "DynamicToolCallContentItems": {
+      "properties": {
+        "contentItems": {
+          "items": {
+            "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+          },
+          "type": "array"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contentItems",
+        "success"
+      ],
+      "type": "object"
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -3108,6 +3126,17 @@
             "string",
             "null"
           ]
+        },
+        "supportedResultFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DynamicToolResultFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional response format supported by the runtime serving this call."
         },
         "threadId": {
           "type": "string"
@@ -3131,23 +3160,68 @@
     },
     "DynamicToolCallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "contentItems": {
-          "items": {
-            "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
-          },
-          "type": "array"
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DynamicToolCallContentItems"
         },
-        "success": {
-          "type": "boolean"
+        {
+          "properties": {
+            "structuredContent": true,
+            "success": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "structuredContent",
+            "success"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "errorMessage": {
+              "type": "string"
+            },
+            "success": {
+              "const": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "errorMessage",
+            "success"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "contentItems",
-        "success"
       ],
-      "title": "DynamicToolCallResponse",
-      "type": "object"
+      "description": "A dynamic tool reply carrying content items, structured JSON, or an error message.",
+      "oneOf": [
+        {
+          "required": [
+            "contentItems"
+          ],
+          "title": "ContentItemsDynamicToolCallResponse"
+        },
+        {
+          "required": [
+            "structuredContent"
+          ],
+          "title": "StructuredContentDynamicToolCallResponse"
+        },
+        {
+          "required": [
+            "errorMessage"
+          ],
+          "title": "ErrorMessageDynamicToolCallResponse"
+        }
+      ],
+      "title": "DynamicToolCallResult"
+    },
+    "DynamicToolResultFormat": {
+      "enum": [
+        "structuredContent"
+      ],
+      "type": "string"
     },
     "ExecCommandApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -127,7 +127,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolCallResult;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::items::ModelInvocationContext;
@@ -3986,7 +3986,11 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
+    pub async fn notify_dynamic_tool_response(
+        &self,
+        call_id: &str,
+        response: DynamicToolCallResult,
+    ) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {

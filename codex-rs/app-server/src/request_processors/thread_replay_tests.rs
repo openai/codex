@@ -60,6 +60,9 @@ async fn stalled_replay_can_be_replaced_or_unsubscribed() -> Result<()> {
             .send_request_to_connections(
                 Some(&[]),
                 ServerRequestPayload::DynamicToolCall(DynamicToolCallParams {
+                    supported_result_format: Some(
+                        codex_app_server_protocol::DynamicToolResultFormat::StructuredContent,
+                    ),
                     thread_id: thread_id.to_string(),
                     turn_id: "turn".into(),
                     call_id: index.to_string(),
