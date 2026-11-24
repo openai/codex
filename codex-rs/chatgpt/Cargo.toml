@@ -21,7 +21,6 @@ codex-model-provider = { workspace = true }
 codex-plugin = { workspace = true }
 codex-utils-cli = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 codex-protocol = { workspace = true }
@@ -32,6 +31,7 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt"] }
 
 [lib]
 doctest = false
