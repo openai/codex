@@ -2310,11 +2310,11 @@ async fn approving_execpolicy_amendment_emits_one_saved_prefix_notice(
             model_info.use_responses_lite = true;
             model_info.model_messages = Some(ModelMessages {
                 permissions: Some(PermissionMessages {
-                    approved_command_prefix_saved: catalog_heading.map(str::to_owned),
+                    approved_command_prefix_saved: catalog_heading.map(Into::into),
                     ..Default::default()
                 }),
                 approvals: full_approval_override.then(|| ApprovalMessages {
-                    on_request: Some("Full catalog approval message".to_string()),
+                    on_request: Some("Full catalog approval message".into()),
                     ..Default::default()
                 }),
                 ..Default::default()

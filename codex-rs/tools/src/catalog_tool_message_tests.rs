@@ -67,8 +67,8 @@ fn catalog_overrides_preserve_tool_fields_and_encryption_with_independent_fallba
         ),
     ] {
         let messages = ToolMessage {
-            description: description.map(str::to_owned),
-            parameters: schema.map(str::to_owned),
+            description: description.map(Into::into),
+            parameters: schema.map(Into::into),
         };
         let mut expected = bundled.clone();
         if let Some(description) = description {

@@ -21,6 +21,7 @@ codex-extension-items = { workspace = true }
 codex-http-client = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cached-str = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-model-facing-id = { workspace = true }
 codex-utils-path-uri = { workspace = true }

@@ -14,7 +14,7 @@ pub fn with_catalog_tool_message(
         return tool;
     };
     if let Some(description) = &messages.description {
-        tool.description.clone_from(description);
+        description.as_str().clone_into(&mut tool.description);
     }
     if let Some(parameters) = &messages.parameters {
         let parameters = parse_catalog_tool_parameters(parameters).and_then(|mut parameters| {

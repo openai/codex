@@ -46,8 +46,8 @@ async fn catalog_approval_headings_follow_selected_model() -> Result<()> {
             model.use_responses_lite = true;
             model.model_messages = Some(ModelMessages {
                 approvals: Some(ApprovalMessages {
-                    request_permissions: Some(format!("# {label} permission requests")),
-                    auto_review_suffix: Some(format!("# {label} automatic review")),
+                    request_permissions: Some(format!("# {label} permission requests").into()),
+                    auto_review_suffix: Some(format!("# {label} automatic review").into()),
                     ..Default::default()
                 }),
                 ..Default::default()

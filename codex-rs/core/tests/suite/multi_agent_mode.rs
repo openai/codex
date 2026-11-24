@@ -54,13 +54,13 @@ fn set_multi_agent_mode(
     if let Some(model_messages) = model_info.model_messages.as_mut() {
         model_messages.multi_agent = Some(MultiAgentMessages {
             role: root_role.map(|root| MultiAgentRoleMessages {
-                root: Some(root.to_string()),
+                root: Some(root.into()),
                 subagent: None,
             }),
             mode: Some(MultiAgentModeMessages {
-                explicit: Some(explicit.to_string()),
-                proactive: proactive.map(str::to_string),
-                hint_text: hint_text.map(str::to_string),
+                explicit: Some(explicit.into()),
+                proactive: proactive.map(Into::into),
+                hint_text: hint_text.map(Into::into),
             }),
         });
     }

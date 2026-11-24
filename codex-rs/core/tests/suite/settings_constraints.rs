@@ -310,7 +310,7 @@ async fn protected_model_settings_use_the_proposed_permissions(
     let messages = protected.model_messages.as_mut().expect("model messages");
     messages.approvals = Some(ApprovalMessages {
         on_request: None,
-        on_request_auto_review: Some(REVIEW_INSTRUCTIONS.to_string()),
+        on_request_auto_review: Some(REVIEW_INSTRUCTIONS.into()),
         never: None,
         unless_trusted: None,
         granular: None,
@@ -319,7 +319,7 @@ async fn protected_model_settings_use_the_proposed_permissions(
     messages.permissions = Some(PermissionMessages {
         danger_full_access: None,
         workspace_write: None,
-        read_only: Some(PERMISSION_INSTRUCTIONS.to_string()),
+        read_only: Some(PERMISSION_INSTRUCTIONS.into()),
         approved_prefixes: None,
         ..PermissionMessages::default()
     });

@@ -658,9 +658,9 @@ async fn guardian_review_recovers_after_compaction(
                 enabled: !with_parent_checkpoint,
                 use_history_notes_extension: true,
                 reminder_threshold_tokens: 6_144,
-                reminder_message_template: "{n_remaining} tokens remain.".to_string(),
-                guidance_message: "Save state before resetting context.".to_string(),
-                auto_compact_fallback_prompt: "Save important state.".to_string(),
+                reminder_message_template: "{n_remaining} tokens remain.".into(),
+                guidance_message: "Save state before resetting context.".into(),
+                auto_compact_fallback_prompt: "Save important state.".into(),
                 auto_compact_fallback_buffer_tokens: 16_384,
             });
         })
@@ -1404,7 +1404,7 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
-                node_repl_policy: node_repl_policy.map(str::to_string),
+                node_repl_policy: node_repl_policy.map(Into::into),
                 rejection_instructions: None,
                 timeout_instructions: None,
             });
@@ -1419,7 +1419,7 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
-                node_repl_policy: Some("Acting-model REPL policy.".to_string()),
+                node_repl_policy: Some("Acting-model REPL policy.".into()),
                 rejection_instructions: None,
                 timeout_instructions: None,
             });
@@ -1930,8 +1930,8 @@ async fn guardian_reviews_delayed_and_new_actions_after_catalog_refresh() -> Res
         .as_mut()
         .unwrap()
         .auto_review = Some(AutoReviewMessages {
-        policy: Some("refreshed policy".to_string()),
-        policy_template: Some("refreshed template: {{ tenant_policy_config }}".to_string()),
+        policy: Some("refreshed policy".into()),
+        policy_template: Some("refreshed template: {{ tenant_policy_config }}".into()),
         node_repl_policy: None,
         rejection_instructions: None,
         timeout_instructions: None,
@@ -2547,7 +2547,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
                 policy: None,
                 policy_template: None,
                 node_repl_policy: None,
-                rejection_instructions: Some("Reviewer-only rejection instructions.".to_string()),
+                rejection_instructions: Some("Reviewer-only rejection instructions.".into()),
                 timeout_instructions: None,
             });
         })
@@ -2561,7 +2561,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
                 policy: None,
                 policy_template: None,
                 node_repl_policy: None,
-                rejection_instructions: rejection_instructions.map(str::to_string),
+                rejection_instructions: rejection_instructions.map(Into::into),
                 timeout_instructions: None,
             });
         })
@@ -2890,7 +2890,7 @@ async fn guardian_timeout_rejects_tool_call_with_acting_model_instructions(
                 policy_template: None,
                 node_repl_policy: None,
                 rejection_instructions: None,
-                timeout_instructions: timeout_instructions.map(str::to_string),
+                timeout_instructions: timeout_instructions.map(Into::into),
             });
         })
         .with_config(|config| {

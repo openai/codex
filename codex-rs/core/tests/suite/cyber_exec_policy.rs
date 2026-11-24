@@ -270,7 +270,7 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
     let server = start_mock_server().await;
     let messages = |heading: &str| ModelMessages {
         permissions: Some(PermissionMessages {
-            approved_command_prefix_saved: Some(heading.to_string()),
+            approved_command_prefix_saved: Some(heading.into()),
             ..Default::default()
         }),
         ..Default::default()

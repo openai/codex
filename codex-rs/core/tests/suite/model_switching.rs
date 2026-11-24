@@ -412,7 +412,7 @@ async fn model_change_respects_personality_opt_out_updates(
                 .expect("test model should have instruction metadata")
                 .instructions_template = Some(
                 "Catalog instructions.\n# Personality\nCatalog style.\n# Rules\nKeep the rules."
-                    .to_string(),
+                    .into(),
             );
         })
         .with_model("gpt-5.5")

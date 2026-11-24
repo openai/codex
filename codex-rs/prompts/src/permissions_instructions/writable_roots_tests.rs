@@ -63,7 +63,7 @@ fn bounds_template_bytes_and_rendered_output_before_allocation() {
     assert!(render_roots_override(&exact, "`/a`").is_some());
     for oversized in [exact + "x", format!("{}{{{{ roots }}}}", "é".repeat(495))] {
         let messages = PermissionMessages {
-            writable_root: Some(oversized),
+            writable_root: Some(oversized.into()),
             ..PermissionMessages::default()
         };
         assert_eq!(

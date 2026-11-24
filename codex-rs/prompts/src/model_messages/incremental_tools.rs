@@ -2,17 +2,18 @@
 //! Text is owned because world-state sections outlive the borrowed model metadata.
 
 use codex_protocol::openai_models::IncrementalToolMessages;
+use codex_utils_cached_str::CodexCachedStr;
 
 /// Resolved static wording; consumers retain ownership of runtime names and instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedIncrementalToolMessages {
-    pub tool_update_hint: String,
-    pub removed_tools_header: String,
-    pub removed_namespaces_header: String,
-    pub namespace_instructions_prefix: String,
-    pub namespace_instructions_cleared: String,
-    pub exec_tools_update_hint: String,
-    pub exec_tools_removed_definitions_header: String,
+    pub tool_update_hint: CodexCachedStr,
+    pub removed_tools_header: CodexCachedStr,
+    pub removed_namespaces_header: CodexCachedStr,
+    pub namespace_instructions_prefix: CodexCachedStr,
+    pub namespace_instructions_cleared: CodexCachedStr,
+    pub exec_tools_update_hint: CodexCachedStr,
+    pub exec_tools_removed_definitions_header: CodexCachedStr,
 }
 
 impl Default for ResolvedIncrementalToolMessages {
@@ -23,9 +24,9 @@ impl Default for ResolvedIncrementalToolMessages {
 
 impl ResolvedIncrementalToolMessages {
     pub(crate) fn new(messages: Option<&IncrementalToolMessages>) -> Self {
-        let resolve = |text: Option<&String>, bundled: &str| {
+        let resolve = |text: Option<&CodexCachedStr>, bundled: &str| {
             text.filter(|text| text.len() <= 512)
-                .map_or_else(|| bundled.to_owned(), Clone::clone)
+                .map_or_else(|| bundled.into(), Clone::clone)
         };
         Self {
             tool_update_hint: resolve(
@@ -57,5 +58,30 @@ impl ResolvedIncrementalToolMessages {
                 "Listed `Tool:` entries are unavailable until redefined or rediscovered. `Namespace instructions:` removes guidance only. Unlisted entries are unchanged.",
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Resolving a catalog override shares its storage, including when it matches a default.
+    #[test]
+    fn resolved_overrides_share_storage_with_catalog_and_defaults() {
+        let defaults = ResolvedIncrementalToolMessages::default();
+        let catalog = IncrementalToolMessages {
+            tool_update_hint: Some(defaults.tool_update_hint.as_str().into()),
+            removed_tools_header: Some("Custom removal instructions".into()),
+            ..Default::default()
+        };
+        let resolved = ResolvedIncrementalToolMessages::new(Some(&catalog));
+        assert!(std::ptr::eq(
+            defaults.tool_update_hint.as_str(),
+            resolved.tool_update_hint.as_str()
+        ));
+        assert!(std::ptr::eq(
+            catalog.removed_tools_header.as_deref().unwrap(),
+            resolved.removed_tools_header.as_str()
+        ));
     }
 }

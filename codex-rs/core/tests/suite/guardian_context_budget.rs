@@ -256,8 +256,8 @@ async fn review_respects_complete_context_budget(
                 .as_mut()
                 .expect("bundled reviewer model messages")
                 .auto_review = Some(AutoReviewMessages {
-                policy: Some("Review actions against user authorization.".to_owned()),
-                policy_template: Some("{{ tenant_policy_config }}".to_owned()),
+                policy: Some("Review actions against user authorization.".into()),
+                policy_template: Some("{{ tenant_policy_config }}".into()),
                 node_repl_policy: None,
                 rejection_instructions: None,
                 timeout_instructions: None,

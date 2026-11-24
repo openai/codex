@@ -79,6 +79,7 @@ codex-user-input = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-audio = { workspace = true }
 codex-utils-cache = { workspace = true }
+codex-utils-cached-str = { workspace = true }
 codex-utils-critical-path = { workspace = true }
 codex-utils-git-discovery = { workspace = true }
 codex-utils-head-tail-buffer = { workspace = true }

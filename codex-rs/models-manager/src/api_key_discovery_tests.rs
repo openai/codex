@@ -55,7 +55,7 @@ async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
     expected_model
         .model_messages
         .get_or_insert_default()
-        .instructions_template = overrides.base_instructions.clone();
+        .instructions_template = overrides.base_instructions.as_deref().map(Into::into);
     assert_eq!(
         manager
             .get_model_info(&bundled_model.slug, &overrides)

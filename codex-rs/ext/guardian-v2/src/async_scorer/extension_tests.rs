@@ -1123,7 +1123,7 @@ async fn sample_configured_conversation_history_with_delivery(
                 .auto_review
                 .as_mut()
                 .expect("reviewer model should have Guardian policy")
-                .policy = Some(TEST_CATALOG_GUARDIAN_POLICY.to_owned());
+                .policy = Some(TEST_CATALOG_GUARDIAN_POLICY.into());
         })
         .with_model("gpt-5.5")
         .with_config(move |config| {
@@ -2340,12 +2340,12 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     let model_defaults = GuardianV2ModelConfig {
         async_classifier_mode: Some(codex_protocol::openai_models::AsyncClassifierMode::Snapshot),
         async_classifier_conversation_token_limit: None,
-        classifier_instructions: Some("Use the experimental model-owned prompt.".to_owned()),
+        classifier_instructions: Some("Use the experimental model-owned prompt.".into()),
         review_threshold_basis_points: Some(6_000),
         max_tool_call_lag: Some(2),
         reasoning_effort: Some(ReasoningEffort::Minimal),
         transcript: Some(GuardianV2TranscriptModelConfig {
-            sources: Some(vec!["reasoning".to_owned()]),
+            sources: Some(vec!["reasoning".into()]),
             include_images: Some(true),
             max_message_entry_tokens: Some(128),
             max_message_transcript_tokens: Some(256),

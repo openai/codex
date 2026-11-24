@@ -3350,10 +3350,8 @@ pub(super) fn guardian_parent_catalog() -> ModelsResponse {
                     .as_mut()
                     .expect("model messages")
                     .auto_review = Some(AutoReviewMessages {
-                    policy: Some("captured policy".to_string()),
-                    policy_template: Some(
-                        "captured template: {{ tenant_policy_config }}".to_string(),
-                    ),
+                    policy: Some("captured policy".into()),
+                    policy_template: Some("captured template: {{ tenant_policy_config }}".into()),
                     node_repl_policy: None,
                     rejection_instructions: None,
                     timeout_instructions: None,

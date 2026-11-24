@@ -19,6 +19,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-tools = { workspace = true }
+codex-utils-cached-str = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

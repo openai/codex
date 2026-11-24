@@ -652,8 +652,8 @@ async fn guardian_review_session_config_resolves_policy_and_template(
     let mut model = model_info_from_slug("active-model");
     model.model_messages = Some(ModelMessages {
         auto_review: Some(AutoReviewMessages {
-            policy: Some(catalog_policy.to_string()),
-            policy_template: catalog_template.map(str::to_owned),
+            policy: Some(catalog_policy.into()),
+            policy_template: catalog_template.map(Into::into),
             node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,

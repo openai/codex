@@ -21,6 +21,7 @@ codex-git-utils = { workspace = true }
 codex-guardian-context = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cached-str = { workspace = true }
 codex-utils-template = { workspace = true }
 tracing = { workspace = true }
 whoami = { workspace = true }

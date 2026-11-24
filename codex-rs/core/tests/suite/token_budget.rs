@@ -73,9 +73,9 @@ fn model_token_budget_config() -> ModelTokenBudgetConfig {
         enabled: false,
         use_history_notes_extension: false,
         reminder_threshold_tokens: 6_144,
-        reminder_message_template: "Model reminder: {n_remaining} tokens remain.".to_string(),
-        guidance_message: "Use the model-owned context-window guidance.".to_string(),
-        auto_compact_fallback_prompt: AUTO_COMPACT_FALLBACK_PROMPT.to_string(),
+        reminder_message_template: "Model reminder: {n_remaining} tokens remain.".into(),
+        guidance_message: "Use the model-owned context-window guidance.".into(),
+        auto_compact_fallback_prompt: AUTO_COMPACT_FALLBACK_PROMPT.into(),
         auto_compact_fallback_buffer_tokens: 16_384,
     }
 }
@@ -579,7 +579,7 @@ async fn token_budget_defaults_follow_the_active_model(activation: Feature) -> R
         .with_model_info_override("gpt-5.2", |model_info| {
             model_info.supports_experimental_context = true;
             let mut defaults = model_token_budget_config();
-            defaults.guidance_message = "Use first-model context-window guidance.".to_string();
+            defaults.guidance_message = "Use first-model context-window guidance.".into();
             model_info
                 .model_messages
                 .as_mut()
@@ -588,7 +588,7 @@ async fn token_budget_defaults_follow_the_active_model(activation: Feature) -> R
         })
         .with_model_info_override("gpt-5.4", |model_info| {
             let mut defaults = model_token_budget_config();
-            defaults.guidance_message = "Use second-model context-window guidance.".to_string();
+            defaults.guidance_message = "Use second-model context-window guidance.".into();
             model_info
                 .model_messages
                 .as_mut()
@@ -666,11 +666,11 @@ async fn token_budget_ignores_invalid_model_message_defaults() -> Result<()> {
     let mut negative_fallback_buffer = model_token_budget_config();
     negative_fallback_buffer.auto_compact_fallback_buffer_tokens = -1;
     let mut oversized_reminder = model_token_budget_config();
-    oversized_reminder.reminder_message_template = "x".repeat(2_001);
+    oversized_reminder.reminder_message_template = "x".repeat(2_001).into();
     let mut oversized_guidance = model_token_budget_config();
-    oversized_guidance.guidance_message = "x".repeat(2_001);
+    oversized_guidance.guidance_message = "x".repeat(2_001).into();
     let mut oversized_fallback = model_token_budget_config();
-    oversized_fallback.auto_compact_fallback_prompt = "x".repeat(2_001);
+    oversized_fallback.auto_compact_fallback_prompt = "x".repeat(2_001).into();
 
     for model_defaults in [
         zero_reminder_threshold,

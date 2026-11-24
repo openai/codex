@@ -2,6 +2,7 @@
 //! Request grouping stays independent of these display rules.
 
 use super::ContextSnapshotOptions;
+use codex_utils_cached_str::CodexCachedStr;
 use regex_lite::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -543,7 +544,7 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
 }
 
 pub(super) fn is_bundled_model_instructions(text: &str) -> bool {
-    static PROMPTS: OnceLock<Vec<String>> = OnceLock::new();
+    static PROMPTS: OnceLock<Vec<CodexCachedStr>> = OnceLock::new();
     text == codex_models_manager::model_info::BASE_INSTRUCTIONS
         || PROMPTS
             .get_or_init(|| {
@@ -555,7 +556,7 @@ pub(super) fn is_bundled_model_instructions(text: &str) -> bool {
                     .collect()
             })
             .iter()
-            .any(|prompt| prompt == text)
+            .any(|prompt| prompt.as_str() == text)
 }
 
 // Only complete, balanced wrappers identify guidance. Adjacent or malformed wrappers remain text.

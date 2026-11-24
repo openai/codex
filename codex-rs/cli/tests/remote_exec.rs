@@ -41,7 +41,7 @@ async fn remote_exec_forwards_model_and_effort_and_preserves_omitted_settings() 
             let mut model = template.clone();
             model.slug = slug.to_string();
             model.model_messages = Some(codex_protocol::openai_models::ModelMessages {
-                instructions_template: Some(format!("Base instructions for {slug}")),
+                instructions_template: Some(format!("Base instructions for {slug}").into()),
                 ..Default::default()
             });
             model

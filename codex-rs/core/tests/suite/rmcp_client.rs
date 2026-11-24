@@ -2561,8 +2561,8 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
         .as_mut()
         .expect("bundled model messages");
     messages.confirmation_policies = Some(ConfirmationPolicies {
-        browser_use: browser_policy.map(str::to_owned),
-        computer_use: computer_policy.map(str::to_owned),
+        browser_use: browser_policy.map(Into::into),
+        computer_use: computer_policy.map(Into::into),
     });
     let models_mock = mount_models_once(&server, models).await;
 

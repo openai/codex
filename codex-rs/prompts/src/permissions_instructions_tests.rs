@@ -190,9 +190,9 @@ fn renders_sandbox_mode_text() {
 #[test]
 fn catalog_permission_messages_select_sandbox_mode_and_render_network_access() {
     let messages = PermissionMessages {
-        danger_full_access: Some("catalog danger".to_string()),
-        workspace_write: Some("catalog workspace {{ network_access }}".to_string()),
-        read_only: Some("catalog read only {{ network_access }}".to_string()),
+        danger_full_access: Some("catalog danger".into()),
+        workspace_write: Some("catalog workspace {{ network_access }}".into()),
+        read_only: Some("catalog read only {{ network_access }}".into()),
         approved_prefixes: None,
         ..PermissionMessages::default()
     };
@@ -217,7 +217,7 @@ fn catalog_permission_messages_select_sandbox_mode_and_render_network_access() {
 fn catalog_permission_text_equal_to_bundled_template_preserves_literal_whitespace() {
     let messages = PermissionMessages {
         danger_full_access: None,
-        workspace_write: Some(WORKSPACE_WRITE_TEMPLATE.to_string()),
+        workspace_write: Some(WORKSPACE_WRITE_TEMPLATE.into()),
         read_only: None,
         approved_prefixes: None,
         ..PermissionMessages::default()
@@ -251,7 +251,7 @@ fn missing_catalog_permission_message_uses_legacy_sandbox_text() {
     let messages = PermissionMessages {
         danger_full_access: None,
         workspace_write: None,
-        read_only: Some("unused".to_string()),
+        read_only: Some("unused".into()),
         approved_prefixes: None,
         ..PermissionMessages::default()
     };
@@ -271,7 +271,7 @@ fn invalid_catalog_permission_message_is_preserved_verbatim() {
     for workspace_write in ["{{ unterminated", "{{ unsupported }}"] {
         let messages = PermissionMessages {
             danger_full_access: None,
-            workspace_write: Some(workspace_write.to_string()),
+            workspace_write: Some(workspace_write.into()),
             read_only: None,
             approved_prefixes: None,
             ..PermissionMessages::default()
@@ -292,7 +292,7 @@ fn catalog_permission_message_renders_network_access_and_preserves_other_placeho
     let source = "network={{ network_access }} compact={{network_access}} other={{ other }}";
     let messages = PermissionMessages {
         danger_full_access: None,
-        workspace_write: Some(source.to_string()),
+        workspace_write: Some(source.into()),
         read_only: None,
         approved_prefixes: None,
         ..PermissionMessages::default()
@@ -312,7 +312,7 @@ fn catalog_permission_message_renders_network_access_and_preserves_other_placeho
 fn empty_catalog_permission_message_preserves_non_sandbox_sections() {
     let messages = PermissionMessages {
         danger_full_access: None,
-        workspace_write: Some(String::new()),
+        workspace_write: Some("".into()),
         read_only: None,
         approved_prefixes: None,
         ..PermissionMessages::default()
@@ -422,10 +422,10 @@ fn on_request_permission_guidance_matches_enabled_capabilities() {
 #[test]
 fn catalog_approval_messages_select_reviewer_variant() {
     let messages = ApprovalMessages {
-        on_request: Some("user catalog approvals".to_string()),
-        on_request_auto_review: Some("auto-review catalog approvals".to_string()),
-        never: Some("never catalog approvals".to_string()),
-        unless_trusted: Some("unless-trusted catalog approvals".to_string()),
+        on_request: Some("user catalog approvals".into()),
+        on_request_auto_review: Some("auto-review catalog approvals".into()),
+        never: Some("never catalog approvals".into()),
+        unless_trusted: Some("unless-trusted catalog approvals".into()),
         granular: None,
         ..Default::default()
     };
@@ -472,7 +472,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
 #[test]
 fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
     let messages = ApprovalMessages {
-        on_request: Some(String::new()),
+        on_request: Some("".into()),
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
@@ -515,7 +515,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
             ApprovalsReviewer::User,
             ApprovalMessages {
                 on_request: None,
-                on_request_auto_review: Some("unused catalog approvals".to_string()),
+                on_request_auto_review: Some("unused catalog approvals".into()),
                 never: None,
                 unless_trusted: None,
                 granular: None,
@@ -525,7 +525,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
         (
             ApprovalsReviewer::AutoReview,
             ApprovalMessages {
-                on_request: Some("unused catalog approvals".to_string()),
+                on_request: Some("unused catalog approvals".into()),
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: None,
@@ -572,8 +572,8 @@ fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text(
     let messages = ApprovalMessages {
         on_request: None,
         on_request_auto_review: None,
-        never: Some(String::new()),
-        unless_trusted: Some(String::new()),
+        never: Some("".into()),
+        unless_trusted: Some("".into()),
         granular: None,
         ..Default::default()
     };
@@ -665,8 +665,8 @@ fn saved_prefix_heading_requires_rollout_and_plain_bounded_wording() {
         (None, None),
     ] {
         let messages = PermissionMessages {
-            approved_command_prefix_saved: heading.map(str::to_owned),
-            approved_prefixes: Some("Unrelated full-list template".to_owned()),
+            approved_command_prefix_saved: heading.map(Into::into),
+            approved_prefixes: Some("Unrelated full-list template".into()),
             ..Default::default()
         };
         let context = ApprovalPromptContext {
@@ -844,7 +844,7 @@ fn preserves_supplied_path_spellings_and_order() {
     let denied_read_paths = vec![r"C:\private".to_string(), "/private".to_string()];
     let denied_read_globs = vec![r"C:\private\**".to_string(), "/private/**".to_string()];
     let approval_messages = ApprovalMessages {
-        on_request: Some(String::new()),
+        on_request: Some("".into()),
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
@@ -853,7 +853,7 @@ fn preserves_supplied_path_spellings_and_order() {
     };
     let permission_messages = PermissionMessages {
         danger_full_access: None,
-        workspace_write: Some(String::new()),
+        workspace_write: Some("".into()),
         read_only: None,
         approved_prefixes: None,
         ..PermissionMessages::default()
@@ -1079,8 +1079,8 @@ fn unusable_path_warning_copy_falls_back_independently() {
                 denied_reads
             };
             let messages = PermissionMessages {
-                omitted_paths: Some(omitted_paths),
-                denied_reads: Some(denied_reads),
+                omitted_paths: Some(omitted_paths.into()),
+                denied_reads: Some(denied_reads.into()),
                 ..Default::default()
             };
             let actual = PermissionsInstructions::from_resolved(
@@ -1121,8 +1121,8 @@ fn path_warning_copy_is_bounded_without_suppressing_omitted_denials() {
         let lead = "x".repeat(bytes);
         let heading = "y".repeat(bytes - "\n{{ denied_reads }}".len());
         let messages = PermissionMessages {
-            omitted_paths: Some(lead.clone()),
-            denied_reads: Some(format!("{heading}\n{{{{ denied_reads }}}}")),
+            omitted_paths: Some(lead.as_str().into()),
+            denied_reads: Some(format!("{heading}\n{{{{ denied_reads }}}}").into()),
             ..Default::default()
         };
         for paths in [&denied[..], &denied[..1], &denied[..0]] {

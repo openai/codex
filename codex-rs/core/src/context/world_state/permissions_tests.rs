@@ -201,11 +201,11 @@ fn initially_blank_permissions_preserve_saved_prefix_updates(per_environment: bo
     let mut model = model_info_from_slug("test-model");
     model.model_messages = Some(ModelMessages {
         approvals: Some(ApprovalMessages {
-            never: Some(String::new()),
+            never: Some("".into()),
             ..Default::default()
         }),
         permissions: Some(PermissionMessages {
-            read_only: Some(" \t ".to_string()),
+            read_only: Some(" \t ".into()),
             ..Default::default()
         }),
         ..Default::default()
@@ -377,7 +377,7 @@ fn permissions_state(
     approval_policy: AskForApproval,
 ) -> PermissionsState {
     let approval_messages = ApprovalMessages {
-        on_request: Some("Ask for approval.".to_string()),
+        on_request: Some("Ask for approval.".into()),
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
@@ -385,9 +385,9 @@ fn permissions_state(
         ..Default::default()
     };
     let permission_messages = PermissionMessages {
-        danger_full_access: Some("Full access.".to_string()),
-        workspace_write: Some("Workspace write.".to_string()),
-        read_only: Some("Read only.".to_string()),
+        danger_full_access: Some("Full access.".into()),
+        workspace_write: Some("Workspace write.".into()),
+        read_only: Some("Read only.".into()),
         approved_prefixes: None,
         ..PermissionMessages::default()
     };

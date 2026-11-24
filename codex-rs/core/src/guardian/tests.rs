@@ -1360,7 +1360,7 @@ async fn guardian_reuse_respects_effective_policy_and_personality_opt_out(
         .auto_review
         .as_mut()
         .unwrap()
-        .policy = Some("changed action policy".to_string());
+        .policy = Some("changed action policy".into());
     let mut different_personality = changed_policy.clone();
     different_personality.personality = Some(codex_protocol::config_types::Personality::Pragmatic);
     let mut omit_personality = different_personality.clone();

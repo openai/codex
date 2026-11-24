@@ -36,7 +36,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
             content_filter_guidance: None,
             persistent_instructions: None,
             tools: None,
-            instructions_template: Some("base instructions".to_string()),
+            instructions_template: Some("base instructions".into()),
             approvals: None,
             collaboration_modes: None,
             auto_review: None,

@@ -193,7 +193,7 @@ async fn catalog_refresh_replaces_instructions_and_compaction_installs_latest_ba
     model
         .model_messages
         .get_or_insert_default()
-        .instructions_template = Some("Help the user complete their task.".to_string());
+        .instructions_template = Some("Help the user complete their task.".into());
     responses::mount_models_once_with_etag(
         &server,
         ModelsResponse {
@@ -239,7 +239,7 @@ async fn catalog_refresh_replaces_instructions_and_compaction_installs_latest_ba
     model
         .model_messages
         .get_or_insert_default()
-        .instructions_template = Some("Check your work before responding.".to_string());
+        .instructions_template = Some("Check your work before responding.".into());
     responses::mount_models_once_with_etag(
         &server,
         ModelsResponse {

@@ -155,9 +155,12 @@ impl GuardianV2Config {
     ) -> Result<Self, String> {
         let mut configured = self.local_overrides.clone();
         if let Some(model_defaults) = model_defaults {
-            configured.classifier_instructions = configured
-                .classifier_instructions
-                .or_else(|| model_defaults.classifier_instructions.clone());
+            configured.classifier_instructions = configured.classifier_instructions.or_else(|| {
+                model_defaults
+                    .classifier_instructions
+                    .as_deref()
+                    .map(str::to_owned)
+            });
             configured.review_threshold = configured.review_threshold.or_else(|| {
                 model_defaults
                     .review_threshold_basis_points

@@ -41,7 +41,7 @@ impl<'a> IndirectNamespacePrefixes<'a> {
         if let Some(namespaces) = prefixes.and_then(|prefixes| prefixes.namespaces.as_ref()) {
             for (namespace, prefix) in namespaces {
                 resolved.insert(
-                    namespace.clone(),
+                    namespace.to_string(),
                     (prefix.trim(), format!("namespaces.{namespace}")),
                 );
             }
@@ -73,7 +73,7 @@ impl<'a> IndirectNamespacePrefixes<'a> {
                 if !registered.contains(namespace.as_str()) {
                     continue;
                 }
-                if resolved.contains_key(namespace) {
+                if resolved.contains_key(namespace.as_str()) {
                     insert_prefix(
                         &mut resolved,
                         namespace,

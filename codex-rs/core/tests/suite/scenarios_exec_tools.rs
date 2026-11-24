@@ -88,8 +88,8 @@ async fn changed_sections_and_entries_append_without_repeating_the_catalog(
                     .tools
                     .get_or_insert_default()
                     .incremental_tools = Some(IncrementalToolMessages {
-                    exec_tools_update_hint: Some(hint.to_string()),
-                    exec_tools_removed_definitions_header: Some(header.to_string()),
+                    exec_tools_update_hint: Some(hint.into()),
+                    exec_tools_removed_definitions_header: Some(header.into()),
                     ..Default::default()
                 });
             }

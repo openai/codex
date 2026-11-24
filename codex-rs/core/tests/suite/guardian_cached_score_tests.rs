@@ -427,7 +427,7 @@ async fn explicit_guardian_provider_is_separate(
             .expect("catalog policy"),
     );
     messages.guardian_v2 = Some(GuardianV2ModelConfig {
-        classifier_instructions: Some("Trusted Guardian classifier instructions.".to_owned()),
+        classifier_instructions: Some("Trusted Guardian classifier instructions.".into()),
         reasoning_effort: Some(ReasoningEffort::Minimal),
         review_threshold_basis_points: Some(guardian_threshold),
         ..Default::default()
@@ -441,7 +441,7 @@ async fn explicit_guardian_provider_is_separate(
             .auto_review
             .as_mut()
             .expect("classifier policy")
-            .policy = Some("Classifier-only policy that must not authorize actions.".to_owned());
+            .policy = Some("Classifier-only policy that must not authorize actions.".into());
         reviewer_model.slug = reviewer_model_name.to_owned();
         models.push(reviewer_model);
     }
@@ -485,9 +485,7 @@ review_threshold = ACTOR_THRESHOLD
                         .expect("catalog policy"),
                 );
                 messages.guardian_v2 = Some(GuardianV2ModelConfig {
-                    classifier_instructions: Some(
-                        "Actor catalog classifier instructions.".to_owned(),
-                    ),
+                    classifier_instructions: Some("Actor catalog classifier instructions.".into()),
                     reasoning_effort: Some(ReasoningEffort::High),
                     review_threshold_basis_points: Some(5_000 - guardian_threshold),
                     ..Default::default()

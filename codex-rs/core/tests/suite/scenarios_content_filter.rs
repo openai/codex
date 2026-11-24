@@ -16,9 +16,8 @@ async fn content_filter_guidance_is_appended_after_each_block() -> Result<()> {
             model
                 .model_messages
                 .get_or_insert_default()
-                .content_filter_guidance = Some(
-                "Your previous response was blocked. Offer a permitted alternative.".to_string(),
-            );
+                .content_filter_guidance =
+                Some("Your previous response was blocked. Offer a permitted alternative.".into());
         })
         .build_with_auto_env(&server)
         .await?;

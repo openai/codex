@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use codex_utils_cached_str::CodexCachedStr;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::InstanceType;
@@ -600,14 +601,14 @@ pub struct ModelMessages {
     /// Developer guidance after a content-filter block. Missing, null, blank, or values over
     /// 512 UTF-8 bytes use the bundled guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_filter_guidance: Option<String>,
+    pub content_filter_guidance: Option<CodexCachedStr>,
     /// Additional developer instructions for persistent mode. Missing or null uses the built-in
     /// instructions; an empty string disables them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persistent_instructions: Option<String>,
+    pub persistent_instructions: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolMessages>,
-    pub instructions_template: Option<String>,
+    pub instructions_template: Option<CodexCachedStr>,
     pub approvals: Option<ApprovalMessages>,
     pub collaboration_modes: Option<CollaborationModeMessages>,
     pub auto_review: Option<AutoReviewMessages>,
@@ -628,7 +629,7 @@ pub struct AppsMessages {
     /// Missing/null uses bundled guidance; empty clears it. Whitespace-only or more than
     /// 800 UTF-8 bytes falls back to bundled guidance. Other values preserve exact bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_instructions: Option<String>,
+    pub usage_instructions: Option<CodexCachedStr>,
 }
 
 /// Model-owned confirmation-policy Markdown, forwarded unchanged to actor tools.
@@ -636,11 +637,14 @@ pub struct AppsMessages {
 pub struct ConfirmationPolicies {
     /// Replacement Markdown for the Browser Use confirmation-policy document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser_use: Option<String>,
+    pub browser_use: Option<CodexCachedStr>,
     /// Replacement Markdown for the native Computer Use confirmation policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub computer_use: Option<String>,
+    pub computer_use: Option<CodexCachedStr>,
 }
+
+/// Catalog selectors and the model-owned description prefixes they apply.
+pub type ToolDescriptionPrefixes = std::collections::BTreeMap<CodexCachedStr, CodexCachedStr>;
 
 /// Model-owned tool messages and description prefixes.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -663,8 +667,7 @@ pub struct ToolMessages {
     /// `description_prefix_budget_bytes` limit with indirect namespace guidance.
     /// Other namespaces are never affected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub functions_namespace_functions_description_prefixes:
-        Option<std::collections::BTreeMap<String, String>>,
+    pub functions_namespace_functions_description_prefixes: Option<ToolDescriptionPrefixes>,
     /// Maximum total UTF-8 bytes of trimmed prefix values in this model's catalog entry.
     /// Defaults to 512. Each configured dictionary entry counts once, including unused
     /// selectors. Keys, paragraph separators, and rendered copies are excluded.
@@ -692,16 +695,16 @@ pub struct IndirectDescriptionPrefixes {
     /// Exact rendered namespaces, including `functions` for plain tools.
     /// Overlapping selectors must have the same trimmed value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespaces: Option<std::collections::BTreeMap<String, String>>,
+    pub namespaces: Option<ToolDescriptionPrefixes>,
     /// Exact rendered namespaces of registered built-in tools, including `functions` for plain tools.
     /// Adds guidance once to the namespace header, including a header shared with client tools.
     /// Flat listings have no header and omit this selector. External-only namespaces are ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub builtin_tool_namespaces: Option<std::collections::BTreeMap<String, String>>,
+    pub builtin_tool_namespaces: Option<ToolDescriptionPrefixes>,
     /// Configured MCP server names, before callable namespace normalization.
     /// Each prefix applies to all namespaces exposed by that server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp_servers: Option<std::collections::BTreeMap<String, String>>,
+    pub mcp_servers: Option<ToolDescriptionPrefixes>,
 }
 
 /// Model-owned messages for a built-in tool.
@@ -710,7 +713,7 @@ pub struct ToolMessage {
     /// Missing or null uses the built-in description; an empty string suppresses its static
     /// text without disabling the tool. Tool-owned runtime guidance is retained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<CodexCachedStr>,
     /// Complete JSON Schema encoded as a string. Consumed by Multi-Agent V2 tools, Code Mode wait,
     /// request_user_input_async (the send_user_message_async catalog key), MCP resource helpers,
     /// and Memento V2 tools.
@@ -720,7 +723,7 @@ pub struct ToolMessage {
     /// Overrides must declare harness-encrypted properties so their annotations can be retained.
     /// Argument handling is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameters: Option<String>,
+    pub parameters: Option<CodexCachedStr>,
 }
 
 /// Model-owned descriptions and parameters for Multi-Agent V2 tools, independent of their namespace.
@@ -811,12 +814,12 @@ pub struct CodeModeToolMessages {
     /// Literal guidance appended when deferred nested tools exist.
     /// Missing or null uses bundled text; an empty string omits the section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deferred_nested_tools_guidance: Option<String>,
+    pub deferred_nested_tools_guidance: Option<CodexCachedStr>,
     /// Literal shared TypeScript definitions, emitted when Code Mode Only exposes MCP results.
     /// Missing or null uses bundled definitions; an empty string omits the section.
     /// Custom definitions must remain compatible with the generated tool declarations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp_typescript_preamble: Option<String>,
+    pub mcp_typescript_preamble: Option<CodexCachedStr>,
 }
 
 /// Model-owned defaults for the context-window token-budget feature.
@@ -827,28 +830,28 @@ pub struct ModelTokenBudgetConfig {
     #[serde(default)]
     pub use_history_notes_extension: bool,
     pub reminder_threshold_tokens: i64,
-    pub reminder_message_template: String,
-    pub guidance_message: String,
-    pub auto_compact_fallback_prompt: String,
+    pub reminder_message_template: CodexCachedStr,
+    pub guidance_message: CodexCachedStr,
+    pub auto_compact_fallback_prompt: CodexCachedStr,
     pub auto_compact_fallback_buffer_tokens: i64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ApprovalMessages {
-    pub on_request: Option<String>,
-    pub on_request_auto_review: Option<String>,
-    pub never: Option<String>,
-    pub unless_trusted: Option<String>,
+    pub on_request: Option<CodexCachedStr>,
+    pub on_request_auto_review: Option<CodexCachedStr>,
+    pub never: Option<CodexCachedStr>,
+    pub unless_trusted: Option<CodexCachedStr>,
     /// Optional replacement heading for the request_permissions tool instructions.
     #[serde(
         default,
         alias = "request_permissions_tool",
         skip_serializing_if = "Option::is_none"
     )]
-    pub request_permissions: Option<String>,
+    pub request_permissions: Option<CodexCachedStr>,
     /// Optional introduction to the harness-owned automatic escalation review policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_review_suffix: Option<String>,
+    pub auto_review_suffix: Option<CodexCachedStr>,
     /// Optional catalog templates for harness-owned granular approval facts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granular: Option<GranularApprovalMessages>,
@@ -861,67 +864,67 @@ pub struct GranularApprovalMessages {
     /// Rendering contract: at most 500 UTF-8 bytes with exactly one `{{ policy }}` marker.
     /// Consumers must use bundled text for missing, null, empty, invalid, or oversized templates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intro: Option<String>,
+    pub intro: Option<CodexCachedStr>,
     /// Presentation around `{{ categories }}`, including the fixed prompted-bucket label.
     /// Uses the same byte limit and fallback rules as `intro`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompted_categories: Option<String>,
+    pub prompted_categories: Option<CodexCachedStr>,
     /// Presentation around `{{ categories }}`, including the fixed rejected-bucket label.
     /// Uses the same byte limit and fallback rules as `intro`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rejected_categories: Option<String>,
+    pub rejected_categories: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct CollaborationModeMessages {
     /// Optional guidance for Default before the first Plan turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial: Option<String>,
-    pub default: Option<String>,
-    pub plan: Option<String>,
+    pub initial: Option<CodexCachedStr>,
+    pub default: Option<CodexCachedStr>,
+    pub plan: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct AutoReviewMessages {
-    pub policy: Option<String>,
-    pub policy_template: Option<String>,
+    pub policy: Option<CodexCachedStr>,
+    pub policy_template: Option<CodexCachedStr>,
     /// Extra developer policy for `node_repl` and `cua_repl` reviews.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_repl_policy: Option<String>,
-    pub rejection_instructions: Option<String>,
-    pub timeout_instructions: Option<String>,
+    pub node_repl_policy: Option<CodexCachedStr>,
+    pub rejection_instructions: Option<CodexCachedStr>,
+    pub timeout_instructions: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct PermissionMessages {
-    pub danger_full_access: Option<String>,
-    pub workspace_write: Option<String>,
-    pub read_only: Option<String>,
+    pub danger_full_access: Option<CodexCachedStr>,
+    pub workspace_write: Option<CodexCachedStr>,
+    pub read_only: Option<CodexCachedStr>,
     /// Supports `{{ approved_prefixes }}`. Missing or null uses the bundled text;
     /// an empty string suppresses the approved-prefix section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_prefixes: Option<String>,
+    pub approved_prefixes: Option<CodexCachedStr>,
     /// Optional plain heading for the separate saved-command-prefix notification.
     /// The harness formats the prefix list and falls back to its bundled heading for invalid text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_command_prefix_saved: Option<String>,
+    pub approved_command_prefix_saved: Option<CodexCachedStr>,
     /// Single writable-root sentence with exactly one `{{ roots }}` placeholder.
     /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub writable_root: Option<String>,
+    pub writable_root: Option<CodexCachedStr>,
     /// Multiple writable-roots sentence with exactly one `{{ roots }}` placeholder.
     /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub writable_roots: Option<String>,
+    pub writable_roots: Option<CodexCachedStr>,
     /// Optional presentation before the harness-owned omission and no-bypass warning.
     /// Empty, invalid, or oversized text uses the bundled warning without a lead-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub omitted_paths: Option<String>,
+    pub omitted_paths: Option<CodexCachedStr>,
     /// Presentation with exactly one `{{ denied_reads }}` placeholder for the
     /// harness-owned denial explanation, no-escalation rule, and path/glob list.
     /// Empty, invalid, or oversized templates use the bundled presentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub denied_reads: Option<String>,
+    pub denied_reads: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -932,17 +935,17 @@ pub struct MultiAgentMessages {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct MultiAgentRoleMessages {
-    pub root: Option<String>,
-    pub subagent: Option<String>,
+    pub root: Option<CodexCachedStr>,
+    pub subagent: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct MultiAgentModeMessages {
-    pub explicit: Option<String>,
+    pub explicit: Option<CodexCachedStr>,
     /// Ultra-only mode instructions. Missing or null uses the built-in proactive hint;
     /// an empty string suppresses the mode message. `hint_text` takes precedence.
-    pub proactive: Option<String>,
-    pub hint_text: Option<String>,
+    pub proactive: Option<CodexCachedStr>,
+    pub hint_text: Option<CodexCachedStr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -998,13 +1001,13 @@ pub struct ModelsResponse {
 struct ModelInfoWithLegacyBaseInstructionsRef<'a> {
     #[serde(flatten)]
     model: &'a ModelInfo,
-    base_instructions: String,
+    base_instructions: &'a str,
 }
 
 #[derive(Deserialize)]
 struct ModelInfoWithLegacyBaseInstructions {
     #[serde(default)]
-    base_instructions: Option<String>,
+    base_instructions: Option<CodexCachedStr>,
     #[serde(flatten)]
     model: ModelInfo,
 }
@@ -1028,13 +1031,13 @@ where
                 .as_ref()
                 .and_then(|messages| messages.instructions_template.as_deref())
             {
-                template.to_owned()
+                template
             } else {
                 warn!(
                     model = %model.slug,
                     "Model has no instruction template; returning empty instructions."
                 );
-                String::new()
+                ""
             };
             ModelInfoWithLegacyBaseInstructionsRef {
                 model,
@@ -1264,6 +1267,29 @@ mod tests {
         assert_eq!(messages, ModelMessages::default());
     }
 
+    /// Independent catalog decodes and clones must reuse storage for identical long messages.
+    #[test]
+    fn model_messages_share_text_across_fields_and_decodes() {
+        let text = "Use the same instructions across models.\n";
+        let first: ModelMessages = serde_json::from_value(serde_json::json!({
+            "instructions_template": text,
+        }))
+        .unwrap();
+        let second: ModelMessages = serde_json::from_value(serde_json::json!({
+            "confirmation_policies": { "browser_use": text },
+        }))
+        .unwrap();
+        let cloned = first.clone();
+        let template = first.instructions_template.as_deref().unwrap();
+        let browser = second.confirmation_policies.unwrap().browser_use.unwrap();
+        assert_eq!(browser.as_str(), text);
+        assert!(std::ptr::eq(template, browser.as_str()));
+        assert!(std::ptr::eq(
+            template,
+            cloned.instructions_template.as_deref().unwrap()
+        ));
+    }
+
     #[test]
     fn apps_messages_preserve_nullable_and_literal_wire_values() {
         for apps in [
@@ -1311,14 +1337,14 @@ mod tests {
             (
                 serde_json::json!({"tools": {"send_user_message_async": {"description": ""}}}),
                 Some(Some(ToolMessage {
-                    description: Some(String::new()),
+                    description: Some("".into()),
                     ..Default::default()
                 })),
             ),
             (
                 serde_json::json!({"tools": {"send_user_message_async": {"description": "Catalog description"}}}),
                 Some(Some(ToolMessage {
-                    description: Some("Catalog description".to_string()),
+                    description: Some("Catalog description".into()),
                     ..Default::default()
                 })),
             ),
@@ -1403,10 +1429,10 @@ mod tests {
         assert_eq!(
             messages.approvals,
             Some(ApprovalMessages {
-                on_request: Some(String::new()),
-                request_permissions: Some(String::new()),
+                on_request: Some("".into()),
+                request_permissions: Some("".into()),
                 on_request_auto_review: None,
-                never: Some(String::new()),
+                never: Some("".into()),
                 unless_trusted: None,
                 granular: None,
                 ..Default::default()
@@ -1509,7 +1535,7 @@ mod tests {
         assert_eq!(
             missing_template.auto_review,
             Some(AutoReviewMessages {
-                policy: Some("policy".to_string()),
+                policy: Some("policy".into()),
                 policy_template: None,
                 node_repl_policy: None,
                 rejection_instructions: None,
@@ -1519,11 +1545,11 @@ mod tests {
         assert_eq!(
             empty_template.auto_review,
             Some(AutoReviewMessages {
-                policy: Some("policy".to_string()),
-                policy_template: Some(String::new()),
-                node_repl_policy: Some(String::new()),
-                rejection_instructions: Some(String::new()),
-                timeout_instructions: Some(String::new()),
+                policy: Some("policy".into()),
+                policy_template: Some("".into()),
+                node_repl_policy: Some("".into()),
+                rejection_instructions: Some("".into()),
+                timeout_instructions: Some("".into()),
             })
         );
     }
@@ -1544,7 +1570,7 @@ mod tests {
             messages.permissions,
             Some(PermissionMessages {
                 danger_full_access: None,
-                workspace_write: Some(String::new()),
+                workspace_write: Some("".into()),
                 read_only: None,
                 approved_prefixes: None,
                 ..PermissionMessages::default()
@@ -1597,13 +1623,13 @@ mod tests {
             messages.multi_agent,
             Some(MultiAgentMessages {
                 role: Some(MultiAgentRoleMessages {
-                    root: Some(String::new()),
-                    subagent: Some("subagent base".to_string()),
+                    root: Some("".into()),
+                    subagent: Some("subagent base".into()),
                 }),
                 mode: Some(MultiAgentModeMessages {
-                    explicit: Some("explicit mode".to_string()),
-                    proactive: Some(String::new()),
-                    hint_text: Some(String::new()),
+                    explicit: Some("explicit mode".into()),
+                    proactive: Some("".into()),
+                    hint_text: Some("".into()),
                 }),
             })
         );
@@ -1629,10 +1655,10 @@ mod tests {
         assert_eq!(
             messages,
             ModelMessages {
-                instructions_template: Some("legacy catalog instructions".to_string()),
+                instructions_template: Some("legacy catalog instructions".into()),
                 collaboration_modes: Some(CollaborationModeMessages {
                     initial: None,
-                    default: Some(String::new()),
+                    default: Some("".into()),
                     plan: None,
                 }),
                 ..Default::default()
@@ -1732,7 +1758,7 @@ mod tests {
         assert_eq!(
             model.model_messages,
             Some(ModelMessages {
-                instructions_template: Some("legacy instructions".to_string()),
+                instructions_template: Some("legacy instructions".into()),
                 ..Default::default()
             })
         );
@@ -1777,7 +1803,7 @@ mod tests {
         ] {
             let response = ModelsResponse {
                 models: vec![test_model(Some(ModelMessages {
-                    instructions_template: template.map(str::to_owned),
+                    instructions_template: template.map(Into::into),
                     ..Default::default()
                 }))],
             };
@@ -1790,19 +1816,19 @@ mod tests {
     fn models_response_prefers_template_and_preserves_message_siblings() {
         let messages = ModelMessages {
             apps: Some(AppsMessages {
-                usage_instructions: Some("Literal Apps {{guidance}}".to_string()),
+                usage_instructions: Some("Literal Apps {{guidance}}".into()),
             }),
             plugins: None,
-            content_filter_guidance: Some("Offer a permitted alternative.".to_string()),
-            persistent_instructions: Some("Persistent catalog instructions".to_string()),
+            content_filter_guidance: Some("Offer a permitted alternative.".into()),
+            persistent_instructions: Some("Persistent catalog instructions".into()),
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {
-                    description: Some("Catalog description".to_string()),
+                    description: Some("Catalog description".into()),
                     ..Default::default()
                 }),
                 multi_agent: Some(MultiAgentToolMessages {
                     spawn_agent: Some(ToolMessage {
-                        description: Some("Catalog spawn description".to_string()),
+                        description: Some("Catalog spawn description".into()),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -1811,32 +1837,32 @@ mod tests {
             }),
             instructions_template: None,
             approvals: Some(ApprovalMessages {
-                on_request: Some("approval".to_string()),
+                on_request: Some("approval".into()),
                 on_request_auto_review: None,
-                never: Some("never approval".to_string()),
-                unless_trusted: Some("unless-trusted approval".to_string()),
+                never: Some("never approval".into()),
+                unless_trusted: Some("unless-trusted approval".into()),
                 granular: Some(GranularApprovalMessages {
-                    intro: Some("Catalog: {{ policy }}".to_string()),
-                    prompted_categories: Some("Allowed: {{ categories }}".to_string()),
-                    rejected_categories: Some("Denied: {{ categories }}".to_string()),
+                    intro: Some("Catalog: {{ policy }}".into()),
+                    prompted_categories: Some("Allowed: {{ categories }}".into()),
+                    rejected_categories: Some("Denied: {{ categories }}".into()),
                 }),
                 ..Default::default()
             }),
             collaboration_modes: Some(CollaborationModeMessages {
-                initial: Some("initial collaboration".to_string()),
-                default: Some("default collaboration".to_string()),
-                plan: Some("plan collaboration".to_string()),
+                initial: Some("initial collaboration".into()),
+                default: Some("default collaboration".into()),
+                plan: Some("plan collaboration".into()),
             }),
             auto_review: Some(AutoReviewMessages {
-                policy: Some("policy".to_string()),
+                policy: Some("policy".into()),
                 policy_template: None,
                 node_repl_policy: None,
-                rejection_instructions: Some("rejection instructions".to_string()),
-                timeout_instructions: Some("timeout instructions".to_string()),
+                rejection_instructions: Some("rejection instructions".into()),
+                timeout_instructions: Some("timeout instructions".into()),
             }),
             permissions: Some(PermissionMessages {
                 danger_full_access: None,
-                workspace_write: Some("workspace".to_string()),
+                workspace_write: Some("workspace".into()),
                 read_only: None,
                 approved_prefixes: None,
                 ..PermissionMessages::default()
@@ -1844,19 +1870,17 @@ mod tests {
             multi_agent: None,
             token_budget: None,
             confirmation_policies: Some(ConfirmationPolicies {
-                browser_use: Some(
-                    "# Browser confirmations\n\nKeep {{literal_markdown}}.\n".to_string(),
-                ),
+                browser_use: Some("# Browser confirmations\n\nKeep {{literal_markdown}}.\n".into()),
                 computer_use: Some(
-                    "  # Native confirmations\r\n\nKeep ${native_markdown}.\n".to_string(),
+                    "  # Native confirmations\r\n\nKeep ${native_markdown}.\n".into(),
                 ),
             }),
             guardian_v2: Some(GuardianV2ModelConfig {
-                classifier_instructions: Some("Guardian classification".to_string()),
+                classifier_instructions: Some("Guardian classification".into()),
                 review_threshold_basis_points: Some(7_500),
                 reasoning_effort: Some(ReasoningEffort::Minimal),
                 transcript: Some(GuardianV2TranscriptModelConfig {
-                    sources: Some(vec!["reasoning".to_string()]),
+                    sources: Some(vec!["reasoning".into()]),
                     max_tool_entry_tokens: Some(500),
                     ..Default::default()
                 }),
@@ -1879,19 +1903,19 @@ mod tests {
         let response: ModelsResponse =
             serde_json::from_value(value).expect("deserialize legacy models response");
         let mut expected_messages = messages;
-        expected_messages.instructions_template = Some("legacy instructions".to_string());
+        expected_messages.instructions_template = Some("legacy instructions".into());
         assert_eq!(response.models[0].model_messages, Some(expected_messages));
 
         let canonical_messages = ModelMessages {
-            persistent_instructions: Some(String::new()),
+            persistent_instructions: Some("".into()),
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {
-                    description: Some(String::new()),
+                    description: Some("".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
             }),
-            instructions_template: Some("canonical instructions".to_string()),
+            instructions_template: Some("canonical instructions".into()),
             ..Default::default()
         };
         let mut value = serde_json::to_value(ModelsResponse {

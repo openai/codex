@@ -94,8 +94,8 @@ fn catalog_collaboration_messages_select_mode_variant() {
         model.model_messages = Some(ModelMessages {
             collaboration_modes: Some(CollaborationModeMessages {
                 initial: None,
-                default: Some(default.to_string()),
-                plan: Some(plan.to_string()),
+                default: Some(default.into()),
+                plan: Some(plan.into()),
             }),
             ..Default::default()
         });

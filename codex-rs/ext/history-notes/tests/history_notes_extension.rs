@@ -142,7 +142,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     let step_store = ExtensionData::new("step-1");
     let mut messages = NotesToolMessages {
         read_file: Some(ToolMessage {
-            description: Some("Catalog read instructions".to_string()),
+            description: Some("Catalog read instructions".into()),
             ..Default::default()
         }),
         ..Default::default()
@@ -155,7 +155,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .find(|tool| tool.tool_name() == ToolName::namespaced("notes", "read_file"))
         .expect("notes.read_file should be exposed");
     let captured_spec = captured_tool.spec();
-    messages.read_file.as_mut().expect("read_file").description = Some(String::new());
+    messages.read_file.as_mut().expect("read_file").description = Some("".into());
     step_store.insert(messages);
     let next_tools =
         registry.tool_contributors()[0].tools_for_step(&session_store, &thread_store, &step_store);

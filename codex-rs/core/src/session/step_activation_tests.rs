@@ -597,9 +597,9 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
             enabled: false,
             use_history_notes_extension: false,
             reminder_threshold_tokens: 2_000,
-            reminder_message_template: "{n_remaining} tokens remain.".to_string(),
-            guidance_message: format!("Guidance for {}.", model.slug),
-            auto_compact_fallback_prompt: "Save state before rollover.".to_string(),
+            reminder_message_template: "{n_remaining} tokens remain.".into(),
+            guidance_message: format!("Guidance for {}.", model.slug).into(),
+            auto_compact_fallback_prompt: "Save state before rollover.".into(),
             auto_compact_fallback_buffer_tokens: 4_000,
         });
     }
@@ -624,7 +624,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         .model_messages
         .as_mut()
         .expect("model messages")
-        .instructions_template = Some("Destination-model instructions.".to_string());
+        .instructions_template = Some("Destination-model instructions.".into());
     let expected_destination = destination.clone();
     let ActivationFixture {
         session,
@@ -1414,8 +1414,8 @@ async fn parent_fallback_policy_uses_both_config_lifetimes(
     let mut live_config = admitted_config.clone();
     live_config.guardian_policy_config = live_policy.map(str::to_string);
     let (mut admitted, mut destination) = safety_models();
-    parent_review_messages(&mut admitted).policy = Some("catalog policy A".to_string());
-    parent_review_messages(&mut destination).policy = Some("catalog policy B".to_string());
+    parent_review_messages(&mut admitted).policy = Some("catalog policy A".into());
+    parent_review_messages(&mut destination).policy = Some("catalog policy B".into());
     assert_eq!(
         check_legacy_model_safety(
             &admitted,
@@ -1442,24 +1442,24 @@ async fn parent_fallback_preserves_explicit_empty_and_bundled_defaults() {
     let check = |destination: &CatalogModel| {
         check_legacy_model_safety(&admitted, &admitted, destination, &config, &config)
     };
-    parent_review_messages(&mut destination).policy = Some(defaults.policy.to_string());
+    parent_review_messages(&mut destination).policy = Some(defaults.policy.into());
     parent_review_messages(&mut destination).policy_template =
-        Some(defaults.policy_template.to_string());
+        Some(defaults.policy_template.into());
     assert_eq!(check(&destination), Ok(()));
-    parent_review_messages(&mut destination).policy_template = Some(String::new());
+    parent_review_messages(&mut destination).policy_template = Some("".into());
     assert_eq!(
         check(&destination),
         Err("the destination changes the Guardian parent-fallback policy template".to_string())
     );
     parent_review_messages(&mut destination).policy_template = None;
-    parent_review_messages(&mut destination).policy = Some(String::new());
+    parent_review_messages(&mut destination).policy = Some("".into());
     assert_eq!(
         check(&destination),
         Err("the destination changes the Guardian parent-fallback policy".to_string())
     );
     parent_review_messages(&mut destination).policy = None;
     assert_eq!(check(&destination), Ok(()));
-    parent_review_messages(&mut destination).node_repl_policy = Some(String::new());
+    parent_review_messages(&mut destination).node_repl_policy = Some("".into());
     assert_eq!(
         check(&destination),
         Err("the destination changes the Guardian parent-fallback node REPL policy".to_string())
@@ -1473,10 +1473,10 @@ async fn unchanged_explicit_reviewer_does_not_use_parent_policy() {
     for model in [&mut admitted, &mut destination] {
         model.auto_review_model_override = Some("shared-reviewer".to_string());
     }
-    parent_review_messages(&mut admitted).policy = Some("catalog policy A".to_string());
-    parent_review_messages(&mut destination).policy = Some("catalog policy B".to_string());
-    parent_review_messages(&mut destination).policy_template = Some(String::new());
-    parent_review_messages(&mut destination).node_repl_policy = Some(String::new());
+    parent_review_messages(&mut admitted).policy = Some("catalog policy A".into());
+    parent_review_messages(&mut destination).policy = Some("catalog policy B".into());
+    parent_review_messages(&mut destination).policy_template = Some("".into());
+    parent_review_messages(&mut destination).node_repl_policy = Some("".into());
     assert_eq!(
         check_legacy_model_safety(
             &admitted,
@@ -1490,7 +1490,7 @@ async fn unchanged_explicit_reviewer_does_not_use_parent_policy() {
 }
 
 #[test_case(GuardianV2ModelConfig {
-    classifier_instructions: Some("Review the complete action.".to_string()),
+    classifier_instructions: Some("Review the complete action.".into()),
     ..Default::default()
 }; "classifier instructions")]
 #[test_case(GuardianV2ModelConfig {
@@ -1503,7 +1503,7 @@ async fn unchanged_explicit_reviewer_does_not_use_parent_policy() {
 }; "classifier effort")]
 #[test_case(GuardianV2ModelConfig {
     transcript: Some(GuardianV2TranscriptModelConfig {
-        sources: Some(vec!["reasoning".to_string()]),
+        sources: Some(vec!["reasoning".into()]),
         ..Default::default()
     }),
     ..Default::default()

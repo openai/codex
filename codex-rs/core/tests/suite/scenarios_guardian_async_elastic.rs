@@ -91,9 +91,7 @@ async fn async_elastic_classifier_request_history() -> anyhow::Result<()> {
         .with_model_info_override("gpt-5.5", |model| {
             model.guardian = None;
             model.model_messages.as_mut().unwrap().guardian_v2 = Some(GuardianV2ModelConfig {
-                classifier_instructions: Some(
-                    "Classify risk using the supplied evidence.".to_owned(),
-                ),
+                classifier_instructions: Some("Classify risk using the supplied evidence.".into()),
                 transcript: Some(GuardianV2TranscriptModelConfig {
                     max_message_entry_tokens: Some(FIXED_ENTRY_TOKENS),
                     ..Default::default()

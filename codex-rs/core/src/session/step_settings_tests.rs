@@ -416,14 +416,14 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
 ) {
     let configured_instructions = "explicit instructions";
     let auto_review = AutoReviewMessages {
-        policy: Some("catalog review policy".to_string()),
-        policy_template: Some("catalog review template".to_string()),
+        policy: Some("catalog review policy".into()),
+        policy_template: Some("catalog review template".into()),
         node_repl_policy: None,
         rejection_instructions: None,
         timeout_instructions: None,
     };
     let guardian_v2 = GuardianV2ModelConfig {
-        classifier_instructions: Some("catalog classifier".to_string()),
+        classifier_instructions: Some("catalog classifier".into()),
         review_threshold_basis_points: Some(7_500),
         ..Default::default()
     };
@@ -437,7 +437,7 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
         .as_mut()
         .expect("test model should have instruction metadata");
     messages.instructions_template =
-        Some("Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.".to_string());
+        Some("Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.".into());
     messages.auto_review = Some(auto_review);
     messages.guardian_v2 = Some(guardian_v2);
     let catalog = ModelsResponse {

@@ -66,7 +66,7 @@ async fn config_personality_controls_baked_personality_section(
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.5", |model_info| {
             if let Some(model_messages) = model_info.model_messages.as_mut() {
-                model_messages.instructions_template = Some("Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".to_string());
+                model_messages.instructions_template = Some("Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".into());
             }
         })
         .with_pre_build_hook(move |home| {
@@ -116,7 +116,7 @@ async fn config_personality_none_preserves_explicit_base_instructions(
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.5", |model_info| {
             if let Some(model_messages) = model_info.model_messages.as_mut() {
-                model_messages.instructions_template = Some("Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".to_string());
+                model_messages.instructions_template = Some("Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".into());
             }
         })
         .with_pre_build_hook(move |home| {

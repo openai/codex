@@ -631,9 +631,9 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
             enabled: false,
             use_history_notes_extension: false,
             reminder_threshold_tokens: 6_144,
-            reminder_message_template: "Reminder: {n_remaining} tokens remain.".to_string(),
-            guidance_message: guidance_message.to_string(),
-            auto_compact_fallback_prompt: "Preserve the important context.".to_string(),
+            reminder_message_template: "Reminder: {n_remaining} tokens remain.".into(),
+            guidance_message: guidance_message.into(),
+            auto_compact_fallback_prompt: "Preserve the important context.".into(),
             auto_compact_fallback_buffer_tokens: 16_384,
         }
     }

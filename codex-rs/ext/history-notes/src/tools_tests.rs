@@ -175,10 +175,10 @@ fn sparse_catalog_messages_preserve_defaults_and_explicit_empty_descriptions() {
     };
     tool.description.clear();
     let messages = codex_protocol::openai_models::NotesToolMessages {
-        namespace_description: Some(String::new()),
+        namespace_description: Some("".into()),
         read_file: Some(codex_protocol::openai_models::ToolMessage {
-            description: Some(String::new()),
-            parameters: Some(String::new()),
+            description: Some("".into()),
+            parameters: Some("".into()),
         }),
         ..Default::default()
     };

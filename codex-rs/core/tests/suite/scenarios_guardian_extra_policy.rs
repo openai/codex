@@ -120,7 +120,7 @@ guardian_extra_policy = "Draft reminders without sending them."
                 .auto_review
                 .as_mut()
                 .expect("reviewer policy")
-                .policy_template = Some(format!("{template}\n{catalog_instruction}"));
+                .policy_template = Some(format!("{template}\n{catalog_instruction}").into());
         })
         .with_model("gpt-5.5")
         .build_with_auto_env(&server)

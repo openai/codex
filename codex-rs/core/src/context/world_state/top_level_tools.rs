@@ -30,9 +30,11 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
+use codex_utils_cached_str::CodexCachedStr;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -236,7 +238,7 @@ impl WorldStateSection for TopLevelToolsState {
             updates.insert(
                 index,
                 WorldStateUpdate::prefix_item(ContextualUserFragment::into(
-                    IncrementalToolsUpdate(self.messages.tool_update_hint.clone()),
+                    IncrementalToolsUpdate(self.messages.tool_update_hint.as_cow()),
                 )),
             );
         }
@@ -491,13 +493,13 @@ impl TopLevelToolsState {
 }
 
 /// An appended catalog hint or exec definition update, retained or discarded with its baseline.
-pub(crate) struct IncrementalToolsUpdate(pub(crate) String);
+pub(crate) struct IncrementalToolsUpdate<'a>(pub(crate) Cow<'a, str>);
 
-impl IncrementalToolsUpdate {
+impl IncrementalToolsUpdate<'_> {
     pub(crate) const KIND: &str = "tools.incremental_update";
 }
 
-impl ContextualUserFragment for IncrementalToolsUpdate {
+impl ContextualUserFragment for IncrementalToolsUpdate<'_> {
     fn role(&self) -> &'static str {
         "developer"
     }
@@ -515,7 +517,7 @@ impl ContextualUserFragment for IncrementalToolsUpdate {
     }
 
     fn body(&self) -> ContentItem {
-        input_text(self.0.clone())
+        input_text(self.0.as_ref())
     }
 }
 
@@ -571,7 +573,10 @@ impl ContextualUserFragment for RemovedTools {
 }
 
 /// Render a nonempty batch of complete replacement definitions with the exec update hint.
-fn render_exec_update(definitions: &[&ExecDefinition], hint: &str) -> IncrementalToolsUpdate {
+fn render_exec_update(
+    definitions: &[&ExecDefinition],
+    hint: &str,
+) -> IncrementalToolsUpdate<'static> {
     let description = definitions
         .iter()
         .map(|entry| entry.description.as_str())
@@ -583,13 +588,13 @@ fn render_exec_update(definitions: &[&ExecDefinition], hint: &str) -> Incrementa
     }
     text.push_str("## Namespace: functions\n");
     text.push_str(&description);
-    IncrementalToolsUpdate(text)
+    IncrementalToolsUpdate(Cow::Owned(text))
 }
 
 /// Removal notice containing the stable keys of withdrawn tools or namespace instructions.
 struct RemovedExecDefinitions {
     /// Guidance preceding the removed keys; an empty header emits only the keys.
-    header: String,
+    header: CodexCachedStr,
     /// Stable entry keys that are no longer present in the current catalog.
     names: Vec<String>,
 }
@@ -612,7 +617,7 @@ impl ContextualUserFragment for RemovedExecDefinitions {
     }
 
     fn body(&self) -> ContentItem {
-        let mut text = self.header.clone();
+        let mut text = self.header.to_string();
         if !text.is_empty() {
             text.push('\n');
         }

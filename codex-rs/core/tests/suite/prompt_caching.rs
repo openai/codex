@@ -151,7 +151,7 @@ async fn prompt_tools_are_consistent_across_requests(
         .model_messages
         .as_mut()
         .expect("bundled model messages")
-        .instructions_template = Some(MODEL_BASE_INSTRUCTIONS.to_string());
+        .instructions_template = Some(MODEL_BASE_INSTRUCTIONS.into());
     // Supply model instructions without making them an explicit config catalog override.
     let models_manager = Arc::new(StaticModelsManager::new(
         /*auth_manager*/ None,

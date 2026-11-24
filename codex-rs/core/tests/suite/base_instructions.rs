@@ -42,7 +42,7 @@ fn managed_model(slug: &str, instructions: &str) -> ModelInfo {
         .model_messages
         .as_mut()
         .expect("model messages")
-        .instructions_template = Some(instructions.to_string());
+        .instructions_template = Some(instructions.into());
     model
 }
 

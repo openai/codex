@@ -8960,8 +8960,8 @@ async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools(
             );
             tools.functions_namespace_functions_description_prefixes =
                 Some(std::collections::BTreeMap::from([(
-                    "hidden-dynamic-tool".to_string(),
-                    "Function guidance.".to_string(),
+                    "hidden-dynamic-tool".into(),
+                    "Function guidance.".into(),
                 )]));
         })
         .with_config(|config| {

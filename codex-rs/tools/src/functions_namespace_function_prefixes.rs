@@ -5,6 +5,7 @@ use crate::ResponsesApiNamespaceTool;
 use crate::ToolName;
 use crate::ToolSpec;
 use crate::indirect_namespace_prefixes::prepend;
+use codex_protocol::openai_models::ToolDescriptionPrefixes;
 use std::collections::BTreeMap;
 
 /// Trimmed description prefixes for the available `functions.*` tools.
@@ -13,7 +14,7 @@ pub struct FunctionsNamespaceFunctionPrefixes(BTreeMap<String, String>);
 
 impl FunctionsNamespaceFunctionPrefixes {
     pub fn new(
-        prefixes: Option<&BTreeMap<String, String>>,
+        prefixes: Option<&ToolDescriptionPrefixes>,
         available_tools: impl IntoIterator<Item = ToolName>,
     ) -> Self {
         let Some(prefixes) = prefixes.filter(|prefixes| !prefixes.is_empty()) else {
@@ -24,7 +25,7 @@ impl FunctionsNamespaceFunctionPrefixes {
             if !tool.is_default_namespace() || normalized.contains_key(&tool.name) {
                 continue;
             }
-            let Some(prefix) = prefixes.get(&tool.name) else {
+            let Some(prefix) = prefixes.get(tool.name.as_str()) else {
                 continue;
             };
             let prefix = prefix.trim();

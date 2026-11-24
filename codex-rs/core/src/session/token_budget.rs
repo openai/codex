@@ -103,9 +103,9 @@ pub(super) fn resolve_token_budget(
         use_history_notes_extension: configured_token_budget
             .is_some_and(|token_budget| token_budget.use_history_notes_extension),
         reminder_threshold_tokens: Some(model_defaults.reminder_threshold_tokens),
-        reminder_message_template: model_defaults.reminder_message_template.clone(),
-        guidance_message: Some(model_defaults.guidance_message.clone()),
-        auto_compact_fallback_prompt: Some(model_defaults.auto_compact_fallback_prompt.clone()),
+        reminder_message_template: model_defaults.reminder_message_template.to_string(),
+        guidance_message: Some(model_defaults.guidance_message.to_string()),
+        auto_compact_fallback_prompt: Some(model_defaults.auto_compact_fallback_prompt.to_string()),
         auto_compact_fallback_buffer_tokens: Some(
             model_defaults.auto_compact_fallback_buffer_tokens,
         ),

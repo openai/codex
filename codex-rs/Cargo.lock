@@ -3118,6 +3118,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-audio",
  "codex-utils-cache",
+ "codex-utils-cached-str",
  "codex-utils-cargo-bin",
  "codex-utils-critical-path",
  "codex-utils-git-discovery",
@@ -4384,6 +4385,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-cached-str",
  "codex-utils-output-truncation",
  "futures",
  "pretty_assertions",
@@ -4512,6 +4514,7 @@ dependencies = [
  "codex-otel",
  "codex-prompts",
  "codex-protocol",
+ "codex-utils-cached-str",
  "codex-utils-output-truncation",
  "pretty_assertions",
  "serde",
@@ -4771,6 +4774,7 @@ dependencies = [
  "codex-protocol",
  "codex-protocol-test-support",
  "codex-utils-absolute-path",
+ "codex-utils-cached-str",
  "codex-utils-template",
  "pretty_assertions",
  "tracing",
@@ -4790,6 +4794,7 @@ dependencies = [
  "codex-http-client",
  "codex-network-proxy",
  "codex-utils-absolute-path",
+ "codex-utils-cached-str",
  "codex-utils-image",
  "codex-utils-model-facing-id",
  "codex-utils-path-uri",
@@ -5581,6 +5586,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-cached-str"
+version = "0.0.0"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "string_cache",
+ "ts-rs",
+]
+
+[[package]]
 name = "codex-utils-cargo-bin"
 version = "0.0.0"
 dependencies = [
@@ -6307,6 +6323,7 @@ dependencies = [
  "codex-protocol",
  "codex-thread-store",
  "codex-utils-absolute-path",
+ "codex-utils-cached-str",
  "codex-utils-cargo-bin",
  "codex-utils-path-uri",
  "codex-utils-rustls-provider",
@@ -11016,6 +11033,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "new_debug_unreachable"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12164,7 +12187,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
  "phf_macros",
- "phf_shared",
+ "phf_shared 0.11.3",
 ]
 
 [[package]]
@@ -12174,7 +12197,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aef8048c789fa5e851558d709946d6d79a8ff88c0440c587967f8e94bfb1216a"
 dependencies = [
  "phf_generator",
- "phf_shared",
+ "phf_shared 0.11.3",
 ]
 
 [[package]]
@@ -12183,7 +12206,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.11.3",
  "rand 0.8.6",
 ]
 
@@ -12194,7 +12217,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
 dependencies = [
  "phf_generator",
- "phf_shared",
+ "phf_shared 0.11.3",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -12205,6 +12228,15 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6fd9027e2d9319be6349febd1db4e8d02aa544921200c9b777720ac34a3aa89"
 dependencies = [
  "siphasher",
 ]
@@ -12406,6 +12438,12 @@ checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
 ]
+
+[[package]]
+name = "precomputed-hash"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "predicates"
@@ -15489,6 +15527,19 @@ name = "streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
+
+[[package]]
+name = "string_cache"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffa8a5dbe8b3f0bbe29d4c3225daafaeead63afdc1b65fc4c01a1384166038e6"
+dependencies = [
+ "new_debug_unreachable",
+ "parking_lot",
+ "phf_shared 0.14.0",
+ "precomputed-hash",
+ "serde",
+]
 
 [[package]]
 name = "stringprep"

@@ -36,6 +36,7 @@ codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cached-str = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }

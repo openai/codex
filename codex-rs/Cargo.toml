@@ -135,6 +135,7 @@ members = [
     "utils/cargo-bin",
     "git-utils",
     "utils/cache",
+    "utils/cached-str",
     "utils/critical-path",
     "utils/git-discovery",
     "utils/head-tail-buffer",
@@ -323,6 +324,7 @@ codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-audio = { path = "utils/audio" }
 codex-utils-cache = { path = "utils/cache" }
+codex-utils-cached-str = { path = "utils/cached-str" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-cli = { path = "utils/cli" }
 codex-utils-critical-path = { path = "utils/critical-path" }
@@ -536,6 +538,7 @@ sqlx-macros = { version = "=0.9.0", default-features = false, features = ["deriv
 # Preserve the target driver's query-description support without building it on the host.
 sqlx-sqlite = { version = "=0.9.0", default-features = false, features = ["offline"] }
 starlark = { version = "0.14.2", default-features = false }
+string_cache = "0.11"
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"

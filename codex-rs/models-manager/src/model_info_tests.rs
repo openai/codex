@@ -33,86 +33,86 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
     let async_message_description = "Catalog async message description.";
     let mut model = model_info_from_slug("unknown-model");
     let approvals = ApprovalMessages {
-        on_request: Some("user approvals".to_string()),
-        on_request_auto_review: Some("auto approvals".to_string()),
-        never: Some("never approvals".to_string()),
-        unless_trusted: Some("unless-trusted approvals".to_string()),
+        on_request: Some("user approvals".into()),
+        on_request_auto_review: Some("auto approvals".into()),
+        never: Some("never approvals".into()),
+        unless_trusted: Some("unless-trusted approvals".into()),
         granular: Some(GranularApprovalMessages {
-            intro: Some("Catalog: {{ policy }}".to_string()),
-            prompted_categories: Some("Allowed: {{ categories }}".to_string()),
-            rejected_categories: Some("Denied: {{ categories }}".to_string()),
+            intro: Some("Catalog: {{ policy }}".into()),
+            prompted_categories: Some("Allowed: {{ categories }}".into()),
+            rejected_categories: Some("Denied: {{ categories }}".into()),
         }),
         ..Default::default()
     };
     let collaboration_modes = CollaborationModeMessages {
-        initial: Some("initial instructions".to_string()),
-        default: Some("default instructions".to_string()),
-        plan: Some("plan instructions".to_string()),
+        initial: Some("initial instructions".into()),
+        default: Some("default instructions".into()),
+        plan: Some("plan instructions".into()),
     };
     let auto_review = AutoReviewMessages {
-        policy: Some("review policy".to_string()),
-        policy_template: Some("review policy template".to_string()),
+        policy: Some("review policy".into()),
+        policy_template: Some("review policy template".into()),
         node_repl_policy: None,
-        rejection_instructions: Some("rejection instructions".to_string()),
-        timeout_instructions: Some(String::new()),
+        rejection_instructions: Some("rejection instructions".into()),
+        timeout_instructions: Some("".into()),
     };
     let permissions = PermissionMessages {
-        danger_full_access: Some("danger".to_string()),
-        workspace_write: Some(String::new()),
+        danger_full_access: Some("danger".into()),
+        workspace_write: Some("".into()),
         read_only: None,
         approved_prefixes: None,
         ..PermissionMessages::default()
     };
     let multi_agent = MultiAgentMessages {
         role: Some(MultiAgentRoleMessages {
-            root: Some("root base".to_string()),
-            subagent: Some("subagent base".to_string()),
+            root: Some("root base".into()),
+            subagent: Some("subagent base".into()),
         }),
         mode: Some(MultiAgentModeMessages {
-            explicit: Some("explicit mode".to_string()),
-            proactive: Some("proactive mode".to_string()),
-            hint_text: Some("mode hint".to_string()),
+            explicit: Some("explicit mode".into()),
+            proactive: Some("proactive mode".into()),
+            hint_text: Some("mode hint".into()),
         }),
     };
     let token_budget = ModelTokenBudgetConfig {
         enabled: false,
         use_history_notes_extension: false,
         reminder_threshold_tokens: 128,
-        reminder_message_template: "budget reminder".to_string(),
-        guidance_message: "budget guidance".to_string(),
-        auto_compact_fallback_prompt: "compact prompt".to_string(),
+        reminder_message_template: "budget reminder".into(),
+        guidance_message: "budget guidance".into(),
+        auto_compact_fallback_prompt: "compact prompt".into(),
         auto_compact_fallback_buffer_tokens: 64,
     };
     let guardian_v2 = GuardianV2ModelConfig {
-        classifier_instructions: Some("Guardian experiment".to_string()),
+        classifier_instructions: Some("Guardian experiment".into()),
         ..Default::default()
     };
     let confirmation_policies = ConfirmationPolicies {
-        browser_use: Some("# Browser policy\n\n{{literal_markdown}}\n".to_string()),
-        computer_use: Some("  # Native policy\r\n\n${native_markdown}\n".to_string()),
+        browser_use: Some("# Browser policy\n\n{{literal_markdown}}\n".into()),
+        computer_use: Some("  # Native policy\r\n\n${native_markdown}\n".into()),
     };
     let mut messages = ModelMessages {
         apps: Some(AppsMessages {
-            usage_instructions: Some("Catalog Apps instructions.".to_string()),
+            usage_instructions: Some("Catalog Apps instructions.".into()),
         }),
         plugins: None,
         content_filter_guidance: None,
-        persistent_instructions: Some(persistent_instructions.to_string()),
+        persistent_instructions: Some(persistent_instructions.into()),
         tools: Some(ToolMessages {
             send_user_message_async: Some(ToolMessage {
-                description: Some(async_message_description.to_string()),
+                description: Some(async_message_description.into()),
                 ..Default::default()
             }),
             multi_agent: Some(MultiAgentToolMessages {
                 spawn_agent: Some(ToolMessage {
-                    description: Some("Catalog spawn description.".to_string()),
+                    description: Some("Catalog spawn description.".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
             }),
             ..Default::default()
         }),
-        instructions_template: Some("template".to_string()),
+        instructions_template: Some("template".into()),
         approvals: Some(approvals),
         collaboration_modes: Some(collaboration_modes),
         auto_review: Some(auto_review),
@@ -131,7 +131,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
 
     let updated = with_config_overrides(model, &config);
 
-    messages.instructions_template = Some(override_instructions.to_string());
+    messages.instructions_template = Some(override_instructions.into());
     assert_eq!(updated.model_messages, Some(messages));
     assert_eq!(render_model_instructions(&updated), override_instructions);
 }
@@ -159,16 +159,16 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
         ),
     ] {
         let mut messages = ModelMessages {
-            instructions_template: Some(instructions.to_string()),
-            persistent_instructions: Some(String::new()),
+            instructions_template: Some(instructions.into()),
+            persistent_instructions: Some("".into()),
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {
-                    description: Some(String::new()),
+                    description: Some("".into()),
                     ..Default::default()
                 }),
                 multi_agent: Some(MultiAgentToolMessages {
                     spawn_agent: Some(ToolMessage {
-                        description: Some(String::new()),
+                        description: Some("".into()),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -176,7 +176,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                 ..Default::default()
             }),
             approvals: Some(ApprovalMessages {
-                on_request: Some("user approvals".to_string()),
+                on_request: Some("user approvals".into()),
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: None,
@@ -190,7 +190,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
 
         let updated = with_config_overrides(model, &config);
 
-        messages.instructions_template = Some(expected.to_string());
+        messages.instructions_template = Some(expected.into());
         assert_eq!(updated.model_messages, Some(messages));
     }
 }
@@ -210,7 +210,7 @@ fn baked_personality_section_is_preserved_without_explicit_none() {
             .model_messages
             .as_mut()
             .expect("fallback model messages")
-            .instructions_template = Some(instructions.to_string());
+            .instructions_template = Some(instructions.into());
 
         assert_eq!(
             render_model_instructions(&with_config_overrides(model, &config)),
@@ -226,7 +226,7 @@ fn explicit_empty_base_instructions_stay_empty_with_personality_none() {
         .model_messages
         .as_mut()
         .expect("fallback model messages")
-        .instructions_template = Some("Intro\n# Personality\nRemove me".to_string());
+        .instructions_template = Some("Intro\n# Personality\nRemove me".into());
     let config = ModelsManagerConfig {
         base_instructions: Some(String::new()),
         personality: Some(Personality::None),

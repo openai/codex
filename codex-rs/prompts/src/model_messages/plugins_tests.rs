@@ -15,9 +15,9 @@ fn plugin_fields_fall_back_independently_without_losing_valid_siblings() {
     let bundled = ResolvedModelMessages::bundled();
     for invalid in [
         None,
-        Some(String::new()),
+        Some("".into()),
         Some(" \t\r\n".into()),
-        Some("é".repeat(251)),
+        Some("é".repeat(251).into()),
     ] {
         let messages = ModelMessages {
             plugins: Some(PluginMessages {
@@ -102,10 +102,16 @@ fn plugin_templates_require_exactly_one_harness_fact_placeholder() {
         catalog_messages: Some(&messages),
     }
     .selected_plugin();
-    assert_eq!(resolved.intro, selected.intro.unwrap());
-    assert_eq!(resolved.skill_namespace, selected.skill_namespace.unwrap());
-    assert_eq!(resolved.apps, selected.apps.unwrap());
-    assert_eq!(resolved.mcp_servers, selected.mcp_servers.unwrap());
+    assert_eq!(resolved.intro, selected.intro.as_deref().unwrap());
+    assert_eq!(
+        resolved.skill_namespace,
+        selected.skill_namespace.as_deref().unwrap()
+    );
+    assert_eq!(resolved.apps, selected.apps.as_deref().unwrap());
+    assert_eq!(
+        resolved.mcp_servers,
+        selected.mcp_servers.as_deref().unwrap()
+    );
 }
 
 #[test]
@@ -118,15 +124,15 @@ fn plugin_wording_limits_count_utf8_bytes_and_keep_boundary_values_literal() {
         let messages = ModelMessages {
             plugins: Some(PluginMessages {
                 generic: Some(GenericPluginMessages {
-                    intro: Some(intro.clone()),
-                    usage_instructions: Some(usage.clone()),
+                    intro: Some(intro.as_str().into()),
+                    usage_instructions: Some(usage.as_str().into()),
                 }),
                 selected: Some(SelectedPluginMessages {
-                    omitted: Some(intro.clone()),
+                    omitted: Some(intro.as_str().into()),
                     ..Default::default()
                 }),
                 recommendations: Some(PluginRecommendationMessages {
-                    intro: Some(intro.clone()),
+                    intro: Some(intro.as_str().into()),
                 }),
             }),
             ..Default::default()

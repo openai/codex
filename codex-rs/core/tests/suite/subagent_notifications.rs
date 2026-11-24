@@ -1646,8 +1646,8 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                 .multi_agent
                 .get_or_insert_with(MultiAgentMessages::default);
             multi_agent.role = Some(MultiAgentRoleMessages {
-                root: Some(format!("{model} root role.")),
-                subagent: Some(format!("{model} subagent role.")),
+                root: Some(format!("{model} root role.").into()),
+                subagent: Some(format!("{model} subagent role.").into()),
             });
             if matches!(
                 selection,

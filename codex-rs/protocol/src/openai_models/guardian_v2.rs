@@ -4,6 +4,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use super::ReasoningEffort;
+use codex_utils_cached_str::CodexCachedStr;
 
 /// Legacy classifier modes retained for configuration and model-catalog compatibility.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
@@ -25,7 +26,7 @@ pub struct GuardianV2ModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_classifier_conversation_token_limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classifier_instructions: Option<String>,
+    pub classifier_instructions: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_threshold_basis_points: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,7 +49,7 @@ pub struct GuardianV2ModelConfig {
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct GuardianV2TranscriptModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sources: Option<Vec<String>>,
+    pub sources: Option<Vec<CodexCachedStr>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_images: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

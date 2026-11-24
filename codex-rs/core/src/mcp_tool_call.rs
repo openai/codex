@@ -1536,7 +1536,10 @@ fn build_confirmation_policies_request_meta(
             ("computer_use", confirmation_policies.computer_use.as_ref()),
         ] {
             if let Some(policy) = policy {
-                policies.insert(name.to_string(), serde_json::Value::String(policy.clone()));
+                policies.insert(
+                    name.to_string(),
+                    serde_json::Value::String(policy.to_string()),
+                );
             }
         }
     }

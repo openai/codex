@@ -9,6 +9,7 @@ use codex_protocol::openai_models::IndirectDescriptionPrefixes;
 use codex_protocol::openai_models::McpResourceToolMessages;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ToolDescriptionPrefixes;
 use codex_protocol::openai_models::ToolMessage;
 use permissions::ResolvedApprovalMessages;
 use permissions::ResolvedPermissionMessages;
@@ -279,7 +280,7 @@ impl<'a> ResolvedModelMessages<'a> {
     /// Selects per-function guidance restricted to the default `functions` namespace.
     pub fn functions_namespace_functions_description_prefixes(
         &self,
-    ) -> Option<&'a std::collections::BTreeMap<String, String>> {
+    ) -> Option<&'a ToolDescriptionPrefixes> {
         self.catalog_messages?
             .tools
             .as_ref()?

@@ -1189,7 +1189,7 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
                 .tools
                 .get_or_insert_with(Default::default)
                 .send_user_message_async = Some(ToolMessage {
-                parameters: Some(catalog_parameters),
+                parameters: Some(catalog_parameters.into()),
                 ..Default::default()
             });
             config.model_provider.base_url = Some(base_url);
@@ -2940,11 +2940,11 @@ async fn code_mode_catalog_messages(ranked_search: bool) -> Result<()> {
             model.model_messages.as_mut().expect("model messages").tools
                 .get_or_insert_with(Default::default).code_mode = Some(CodeModeToolMessages {
                     exec: Some(ToolMessage {
-                        description: Some("Catalog exec instructions. Default yield: {{ default_exec_yield_time_ms }} ms.\n{{ image_helper }}".to_string()),
+                        description: Some("Catalog exec instructions. Default yield: {{ default_exec_yield_time_ms }} ms.\n{{ image_helper }}".into()),
                         ..Default::default()
                     }),
                     wait: Some(ToolMessage {
-                        description: Some("Catalog wait instructions: resume the yielded cell.".to_string()),
+                        description: Some("Catalog wait instructions: resume the yielded cell.".into()),
                         parameters: Some(json!({
                             "type": "object",
                             "properties": {
@@ -2955,10 +2955,10 @@ async fn code_mode_catalog_messages(ranked_search: bool) -> Result<()> {
                             },
                             "required": ["cell_id"],
                             "additionalProperties": false
-                        }).to_string()),
+                        }).to_string().into()),
                     }),
-                    deferred_nested_tools_guidance: Some("Catalog discovery: find nested tools by name and description in ALL_TOOLS.".to_string()),
-                    mcp_typescript_preamble: Some("type CallToolResult<T = unknown> = { content: unknown[]; structuredContent?: T; isError?: boolean };".to_string()),
+                    deferred_nested_tools_guidance: Some("Catalog discovery: find nested tools by name and description in ALL_TOOLS.".into()),
+                    mcp_typescript_preamble: Some("type CallToolResult<T = unknown> = { content: unknown[]; structuredContent?: T; isError?: boolean };".into()),
                 });
         })
         .build_with_auto_env(&server)
@@ -4504,8 +4504,8 @@ async fn astra_async_compaction_preserves_exec_catalog(change: ExecCatalogRefres
                 .code_mode
                 .get_or_insert_default();
             messages.exec.get_or_insert_default().description =
-                Some("Previous exec instructions.".to_string());
-            messages.mcp_typescript_preamble = Some("type PreviousResult = string;".to_string());
+                Some("Previous exec instructions.".into());
+            messages.mcp_typescript_preamble = Some("type PreviousResult = string;".into());
         }
     }
     mount_models_once_with_etag(&model_server, catalog.clone(), "\"exec-mode-v2\"").await;

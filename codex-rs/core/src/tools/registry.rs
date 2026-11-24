@@ -40,6 +40,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ToolResultMetadata;
+use codex_protocol::openai_models::ToolDescriptionPrefixes;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
@@ -493,7 +494,7 @@ impl ToolRegistry {
     /// Prepare registered functions and the exec/wait wrappers added later in the plan.
     pub(crate) fn apply_functions_namespace_function_prefixes(
         &mut self,
-        prefixes: Option<&BTreeMap<String, String>>,
+        prefixes: Option<&ToolDescriptionPrefixes>,
     ) {
         let registered = self
             .tools

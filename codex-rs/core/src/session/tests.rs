@@ -11353,7 +11353,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         model_info.context_window = None;
         model_info.max_context_window = None;
         let messages = model_info.model_messages.as_mut().unwrap();
-        messages.instructions_template = Some("A instructions".to_string());
+        messages.instructions_template = Some("A instructions".into());
     });
     session.state.lock().await.base_instructions_provenance =
         Some(codex_protocol::models::BaseInstructionsProvenance::Model {
@@ -11401,7 +11401,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .model_messages
         .as_mut()
         .unwrap()
-        .instructions_template = Some("B instructions".to_string());
+        .instructions_template = Some("B instructions".into());
     turn_context
         .next_step_settings
         .store(Arc::new(ResolvedStepSettings::new(

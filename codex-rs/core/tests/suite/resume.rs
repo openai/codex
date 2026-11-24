@@ -183,7 +183,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
             model
                 .model_messages
                 .get_or_insert_default()
-                .instructions_template = Some(legacy_instructions.to_string());
+                .instructions_template = Some(legacy_instructions.into());
         })
         .with_config(|config| {
             config.personality = Some(Personality::Pragmatic);

@@ -1,5 +1,6 @@
 //! Optional model-catalog overrides for harness-owned incremental tool notices.
 
+use codex_utils_cached_str::CodexCachedStr;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,21 +11,21 @@ use ts_rs::TS;
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct IncrementalToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_update_hint: Option<String>,
+    pub tool_update_hint: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub removed_tools_header: Option<String>,
+    pub removed_tools_header: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub removed_namespaces_header: Option<String>,
+    pub removed_namespaces_header: Option<CodexCachedStr>,
     /// Prefix supporting `{name}`; the namespace instructions are appended verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace_instructions_prefix: Option<String>,
+    pub namespace_instructions_prefix: Option<CodexCachedStr>,
     /// Message supporting `{name}` when a namespace's instructions are cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace_instructions_cleared: Option<String>,
+    pub namespace_instructions_cleared: Option<CodexCachedStr>,
     /// Literal hint before changed Code Mode tool definitions and namespace instructions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exec_tools_update_hint: Option<String>,
+    pub exec_tools_update_hint: Option<CodexCachedStr>,
     /// Literal header before removed Code Mode tool and namespace-instruction identities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exec_tools_removed_definitions_header: Option<String>,
+    pub exec_tools_removed_definitions_header: Option<CodexCachedStr>,
 }

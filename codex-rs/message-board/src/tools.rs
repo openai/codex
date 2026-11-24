@@ -34,6 +34,7 @@ use codex_tools::ToolExecutor;
 use codex_tools::ToolExecutorFuture;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_cached_str::CodexCachedStr;
 use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::Value;
@@ -89,7 +90,7 @@ struct BoardTool {
     board: Arc<dyn AgentMessageBoard>,
     namespace: Option<String>,
     namespace_description: String,
-    description: Option<String>,
+    description: Option<CodexCachedStr>,
 }
 
 impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {

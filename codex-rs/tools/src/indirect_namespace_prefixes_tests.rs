@@ -67,8 +67,8 @@ fn plain_tools_join_an_existing_functions_group_only_with_a_prefix() {
     }
     let configured = IndirectDescriptionPrefixes {
         namespaces: Some(BTreeMap::from([(
-            "functions".to_string(),
-            "Catalog guidance.".to_string(),
+            "functions".into(),
+            "Catalog guidance.".into(),
         )])),
         ..Default::default()
     };
@@ -171,8 +171,8 @@ fn plain_tools_join_an_existing_functions_group_only_with_a_prefix() {
 fn flat_tool_descriptions_use_trimmed_namespace_prefixes() {
     let configured = IndirectDescriptionPrefixes {
         namespaces: Some(BTreeMap::from([(
-            "functions".to_string(),
-            " \nFunction guidance.\t ".to_string(),
+            "functions".into(),
+            " \nFunction guidance.\t ".into(),
         )])),
         ..Default::default()
     };
@@ -201,13 +201,10 @@ fn flat_tool_descriptions_use_trimmed_namespace_prefixes() {
 #[test]
 fn matching_prefixes_cover_each_namespace_once() {
     let servers = BTreeMap::from([
-        ("codex_apps".to_string(), " App guidance. ".to_string()),
-        ("apps_alias".to_string(), "App guidance.\n".to_string()),
+        ("codex_apps".into(), " App guidance. ".into()),
+        ("apps_alias".into(), "App guidance.\n".into()),
     ]);
-    let exact = BTreeMap::from([(
-        "mcp__codex_apps__gmail".to_string(),
-        "App guidance.".to_string(),
-    )]);
+    let exact = BTreeMap::from([("mcp__codex_apps__gmail".into(), "App guidance.".into())]);
     let configured = IndirectDescriptionPrefixes {
         namespaces: Some(exact),
         mcp_servers: Some(servers),
@@ -252,12 +249,12 @@ fn conflicting_namespace_and_server_prefixes_report_keys_without_values() {
     ] {
         let configured = IndirectDescriptionPrefixes {
             namespaces: Some(BTreeMap::from([(
-                "mcp__reports_one".to_string(),
-                namespace_prefix.to_string(),
+                "mcp__reports_one".into(),
+                namespace_prefix.into(),
             )])),
             mcp_servers: Some(BTreeMap::from([(
-                "reports.one".to_string(),
-                server_prefix.to_string(),
+                "reports.one".into(),
+                server_prefix.into(),
             )])),
             ..Default::default()
         };
@@ -280,8 +277,8 @@ fn conflicting_namespace_and_server_prefixes_report_keys_without_values() {
 fn conflicting_mcp_servers_report_the_shared_namespace() {
     let configured = IndirectDescriptionPrefixes {
         mcp_servers: Some(BTreeMap::from([
-            ("reports.one".to_string(), "First guidance.".to_string()),
-            ("reports.two".to_string(), "Second guidance.".to_string()),
+            ("reports.one".into(), "First guidance.".into()),
+            ("reports.two".into(), "Second guidance.".into()),
         ])),
         ..Default::default()
     };

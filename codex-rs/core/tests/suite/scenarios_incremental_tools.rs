@@ -213,7 +213,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
                     .as_mut()
                     .expect("model messages")
                     .instructions_template =
-                    Some("Use the available tools to help the user.".to_string());
+                    Some("Use the available tools to help the user.".into());
             }
         })
         .with_config(move |config| {
@@ -248,7 +248,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
                     .model_messages
                     .as_mut()
                     .expect("model messages")
-                    .instructions_template = Some("Review results before responding.".to_string());
+                    .instructions_template = Some("Review results before responding.".into());
             }
             updated
                 .model_messages
@@ -257,7 +257,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
                 .get_or_insert_default()
                 .code_mode = Some(CodeModeToolMessages {
                 exec: Some(ToolMessage {
-                    description: Some("Updated execution instructions.".to_string()),
+                    description: Some("Updated execution instructions.".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -504,13 +504,12 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history(
                     .get_or_insert_default()
                     .incremental_tools = Some(IncrementalToolMessages {
                     tool_update_hint: Some(
-                        "Catalog update: retain earlier tools unless explicitly removed."
-                            .to_string(),
+                        "Catalog update: retain earlier tools unless explicitly removed.".into(),
                     ),
-                    removed_tools_header: Some("Unavailable tools:".to_string()),
-                    removed_namespaces_header: Some("Unavailable namespaces:".to_string()),
-                    namespace_instructions_prefix: Some("Catalog {name}: ".to_string()),
-                    namespace_instructions_cleared: Some("Cleared {name}.".to_string()),
+                    removed_tools_header: Some("Unavailable tools:".into()),
+                    removed_namespaces_header: Some("Unavailable namespaces:".into()),
+                    namespace_instructions_prefix: Some("Catalog {name}: ".into()),
+                    namespace_instructions_cleared: Some("Cleared {name}.".into()),
                     ..Default::default()
                 });
             }

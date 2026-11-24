@@ -1085,25 +1085,25 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                     model.max_context_window = None;
                 }
                 let messages = model.model_messages.as_mut().expect("model messages");
-                messages.instructions_template = Some(format!("Instructions for {slug}."));
+                messages.instructions_template = Some(format!("Instructions for {slug}.").into());
                 messages.collaboration_modes = Some(CollaborationModeMessages {
                     initial: None,
                     default: None,
-                    plan: Some(format!("Plan collaboration for {slug}.")),
+                    plan: Some(format!("Plan collaboration for {slug}.").into()),
                 });
                 messages.multi_agent = Some(MultiAgentMessages {
                     role: Some(MultiAgentRoleMessages {
-                        root: Some(format!("Root role for {slug}.")),
+                        root: Some(format!("Root role for {slug}.").into()),
                         subagent: None,
                     }),
                     mode: Some(MultiAgentModeMessages {
-                        explicit: Some(format!("Delegation policy for {slug}.")),
+                        explicit: Some(format!("Delegation policy for {slug}.").into()),
                         proactive: None,
                         hint_text: None,
                     }),
                 });
                 messages.approvals = Some(ApprovalMessages {
-                    on_request: Some(format!("Approval instructions for {slug}.")),
+                    on_request: Some(format!("Approval instructions for {slug}.").into()),
                     on_request_auto_review: None,
                     never: None,
                     unless_trusted: None,
@@ -1117,9 +1117,9 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                     reminder_threshold_tokens: if initial_model { 8_000 } else { 2_000 },
                     reminder_message_template: format!(
                         "Reminder for {slug}: {{n_remaining}} tokens remain."
-                    ),
-                    guidance_message: format!("Use {slug} token-budget guidance."),
-                    auto_compact_fallback_prompt: format!("Save {slug} state before rollover."),
+                    ).into(),
+                    guidance_message: format!("Use {slug} token-budget guidance.").into(),
+                    auto_compact_fallback_prompt: format!("Save {slug} state before rollover.").into(),
                     auto_compact_fallback_buffer_tokens: if initial_model {
                         16_000
                     } else {
@@ -1430,20 +1430,20 @@ async fn mcp_confirmation_policy_follows_step_model_changes() -> Result<()> {
                     .expect("bundled model messages");
                 messages.confirmation_policies = match model.slug.as_str() {
                     MODEL_A => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_A.to_string()),
-                        computer_use: Some(COMPUTER_POLICY_A.to_string()),
+                        browser_use: Some(BROWSER_POLICY_A.into()),
+                        computer_use: Some(COMPUTER_POLICY_A.into()),
                     }),
                     MODEL_B => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_B.to_string()),
-                        computer_use: Some(COMPUTER_POLICY_B.to_string()),
+                        browser_use: Some(BROWSER_POLICY_B.into()),
+                        computer_use: Some(COMPUTER_POLICY_B.into()),
                     }),
                     BROWSER_ONLY_MODEL => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_B.to_string()),
+                        browser_use: Some(BROWSER_POLICY_B.into()),
                         computer_use: None,
                     }),
                     COMPUTER_ONLY_MODEL => Some(ConfirmationPolicies {
                         browser_use: None,
-                        computer_use: Some(COMPUTER_POLICY_B.to_string()),
+                        computer_use: Some(COMPUTER_POLICY_B.into()),
                     }),
                     MODEL_C => None,
                     _ => unreachable!("unexpected test model"),
@@ -2173,8 +2173,7 @@ async fn model_activation_uses_destination_metadata_defaults(
                         .model_messages
                         .as_mut()
                         .expect("model instruction metadata")
-                        .instructions_template =
-                        Some("Destination model instructions.".to_string());
+                        .instructions_template = Some("Destination model instructions.".into());
                 }
             }
         })
@@ -2331,8 +2330,8 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     .push("send_user_message_async".to_string());
                 let tool_message = |name| {
                     Some(ToolMessage {
-                        description: Some(format!("{name} description for {}.", model.slug)),
-                        parameters: Some(parameters(&model.slug).to_string()),
+                        description: Some(format!("{name} description for {}.", model.slug).into()),
+                        parameters: Some(parameters(&model.slug).to_string().into()),
                     })
                 };
                 model
@@ -2341,8 +2340,10 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     .expect("model instruction metadata")
                     .tools = Some(ToolMessages {
                     send_user_message_async: Some(ToolMessage {
-                        description: Some(format!("Async message description for {}.", model.slug)),
-                        parameters: Some(async_parameters(&model.slug).to_string()),
+                        description: Some(
+                            format!("Async message description for {}.", model.slug).into(),
+                        ),
+                        parameters: Some(async_parameters(&model.slug).to_string().into()),
                     }),
                     multi_agent: Some(MultiAgentToolMessages {
                         spawn_agent: tool_message("spawn_agent"),
@@ -2356,12 +2357,16 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     }),
                     code_mode: Some(CodeModeToolMessages {
                         exec: Some(ToolMessage {
-                            description: Some(format!("Exec description for {}.", model.slug)),
+                            description: Some(
+                                format!("Exec description for {}.", model.slug).into(),
+                            ),
                             ..Default::default()
                         }),
                         wait: Some(ToolMessage {
-                            description: Some(format!("Wait description for {}.", model.slug)),
-                            parameters: Some(wait_parameters(&model.slug).to_string()),
+                            description: Some(
+                                format!("Wait description for {}.", model.slug).into(),
+                            ),
+                            parameters: Some(wait_parameters(&model.slug).to_string().into()),
                         }),
                         ..Default::default()
                     }),
@@ -2477,7 +2482,7 @@ async fn persistent_instructions_follow_mid_turn_model_changes() -> Result<()> {
                     .as_mut()
                     .expect("model instruction metadata")
                     .persistent_instructions =
-                    Some(format!("Persistent instructions for {}.", model.slug));
+                    Some(format!("Persistent instructions for {}.", model.slug).into());
             }
         })
         .build_with_auto_env(&server)
@@ -3182,8 +3187,8 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
                     .get_or_insert_with(Default::default)
                     .mcp_resources = Some(McpResourceToolMessages {
                     read_mcp_resource: Some(ToolMessage {
-                        description: Some(format!("Read resource for {}.", model.slug)),
-                        parameters: Some(parameters(&model.slug).to_string()),
+                        description: Some(format!("Read resource for {}.", model.slug).into()),
+                        parameters: Some(parameters(&model.slug).to_string().into()),
                     }),
                     ..Default::default()
                 });

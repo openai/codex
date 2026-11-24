@@ -1,6 +1,7 @@
 //! Sparse Memento V2 tool definitions. Runtime data remains with consumers.
 
 use super::ToolMessage;
+use codex_utils_cached_str::CodexCachedStr;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,7 +11,7 @@ use ts_rs::TS;
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct HistoryToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace_description: Option<String>,
+    pub namespace_description: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_windows: Option<ToolMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,7 +26,7 @@ pub struct HistoryToolMessages {
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct NotesToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace_description: Option<String>,
+    pub namespace_description: Option<CodexCachedStr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_files_by_prefix: Option<ToolMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

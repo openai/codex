@@ -56,6 +56,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_prompts::ResolvedIncrementalToolMessages;
 use codex_protocol::AgentPath;
 use codex_protocol::RequestCountry;
 use codex_protocol::ResponseItemId;
@@ -3334,7 +3335,9 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
         tools: Arc::from([serde_json::json!({"type": "function", "name": "compacted_tool"})]),
     };
     let tools_update = ContextualUserFragment::into(IncrementalToolsUpdate(
-        codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
+        ResolvedIncrementalToolMessages::default()
+            .tool_update_hint
+            .as_cow(),
     ));
     let replacement_history = vec![
         tools_update.clone(),
@@ -3911,7 +3914,9 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         ]);
         rollout_items.push(rollout_response_item(ContextualUserFragment::into(
             IncrementalToolsUpdate(
-                codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
+                ResolvedIncrementalToolMessages::default()
+                    .tool_update_hint
+                    .as_cow(),
             ),
         )));
         rollout_items.push(rollout_response_item(ResponseItem::AdditionalTools {

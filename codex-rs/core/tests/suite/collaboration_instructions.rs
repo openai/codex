@@ -91,8 +91,8 @@ fn model_with_collaboration_messages(
     });
     model_messages.collaboration_modes = Some(CollaborationModeMessages {
         initial: None,
-        default: default.map(str::to_string),
-        plan: plan.map(str::to_string),
+        default: default.map(Into::into),
+        plan: plan.map(Into::into),
     });
     model
 }

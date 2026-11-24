@@ -12,13 +12,13 @@ fn apps_resolution_preserves_literal_bytes_and_rejects_invalid_overrides() {
         None,
         Some(AppsMessages::default()),
         Some(AppsMessages {
-            usage_instructions: Some(" \t\n".to_string()),
+            usage_instructions: Some(" \t\n".into()),
         }),
         Some(AppsMessages {
-            usage_instructions: Some("é".repeat(401)),
+            usage_instructions: Some("é".repeat(401).into()),
         }),
         Some(AppsMessages {
-            usage_instructions: Some("x".repeat(801)),
+            usage_instructions: Some("x".repeat(801).into()),
         }),
     ] {
         let messages = ModelMessages {
@@ -45,7 +45,7 @@ fn apps_resolution_keeps_empty_boundary_and_placeholder_text_literal() {
     ] {
         let messages = ModelMessages {
             apps: Some(AppsMessages {
-                usage_instructions: Some(text.clone()),
+                usage_instructions: Some(text.as_str().into()),
             }),
             ..Default::default()
         };
