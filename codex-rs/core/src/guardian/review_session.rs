@@ -145,6 +145,8 @@ pub struct GuardianReviewSessionReuseKey {
     // history rewrites that invalidate existing reviewer context.
     parent_history_version: u64,
     parent_reset_version: u64,
+    // Never carry a recorded decision into a review with different or absent root evidence.
+    root_evidence: Option<Arc<codex_app_server_protocol::GuardianRootEvidence>>,
     root_review_version: Option<(crate::codex_thread::GuardianAuthorizationVersion, u64)>,
     node_repl_auto_review_required: bool,
     node_repl_policy: String,
@@ -179,6 +181,7 @@ impl GuardianReviewSessionReuseKey {
         context_mode: GuardianContextMode,
     ) -> Self {
         Self {
+            root_evidence: None,
             root_review_version: None,
             parent_reset_version: 0,
             parent_history_version: match ReviewContextPolicy::for_context(

@@ -275,6 +275,46 @@ Clients that used `"detached"` should call `thread/start` and pass the new threa
 to `review/start`. To keep the original conversation history with custom review
 instructions, use `thread/fork` followed by `turn/start`.
 
+## Recorded Guardian reviews (experimental)
+
+On an idle thread, `thread/guardianReview` assesses the supplied `toolCall`
+without appending or executing it. To review an archived worker's action,
+start a dedicated ephemeral thread and load the worker's history with
+`thread/inject_items`. Supply the action and parent messages in the review request.
+
+```json
+{
+  "method": "thread/guardianReview",
+  "id": 1,
+  "params": {
+    "threadId": "<ephemeral-thread-id>",
+    "toolCall": {
+      "type": "function_call",
+      "name": "exec_command",
+      "call_id": "pending",
+      "arguments": "{\"cmd\":\"git ls-files\"}"
+    },
+    "rootEvidence": {
+      "messages": [{ "role": "user", "text": "List the tracked files." }],
+      "missingUserInstructions": false,
+      "missingAssistantContext": true
+    }
+  }
+}
+```
+
+Supply bounded root messages in order with role `user` or `assistant`.
+Set both omission flags from the source. The server renders the native root
+section alongside the worker transcript. Send the evidence on every review.
+The reviewer can keep its private history when the evidence is unchanged.
+Changing or omitting the evidence invalidates that history. Parent messages
+never enter the worker history. Check for both
+`usedRootEvidence: true` and the expected `callId` before using the result.
+Older servers may ignore the parent evidence and review only the injected history.
+The result measures the supplied recording under the thread's current policy,
+tool catalog and environment. It grants no permission to execute the call.
+Direct client input to V2 workers remains restricted.
+
 # Thread removal
 
 `thread/archive` and `thread/delete` reject attempts to remove a live internal

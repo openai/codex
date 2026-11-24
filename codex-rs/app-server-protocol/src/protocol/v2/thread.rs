@@ -1864,12 +1864,49 @@ pub struct ThreadGuardianReviewParams {
     /// A plaintext Responses API function_call or custom_tool_call to assess against
     /// the idle thread's history. The call is neither appended nor executed.
     pub tool_call: Box<ResponseItem>,
+    /// Supply parent evidence for the injected worker history on an ephemeral thread.
+    #[ts(optional = nullable)]
+    pub root_evidence: Option<GuardianRootEvidence>,
+}
+
+/// Parent evidence is scoped to this review. Inject the worker history with thread/inject_items.
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct GuardianRootEvidence {
+    /// Bounded parent messages in recorded order.
+    pub messages: Vec<GuardianRootEvidenceMessage>,
+    pub missing_user_instructions: bool,
+    pub missing_assistant_context: bool,
+}
+
+impl std::fmt::Debug for GuardianRootEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardianRootEvidence")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, TS)]
+#[serde(
+    tag = "role",
+    content = "text",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+#[ts(export_to = "v2/")]
+pub enum GuardianRootEvidenceMessage {
+    User(String),
+    Assistant(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadGuardianReviewResponse {
+    /// True if Codex used the supplied root evidence.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub used_root_evidence: bool,
     pub call_id: String,
     pub assessment: ThreadGuardianAssessment,
 }

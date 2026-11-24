@@ -1150,11 +1150,41 @@ impl CodexThread {
         tool_call: &ResponseItem,
         cancellation: &CancellationToken,
     ) -> CodexResult<crate::guardian_review::GuardianReviewResult> {
+        self.guardian_review_with_root_evidence(
+            tool_call,
+            /*root_evidence*/ None,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Use the supplied parent evidence only for this review of the injected history.
+    pub async fn guardian_review_with_root_evidence(
+        &self,
+        tool_call: &ResponseItem,
+        root_evidence: Option<codex_app_server_protocol::GuardianRootEvidence>,
+        cancellation: &CancellationToken,
+    ) -> CodexResult<crate::guardian_review::GuardianReviewResult> {
         if self.session.active_turn.lock().await.is_some() {
             return Err(CodexErr::InvalidRequest("thread has an active turn".into()));
         }
+        if root_evidence.is_some()
+            && (!self.config().await.ephemeral
+                || matches!(self.session_source(), SessionSource::SubAgent(_)))
+        {
+            return Err(CodexErr::InvalidRequest(
+                "recorded worker review requires an ephemeral non-subagent thread".into(),
+            ));
+        }
         let history = self.session.clone_history().await;
-        crate::guardian::review_tool_call(&self.session, history, tool_call, cancellation).await
+        crate::guardian::review_tool_call(
+            &self.session,
+            history,
+            tool_call,
+            root_evidence,
+            cancellation,
+        )
+        .await
     }
 
     /// Inject raw Responses items. Plaintext agent-mail batches in a native MAv2

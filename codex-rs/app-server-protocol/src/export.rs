@@ -52,6 +52,8 @@ const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
     "EnvironmentShellInfo",
     "EnvironmentStatusKind",
     "GuardianAssessmentOutcome",
+    "GuardianRootEvidenceMessage",
+    "GuardianRootEvidence",
     "RemoteControlClient",
     "RemoteControlClientsListOrder",
     "ThreadBackgroundTerminal",

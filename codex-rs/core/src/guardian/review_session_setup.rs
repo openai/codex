@@ -61,6 +61,7 @@ impl PreparedGuardianContext {
         .with_environments(context.environments())
         .with_node_repl_policy_eligibility(context.model_info.computer_use_review_required())
         .with_node_repl_policy(node_repl_policy);
+        key.root_evidence = context.root_evidence.clone();
         key.root_review_version = root_review_version;
         key.parent_reset_version = history.reset_version;
         let inference = crate::guardian::GuardianInferenceContext::for_config(

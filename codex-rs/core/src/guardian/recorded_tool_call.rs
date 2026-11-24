@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
+use codex_app_server_protocol::GuardianRootEvidence;
+use codex_app_server_protocol::GuardianRootEvidenceMessage;
 use codex_features::Feature;
+use codex_guardian_context::GuardianRootMessage;
 use codex_guardian_reviewer::GuardianReviewError;
 use codex_guardian_reviewer::ReviewDeadline;
 use codex_protocol::error::CodexErr;
@@ -40,6 +43,7 @@ pub(crate) async fn review_tool_call(
     session: &Arc<Session>,
     history: ContextManager,
     tool_call: &ResponseItem,
+    root_evidence: Option<GuardianRootEvidence>,
     cancellation: &CancellationToken,
 ) -> Result<GuardianReviewResult> {
     let is_supported_builtin = match tool_call {
@@ -84,6 +88,13 @@ pub(crate) async fn review_tool_call(
         return Err(CodexErr::InvalidRequest(
             "direct review does not support replaying request_permissions".into(),
         ));
+    }
+    if let Some(evidence) = &root_evidence
+        && !evidence.messages.iter().any(
+            |entry| matches!(entry, GuardianRootEvidenceMessage::User(text) if !text.trim().is_empty()),
+        )
+    {
+        return Err(CodexErr::InvalidRequest("missing root user evidence".into()));
     }
     let deadline = ReviewDeadline::from_timeout(session.get_config().await.guardian_review_timeout);
 
@@ -143,7 +154,10 @@ pub(crate) async fn review_tool_call(
                 PreToolUseError::Cancelled(_) => CodexErr::TurnAborted,
             })?;
         let step = &invocation.step_context;
-        let context = GuardianReviewContext::from(step);
+        let context = GuardianReviewContext {
+            root_evidence: root_evidence.map(Arc::new),
+            ..GuardianReviewContext::from(step)
+        };
         let (approval, request) = if let Some(tool_info) = advertised_mcp_tool {
             let request = mcp_tool_call::recorded::prepare_review_request(&invocation, tool_info)
                 .await
@@ -257,6 +271,23 @@ pub(crate) async fn review_tool_call(
         _ = deadline.wait() => Err(CodexErr::RequestTimeout),
         result = review => result,
     }
+}
+
+pub(super) fn root_messages(evidence: &GuardianRootEvidence) -> Vec<GuardianRootMessage> {
+    let mut messages = vec![GuardianRootMessage::RetainedContextScope];
+    if evidence.missing_user_instructions {
+        messages.push(GuardianRootMessage::IncompleteRootInstructions);
+    }
+    if evidence.missing_assistant_context {
+        messages.push(GuardianRootMessage::IncompleteAssistantContext);
+    }
+    messages.extend(evidence.messages.iter().map(|entry| match entry {
+        GuardianRootEvidenceMessage::User(text) => GuardianRootMessage::User(text.clone()),
+        GuardianRootEvidenceMessage::Assistant(text) => {
+            GuardianRootMessage::Assistant(text.clone())
+        }
+    }));
+    messages
 }
 
 fn tool_error(error: FunctionCallError) -> CodexErr {

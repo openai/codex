@@ -179,6 +179,10 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         Some(context) => context.turn().config.guardian_transcript_mode,
         None => config.guardian_transcript_mode,
     };
+    let recorded_root = parent_context
+        .and_then(|context| context.root_evidence.as_deref())
+        .map(super::recorded_tool_call::root_messages)
+        .unwrap_or_default();
     let sections = collect_guardian_context(SectionInput {
         target: profile.target,
         history: &GuardianReviewHistory {
@@ -188,7 +192,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         },
         transcript: &profile.transcript,
         is_selected_exec_output,
-        root_conversation: &[],
+        root_conversation: &recorded_root,
         root_conversation_candidates: root_authorization.as_ref(),
         trusted_user_answers: &trusted_user_inputs,
         planned_action: Some(&planned_action),
