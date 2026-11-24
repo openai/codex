@@ -213,15 +213,11 @@ impl AgentsOverviewView {
             }
         }
         if let Some(hint) = self.center_list_hint(ListAction::Accept) {
-            hints.push((
-                hint.display_label(),
-                if state.rename_target.is_some() {
-                    "rename"
-                } else {
-                    "open"
-                }
-                .into(),
-            ));
+            let action = match self.selected {
+                _ if state.rename_target.is_some() => "rename",
+                _ => "open",
+            };
+            hints.push((hint.display_label(), action.into()));
         }
         if !state.editing_metadata()
             && let Some(hint) = self

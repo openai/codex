@@ -50,13 +50,15 @@ impl AgentsOverviewView {
         let indices = self.selectable_indices();
         let mut state = self.state();
         let padding = u16::from(area.height >= 3);
-        let viewport = row(area, padding, area.height - padding * 2);
-        state.list_width = viewport.width;
+        state.list_width = area.width;
+        let top_padding = padding;
+        let viewport = row(area, top_padding, area.height - top_padding - padding);
         state.page_height = usize::from(viewport.height);
+        let entries = self.center_rows(&indices, &state);
         if area.is_empty() {
             return;
         }
-        if indices.is_empty() {
+        if entries.is_empty() {
             line(
                 if state.connection_notice.is_some() {
                     "Reconnecting…"
@@ -96,31 +98,32 @@ impl AgentsOverviewView {
             };
             (label, dot)
         };
-        let entries = self.center_rows(&indices, &state);
         let reference = chrono::Utc::now();
         let sort = if state.searching {
             state.search_sort
         } else {
             HistorySort::Updated
         };
-        let age = |task: &AgentsOverviewRow| {
+        let age = |timestamp| {
             format_relative_time(
                 reference,
-                chrono::DateTime::from_timestamp(sort.timestamp(&task.thread), /*nsecs*/ 0),
+                chrono::DateTime::from_timestamp(timestamp, /*nsecs*/ 0),
             )
         };
+        let task_age = |task: &AgentsOverviewRow| age(sort.timestamp(&task.thread));
         let widths = (state.list_width >= STATUS_COLUMNS_MIN_WIDTH).then(|| {
             let mut status_width = "Status".width();
             let mut updated_width = sort.label().width();
             for task in indices.iter().filter_map(|&index| self.rows.get(index)) {
                 status_width = status_width.max(status_for(task).0.width());
-                updated_width = updated_width.max(age(task).width());
+                updated_width = updated_width.max(task_age(task).width());
             }
             (status_width.min(11) as u16, updated_width.min(9) as u16)
         });
         if padding > 0 && self.dock_focused.is_none() {
             let (title, status, updated) = columns(row(area, /*offset*/ 0, /*height*/ 1), widths);
-            line("Tasks".dim(), title, buf);
+            let heading = "Tasks";
+            line(heading.dim(), title, buf);
             line("Status".dim(), status, buf);
             Line::from(sort.label().dim())
                 .right_aligned()
@@ -213,7 +216,8 @@ impl AgentsOverviewView {
                 let count = indices
                     .iter()
                     .filter(|&&candidate| {
-                        candidate != usize::MAX && self.same_group(state.grouping, candidate, index)
+                        candidate < self.rows.len()
+                            && self.same_group(state.grouping, candidate, index)
                     })
                     .count();
                 let total = (0..self.rows.len())
@@ -313,7 +317,7 @@ impl AgentsOverviewView {
             line(task_title, title, buf);
             line(Line::from(status).style(style), status_area, buf);
             if !updated.is_empty() {
-                Line::from(age(task))
+                Line::from(task_age(task))
                     .style(if index == self.selected {
                         style
                     } else {

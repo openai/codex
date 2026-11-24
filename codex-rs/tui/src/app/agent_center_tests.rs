@@ -31,6 +31,35 @@ pub(super) fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> Stri
 }
 
 #[tokio::test]
+async fn live_center_home_and_end_preserve_selection_across_refreshes() {
+    let mut app = make_test_app().await;
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    let thread = overview_thread(
+        ThreadId::from_u128(/*value*/ 42),
+        /*parent_thread_id*/ None,
+        "Task",
+        ThreadStatus::Idle,
+    );
+    let state = &app.agents_overview.view_state;
+    state.lock().unwrap().has_more = true;
+    let view = || app.agents_overview_view(vec![thread.clone()], /*selected_thread_id*/ None);
+    let mut center = view();
+    center.handle_key_event(KeyCode::End.into());
+    assert!(screen(&view(), /*width*/ 88, /*height*/ 14).contains("›   Show more"));
+    let mut center = view();
+    center.handle_key_event(KeyCode::Home.into());
+    assert!(!screen(&view(), /*width*/ 88, /*height*/ 14).contains("›   Show more"));
+    let mut center = view();
+    center.handle_key_event(KeyCode::End.into());
+    view().handle_key_event(KeyCode::Enter.into());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::ShowMoreAgentsOverview))
+    );
+}
+
+#[tokio::test]
 async fn live_center_keeps_status_order_across_progress_refreshes() {
     let mut app = make_test_app_with_chat().await;
     app.agents_overview.view_state.lock().unwrap().grouping = AgentsOverviewGrouping::Status;

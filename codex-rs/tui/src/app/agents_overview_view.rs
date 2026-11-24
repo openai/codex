@@ -484,6 +484,7 @@ impl AgentsOverviewView {
             self.load_search_matches(/*additional*/ 10);
             return;
         }
+
         if self.selected == usize::MAX && self.state().has_more {
             if !self.state().loading {
                 self.state().loading = true;
@@ -798,11 +799,14 @@ impl BottomPaneView for AgentsOverviewView {
                 if state.searching {
                     drop(state);
                     self.on_ctrl_c();
+                    return;
                 } else {
                     state.browse_selection = self.rows.get(self.selected).map(|row| row.thread_id);
                     state.searching = true;
                 }
             }
+            drop(state);
+            self.reconcile_command_center_selection();
             return;
         }
 
@@ -817,11 +821,8 @@ impl BottomPaneView for AgentsOverviewView {
                 Some(action @ (ListAction::PageUp | ListAction::PageDown)) => {
                     self.page_selection(action)
                 }
-                Some(ListAction::JumpTop) => {
-                    self.selected = self.visible_indices().first().copied().unwrap_or(0);
-                }
-                Some(ListAction::JumpBottom) => {
-                    self.selected = self.visible_indices().last().copied().unwrap_or(0);
+                Some(action @ (ListAction::JumpTop | ListAction::JumpBottom)) => {
+                    self.jump_selection(action)
                 }
                 _ => {}
             }
@@ -943,16 +944,11 @@ impl BottomPaneView for AgentsOverviewView {
             match action {
                 ListAction::MoveUp => self.move_selection(/*forward*/ false),
                 ListAction::MoveDown => self.move_selection(/*forward*/ true),
-                ListAction::JumpTop => {
-                    self.selected = self.visible_indices().first().copied().unwrap_or(0);
-                }
-                ListAction::JumpBottom => {
-                    self.selected = self.visible_indices().last().copied().unwrap_or(0);
-                }
+                ListAction::JumpTop | ListAction::JumpBottom => self.jump_selection(action),
                 ListAction::Accept => self.activate(),
                 ListAction::Cancel => {
-                    if self.can_return_to_chat
-                        && matches!(self.on_ctrl_c(), CancellationEvent::NotHandled)
+                    if matches!(self.on_ctrl_c(), CancellationEvent::NotHandled)
+                        && self.can_return_to_chat
                     {
                         self.state().completion = Some(ViewCompletion::Cancelled);
                     }

@@ -69,7 +69,7 @@ impl AgentsOverviewView {
                 continue;
             }
             if previous.is_none_or(|previous| !self.same_group(state.grouping, previous, index)) {
-                if previous.is_some() {
+                if !entries.is_empty() {
                     entries.push(TaskListRow::Gap);
                 }
                 entries.push(TaskListRow::Group(index));
@@ -81,6 +81,18 @@ impl AgentsOverviewView {
             previous = Some(index);
         }
         entries
+    }
+
+    pub(in crate::app::agents_overview_view) fn jump_selection(&mut self, action: ListAction) {
+        let indices = self.selectable_indices();
+        let selected = match action {
+            ListAction::JumpTop => indices.first(),
+            ListAction::JumpBottom => indices.last(),
+            _ => return,
+        }
+        .copied();
+        self.selected = selected.unwrap_or(usize::MAX);
+        self.state().show_more_selected = selected == Some(usize::MAX);
     }
 
     pub(in crate::app::agents_overview_view) fn select_section(
