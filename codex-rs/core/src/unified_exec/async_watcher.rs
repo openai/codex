@@ -1,7 +1,6 @@
 use codex_protocol::openai_models::CatalogModel;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -11,7 +10,6 @@ use tokio::time::Sleep;
 use super::SharedPluginMetricsSidecar;
 use super::UnifiedExecContext;
 use super::process::OutputBuffers;
-use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
 use super::take_plugin_metrics_sidecar;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
@@ -58,11 +56,7 @@ pub(crate) fn start_streaming_output(process: &UnifiedExecProcess, context: &Uni
     let mut receiver = process.output_receiver();
     let output_drained = process.output_drained_notify();
     let exit_token = process.cancellation_token();
-    let OutputHandles {
-        output_closed,
-        output_closed_notify,
-        ..
-    } = process.output_handles().clone();
+    let output_closed = process.output_handles().output_closed.clone();
 
     let emitter = Emitter {
         remaining_deltas: MAX_EXEC_OUTPUT_DELTAS_PER_CALL,
@@ -80,19 +74,8 @@ pub(crate) fn start_streaming_output(process: &UnifiedExecProcess, context: &Uni
         };
 
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
-        let output_closed_notified = output_closed_notify.notified();
-        tokio::pin!(output_closed_notified);
-        let mut output_complete = false;
 
         loop {
-            // Register before checking the atomic so a close between the check
-            // and the select cannot miss the notification.
-            output_closed_notified.as_mut().enable();
-            if grace_sleep.is_some() && output_closed.load(Ordering::Acquire) {
-                output_complete = true;
-                break;
-            }
-
             tokio::select! {
                 _ = exit_token.cancelled(), if grace_sleep.is_none() => {
                     let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
@@ -107,20 +90,13 @@ pub(crate) fn start_streaming_output(process: &UnifiedExecProcess, context: &Uni
                     break;
                 }
 
-                _ = &mut output_closed_notified, if grace_sleep.is_some() => {
-                    output_closed_notified.set(output_closed_notify.notified());
-                }
+                _ = output_closed.cancelled(), if grace_sleep.is_some() => break,
 
                 received = receiver.recv() => {
                     let chunk = match received {
                         Ok(chunk) => chunk,
-                        Err(RecvError::Lagged(_)) => {
-                            continue;
-                        },
-                        Err(RecvError::Closed) => {
-                            output_complete = true;
-                            break;
-                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
                     };
 
                     output.push(chunk).await;
@@ -128,11 +104,8 @@ pub(crate) fn start_streaming_output(process: &UnifiedExecProcess, context: &Uni
             }
         }
 
-        output_complete |= output_closed.load(Ordering::Acquire);
-        if output_complete {
-            // Output producers publish all chunks before setting output_closed
-            // with Release ordering, so the Acquire above makes this a final
-            // safe drain.
+        // Closure can win the select while the receiver still has queued chunks.
+        if output_closed.is_cancelled() {
             loop {
                 let chunk = match receiver.try_recv() {
                     Ok(chunk) => chunk,

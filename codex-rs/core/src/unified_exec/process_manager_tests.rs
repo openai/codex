@@ -377,61 +377,49 @@ fn initial_exec_yield_time_has_no_platform_floor() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn output_collection_stays_bounded_across_repeated_drains() {
-    let chunks: [&[u8]; 4] = [b"01234567", b"89ABCDEF", b"ghijklmnopq", b"rs"];
-    let output_buffer = Arc::new(tokio::sync::Mutex::new(OutputBuffers::<10>::default()));
-    let output_notify = Arc::new(Notify::new());
-    let output_closed = Arc::new(AtomicBool::new(false));
-    let output_closed_notify = Arc::new(Notify::new());
-    let cancellation_token = CancellationToken::new();
     let output = OutputHandles {
-        output_buffer: Arc::clone(&output_buffer),
-        output_notify: Arc::clone(&output_notify),
-        output_closed: Arc::clone(&output_closed),
-        output_closed_notify: Arc::clone(&output_closed_notify),
-        cancellation_token: cancellation_token.clone(),
+        output_buffer: Arc::new(tokio::sync::Mutex::new(OutputBuffers::<10>::default())),
+        output_notify: Arc::new(Notify::new()),
+        output_closed: CancellationToken::new(),
+        cancellation_token: CancellationToken::new(),
         collection_finished: CancellationToken::new(),
         drain_policy: OutputDrainPolicy::BoundedAfterExit,
     };
-
     let collect = UnifiedExecProcessManager::collect_output_until_deadline(
         &output,
         /*pause_state*/ None,
         Instant::now() + Duration::from_secs(5),
     );
-    let produce = async {
-        for chunk in chunks {
-            output_buffer
-                .lock()
-                .await
-                .push_chunk(ExecOutputStream::Stdout, chunk);
-            output_notify.notify_one();
-            tokio::time::timeout(Duration::from_secs(1), async {
-                loop {
-                    if output_buffer.lock().await.pending.retained_bytes() == 0 {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("collector should drain each chunk");
-        }
+    tokio::pin!(collect);
 
-        output_closed.store(true, Ordering::Release);
-        cancellation_token.cancel();
-        output_closed_notify.notify_waiters();
-        output_notify.notify_waiters();
-    };
-
-    let (collected, ()) = tokio::join!(collect, produce);
-    let mut expected = HeadTailBuffer::<10>::default();
+    let chunks: [&[u8]; 3] = [b"01234567", b"89ABCDEF", b"ghijklmnopq"];
     for chunk in chunks {
-        expected.push_chunk(chunk);
+        output
+            .output_buffer
+            .lock()
+            .await
+            .push_chunk(ExecOutputStream::Stdout, chunk);
+        output.output_notify.notify_waiters();
+        assert!(futures::poll!(collect.as_mut()).is_pending());
+        assert_eq!(output.output_buffer.lock().await.pending.total_bytes(), 0);
     }
-    assert_eq!(collected, expected);
-    assert_eq!(output_buffer.lock().await.transcript, expected);
+
+    // Closure alone must wake the post-exit wait and drain the last bytes.
+    output.cancellation_token.cancel();
+    assert!(futures::poll!(collect.as_mut()).is_pending());
+    output
+        .output_buffer
+        .lock()
+        .await
+        .push_chunk(ExecOutputStream::Stdout, b"rs");
+    output.output_closed.cancel();
+
+    let mut expected = HeadTailBuffer::<10>::default();
+    expected.push_chunk(b"0123456789ABCDEFghijklmnopqrs");
+    assert_eq!(collect.await, expected);
+    assert_eq!(output.output_buffer.lock().await.transcript, expected);
 }
 
 #[tokio::test]
@@ -444,20 +432,17 @@ async fn output_collection_preserves_omissions_from_drained_buffer() {
     expected.push_chunk(b"overflow");
     let output_buffer = Arc::new(tokio::sync::Mutex::new(buffered_output));
     let output_notify = Arc::new(Notify::new());
-    let output_closed = Arc::new(AtomicBool::new(true));
-    let output_closed_notify = Arc::new(Notify::new());
-    let cancellation_token = CancellationToken::new();
-    cancellation_token.cancel();
     let output = OutputHandles {
         output_buffer,
         output_notify,
-        output_closed,
-        output_closed_notify,
-        cancellation_token,
+        output_closed: CancellationToken::new(),
+        cancellation_token: CancellationToken::new(),
         collection_finished: CancellationToken::new(),
         drain_policy: OutputDrainPolicy::BoundedAfterExit,
     };
 
+    output.output_closed.cancel();
+    output.cancellation_token.cancel();
     let collected = UnifiedExecProcessManager::collect_output_until_deadline(
         &output,
         /*pause_state*/ None,

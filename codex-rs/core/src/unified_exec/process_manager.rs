@@ -594,10 +594,7 @@ impl UnifiedExecProcessManager {
         // Persist live sessions and remote output that remains pollable after an early exit.
         let process_stored = (!process.has_exited() && process.exit_code().is_none())
             || (process.output_handles().drain_policy == OutputDrainPolicy::WaitForOutputClosure
-                && !process
-                    .output_handles()
-                    .output_closed
-                    .load(Ordering::Acquire));
+                && !process.output_handles().output_closed.is_cancelled());
         let mut initial_exec_command_guard = InitialExecCommandGuard {
             active: None,
             metrics_sidecar,
@@ -1139,7 +1136,7 @@ impl UnifiedExecProcessManager {
             if retention == OutputRetention::UntilCollected
                 && output.drain_policy == OutputDrainPolicy::WaitForOutputClosure
                 && !entry.process.termination_requested.load(Ordering::Acquire)
-                && (!output.output_closed.load(Ordering::Acquire)
+                && (!output.output_closed.is_cancelled()
                     || output
                         .output_buffer
                         .try_lock()
@@ -1537,12 +1534,10 @@ impl UnifiedExecProcessManager {
             output_buffer,
             output_notify,
             output_closed,
-            output_closed_notify,
             cancellation_token,
             ..
         } = output;
         let mut collected = HeadTailBuffer::default();
-        let mut exit_signal_received = cancellation_token.is_cancelled();
         let mut post_exit_deadline: Option<Instant> = None;
         let stop_reason = loop {
             Self::extend_deadlines_while_paused(
@@ -1551,22 +1546,14 @@ impl UnifiedExecProcessManager {
                 &mut post_exit_deadline,
             )
             .await;
-            let drained_output: HeadTailBuffer<MAX_BYTES>;
-            let has_drained_output: bool;
-            let mut wait_for_output = None;
-            {
-                let mut guard = output_buffer.lock().await;
-                drained_output = std::mem::take(&mut guard.pending);
-                has_drained_output =
-                    drained_output.retained_bytes() > 0 || drained_output.omitted_bytes() > 0;
-                if !has_drained_output {
-                    wait_for_output = Some(output_notify.notified());
-                }
-            }
-
-            if !has_drained_output {
-                exit_signal_received |= cancellation_token.is_cancelled();
-                if exit_signal_received && output_closed.load(Ordering::Acquire) {
+            // Subscribe before draining. If closure races the drain, wake and
+            // drain again so the last chunk cannot land between an empty read and exit.
+            let notified = output_notify.notified();
+            let closed = output_closed.is_cancelled();
+            let drained_output = std::mem::take(&mut output_buffer.lock().await.pending);
+            if drained_output.total_bytes() == 0 {
+                let exit_signal_received = cancellation_token.is_cancelled();
+                if exit_signal_received && closed {
                     break StopReason::OutputClosed;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1582,26 +1569,18 @@ impl UnifiedExecProcessManager {
                     if close_wait_remaining == Duration::ZERO {
                         break StopReason::PostExitDeadline;
                     }
-                    let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
-                    let closed = output_closed_notify.notified();
-                    tokio::pin!(notified);
-                    tokio::pin!(closed);
                     tokio::select! {
-                        _ = &mut notified => {}
-                        _ = &mut closed => {}
+                        _ = notified => {}
+                        _ = output_closed.cancelled() => {}
                         _ = tokio::time::sleep(close_wait_remaining) => break StopReason::PostExitDeadline,
                         _ = Self::wait_for_pause_change(pause_state.as_ref()) => {}
                     }
                     continue;
                 }
 
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
-                tokio::pin!(notified);
-                let exit_notified = cancellation_token.cancelled();
-                tokio::pin!(exit_notified);
                 tokio::select! {
-                    _ = &mut notified => {}
-                    _ = &mut exit_notified => exit_signal_received = true,
+                    _ = notified => {}
+                    _ = cancellation_token.cancelled() => {}
                     _ = tokio::time::sleep(remaining) => break StopReason::Deadline,
                     _ = Self::wait_for_pause_change(pause_state.as_ref()) => {}
                 }
@@ -1610,7 +1589,6 @@ impl UnifiedExecProcessManager {
 
             collected.push_buffer(drained_output);
 
-            exit_signal_received |= cancellation_token.is_cancelled();
             if Instant::now() >= deadline {
                 break StopReason::Deadline;
             }
@@ -1625,11 +1603,8 @@ impl UnifiedExecProcessManager {
                 StopReason::PostExitDeadline => "post_exit_deadline",
             },
         );
-        span.record(
-            "exit_signaled",
-            exit_signal_received || cancellation_token.is_cancelled(),
-        );
-        span.record("output_closed", output_closed.load(Ordering::Acquire));
+        span.record("exit_signaled", cancellation_token.is_cancelled());
+        span.record("output_closed", output_closed.is_cancelled());
         span.record("outcome", "completed");
         collected
     }

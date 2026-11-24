@@ -212,15 +212,12 @@ async fn remote_lifecycle_updates_preserve_recovered_exit_state(write_status: Wr
 
     // A rejected write first reports exit without a status. The final read then
     // recovers the executor's actual exit code and sandbox-denial classification.
-    let closed = process.output_handles().output_closed_notify.notified();
-    tokio::pin!(closed);
-    closed.as_mut().enable();
     process.output_handles().collection_finished.cancel();
     assert!(matches!(
         process.write(b"hello").await,
         Err(UnifiedExecError::WriteToStdin)
     ));
-    closed.await;
+    process.output_handles().output_closed.cancelled().await;
 
     assert!(matches!(
         process.write(b"hello").await,
@@ -314,11 +311,8 @@ async fn closed_output_is_classified_without_waiting_for_more_output() {
             .lock()
             .await
             .push_chunk(ExecOutputStream::Stderr, b"permission denied");
-        let closed = output.output_closed_notify.notified();
-        tokio::pin!(closed);
-        closed.as_mut().enable();
         process.terminate_confirmed().await.expect("terminate");
-        closed.await;
+        output.output_closed.cancelled().await;
 
         let start = tokio::time::Instant::now();
         let result = process.check_for_sandbox_denial().await;
