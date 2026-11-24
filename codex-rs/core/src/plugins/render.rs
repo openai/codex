@@ -1,25 +1,10 @@
-#[cfg(test)]
-use crate::context::AvailablePluginsInstructions;
-#[cfg(test)]
-use crate::context::ContextualUserFragment;
 use crate::plugins::PluginCapabilitySummary;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_prompts::ResolvedSelectedPluginMessages;
-#[cfg(test)]
-use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 const MAX_EXPLICIT_PLUGIN_INSTRUCTIONS_BYTES: usize = 4 * 1024;
-
-#[cfg(test)]
-pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Option<String> {
-    (!plugins.is_empty()).then(|| {
-        AvailablePluginsInstructions::default()
-            .render()
-            .expect_text()
-    })
-}
 
 pub(crate) fn render_explicit_plugin_instructions(
     plugin: &PluginCapabilitySummary,
