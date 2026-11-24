@@ -5212,11 +5212,17 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "codex-backend-client",
  "codex-http-client",
+ "codex-login",
+ "codex-model-provider",
  "http 1.4.0",
  "oai-statsig-rust-client",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "tokio",
+ "tracing",
  "wiremock",
 ]
 

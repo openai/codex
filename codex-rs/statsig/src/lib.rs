@@ -1,5 +1,12 @@
-//! Statsig HTTP requests use the caller's Codex routing and network policy.
-//! Decoded responses are bounded; status handling and retries stay in the SDK.
+//! Codex's account-scoped store of Statsig evaluations and its policy-aware HTTP adapter.
+
+mod evaluations;
+
+pub use codex_backend_client::StatsigBootstrapContext;
+pub use evaluations::DynamicConfig;
+pub use evaluations::Gate;
+pub use evaluations::StatsigIdentity;
+pub use evaluations::StatsigRuntime;
 
 use std::time::Duration;
 
