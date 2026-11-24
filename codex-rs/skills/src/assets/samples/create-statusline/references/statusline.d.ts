@@ -31,7 +31,7 @@ export type Cost = { total_cost_usd?: number, total_credits?: number, };
 
 export type DisplayMode = "standard" | "raw";
 
-export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | string;
+export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
 
 export type FileSystem = { "type": "restricted" } | { "type": "unrestricted" };
 
@@ -105,6 +105,7 @@ export type UnderlineElement = Extract<Element, { type: "underline" }>;
 export type LinkElement = Extract<Element, { type: "link" }>;
 export type RowElement = Extract<Element, { type: "row" }>;
 export type ColElement = Extract<Element, { type: "col" }>;
+export type CodeElement = Extract<Element, { type: "code" }>;
 export type RateLimitWindow = {
 /**
  * Percentage of the allowance consumed during the window. Can exceed 100.

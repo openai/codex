@@ -60,6 +60,10 @@ pub(crate) enum UiNode {
     Underline {
         children: Vec<Option<UiNode>>,
     },
+    /// An inline span with preserved whitespace and its own theme colors.
+    Code {
+        children: Vec<Option<UiNode>>,
+    },
     #[serde(untagged)]
     String(String),
 }

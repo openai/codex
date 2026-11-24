@@ -39,6 +39,253 @@ fn elements_round_trip_and_require_explicit_row_spacing() {
 }
 
 #[test]
+fn code_accepts_inline_children_and_counts_them_toward_tree_limits() {
+    let code = |children: Value| json!({"type":"code","children":children});
+    let literal = code(json!(["cargo test"]));
+    for children in [
+        json!([]),
+        json!(["cargo ", null, {"type":"bold","children":[" test"]}]),
+    ] {
+        let element = code(children);
+        assert_eq!(
+            serde_json::to_value(parse(element.clone()).unwrap()).unwrap(),
+            element
+        );
+    }
+    assert!(parse(code(json!("cargo test"))).is_err());
+    assert!(parse(json!({"type":"code","props":{},"children":["x"]})).is_err());
+    assert!(parse(code(json!(["x".repeat(MAX_TEXT_BYTES)]))).is_ok());
+    assert!(parse(code(json!(["x".repeat(MAX_TEXT_BYTES + 1)]))).is_err());
+
+    let mut children = vec![literal.clone(); 127];
+    children.push(json!(""));
+    let group = |items: &[Value]| json!({"type":"text","children":items});
+    assert!(parse(group(&children)).is_ok());
+    children.push(json!(""));
+    assert!(parse(group(&children)).is_err());
+    let nested = (0..15).fold(literal, |child, _| group(&[child]));
+    assert!(parse(nested.clone()).is_ok());
+    assert!(parse(group(&[nested])).is_err());
+}
+
+#[test]
+fn inline_code_preserves_literal_spacing_and_wraps_in_the_text_flow() {
+    let node = tree(json!({"type":"text","children":[
+        "run ", {"type":"code","children":["printf  '%s'\t`ok`"]}, " now"
+    ]}));
+    insta::assert_snapshot!(painted_rows(&node, Size::new(40, 1)).join("\n"), @"run printf  '%s'        `ok` now");
+    let narrow = tree(json!({"type":"code","children":["foo  bar"]}));
+    assert_eq!(narrow.measure(Size::new(5, 2)), Size::new(5, 2));
+    assert_eq!(painted_rows(&narrow, Size::new(5, 2)), ["foo", "bar"]);
+}
+
+#[test]
+fn prose_before_code_can_wrap_before_a_preserved_space() {
+    let node = tree(json!({"type":"text","children":[
+        "last run ", {"type":"code","children":[{"type":"bold","children":[" pending"]}]}
+    ]}));
+    assert_eq!(
+        painted_rows(&node, Size::new(8, 2)),
+        ["last run", " pending"]
+    );
+    assert_eq!(painted_rows(&node, Size::new(17, 1)), ["last run  pending"]);
+}
+
+#[test]
+fn punctuation_can_wrap_at_the_start_of_a_code_span() {
+    let node = tree(json!({"type":"text","children":[
+        {"type":"code","children":["ci-#12"]}, "-", {"type":"code","children":["#34567"]}
+    ]}));
+    assert_eq!(painted_rows(&node, Size::new(7, 2)), ["ci-#12-", "#34567"]);
+}
+
+#[test]
+fn literal_space_between_sibling_code_spans_can_start_a_line() {
+    let node = tree(json!({"type":"text","children":[
+        {"type":"code","children":["fix-#123"]},
+        {"type":"code","children":[{"type":"bold","children":[" pending"]}]}
+    ]}));
+    assert_eq!(
+        painted_rows(&node, Size::new(8, 2)),
+        ["fix-#123", " pending"]
+    );
+    let node = tree(json!({"type":"code","children":[
+        {"type":"bold","children":["fix-#123"]},
+        {"type":"bold","children":[" pending"]}
+    ]}));
+    assert_eq!(
+        painted_rows(&node, Size::new(8, 3)),
+        ["fix-", "#123", "pending"]
+    );
+}
+
+#[test]
+fn prose_after_code_keeps_one_separator_until_the_line_wraps() {
+    for suffix in [" b", "  \t b"] {
+        let node = tree(json!({"type":"text","children":[
+            {"type":"code","children":["a "]}, suffix
+        ]}));
+        assert_eq!(painted_rows(&node, Size::new(4, 2)), ["a  b"]);
+        let bounds = Size::new(3, 2);
+        assert_eq!(painted_rows(&node, bounds), ["a", "b"]);
+        assert_eq!(node.measure(bounds), Size::new(2, 2));
+    }
+}
+
+#[test]
+fn inline_code_keeps_spaces_and_wraps_across_styled_arguments() {
+    use ratatui::style::Modifier;
+
+    let code = |children: Value| tree(json!({"type":"code","children":children}));
+    let joined = code(json!(["cargo  test"]));
+    let split = code(json!(["cargo ", " test"]));
+    let styled = code(json!(["cargo ", {"type":"bold","children":[" test"]}]));
+    for width in 1..=11 {
+        let bounds = Size::new(width, 11);
+        let expected = painted_rows(&joined, bounds);
+        for node in [&split, &styled] {
+            assert_eq!(node.measure(bounds), joined.measure(bounds));
+            assert_eq!(painted_rows(node, bounds), expected, "width {width}");
+        }
+    }
+    let area = Rect::new(0, 0, 11, 1);
+    insta::assert_snapshot!(painted_rows(&styled, area.as_size()).join("\n"), @"cargo  test");
+    let mut buf = Buffer::empty(area);
+    styled.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+    for x in 0..area.width {
+        assert_eq!(buf[(x, 0)].modifier.contains(Modifier::BOLD), x >= 6);
+    }
+}
+
+#[test]
+fn inline_code_uses_the_subdued_fallback_for_translucent_highlights() {
+    let node = tree(json!({"type":"code","children":["x"]}));
+    let area = Rect::new(0, 0, 1, 1);
+    let background = |highlight: &str| {
+        let mut theme = Theme::default();
+        theme.settings.line_highlight = Some(highlight.parse().unwrap());
+        let mut buf = Buffer::empty(area);
+        node.render(area, &theme, &mut buf, /*plain_style*/ None);
+        buf[(0, 0)].bg
+    };
+    let palette = crate::terminal_probe::DefaultColors {
+        fg: (255, 255, 255),
+        bg: (0, 0, 0),
+    };
+    crate::terminal_palette::with_test_default_colors(palette, || {
+        assert_eq!(
+            background("#ffffff24"),
+            crate::style::user_message_style().bg.unwrap()
+        );
+        assert_eq!(
+            background("#ffffff"),
+            crate::terminal_palette::rgb_color((255, 255, 255))
+        );
+    });
+}
+
+#[test]
+fn wrapped_code_keeps_a_leading_hyphen_with_the_hash() {
+    let bounds = Size::new(8, 3);
+    for children in [
+        json!(["detached-123456789abcdef"]),
+        json!(["detached-", "123456789abcdef"]),
+        json!(["detached-", {"type":"bold","children":["123456789abcdef"]}]),
+    ] {
+        let node = tree(json!({"type":"code","children":children}));
+        assert_eq!(
+            painted_rows(&node, bounds),
+            ["detached", "-1234567", "89abcdef"]
+        );
+    }
+}
+
+#[test]
+fn inline_code_wraps_at_spaces_then_graphemes_and_expands_tabs_on_each_line() {
+    for (literal, width, expected) in [
+        ("a\tb", 10, vec!["a       b"]),
+        ("a\tb", 4, vec!["a", "", "b"]),
+        ("ab cd\tQ", 5, vec!["ab", "cd", "", "Q"]),
+        ("abcdefghij", 5, vec!["abcde", "fghij"]),
+        ("git --help", 5, vec!["git -", "-help"]),
+        ("job-123", 5, vec!["job-", "123"]),
+        ("fix issue-#1234", 10, vec!["fix issue-", "#1234"]),
+        ("sum = -(value)", 7, vec!["sum = -", "(value)"]),
+        ("tmp-*[0-9]", 5, vec!["tmp-*", "[0-9]"]),
+        ("foo?bar", 5, vec!["foo?", "bar"]),
+        ("ls|sha256sum", 6, vec!["ls|sha", "256sum"]),
+        (r"\\server\share", 8, vec![r"\\server", r"\share"]),
+        ("foo/bar", 5, vec!["foo/b", "ar"]),
+        ("/usr/lib/bin", 6, vec!["/usr/l", "ib/bin"]),
+        ("--help", 4, vec!["--", "help"]),
+        ("foo-bar", 5, vec!["foo-", "bar"]),
+        ("e\u{301}  x", 3, vec!["e\u{301}", "x"]),
+    ] {
+        let node = tree(json!({"type":"code","children":[literal]}));
+        assert_eq!(
+            painted_rows(&node, Size::new(width, 4)),
+            expected,
+            "{literal:?}"
+        );
+    }
+    let clipped = tree(json!({"type":"code","children":["abcdefghij"]}));
+    assert_eq!(painted_rows(&clipped, Size::new(5, 1)), ["abcd…"]);
+}
+
+#[test]
+fn inline_code_uses_its_own_foreground_background_and_weight_inside_styled_links() {
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
+    use syntect::highlighting::StyleModifier;
+    use syntect::highlighting::ThemeItem;
+
+    let href = "https://example.com/check";
+    let node = tree(
+        json!({"type":"row","props":{"gap":1,"background":"blue"},"children":[
+            {"type":"bold","children":[{"type":"link","props":{"href":href},"children":[
+                {"type":"code","children":["\u{1b}[31ma  b\u{1b}[0m"]}
+            ]}]},
+            {"type":"text","props":{"color":"red","italic":true},"children":[{"type":"code","children":["X"]}]}
+        ]}),
+    );
+    let area = Rect::new(0, 0, 6, 1);
+    assert_eq!(
+        painted_rows(&node, area.as_size()),
+        [linked_columns("a  b X", 0..4, href)]
+    );
+    let mut theme = Theme::default();
+    theme.settings.line_highlight = Some(syntect::highlighting::Color {
+        r: 3,
+        g: 0,
+        b: 0,
+        a: 0,
+    });
+    theme.scopes.push(ThemeItem {
+        scope: "markup.raw.inline.markdown".parse().unwrap(),
+        style: StyleModifier {
+            foreground: Some(syntect::highlighting::Color {
+                r: 6,
+                g: 0,
+                b: 0,
+                a: 0,
+            }),
+            ..StyleModifier::default()
+        },
+    });
+    let mut buf = Buffer::empty(area);
+    node.render(area, &theme, &mut buf, /*plain_style*/ None);
+    for x in 0..4 {
+        let cell = &buf[(x, 0)];
+        assert_eq!((cell.fg, cell.bg), (Color::Cyan, Color::Yellow));
+        assert_eq!(cell.modifier, Modifier::UNDERLINED);
+    }
+    assert_eq!(buf[(4, 0)].bg, Color::Blue);
+    let last = &buf[(5, 0)];
+    assert_eq!((last.fg, last.bg), (Color::Cyan, Color::Yellow));
+    assert_eq!(last.modifier, Modifier::ITALIC);
+}
+
+#[test]
 fn rejects_invalid_gaps_and_elements() {
     for gap in ["-1", "1.5", "9007199254740992", r#""1""#, "[1]"] {
         let row = format!(r#"{{"children":[],"props":{{"gap":{gap}}},"type":"row"}}"#);
@@ -1118,5 +1365,57 @@ fn nested_row_background_fills_blank_lines_independently_of_siblings() {
                 if sibling.contains('T') { "T" } else { " " }
             );
         }
+    }
+}
+
+#[test]
+fn inline_code_checks_theme_contrast_on_its_fill() {
+    use ratatui::style::Color;
+    use syntect::highlighting::StyleModifier;
+    use syntect::highlighting::ThemeItem;
+
+    let node = tree(json!({"type":"code","children":["X"]}));
+    let area = Rect::new(0, 0, 1, 1);
+    let colors = |color: &str| {
+        let color = Some(color.parse().unwrap());
+        let mut theme = Theme::default();
+        theme.settings.line_highlight = color;
+        theme.scopes.push(ThemeItem {
+            scope: "markup.raw.inline.markdown".parse().unwrap(),
+            style: StyleModifier {
+                foreground: color,
+                ..Default::default()
+            },
+        });
+        let mut buf = Buffer::empty(area);
+        node.render(area, &theme, &mut buf, /*plain_style*/ None);
+        (buf[(0, 0)].fg, buf[(0, 0)].bg)
+    };
+    let palette = crate::terminal_probe::DefaultColors {
+        fg: (255, 255, 255),
+        bg: (0, 0, 0),
+    };
+    crate::terminal_palette::with_test_default_colors(palette, || {
+        let white = crate::terminal_palette::rgb_color((255, 255, 255));
+        assert_eq!(
+            colors("#ffffff"),
+            (crate::style::readable_color_on(white, Some(white)), white)
+        );
+        assert_eq!(colors("#03000000"), (Color::Reset, Color::Reset));
+    });
+}
+
+#[test]
+fn clipped_code_tab_styles_the_marker_only_when_it_paints_cells() {
+    let node = tree(json!({"type":"row","props":{"gap":0},"children":[
+        {"type":"bold","children":["abc"]},{"type":"code","children":["\t"]}
+    ]}));
+    for width in [4, 5] {
+        let area = Rect::new(0, 0, width, 1);
+        let mut buf = Buffer::empty(area);
+        node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+        let marker = &buf[(width - 1, 0)];
+        assert_eq!(marker.symbol(), "…");
+        assert_eq!(marker.style(), buf[(width - 2, 0)].style());
     }
 }

@@ -1,6 +1,7 @@
 //! Resolve typed wire colors against the active theme and terminal palette.
 
 use ratatui::style::Color as TerminalColor;
+use ratatui::style::Style;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -17,6 +18,7 @@ use syntect::parsing::Scope;
 pub(super) struct RenderTheme<'a> {
     theme: &'a Theme,
     highlighter: OnceCell<Highlighter<'a>>,
+    inline_code: OnceCell<(TerminalColor, TerminalColor)>,
     resolved: HashMap<Color, TerminalColor>,
 }
 
@@ -25,6 +27,7 @@ impl<'a> RenderTheme<'a> {
         Self {
             theme,
             highlighter: OnceCell::new(),
+            inline_code: OnceCell::new(),
             resolved: HashMap::new(),
         }
     }
@@ -37,6 +40,41 @@ impl<'a> RenderTheme<'a> {
         let resolved = color.resolve(self);
         self.resolved.insert(color, resolved);
         resolved
+    }
+
+    pub(super) fn inline_code_style(&self, style: Style) -> Style {
+        let &(fg, bg) = self.inline_code.get_or_init(|| {
+            let fg = terminal_color(
+                highlight::foreground_color_for_scopes(
+                    self.highlighter(),
+                    highlight::INLINE_CODE_SCOPES,
+                ),
+                crate::style::accent_color(),
+            );
+            let bg = terminal_color(
+                self.theme
+                    .settings
+                    .line_highlight
+                    // Use the subdued fallback for translucent overlays, retaining
+                    // bat’s alpha-zero ANSI palette encoding.
+                    .filter(|c| matches!(c.a, 0 | 255))
+                    .and_then(highlight::convert_syntect_color),
+                crate::style::user_message_style()
+                    .bg
+                    .unwrap_or(TerminalColor::Reset),
+            );
+            (fg, bg)
+        });
+        let bg = style.bg.unwrap_or(bg);
+        if style.fg.is_some() {
+            return style.bg(bg);
+        }
+        let fg = crate::style::readable_color_on(fg, Some(bg));
+        // The terminal owns the ANSI palette. Use its default pair for an exact collision.
+        if fg == bg {
+            return style.fg(TerminalColor::Reset).bg(TerminalColor::Reset);
+        }
+        style.fg(fg).bg(bg)
     }
 
     // Plain text and literal colors need no TextMate scope matching.

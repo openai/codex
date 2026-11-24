@@ -360,6 +360,11 @@ fn scope_background(
     })
 }
 
+pub(crate) const INLINE_CODE_SCOPES: &[&str] = &[
+    "markup.inline.raw.string.markdown",
+    "markup.raw.inline.markdown",
+];
+
 /// Query the active syntax theme for the first foreground style provided by the
 /// supplied TextMate scopes.
 pub(crate) fn foreground_style_for_scopes(scope_names: &[&str]) -> Option<Style> {

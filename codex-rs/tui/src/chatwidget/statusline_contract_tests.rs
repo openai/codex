@@ -29,6 +29,7 @@ fn statusline_typescript_contract_matches_the_bundled_reference() -> color_eyre:
         "UiTree",
         "RowElement",
         "ColElement",
+        "CodeElement",
         "StatuslineItemId",
         "Color",
     ] {
@@ -59,7 +60,16 @@ fn generate_reference(output: &Path) -> color_eyre::Result<String> {
         "export type StatuslineItemId = {};",
         items.join(" | ")
     )?;
-    for name in ["Text", "Bold", "Italic", "Underline", "Link", "Row", "Col"] {
+    for name in [
+        "Text",
+        "Bold",
+        "Italic",
+        "Underline",
+        "Link",
+        "Row",
+        "Col",
+        "Code",
+    ] {
         let tag = name.to_ascii_lowercase();
         writeln!(
             generated,

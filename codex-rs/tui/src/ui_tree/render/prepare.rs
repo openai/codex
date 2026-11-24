@@ -102,12 +102,17 @@ impl PreparedNode {
         let mut widths = Widths::default();
         for line in &text.lines {
             let mut width = 0;
-            for chunk in line {
-                let cells = chunk.width_cells as u64;
-                widths.minimum = widths.minimum.max(cells);
-                width += cells + u64::from(chunk.trailing_space.is_some());
+            let mut word = 0;
+            for (i, chunk) in line.iter().enumerate() {
+                let cells = chunk.width_at(width);
+                if chunk.prefers_break_before(i) {
+                    word = 0;
+                }
+                word += cells;
+                widths.minimum = widths.minimum.max(word as u64);
+                width += cells + usize::from(chunk.trailing_space.is_some());
             }
-            widths.preferred = widths.preferred.max(width);
+            widths.preferred = widths.preferred.max(width as u64);
         }
         Some(Self {
             kind: NodeKind::Text(text),
@@ -179,10 +184,20 @@ impl PreparedNode {
     }
 
     fn collect_inline(flow: &mut Flow, inline: &mut InlineText, node: UiNode, mut paint: Paint) {
+        let parent_preserves_spaces = paint.inline_code;
         let children = match node {
             UiNode::String(raw) => {
                 inline.push_leaf(raw, paint);
                 return;
+            }
+            UiNode::Code { children } => {
+                paint.inline_code = true;
+                paint.foreground = None;
+                paint.background = None;
+                paint.modifiers = paint
+                    .modifiers
+                    .remove_modifier(ratatui::style::Modifier::BOLD);
+                children
             }
             UiNode::Col { props, children } => {
                 flow.line.extend(Self::text(std::mem::take(inline)));
@@ -234,6 +249,9 @@ impl PreparedNode {
         };
         for node in children.into_iter().flatten() {
             Self::collect_inline(flow, inline, node, paint.clone());
+        }
+        if !parent_preserves_spaces {
+            inline.end_span();
         }
     }
 

@@ -101,7 +101,7 @@ impl<'a> Fragment<'a> {
 
     fn visit(self, limit: usize, mut draw: impl FnMut(usize, &str, usize, &'a Paint)) -> usize {
         match self {
-            Self::Text(chunks, _) => visit_chunks(chunks, limit, draw),
+            Self::Text(chunks, width) => visit_chunks(chunks, limit.min(width), draw),
             Self::BlankLine => 0,
             Self::Padding(width, paint)
             | Self::Gap(width, paint)

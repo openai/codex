@@ -182,11 +182,9 @@ impl MarkdownStyles {
             h4: foreground(&["markup.heading.4.markdown", "markup.heading.markdown"]).italic(),
             h5: foreground(&["markup.heading.5.markdown", "markup.heading.markdown"]).italic(),
             h6: foreground(&["markup.heading.6.markdown", "markup.heading.markdown"]).italic(),
-            code: Style::new().fg(color(&[
-                "markup.inline.raw.string.markdown",
-                "markup.raw.inline.markdown",
-            ])
-            .unwrap_or_else(accent_color)),
+            code: Style::new()
+                .fg(color(crate::render::highlight::INLINE_CODE_SCOPES)
+                    .unwrap_or_else(accent_color)),
             emphasis: foreground(&["markup.italic.markdown"]).italic(),
             strong: foreground(&["markup.bold.markdown"]).bold(),
             strikethrough: Style::new().crossed_out(),

@@ -37,6 +37,7 @@ impl std::str::FromStr for UiTree {
                     }
                 }
                 UiNode::Text { children, .. }
+                | UiNode::Code { children }
                 | UiNode::Bold { children }
                 | UiNode::Italic { children }
                 | UiNode::Underline { children }
