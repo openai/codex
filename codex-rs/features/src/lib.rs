@@ -643,6 +643,7 @@ pub struct Features {
     legacy_usages: BTreeSet<LegacyFeatureUsage>,
     /// Spawned agents require their own opt-in, independent of the root feature flag.
     pub subagent_async_messages_enabled: bool,
+    pub async_messages_in_code_mode: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1058,10 +1059,13 @@ pub struct FeaturesToml {
 
 impl Features {
     fn apply_toml(&mut self, features: &FeaturesToml) {
-        if let Some(FeatureToml::Config(config)) = &features.send_message_to_user_async
-            && let Some(subagents) = config.subagents
-        {
-            self.subagent_async_messages_enabled = subagents;
+        if let Some(FeatureToml::Config(config)) = &features.send_message_to_user_async {
+            if let Some(subagents) = config.subagents {
+                self.subagent_async_messages_enabled = subagents;
+            }
+            if let Some(direct_only) = config.direct_only {
+                self.async_messages_in_code_mode = !direct_only;
+            }
         }
         let entries = features.entries();
         self.apply_map(&entries);

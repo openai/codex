@@ -538,7 +538,8 @@ fn brokered_snapshots_filter_complete_multiline_exports() -> Result<()> {
                     allowed_brokered_keys: &[],
                 },
                 |_| true,
-            );
+            )
+            .with_context(|| format!("{shell}: snapshot rejected multiline export {value:?}"))?;
             let path = dir.path().join("snapshot.sh");
             std::fs::write(&path, snapshot)?;
             let replayed = Command::new(shell)
@@ -560,7 +561,8 @@ fn brokered_snapshots_filter_complete_multiline_exports() -> Result<()> {
             assert_eq!(
                 replayed.stdout,
                 format!("{value}\0unset\0kept\0original name\0original value\0original escaped{function_value}{exported_setting}").as_bytes(),
-                "{shell}"
+                "{shell}: replay stderr: {}",
+                String::from_utf8_lossy(&replayed.stderr)
             );
         }
     }

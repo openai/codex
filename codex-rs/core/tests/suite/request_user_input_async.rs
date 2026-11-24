@@ -20,6 +20,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -291,6 +292,110 @@ async fn freeform_async_message_respects_independent_agent_opt_ins(
             .count(),
         usize::from(expected),
     );
+    Ok(())
+}
+
+#[test_case::test_matrix([ToolMode::Direct, ToolMode::CodeMode, ToolMode::CodeModeOnly], [true, false])]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn freeform_async_message_follows_tool_mode(mode: ToolMode, direct_only: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const TOOL: &str = "send_message_to_user_async";
+    const ACCEPTED: &str = r#"{"accepted":true}"#;
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.2", move |model| {
+            model.tool_mode = Some(mode);
+            model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+        })
+        .with_pre_build_hook(move |home| {
+            let config = format!("{EXPLICIT_ROOT_MESSAGES}\ndirect_only = {direct_only}");
+            std::fs::write(home.join("config.toml"), config).expect("write config");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    // Attempt the direct send even when it is absent from the model's tool list.
+    let args = r#"{"message":"direct"}"#;
+    let mut calls = vec![
+        ev_function_call_with_namespace("direct", "functions", TOOL, args),
+        // Other tools remain callable directly even when CodeModeOnly hides them.
+        ev_function_call_with_namespace("other", "functions", "test_sync_tool", "{}"),
+    ];
+    if mode != ToolMode::Direct {
+        let js =
+            "text(await tools.send_message_to_user_async?.({message: 'nested'}) ?? 'unavailable')";
+        calls.push(ev_custom_tool_call("nested", "exec", js));
+    }
+    calls.push(ev_completed("resp-1"));
+    let done = sse(vec![ev_completed("resp-2")]);
+    let responses = mount_sse_sequence(&server, vec![sse(calls), done]).await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Report progress.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut started = Vec::new();
+    let mut completed = Vec::new();
+    wait_for_event(&test.codex, |event| {
+        match event {
+            EventMsg::ItemStarted(event) => {
+                if let TurnItem::AgentMessage(message) = &event.item {
+                    started.push(message.clone());
+                }
+            }
+            EventMsg::ItemCompleted(event) => {
+                if let TurnItem::AgentMessage(message) = &event.item {
+                    completed.push(message.clone());
+                }
+            }
+            _ => {}
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    let body = requests[0].body_json();
+    let tools = body["tools"].as_array().expect("request tools");
+    let direct = direct_only || mode != ToolMode::CodeModeOnly;
+    assert_eq!(tools.iter().any(|tool| tool["name"] == TOOL), direct);
+    let expected = if direct {
+        ACCEPTED
+    } else {
+        "send_message_to_user_async requires code mode"
+    };
+    assert_eq!(
+        requests[1].function_call_output("direct")["output"],
+        expected
+    );
+    assert_eq!(requests[1].function_call_output("other")["output"], "ok");
+    if mode != ToolMode::Direct {
+        let nested = requests[1].custom_tool_call_output("nested");
+        let expected = if direct_only { "unavailable" } else { ACCEPTED };
+        assert_eq!(nested["output"][1]["text"], expected, "{nested}");
+    }
+    started.sort_by(|left, right| left.id.cmp(&right.id));
+    completed.sort_by(|left, right| left.id.cmp(&right.id));
+    assert_eq!(
+        serde_json::to_value(&started)?,
+        serde_json::to_value(&completed)?,
+    );
+    let expected_messages = [
+        direct.then_some("direct"),
+        (mode != ToolMode::Direct && !direct_only).then_some("nested"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let mut actual_messages = completed
+        .iter()
+        .map(|message| match message.content.as_slice() {
+            [AgentMessageContent::Text { text }] => text.as_str(),
+            content => panic!("unexpected message content: {content:?}"),
+        })
+        .collect::<Vec<_>>();
+    actual_messages.sort_unstable();
+    assert_eq!(actual_messages, expected_messages);
     Ok(())
 }
 

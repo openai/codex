@@ -852,13 +852,11 @@ fn agent_type_description(
     }
 }
 
-fn is_hidden_by_code_mode_only(
-    turn_context: &TurnContext,
-    model_info: &ModelInfo,
+pub(super) fn is_hidden_by_code_mode_only(
+    tool_mode: ToolMode,
     tool_name: &ToolName,
     exposure: ToolExposure,
 ) -> bool {
-    let tool_mode = effective_tool_mode(turn_context, model_info);
     tool_mode == ToolMode::CodeModeOnly
         && exposure.is_available_in_code_mode()
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
@@ -873,8 +871,7 @@ fn is_directly_visible(
 ) -> bool {
     tool.exposure.is_direct()
         && !is_hidden_by_code_mode_only(
-            turn_context,
-            model_info,
+            effective_tool_mode(turn_context, model_info),
             &tool.runtime.tool_name(),
             tool.exposure,
         )
@@ -1322,7 +1319,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     let subagent_messages = features.subagent_async_messages_enabled
         && turn_context.session_source.parent_thread_id().is_some();
     if root_messages || subagent_messages {
-        registry.add_with_exposure(SendMessageToUserAsyncHandler, ToolExposure::DirectModelOnly);
+        let exposure = if features.async_messages_in_code_mode {
+            ToolExposure::Direct
+        } else {
+            ToolExposure::DirectModelOnly
+        };
+        registry.add_with_exposure(SendMessageToUserAsyncHandler, exposure);
     }
 
     if features.enabled(Feature::RequestPermissionsTool) {

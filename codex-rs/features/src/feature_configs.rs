@@ -34,7 +34,7 @@ pub struct ToolRegistryConfigToml {
     pub turn_metadata_includes_tool_info: Option<bool>,
 }
 
-/// Controls which agents can send async user messages.
+/// Controls which agents can send async user messages and how they call the tool.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessageToUserAsyncConfigToml {
@@ -46,6 +46,9 @@ pub struct SendMessageToUserAsyncConfigToml {
     /// and the model catalog. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagents: Option<bool>,
+    /// Keep async user messages top-level only (default). Set to false to follow the session's tool mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_only: Option<bool>,
 }
 
 impl FeatureConfig for SendMessageToUserAsyncConfigToml {

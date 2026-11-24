@@ -131,8 +131,9 @@ async fn incompatible_daemon_can_run_embedded_for_explicit_features() -> Result<
             .context("missing warning line")?;
         insta::assert_snapshot!(snapshot, warning);
         terminal.write_input(b"\x14")?;
-        terminal.write_input(b"/status")?;
-        terminal.wait_for_screen("show current session configuration")?;
+        // Submit the command as one paste event, not a partially buffered key burst.
+        terminal.write_input(b"\x1b[200~/status\x1b[201~")?;
+        terminal.wait_for_screen("/status")?;
         terminal.write_input(b"\r")?;
         terminal.wait_for_screen("Model:")?;
         ensure!(!terminal.screen_contains("unix://"));

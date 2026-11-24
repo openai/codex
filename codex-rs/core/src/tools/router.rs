@@ -18,6 +18,7 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use crate::tools::spec_plan::is_hidden_by_code_mode_only;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_REGISTRATIONS_METRIC;
 use codex_otel::TOOL_REGISTRATIONS_METRIC_BUCKETS;
@@ -425,6 +426,25 @@ impl ToolRouter {
             native_call,
             ..
         } = call;
+
+        // Only async messages require this dispatch restriction; other tools'
+        // exposure remains advertisement policy.
+        if tool_name.is_default_namespace()
+            && tool_name.name == "send_message_to_user_async"
+            && !matches!(source, ToolCallSource::CodeMode { .. })
+            && self
+                .registry
+                .registered_tool(&tool_name)
+                .is_some_and(|tool| {
+                    tool.is_trusted
+                        && is_hidden_by_code_mode_only(self.tool_mode, &tool_name, tool.exposure)
+                })
+        {
+            let tool_name = codex_tools::code_mode_name_for_tool_name(&tool_name);
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{tool_name} requires code mode"
+            )));
+        }
 
         // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
         let turn = Arc::clone(&step_context.turn);

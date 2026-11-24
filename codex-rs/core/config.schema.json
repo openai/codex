@@ -5070,8 +5070,12 @@
     },
     "SendMessageToUserAsyncConfigToml": {
       "additionalProperties": false,
-      "description": "Controls which agents can send async user messages.",
+      "description": "Controls which agents can send async user messages and how they call the tool.",
       "properties": {
+        "direct_only": {
+          "description": "Keep async user messages top-level only (default). Set to false to follow the session's tool mode.",
+          "type": "boolean"
+        },
         "root_agent": {
           "description": "Sets the root agent's feature flag, just like the plain boolean shorthand. The model catalog can still enable the tool for the root when this is false.",
           "type": "boolean"
