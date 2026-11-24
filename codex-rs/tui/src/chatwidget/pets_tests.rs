@@ -87,7 +87,10 @@ async fn configured_pet_loads_are_scoped_across_widget_replacements() {
     let area = ratatui::layout::Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
     );
-    assert!(chat.ambient_pet_draw(area, area.bottom()).is_some());
+    assert!(
+        chat.ambient_pet_draw(area, area.bottom(), /*shortcut_hud_area*/ None)
+            .is_some()
+    );
 }
 
 #[tokio::test]

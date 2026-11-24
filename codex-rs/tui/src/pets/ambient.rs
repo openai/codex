@@ -11,8 +11,6 @@
 //! that does not overlap reserved bottom-pane space. It does not persist pet
 //! selection or decide when modal/popover UI should suppress the sprite.
 
-#[cfg(test)]
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -38,7 +36,6 @@ const PET_TARGET_HEIGHT_PX: u16 = 75;
 const PET_COMPOSER_GAP_PX: u16 = 10;
 const TERMINAL_ROW_HEIGHT_PX: u16 = 15;
 
-const RUNNING_LIFETIME: Duration = Duration::from_secs(3 * 60);
 const FAILED_LIFETIME: Duration = Duration::from_secs(60 * 60);
 const WAITING_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 const REVIEW_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -79,12 +76,12 @@ impl PetNotificationKind {
         }
     }
 
-    fn lifetime(self) -> Duration {
+    fn lifetime(self) -> Option<Duration> {
         match self {
-            Self::Running => RUNNING_LIFETIME,
-            Self::Waiting => WAITING_LIFETIME,
-            Self::Review => REVIEW_LIFETIME,
-            Self::Failed => FAILED_LIFETIME,
+            Self::Running => None,
+            Self::Waiting => Some(WAITING_LIFETIME),
+            Self::Review => Some(REVIEW_LIFETIME),
+            Self::Failed => Some(FAILED_LIFETIME),
         }
     }
 }
@@ -106,7 +103,9 @@ impl PetNotification {
     }
 
     fn is_expired(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.updated_at) >= self.kind.lifetime()
+        self.kind
+            .lifetime()
+            .is_some_and(|lifetime| now.saturating_duration_since(self.updated_at) >= lifetime)
     }
 }
 
@@ -184,6 +183,14 @@ impl AmbientPet {
     pub(crate) fn set_notification(&mut self, kind: PetNotificationKind, body: Option<String>) {
         self.notification = Some(PetNotification::new(kind, body));
         self.animation_started_at = Instant::now();
+    }
+
+    /// A redraw must not restart playback or renew an expired notification.
+    pub(crate) fn sync_notification(&mut self, kind: Option<PetNotificationKind>) {
+        if self.notification.as_ref().map(|n| n.kind) != kind {
+            self.notification = kind.map(|kind| PetNotification::new(kind, /*body*/ None));
+            self.animation_started_at = Instant::now();
+        }
     }
 
     pub(crate) fn set_animations_enabled(&mut self, enabled: bool) {
@@ -401,6 +408,12 @@ fn current_animation_frame(animation: &Animation, elapsed: Duration) -> Option<A
             .iter()
             .map(|frame| frame.duration.as_nanos())
             .sum::<u128>();
+        if elapsed_nanos >= prefix_nanos && loop_start == animation.frames.len() - 1 {
+            return Some(AnimationFrameTick {
+                sprite_index: animation.frames[loop_start].sprite_index,
+                delay: None,
+            });
+        }
         let loop_nanos = animation.frames[loop_start..]
             .iter()
             .map(|frame| frame.duration.as_nanos())
@@ -468,10 +481,12 @@ pub(crate) fn test_ambient_pet(
             columns: 8,
             rows: 9,
             frame_count: 72,
-            animations: HashMap::from([("idle".to_string(), test_animation())]),
+            animations: super::model::with_default_animations(Default::default()),
         },
         support: PetImageSupport::Supported(ImageProtocol::Kitty),
-        frames: vec![PathBuf::from("frame-0.png"), PathBuf::from("frame-1.png")],
+        frames: (0..72)
+            .map(|i| PathBuf::from(format!("frame-{i}.png")))
+            .collect(),
         sixel_dir: PathBuf::new(),
         frame_requester,
         notification: None,
@@ -503,6 +518,7 @@ fn test_animation() -> Animation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn notification_labels_match_codex_app_vocabulary() {
@@ -513,14 +529,46 @@ mod tests {
     }
 
     #[test]
+    fn active_pet_tracks_keep_playing_but_ready_settles_into_idle() {
+        let mut pet = test_ambient_pet(
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
+        let elapsed = Duration::from_secs(181);
+        for (kind, row) in [
+            (PetNotificationKind::Running, 7),
+            (PetNotificationKind::Waiting, 6),
+            (PetNotificationKind::Failed, 5),
+            (PetNotificationKind::Review, 0),
+        ] {
+            pet.sync_notification(Some(kind));
+            let started = pet.animation_started_at;
+            pet.sync_notification(Some(kind));
+            assert_eq!(pet.animation_started_at, started);
+            let notification = pet.visible_notification(started + elapsed).unwrap();
+            let animation = &pet.pet.animations[notification.kind.animation_name()];
+            let frame = current_animation_frame(animation, elapsed).unwrap();
+            assert_eq!(frame.sprite_index / 8, row);
+        }
+    }
+
+    #[test]
     fn animation_frame_uses_per_frame_duration() {
-        let animation = test_animation();
+        let mut animation = test_animation();
 
         assert_eq!(
             current_animation_frame(&animation, Duration::from_millis(/*millis*/ 15)),
             Some(AnimationFrameTick {
                 sprite_index: 1,
                 delay: Some(Duration::from_millis(/*millis*/ 5)),
+            })
+        );
+        animation.loop_start = Some(1);
+        assert_eq!(
+            current_animation_frame(&animation, Duration::from_millis(/*millis*/ 10)),
+            Some(AnimationFrameTick {
+                sprite_index: 1,
+                delay: None,
             })
         );
     }

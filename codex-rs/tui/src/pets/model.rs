@@ -178,7 +178,7 @@ fn load_builtin_pet(pet: catalog::BuiltinPet, codex_home: Option<&Path>) -> Resu
         columns: catalog::DEFAULT_FRAME_COLUMNS,
         rows: catalog::DEFAULT_FRAME_ROWS,
         frame_count: default_frame_count(),
-        animations: default_animations(),
+        animations: with_default_animations(HashMap::new()),
     })
 }
 
@@ -389,12 +389,7 @@ fn load_animations(
     specs: HashMap<String, AnimationSpec>,
     frame_count: usize,
 ) -> Result<HashMap<String, Animation>> {
-    let mut animations = default_animations();
-    if specs.is_empty() {
-        validate_animation_indices(&animations, frame_count)?;
-        return Ok(animations);
-    }
-
+    let mut animations = HashMap::new();
     for (name, spec) in specs {
         if spec.frames.is_empty() {
             bail!("animation {name} must include at least one frame");
@@ -444,9 +439,7 @@ fn load_animations(
         );
     }
 
-    animations
-        .entry("idle".to_string())
-        .or_insert_with(idle_animation);
+    let animations = with_default_animations(animations);
     validate_animation_indices(&animations, frame_count)?;
     Ok(animations)
 }
@@ -481,9 +474,11 @@ fn default_frame_count() -> usize {
     (catalog::DEFAULT_FRAME_COLUMNS * catalog::DEFAULT_FRAME_ROWS) as usize
 }
 
-fn default_animations() -> HashMap<String, Animation> {
-    [
-        ("idle", idle_animation()),
+pub(super) fn with_default_animations(
+    mut animations: HashMap<String, Animation>,
+) -> HashMap<String, Animation> {
+    let idle = animations.remove("idle").unwrap_or_else(idle_animation);
+    for (name, default) in [
         (
             "running-right",
             app_state_animation(
@@ -575,10 +570,19 @@ fn default_animations() -> HashMap<String, Animation> {
                 /*final_frame_duration_ms*/ 240,
             ),
         ),
-    ]
-    .into_iter()
-    .map(|(name, animation)| (name.to_string(), animation))
-    .collect()
+    ] {
+        let custom = animations.contains_key(name);
+        let animation = animations.entry(name.to_string()).or_insert(default);
+        // Task state controls playback even for custom one-shot tracks.
+        match name {
+            "running" | "waiting" | "failed" => animation.loop_start = Some(0),
+            "review" => settle_into_idle(animation, &idle.frames),
+            _ if !custom => settle_into_idle(animation, &idle_animation().frames),
+            _ => {}
+        }
+    }
+    animations.insert("idle".to_string(), idle);
+    animations
 }
 
 fn idle_animation() -> Animation {
@@ -611,24 +615,26 @@ fn app_state_animation(
             }),
         })
         .collect::<Vec<_>>();
-    let primary_frame_count = primary_frames.len() * 3;
-    let frames = primary_frames
-        .iter()
-        .chain(primary_frames.iter())
-        .chain(primary_frames.iter())
-        .cloned()
-        .chain(idle_animation().frames)
-        .collect();
     Animation {
-        frames,
-        loop_start: Some(primary_frame_count),
+        frames: primary_frames,
+        loop_start: Some(/*loop_start*/ 0),
         fallback: "idle".to_string(),
     }
+}
+
+/// Desktop plays a short reaction three times, then loops the idle frames.
+fn settle_into_idle(animation: &mut Animation, idle: &[AnimationFrame]) {
+    let count = animation.frames.len();
+    animation.frames.extend_from_within(..count);
+    animation.frames.extend_from_within(..count);
+    animation.loop_start = Some(animation.frames.len());
+    animation.frames.extend_from_slice(idle);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn write_minimal_pet() -> tempfile::TempDir {
         write_pet_manifest(
@@ -679,7 +685,7 @@ mod tests {
 
     #[test]
     fn app_idle_animation_uses_calm_loop() {
-        let animations = default_animations();
+        let animations = with_default_animations(HashMap::new());
         let idle = &animations["idle"];
 
         assert_eq!(sprite_indices(idle), vec![0, 1, 2, 3, 4, 5]);
@@ -688,28 +694,8 @@ mod tests {
     }
 
     #[test]
-    fn app_running_animation_repeats_then_settles_into_idle() {
-        let animations = default_animations();
-        let running = &animations["running"];
-        let primary = vec![56, 57, 58, 59, 60, 61];
-
-        assert_eq!(sprite_indices(running)[0..6], primary);
-        assert_eq!(sprite_indices(running)[6..12], primary);
-        assert_eq!(sprite_indices(running)[12..18], primary);
-        assert_eq!(
-            sprite_indices(running)[18..],
-            sprite_indices(&animations["idle"])
-        );
-        assert_eq!(
-            durations_ms(running)[0..6],
-            vec![120, 120, 120, 120, 120, 220]
-        );
-        assert_eq!(running.loop_start, Some(/*loop_start*/ 18));
-    }
-
-    #[test]
     fn app_notification_states_use_expected_rows() {
-        let animations = default_animations();
+        let animations = with_default_animations(HashMap::new());
 
         assert_eq!(
             sprite_indices(&animations["waiting"])[0..6],
@@ -726,20 +712,27 @@ mod tests {
     }
 
     #[test]
-    fn custom_animation_specs_keep_manifest_fps_and_loop_shape() {
+    fn custom_task_tracks_follow_state_and_other_tracks_honor_manifest() {
         let animations = load_animations(
-            HashMap::from([(
-                "custom".to_string(),
-                AnimationSpec {
-                    frames: vec![1, 2],
-                    fps: Some(/*fps*/ 2.0),
-                    loop_animation: Some(/*loop_animation*/ false),
-                    fallback: "idle".to_string(),
-                },
-            )]),
+            ["custom", "running", "review"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        AnimationSpec {
+                            frames: vec![1, 2],
+                            fps: Some(/*fps*/ 2.0),
+                            loop_animation: Some(/*loop_animation*/ false),
+                            fallback: "idle".to_string(),
+                        },
+                    )
+                })
+                .collect(),
             default_frame_count(),
         )
         .unwrap();
+        assert_eq!(animations["running"].loop_start, Some(0));
+        assert_eq!(animations["review"].loop_start, Some(6));
         let custom = &animations["custom"];
 
         assert_eq!(sprite_indices(custom), vec![1, 2]);

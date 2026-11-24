@@ -3,15 +3,30 @@
 
 use super::*;
 use crate::terminal_program_status::ProgramStatus;
-use crate::terminal_program_status::ProgramStatusKind;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn program_status_tracks_live_results_and_resolved_approvals() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let mut statuses = vec![chat.desired_program_status()];
+    chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let status = |chat: &mut ChatWidget| {
+        chat.pre_draw_tick();
+        let area = ratatui::layout::Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+        );
+        // Inspect the selected sprite even when an approval modal covers it.
+        let draw = chat
+            .ambient_pet
+            .as_ref()
+            .unwrap()
+            .draw_request(area, area.bottom())
+            .unwrap();
+        let status = chat.desired_program_status();
+        format!("{status:?} {}", draw.frame.display())
+    };
+    let mut statuses = vec![status(&mut chat)];
     handle_turn_started(&mut chat, "status-turn");
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     handle_exec_approval_request(
         &mut chat,
         "status-approval",
@@ -31,18 +46,18 @@ async fn program_status_tracks_live_results_and_resolved_approvals() {
             available_decisions: None,
         },
     );
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     handle_turn_completed(&mut chat, "status-turn", /*duration_ms*/ None);
-    statuses.push(chat.desired_program_status());
-    chat.pre_draw_tick();
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
+    // A second draw must leave the unread result in place.
+    statuses.push(status(&mut chat));
     chat.acknowledge_program_status();
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     handle_turn_started(&mut chat, "cancelled-turn");
     handle_turn_interrupted(&mut chat, "cancelled-turn");
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     handle_turn_started(&mut chat, "failed-turn");
     chat.handle_server_notification(
         ServerNotification::TurnCompleted(TurnCompletedNotification {
@@ -56,24 +71,21 @@ async fn program_status_tracks_live_results_and_resolved_approvals() {
         }),
         /*replay_kind*/ None,
     );
-    statuses.push(chat.desired_program_status());
+    statuses.push(status(&mut chat));
     chat.acknowledge_program_status();
-    statuses.push(chat.desired_program_status());
-    assert_eq!(
-        statuses,
-        [
-            ProgramStatus::Idle,
-            ProgramStatus::Working,
-            ProgramStatus::Blocked(ProgramStatusKind::Permission),
-            ProgramStatus::Working,
-            ProgramStatus::Done,
-            ProgramStatus::Done,
-            ProgramStatus::Idle,
-            ProgramStatus::Idle,
-            ProgramStatus::Error,
-            ProgramStatus::Idle,
-        ]
-    );
+    statuses.push(status(&mut chat));
+    insta::assert_snapshot!(statuses.join("\n"), @r"
+    Idle frame-0.png
+    Working frame-56.png
+    Blocked(Permission) frame-48.png
+    Working frame-56.png
+    Done frame-64.png
+    Done frame-64.png
+    Idle frame-0.png
+    Idle frame-0.png
+    Error frame-40.png
+    Idle frame-0.png
+    ");
 }
 
 #[tokio::test]
