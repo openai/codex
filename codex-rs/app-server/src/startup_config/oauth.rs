@@ -18,6 +18,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::StartupGatewayOAuthChangedNotification;
+use codex_config::ConfigServerResolution;
 use codex_login::OAuthSessionManager;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -36,19 +37,32 @@ use tokio_util::sync::CancellationToken;
 // bootstrap settings to resolve the grant without fetching policy again.
 async fn discover_session(
     manager: &ConfigManager,
+    resolution: &mut Option<ConfigServerResolution>,
 ) -> Result<Option<OAuthSessionManager>, JSONRPCErrorError> {
     let bootstrap = manager
         .load_startup_config(std::env::current_dir().ok())
         .await
         .map_err(startup_error)?
         .config;
-    codex_cloud_config::managed_config_auth_manager(
-        bootstrap.auth_config(),
-        bootstrap.config_layer_stack.requirements_toml(),
+    let previous = resolution.take();
+    let Some(server) = &bootstrap
+        .config_layer_stack
+        .requirements_toml()
+        .config_server
+    else {
+        return Ok(None);
+    };
+    let auth = bootstrap.auth_config();
+    let (resolved, session) = codex_cloud_config::config_server_auth_manager(
+        server,
+        auth.codex_home,
+        &auth.auth_route_config,
+        previous.as_ref(),
     )
     .await
-    .map(|session| session.and_then(|(_, manager)| manager))
-    .map_err(|_| config_server_login_failed("Could not initialize configuration server sign-in"))
+    .map_err(|_| config_server_login_failed("Could not initialize configuration server sign-in"))?;
+    *resolution = Some(resolved);
+    Ok(session)
 }
 
 struct Attempt {
@@ -117,6 +131,7 @@ async fn start_login(
     id: RequestId,
     params: GatewayOAuthLoginParams,
     manager: &ConfigManager,
+    resolution: &mut Option<ConfigServerResolution>,
     active: &mut Option<Attempt>,
 ) -> Result<StartupGatewayOAuthChangedNotification, JSONRPCErrorError> {
     if params.target != Some(GatewayOAuthTarget::ConfigServer) || params.model_provider.is_some() {
@@ -132,9 +147,11 @@ async fn start_login(
     if active.is_some() {
         return Err(invalid_request("Sign-in already in progress"));
     }
-    let session = discover_session(manager).await?.ok_or_else(|| {
-        config_server_login_failed("Configuration server OAuth is not configured")
-    })?;
+    let session = discover_session(manager, resolution)
+        .await?
+        .ok_or_else(|| {
+            config_server_login_failed("Configuration server OAuth is not configured")
+        })?;
     let (attempt, handoff) = Attempt::start(id, session).await?;
     *active = Some(attempt);
     Ok(handoff)
@@ -143,6 +160,7 @@ async fn start_login(
 async fn handle_request(
     line: &str,
     manager: &ConfigManager,
+    resolution: &mut Option<ConfigServerResolution>,
     active: &mut Option<Attempt>,
     output: &mut (impl AsyncWrite + Unpin),
 ) -> io::Result<()> {
@@ -150,7 +168,7 @@ async fn handle_request(
     let id = raw.id.clone();
     if !matches!(
         raw.method.as_str(),
-        "account/gatewayOAuth/login" | "account/gatewayOAuth/cancel"
+        "configRequirements/read" | "account/gatewayOAuth/login" | "account/gatewayOAuth/cancel"
     ) {
         return write(
             output,
@@ -159,8 +177,34 @@ async fn handle_request(
         .await;
     }
     let result = match ClientRequest::try_from(raw) {
+        Ok(ClientRequest::ConfigRequirementsRead { .. }) if active.is_some() => {
+            Err(invalid_request("Sign-in already in progress"))
+        }
+        Ok(ClientRequest::ConfigRequirementsRead { .. }) => {
+            let probe = manager.startup_probe();
+            let result =
+                super::read_startup_config(&probe, /*sign_out*/ false, resolution.as_ref()).await;
+            // Keep successful discovery even when the policy read requires sign-in.
+            *resolution = probe
+                .current_managed_config_loader()
+                .config_server_resolution()
+                .cloned();
+            result.map(|config| {
+                let mut response = json!(config.config_requirements);
+                response["appServerVersion"] = json!(config.app_server_version);
+                response
+            })
+        }
         Ok(ClientRequest::GatewayOAuthLogin { params, .. }) => {
-            match start_login(id.clone(), params.unwrap_or_default(), manager, active).await {
+            match start_login(
+                id.clone(),
+                params.unwrap_or_default(),
+                manager,
+                resolution,
+                active,
+            )
+            .await
+            {
                 Ok(handoff) => {
                     return write(
                         output,
@@ -191,6 +235,7 @@ pub(super) async fn serve(
 ) -> io::Result<()> {
     let mut requests = BufReader::new(input).lines();
     let mut active: Option<Attempt> = None;
+    let mut resolution = None;
     loop {
         let line = if let Some(attempt) = active.as_mut() {
             tokio::select! {
@@ -207,6 +252,6 @@ pub(super) async fn serve(
             requests.next_line().await
         }?;
         let Some(line) = line else { return Ok(()) };
-        handle_request(&line, &manager, &mut active, &mut output).await?;
+        handle_request(&line, &manager, &mut resolution, &mut active, &mut output).await?;
     }
 }

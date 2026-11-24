@@ -854,9 +854,16 @@ the app server. If a required configuration server uses OAuth and needs a new
 grant, the command exits with an error whose `data` contains
 `"reason": "configServer"` and `"action": "configServerLogin"`.
 
-When the action is `configServerLogin`, start `codex app-server --startup-oauth`.
+To share OAuth discovery across startup and sign-in, start
+`codex app-server --startup-oauth` and send
+`{"id":0,"method":"configRequirements/read"}`. The result is the usual
+requirements response with an additional `appServerVersion` field. The helper
+performs the same validation and reports the same errors as
+`--print-startup-config`.
+
 This dedicated stdio connection accepts one JSON request per line without an
 initialize handshake. Each reply echoes the string or integer request ID.
+If the read reports `configServerLogin`, keep the connection open.
 
 1. After the user chooses Sign in, send
    `{"id":1,"method":"account/gatewayOAuth/login","params":{"target":{"kind":"configServer"}}}`.
@@ -869,8 +876,11 @@ initialize handshake. Each reply echoes the string or integer request ID.
    success, or an error on failure. To cancel, send
    `{"id":2,"method":"account/gatewayOAuth/cancel"}`. Closing stdin also ends the
    pending attempt.
-4. On success, close the pipe and rerun `--print-startup-config`. Continue startup
-   only with the validated requirements.
+4. On success, send `configRequirements/read` again on the same pipe. The
+   helper reloads policy with the saved credentials and reuses OAuth discovery
+   if the server and proxy settings still match. Close the pipe and continue
+   only after validating the requirements. Older clients can still use the
+   one-shot command before and after sign-in.
 
 # Item history anchors
 

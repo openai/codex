@@ -181,8 +181,9 @@ pub async fn config_server_auth_manager(
     service_config: &ConfigServer,
     codex_home: PathBuf,
     routes: &AuthRouteConfig,
+    previous: Option<&ConfigServerResolution>,
 ) -> std::io::Result<(ConfigServerResolution, Option<OAuthSessionManager>)> {
-    let resolution = resolve_config_server(service_config, routes, /*previous*/ None).await?;
+    let resolution = resolve_config_server(service_config, routes, previous).await?;
     let factory = config_server_http_client_factory(&resolution.resolved, routes);
     let manager =
         oauth_session_manager(resolution.resolved.oauth.as_deref(), codex_home, &factory)?;

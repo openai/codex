@@ -578,7 +578,7 @@ pub async fn run_main_with_transport_options(
     )
     .with_mcp_launch_cwds(runtime_options.plugin_mcp_launch.into_cwds()?);
     let startup = config_manager
-        .load_managed_startup_config(startup_cwd.clone())
+        .load_managed_startup_config(startup_cwd.clone(), /*previous*/ None)
         .await?;
     let mut config_warnings = Vec::new();
     let mut plugin_startup_config = PluginStartupConfig::Current;

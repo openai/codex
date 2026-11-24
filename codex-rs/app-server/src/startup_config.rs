@@ -41,7 +41,7 @@ pub struct StartupConfigArgs {
     )]
     pub startup_sign_out: bool,
 
-    /// Serve only configuration-server OAuth requests over standard input and output.
+    /// Serve startup requirements and configuration-server OAuth requests over standard input and output.
     #[arg(long, group = "startup_mode", conflicts_with_all = ["listen", "stdio", "remote_control", "managed_daemon"])]
     pub startup_oauth: bool,
 
@@ -81,7 +81,9 @@ pub async fn print_startup_config(
         return oauth::serve(manager, tokio::io::stdin(), tokio::io::stdout()).await;
     }
     let result = match manager {
-        Ok(manager) => read_startup_config(manager, startup.startup_sign_out).await,
+        Ok(manager) => {
+            read_startup_config(&manager, startup.startup_sign_out, /*previous*/ None).await
+        }
         Err(error) => Err(error),
     };
     let output = match &result {
@@ -98,8 +100,9 @@ pub async fn print_startup_config(
 }
 
 async fn read_startup_config(
-    manager: ConfigManager,
+    manager: &ConfigManager,
     sign_out: bool,
+    previous: Option<&codex_config::ConfigServerResolution>,
 ) -> Result<StartupConfig, JSONRPCErrorError> {
     if sign_out && (is_workload_identity_selected() || read_codex_access_token_from_env().is_some())
     {
@@ -109,7 +112,7 @@ async fn read_startup_config(
     }
     let cwd = std::env::current_dir().ok();
     let loaded = manager
-        .load_managed_startup_config(cwd.clone())
+        .load_managed_startup_config(cwd.clone(), previous)
         .await
         .map_err(startup_error)?;
     let config = match loaded.config {
@@ -141,8 +144,8 @@ async fn read_startup_config(
         .await
         .map_err(|error| startup_error(io::Error::other(error)))?;
         set_default_client_residency_requirement(config.enforce_residency.value());
-        let config = logout_configured_account(&manager, &auth, &config).await?;
-        clear_account_configuration(&manager, &config).await?;
+        let config = logout_configured_account(manager, &auth, &config).await?;
+        clear_account_configuration(manager, &config).await?;
         manager
             .update_managed_config_loader(Arc::clone(&auth), &config)
             .await;

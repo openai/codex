@@ -29,9 +29,14 @@ pub async fn managed_config_auth_manager(
     let Some(service_config) = requirements.config_server.as_ref() else {
         return Ok(None);
     };
-    crate::config_server_auth_manager(service_config, auth.codex_home, &auth.auth_route_config)
-        .await
-        .map(Some)
+    crate::config_server_auth_manager(
+        service_config,
+        auth.codex_home,
+        &auth.auth_route_config,
+        /*previous*/ None,
+    )
+    .await
+    .map(Some)
 }
 
 /// How to sign in when the config server has no saved OAuth grant.
@@ -87,13 +92,14 @@ pub async fn managed_config_bundle_loader(
     codex_home: PathBuf,
     factory: HttpClientFactory,
     requirements: &ConfigRequirementsToml,
+    previous: Option<&ConfigServerResolution>,
 ) -> CloudConfigBundleLoader {
     if let Some(service_config) = requirements.config_server.as_ref() {
         return crate::config_server_bundle_loader(
             service_config.clone(),
             codex_home,
             &codex_login::AuthRouteConfig::from_http_client_factory(factory),
-            /*previous*/ None,
+            previous,
         )
         .await;
     }
