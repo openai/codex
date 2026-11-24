@@ -3153,6 +3153,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.4.0",
+ "http-body-util",
  "hyper-util",
  "iana-time-zone",
  "image",

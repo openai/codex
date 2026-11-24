@@ -9,6 +9,7 @@ use codex_code_mode_protocol::CodeModeProcessMetricsSample;
 use codex_code_mode_protocol::grpc;
 use tonic::Code;
 
+use super::GrpcCallKind;
 use super::GrpcCodeModeSessionProvider;
 
 pub(super) async fn sample(
@@ -18,6 +19,7 @@ pub(super) async fn sample(
     tokio::time::timeout(deadline, async {
         let client = provider.transport.client().await?;
         let mut request = tonic::Request::new(grpc::GetProcessMetricsRequest {});
+        request.extensions_mut().insert(GrpcCallKind::Observation);
         request.set_timeout(deadline);
         match client.as_ref().clone().get_process_metrics(request).await {
             Ok(response) => {

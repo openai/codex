@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! Deterministic child failures around channel selection and session recovery.
+//! Child retirement and failure recovery around channel selection.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -21,9 +21,7 @@ use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tonic::Status;
 use tonic::body::Body;
-use tower::ServiceExt;
 use tower::service_fn;
 
 use super::super::HostTransport;
@@ -88,17 +86,14 @@ async fn child_exit_after_channel_selection_does_not_replay_execution() -> Resul
             async move {
                 // Exercise the production selector, pausing exactly between
                 // selecting a live generation and dispatching to that channel.
-                let channel = transport.channel(request.uri().path())?;
+                let rpc = transport.select(request.extensions())?;
                 if request.uri().path() == "/codex.code_mode.v1.CodeModeHost/Execute"
                     && armed.swap(false, Ordering::SeqCst)
                 {
                     selected.notify_one();
                     dispatch.acquire().await.unwrap().forget();
                 }
-                channel
-                    .oneshot(request)
-                    .await
-                    .map_err(|error| Status::from_error(Box::new(error)))
+                rpc.send(request).await
             }
         }
     }));
@@ -185,5 +180,76 @@ async fn child_exit_after_channel_selection_does_not_replay_execution() -> Resul
     for session in sessions {
         session.shutdown().await.map_err(anyhow::Error::msg)?;
     }
+    Ok(())
+}
+
+/// Advance through a quiet period with real pipes and no outstanding unary RPCs.
+async fn elapse(duration: Duration) {
+    tokio::time::pause();
+    tokio::time::sleep(duration).await;
+    tokio::time::resume();
+}
+
+#[tokio::test]
+async fn idle_host_is_reused_then_reaped_after_last_session_closes() -> Result<()> {
+    let recorder = CodeModeHostRecorder::new()?;
+    let provider = ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(recorder.program());
+    let (first, second) = tokio::try_join!(provider.create_session(), provider.create_session())
+        .map_err(anyhow::Error::msg)?;
+    let pid = recorder.pid()?;
+    execute(&second, r#"store("answer", 42);"#).await?;
+    first.shutdown().await.map_err(anyhow::Error::msg)?;
+    elapse(Duration::from_secs(/*secs*/ 6)).await;
+    assert_eq!(
+        execute(&second, r#"text(load("answer"));"#).await?,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: "42".to_string()
+        }]
+    );
+    second.shutdown().await.map_err(anyhow::Error::msg)?;
+
+    let interval = Duration::from_secs(/*secs*/ 3);
+    elapse(interval).await;
+    let third = provider
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    third.shutdown().await.map_err(anyhow::Error::msg)?;
+    // Cross the first deadline. Sampling must observe the fresh grace period
+    // without extending it.
+    elapse(interval).await;
+    assert_eq!(
+        provider
+            .sample_process_metrics()
+            .await
+            .map_err(anyhow::Error::msg)?,
+        CodeModeProcessMetricsSample::Unsupported
+    );
+    elapse(interval).await;
+    assert_eq!(
+        provider
+            .sample_process_metrics()
+            .await
+            .map_err(anyhow::Error::msg)?,
+        CodeModeProcessMetricsSample::NotRunning
+    );
+    timeout(TEST_TIMEOUT, async {
+        while unsafe {
+            libc::kill(pid as libc::pid_t, /*sig*/ 0)
+        } == 0
+        {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await
+    .context("idle child was not reaped")?;
+    assert_eq!(recorder.invocations()?.len(), 1);
+
+    let fresh = provider
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    execute(&fresh, "text(1);").await?;
+    assert_eq!(recorder.invocations()?.len(), 2);
     Ok(())
 }

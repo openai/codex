@@ -19,8 +19,8 @@ use tower::ServiceExt;
 use tower::service_fn;
 use tower::util::BoxCloneSyncService;
 
+use super::GrpcCallKind;
 use super::GrpcClient;
-use super::SessionAdmission;
 
 pub(super) type GrpcTransport = BoxCloneSyncService<Request<Body>, Response<Body>, Status>;
 
@@ -121,7 +121,7 @@ impl SharedTransport {
             let transport = service_fn(move |request: Request<Body>| {
                 let client = client.clone();
                 async move {
-                    let admission = request.extensions().get::<SessionAdmission>().is_some();
+                    let kind = request.extensions().get::<GrpcCallKind>().copied();
                     let request =
                         request.map(|body| reqwest::Body::wrap_stream(body.into_data_stream()));
                     let request = reqwest::Request::try_from(request)
@@ -145,7 +145,9 @@ impl SharedTransport {
                             status
                         })?
                         .into_http_response();
-                    if admission && response.status() == StatusCode::SERVICE_UNAVAILABLE {
+                    if kind == Some(GrpcCallKind::Admission)
+                        && response.status() == StatusCode::SERVICE_UNAVAILABLE
+                    {
                         // A 503 cannot grant a lease. Leave headers and trailers for tonic
                         // to read the gRPC status, or infer Unavailable when it is absent.
                         return Ok(response.map(|body| {

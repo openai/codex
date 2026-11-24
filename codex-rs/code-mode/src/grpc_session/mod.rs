@@ -75,8 +75,15 @@ where
     }
 }
 
-#[derive(Clone)]
-struct SessionAdmission;
+/// Request extension for calls with special host lifecycle requirements.
+/// Untagged calls need a running host and keep it active.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrpcCallKind {
+    /// Opens a session and may start or replace the host.
+    Admission,
+    /// Samples a running host without extending its lifetime.
+    Observation,
+}
 
 const SHUTDOWN_ERROR: &str = "code mode session is shutting down";
 const ROUTE_HEADER: &str = "x-code-mode-route";
@@ -204,7 +211,7 @@ impl GrpcCodeModeSessionProvider {
                         }
                     },
                 });
-                request.extensions_mut().insert(SessionAdmission);
+                request.extensions_mut().insert(GrpcCallKind::Admission);
                 inject_span_traceparent(&mut request, &open_session_span);
                 let result = async {
                     let response = client.as_ref().clone().open_session(request).await?;
