@@ -55,7 +55,7 @@ async fn enrich_loaded_thread(
     let Ok(loaded_thread) = thread_manager.get_thread(thread_id).await else {
         return;
     };
-    let config_snapshot = loaded_thread.config_snapshot().await;
+    let config_snapshot = loaded_thread.configured_snapshot().await;
     apply_live_thread_settings(thread, &loaded_thread, &config_snapshot);
     if !matches!(
         &thread.source,

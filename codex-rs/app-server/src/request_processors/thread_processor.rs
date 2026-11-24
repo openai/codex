@@ -3396,7 +3396,7 @@ impl ThreadRequestProcessor {
         let persisted = self
             .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
             .await?;
-        let config_snapshot = loaded_thread.config_snapshot().await;
+        let config_snapshot = loaded_thread.configured_snapshot().await;
         if include_turns && config_snapshot.ephemeral {
             return Err(ThreadReadViewError::InvalidRequest(
                 "ephemeral threads do not support includeTurns".to_string(),

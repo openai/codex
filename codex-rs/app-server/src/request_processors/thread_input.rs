@@ -23,7 +23,7 @@ pub(super) fn can_accept_direct_input(
 pub(super) async fn ensure_direct_input_allowed(
     thread: &CodexThread,
 ) -> Result<(), JSONRPCErrorError> {
-    let config_snapshot = thread.config_snapshot().await;
+    let config_snapshot = thread.configured_snapshot().await;
     if !can_accept_direct_input(
         thread.multi_agent_version(),
         &config_snapshot.session_source,

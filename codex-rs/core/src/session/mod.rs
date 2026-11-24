@@ -2395,6 +2395,12 @@ impl Session {
             .model
     }
 
+    pub(crate) async fn configured_snapshot(&self) -> ThreadConfigSnapshot {
+        let state = self.state.lock().await;
+        let configuration = &state.session_configuration;
+        configuration.thread_config_snapshot(configuration.environments.clone())
+    }
+
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         self.resume_config_snapshot().await.0
     }
@@ -4316,7 +4322,7 @@ impl Session {
         {
             mark_thread_memory_mode_polluted_if_external_context(self, turn_context, item).await;
         }
-        self.send_raw_response_items(turn_context, &response_items)
+        self.send_raw_response_items(&turn_context.sub_id, &response_items)
             .await;
         Ok(recorded_through)
     }
@@ -5186,19 +5192,15 @@ impl Session {
     }
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
-    async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
+    async fn send_raw_response_items(&self, sub_id: &str, items: &[ResponseItem]) {
         for item in items {
             self.services
                 .rollout_thread_trace
-                .record_history_item_accepted(
-                    &turn_context.sub_id,
-                    item,
-                    /*source_tool_call_id*/ None,
-                );
-            self.send_event(
-                turn_context,
-                EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
-            )
+                .record_history_item_accepted(sub_id, item, /*source_tool_call_id*/ None);
+            self.send_event_raw(Event {
+                id: sub_id.to_owned(),
+                msg: EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+            })
             .await;
         }
     }

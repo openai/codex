@@ -1407,6 +1407,13 @@ impl CodexThread {
             .await
     }
 
+    /// Captures local settings for thread views and input ownership checks.
+    /// The service tier is the configured selection. Use [`Self::config_snapshot`]
+    /// when the tier must be validated against the selected model.
+    pub async fn configured_snapshot(&self) -> ThreadConfigSnapshot {
+        self.session.configured_snapshot().await
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.session.thread_config_snapshot().await
     }

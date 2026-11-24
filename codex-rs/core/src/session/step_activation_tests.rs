@@ -2,6 +2,7 @@ use super::*;
 use crate::McpRefreshReason;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
+use crate::context::UserGoalUpdate;
 use crate::session::Submission;
 use crate::session::handlers::submission_loop;
 use crate::session::step_context::StepContext;
@@ -48,6 +49,7 @@ use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnAbortReason;
 use pretty_assertions::assert_eq;
@@ -416,6 +418,59 @@ impl ModelsManager for GatedModelsManager {
             self.inner.get_model_info(model, config).await
         })
     }
+}
+
+#[tokio::test]
+async fn thread_metadata_and_goal_recording_do_not_resolve_the_selected_model() {
+    let (mut session, _) = make_session_and_context().await;
+    let (tx_event, rx_event) = async_channel::unbounded();
+    session.tx_event = tx_event;
+    let (models, lookup) = GatedModelsManager::new(activation_models());
+    session.services.models_manager = models;
+    let configuration = &mut session.state.get_mut().session_configuration;
+    let settings = Arc::make_mut(&mut configuration.step_settings);
+    settings.collaboration_mode = settings.collaboration_mode.with_updates(
+        Some(MODEL_B.to_owned()),
+        /*effort*/ None,
+        /*developer_instructions*/ None,
+    );
+    settings.service_tier = Some("unsupported".into());
+
+    // The first lookup of MODEL_B blocks until we release it.
+    let local = tokio::select! {
+        snapshot = session.configured_snapshot() => snapshot,
+        _ = lookup.started.notified() => panic!("thread metadata requested model info"),
+    };
+    assert_eq!(local.model, MODEL_B);
+    assert_eq!(local.service_tier.as_deref(), Some("unsupported"));
+
+    let update = UserGoalUpdate::Set {
+        objective: Some("Keep the existing tests".into()),
+        status: None,
+    };
+    tokio::select! {
+        result = session.record_user_goal_update(update) => result.expect("record goal"),
+        _ = lookup.started.notified() => panic!("goal recording requested model info"),
+    }
+    let event = rx_event.try_recv().expect("goal event");
+    let EventMsg::RawResponseItem(raw) = event.msg else {
+        panic!("expected raw goal instruction");
+    };
+    assert_eq!(raw.item.turn_id(), Some(event.id.as_str()));
+    assert!(
+        UserGoalUpdate::message_text(&raw.item)
+            .unwrap()
+            .contains("Keep the existing tests")
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items().last(),
+        Some(&raw.item)
+    );
+
+    lookup.release();
+    let effective = session.thread_config_snapshot().await;
+    assert_eq!(effective.model, local.model);
+    assert_eq!(effective.service_tier, None);
 }
 
 struct ActivationFixture {

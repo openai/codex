@@ -19,6 +19,7 @@ use codex_history::RetainedUserMessage;
 use codex_history::RolloutItem;
 use codex_protocol::models::ResponseItem;
 use codex_thread_store::PersistContext;
+use codex_utils_output_truncation::TruncationPolicy;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -85,14 +86,12 @@ impl Session {
         &self,
         update: UserGoalUpdate,
     ) -> std::io::Result<()> {
-        // Goal metadata must not initialize a model step, even on a goal-first thread.
-        // Keep context construction off callers' stacks, including the TUI RPC dispatcher.
-        let context = Box::pin(self.new_inject_items_context()).await;
+        let sub_id = self.next_internal_sub_id();
         // Earlier Code Mode messages may need the persistence lock before this can return.
         let user_input_order = self.reserve_user_input_order().await;
         let _guard = thread_settings::acquire_persistence_lock(self).await;
         let mut item = ContextualUserFragment::into(update);
-        Self::stamp_response_item_for_history(&mut item, &context.sub_id);
+        Self::stamp_response_item_for_history(&mut item, &sub_id);
         self.assign_missing_response_item_id(&mut item);
         let mut item = ResponseItemEnvelope {
             item,
@@ -117,9 +116,10 @@ impl Session {
             .await?;
         self.state.lock().await.history.record_annotated_items(
             std::slice::from_mut(&mut item),
-            context.model_info().truncation_policy.into(),
+            // This is a user message. Only tool outputs use the truncation policy.
+            TruncationPolicy::Bytes(0),
         );
-        self.send_raw_response_items(&context, std::slice::from_ref(&item.item))
+        self.send_raw_response_items(&sub_id, std::slice::from_ref(&item.item))
             .await;
         Ok(())
     }
