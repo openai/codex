@@ -1432,56 +1432,6 @@ const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 const MCP_TOOL_CONNECTED_ACCOUNT_EMAIL_META_KEY: &str = "connected_account_email";
 const MCP_TOOL_RESOURCE_URI_META_KEY: &str = "resource_uri";
 
-#[cfg(test)]
-async fn custom_mcp_tool_approval_mode(
-    sess: &Session,
-    turn_context: &TurnContext,
-    server: &str,
-    tool_name: &str,
-) -> AppToolApproval {
-    let user_configured_mode = turn_context
-        .config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("mcp_servers"))
-        .cloned()
-        .and_then(|value| {
-            HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
-        })
-        .and_then(|servers| {
-            let server_config = servers.get(server)?;
-            Some(
-                server_config
-                    .tools
-                    .get(tool_name)
-                    .and_then(|tool| tool.approval_mode)
-                    .or(server_config.default_tools_approval_mode)
-                    .unwrap_or_default(),
-            )
-        });
-    if let Some(user_configured_mode) = user_configured_mode {
-        return user_configured_mode;
-    }
-
-    sess.services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await
-        .plugins()
-        .iter()
-        .filter(|plugin| plugin.is_active())
-        .find_map(|plugin| {
-            let server_config = plugin.mcp_servers.get(server)?;
-            server_config
-                .tools
-                .get(tool_name)
-                .and_then(|tool| tool.approval_mode)
-                .or(server_config.default_tools_approval_mode)
-        })
-        .unwrap_or_default()
-}
-
 fn build_mcp_tool_call_request_meta(
     step_context: &StepContext,
     server: &str,

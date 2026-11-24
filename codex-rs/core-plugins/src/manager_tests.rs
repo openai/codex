@@ -3355,6 +3355,20 @@ enabled = false"#,
     let second_snapshots = manager
         .plugin_skill_snapshots_for_config(&second_config)
         .expect("second configuration snapshots");
+    let approval_config = config(
+        r#"[plugins."sample@test".mcp_servers.sample.tools.search]
+approval_mode = "approve""#,
+    );
+    let approval_outcome = manager.plugins_for_config(&approval_config).await;
+    assert_eq!(
+        approval_outcome.plugins()[0].mcp_servers["sample"]
+            .tools
+            .get("search"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+            ..Default::default()
+        }),
+    );
     std::fs::remove_file(plugin_root.join(".mcp.json")).unwrap();
 
     assert_eq!(
@@ -3376,6 +3390,10 @@ approval_mode = "prompt""#
         Some(second_snapshots),
     );
     assert_eq!(manager.plugins_for_config(&second_config).await, second);
+    assert_eq!(
+        manager.plugins_for_config(&approval_config).await,
+        approval_outcome,
+    );
     manager.clear_cache();
     assert_eq!(
         [first_config, second_config]
