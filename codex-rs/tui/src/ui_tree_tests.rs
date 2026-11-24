@@ -915,3 +915,73 @@ fn width_fitting_respects_word_hyphens_across_styles() {
         assert_eq!(painted_rows(&node, Size::new(2, 3)), expected);
     }
 }
+
+#[test]
+fn blank_nested_row_keeps_its_height_without_displacing_a_wide_sibling() {
+    for (blank, gap, width, expected) in [
+        ("\n", 0, 2, vec!["界"]),
+        ("\n\n", 0, 2, vec!["界", ""]),
+        ("\n\n", 1, 3, vec![" 界", ""]),
+    ] {
+        let node = tree(json!({
+            "type": "row", "props": {"gap": gap, "justify": "end"}, "children": [
+                {"type": "row", "props": {"gap": 0, "justify": "end"}, "children": [
+                    {"type": "text", "children": [blank]}
+                ]},
+                "界"
+            ]
+        }));
+        assert_eq!(painted_rows(&node, Size::new(width, 2)), expected);
+    }
+}
+
+#[test]
+fn trailing_gap_keeps_the_aligned_glyph_at_the_viewport_edge() {
+    let node = tree(json!({
+        "type":"row","props":{"gap":1},"children":[
+            {"type":"row","props":{"gap":0,"wrap":"wrap","justify":"end"},"children":[
+                "界",{"type":"text","children":["1234"]}
+            ]},
+            {"type":"text","children":["\n"]}
+        ]
+    }));
+    assert_eq!(painted_rows(&node, Size::new(4, 1)), [" 界…"]);
+    assert_eq!(painted_rows(&node, Size::new(4, 2)), ["  界", "1234"]);
+}
+
+#[test]
+fn nested_row_background_fills_blank_lines_independently_of_siblings() {
+    let area = Rect::new(0, 0, 8, 4);
+    for sibling in ["S\nT\n\nU", "S\n\n\nU"] {
+        for inner in [
+            json!({"type":"row","props":{"gap":1,"background":"red"},"children":["a\n\n\nc","b\n\n\nd"]}),
+            json!({"type":"row","props":{"gap":1,"justify":"end","background":"red"},"children":[
+                {"type":"text","children":["a\n\n\nc"]},
+                {"type":"text","children":["b\n\n\nd"]}
+            ]}),
+        ] {
+            let node = tree(json!({
+                "type":"row","props":{"gap":1,"justify":"end"},"children":[
+                    inner,
+                    {"type":"text","children":[sibling]}
+                ]
+            }));
+            let mut buf = Buffer::empty(area);
+            node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    let expected = if (3..6).contains(&x) {
+                        ratatui::style::Color::Red
+                    } else {
+                        ratatui::style::Color::Reset
+                    };
+                    assert_eq!(buf[(x, y)].bg, expected, "cell ({x}, {y})");
+                }
+            }
+            assert_eq!(
+                buf[(7, 1)].symbol(),
+                if sibling.contains('T') { "T" } else { " " }
+            );
+        }
+    }
+}
