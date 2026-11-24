@@ -259,6 +259,10 @@ mod guardian_agent_messages;
 #[path = "scenarios_guardian_handoff.rs"]
 mod guardian_handoff;
 
+#[cfg(not(target_os = "windows"))]
+#[path = "scenarios_guardian_hosted.rs"]
+mod guardian_hosted;
+
 #[path = "scenarios_guardian_heartbeat.rs"]
 mod guardian_heartbeat;
 

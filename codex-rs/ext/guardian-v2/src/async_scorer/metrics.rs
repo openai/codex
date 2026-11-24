@@ -26,6 +26,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
         LunaSamplerError::ConnectionTimeout => "connection_timeout",
         LunaSamplerError::MissingOutput => "missing_output",
         LunaSamplerError::OutputTooLarge => "output_too_large",
+        LunaSamplerError::RootEvidenceUnavailable => "root_evidence_unavailable",
         LunaSamplerError::Superseded => "superseded",
         LunaSamplerError::InputTooLarge => "input_too_large",
         LunaSamplerError::QueueFull => "queue_full",

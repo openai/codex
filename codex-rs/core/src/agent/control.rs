@@ -73,6 +73,7 @@ mod budget;
 mod completion;
 mod delivery;
 mod execution;
+mod guardian_root_evidence;
 mod inspection;
 mod interrupt;
 mod legacy;
@@ -91,6 +92,8 @@ mod spawn_telemetry;
 mod target;
 mod user_authorization;
 mod watch;
+
+pub use guardian_root_evidence::GuardianRootEvidence;
 
 /// Per-session controller handle for a local agent tree.
 /// Handles retain a session identity and share their tree's `LocalAgentRuntime`.

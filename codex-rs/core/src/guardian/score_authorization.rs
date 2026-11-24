@@ -4,6 +4,7 @@
 use crate::CodexThread;
 use crate::GuardianAuthorizationVersion;
 use crate::context::GuardianReviewEvidence;
+use codex_protocol::error::Result;
 
 /// Authorization and policy captured for a score; consumers must revalidate before approval.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,34 +21,32 @@ pub struct ScoreAuthorization {
 
 impl ScoreAuthorization {
     /// Checks the captured authorization against the live thread.
-    pub async fn is_current(&self, thread: &CodexThread) -> bool {
-        self == &Self::current(thread, &self.permissions).await
+    pub async fn is_current(&self, thread: &CodexThread) -> Result<bool> {
+        Self::current(thread, &self.permissions)
+            .await
+            .map(|current| self == &current)
     }
 
     /// Captures the thread authorization and policy for the supplied permission evidence.
     pub async fn current(
         thread: &CodexThread,
         permissions: &codex_guardian_context::PermissionContext,
-    ) -> Self {
+    ) -> Result<Self> {
         Self::for_session(&thread.session, permissions).await
     }
 
     pub(crate) async fn for_session(
         session: &crate::session::session::Session,
         permissions: &codex_guardian_context::PermissionContext,
-    ) -> Self {
-        let root = session
-            .services
-            .agent_control
-            .get_guardian_package(session.thread_id)
-            .await;
+    ) -> Result<Self> {
+        let root = session.guardian_root_snapshot().await?;
         let history = session.conversation_history_snapshot().await;
         let local = session
             .services
             .thread_extension_data
             .get_or_init(GuardianReviewEvidence::default)
             .authorization_version(history.as_ref());
-        Self {
+        Ok(Self {
             permissions: permissions.clone(),
             settings: session.thread_settings_snapshot().await,
             environments: session
@@ -63,7 +62,7 @@ impl ScoreAuthorization {
                 .services
                 .thread_extension_data
                 .get::<codex_protocol::openai_models::ModelInfo>(),
-        }
+        })
     }
 }
 

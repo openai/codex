@@ -31,6 +31,7 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
+use codex_guardian_context::CachedApprovalContext;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -212,7 +213,7 @@ impl codex_extension_api::SynchronousApprovalReviewer for AllContributors {
     fn review<'a>(
         &'a self,
         _reason: codex_protocol::approvals::GuardianReviewReason,
-        _async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
+        _async_approval: Option<codex_extension_api::ExtensionFuture<'a, CachedApprovalContext>>,
     ) -> ExtensionFuture<'a, Option<codex_protocol::protocol::ReviewDecision>> {
         Box::pin(std::future::ready(Some(
             codex_protocol::protocol::ReviewDecision::Approved,

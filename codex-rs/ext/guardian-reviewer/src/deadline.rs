@@ -7,6 +7,30 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+tokio::task_local! {
+    static ROOT_EVIDENCE_LIMITS: (ReviewDeadline, CancellationToken);
+}
+
+/// Approval contributors and prompt builders share a deadline without cancelling reviewer cleanup.
+pub async fn with_root_evidence_limits<T>(
+    deadline: Option<ReviewDeadline>,
+    cancel: &CancellationToken,
+    work: impl Future<Output = T>,
+) -> T {
+    if let Some(deadline) = deadline {
+        ROOT_EVIDENCE_LIMITS
+            .scope((deadline, cancel.clone()), work)
+            .await
+    } else {
+        work.await
+    }
+}
+
+/// Limits for a hosted provider read, absent outside an approval.
+pub fn root_evidence_limits() -> Option<(ReviewDeadline, CancellationToken)> {
+    ROOT_EVIDENCE_LIMITS.try_with(Clone::clone).ok()
+}
+
 /// One shared review deadline, optionally disabled without disabling cancellation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDeadline {

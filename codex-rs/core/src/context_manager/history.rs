@@ -87,6 +87,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
+use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -100,9 +101,28 @@ fn next_guardian_review_context_revision() -> u64 {
     GUARDIAN_REVIEW_CONTEXT_REVISION.fetch_add(/*val*/ 1, Ordering::Relaxed)
 }
 
+/// Only the committed live history reports changes; speculative clones stay silent.
+#[derive(Default)]
+struct LiveGuardianEvidenceChanges(Weak<crate::context::GuardianReviewEvidence>);
+
+impl Clone for LiveGuardianEvidenceChanges {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl LiveGuardianEvidenceChanges {
+    fn notify(&self) {
+        if let Some(evidence) = self.0.upgrade() {
+            evidence.changes.notify();
+        }
+    }
+}
+
 /// Transcript of thread history
 #[derive(Clone)]
 pub(crate) struct ContextManager {
+    guardian_evidence_changes: LiveGuardianEvidenceChanges,
     context_ids: ThreadContextIds,
     sampling: super::sampling::SamplingProgress,
     /// Inclusive sequence cutoff for calls that may still be running in the fork source.
@@ -326,6 +346,7 @@ impl ContextManager {
 
     pub(crate) fn new(context_ids: ThreadContextIds, retention: Option<MessageRetention>) -> Self {
         Self {
+            guardian_evidence_changes: LiveGuardianEvidenceChanges::default(),
             context_ids,
             sampling: Default::default(),
             restored_through_sequence: 0,
@@ -349,6 +370,13 @@ impl ContextManager {
             reference_context_item: None,
             world_state_baseline: None,
         }
+    }
+
+    pub(crate) fn attach_guardian_evidence_changes(
+        &mut self,
+        evidence: Weak<crate::context::GuardianReviewEvidence>,
+    ) {
+        self.guardian_evidence_changes.0 = evidence;
     }
 
     pub(crate) fn guardian_revisions(&self) -> (u64, u64) {
@@ -425,6 +453,7 @@ impl ContextManager {
                 self.guardian_review_context_revision = next_guardian_review_context_revision();
             }
         }
+        self.guardian_evidence_changes.notify();
         true
     }
 
@@ -795,6 +824,7 @@ impl ContextManager {
             self.last_model_output_item_count = Some(self.items.len() + 1);
         }
         Arc::make_mut(&mut self.items).push(processed);
+        self.guardian_evidence_changes.notify();
         source
     }
 
@@ -872,6 +902,7 @@ impl ContextManager {
         if rejected.len() != previous_len {
             self.history_version = self.history_version.saturating_add(1);
             self.guardian_review_context_revision = next_guardian_review_context_revision();
+            self.guardian_evidence_changes.notify();
         }
     }
 
@@ -982,6 +1013,7 @@ impl ContextManager {
         self.history_version = self.history_version.saturating_add(1);
         self.reset_version = self.history_version;
         self.world_state_baseline = None;
+        self.guardian_evidence_changes.notify();
     }
 
     /// Returns whether compaction changed Guardian's evidence policy, invalidating older reviews.
@@ -1026,6 +1058,7 @@ impl ContextManager {
             self.reset_version = self.history_version;
         }
         self.world_state_baseline = None;
+        self.guardian_evidence_changes.notify();
         promoted
     }
 

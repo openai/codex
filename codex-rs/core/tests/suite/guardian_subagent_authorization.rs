@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::GuardianRootMessage;
+use codex_core::GuardianRootSnapshot;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::config::Constrained;
@@ -16,6 +17,7 @@ use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
 use codex_prompts::render_review_exit_success;
+use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -1293,6 +1295,7 @@ async fn run_guardian_subagent_review(
     let snapshot = worker_thread
         .guardian_root_snapshot()
         .await
+        .expect("read root snapshot")
         .expect("worker root snapshot");
     if matches!(
         messaging_outcome,
@@ -1462,6 +1465,7 @@ async fn run_guardian_subagent_review(
             let resumed = worker_thread
                 .guardian_root_snapshot()
                 .await
+                .expect("read root snapshot")
                 .expect("worker root snapshot after Code Mode resume");
             assert_eq!(exchange(&resumed.messages), exchange(&expected_messages));
         }
@@ -1710,6 +1714,7 @@ async fn run_guardian_subagent_review(
             let snapshot = worker_thread
                 .guardian_root_snapshot()
                 .await
+                .expect("read root snapshot")
                 .expect("worker root snapshot after checkpoint resume");
             assert!(!snapshot.messages.iter().any(|message| {
                 matches!(message, GuardianRootMessage::Assistant(text)
@@ -1788,6 +1793,7 @@ async fn run_guardian_subagent_review(
             let snapshot = worker_thread
                 .guardian_root_snapshot()
                 .await
+                .expect("read root snapshot")
                 .expect("worker root snapshot after revocation");
             assert_eq!(
                 (
@@ -1821,6 +1827,7 @@ async fn run_guardian_subagent_review(
                 worker_thread
                     .guardian_root_snapshot()
                     .await
+                    .expect("read root snapshot")
                     .expect("before compaction")
                     .messages,
             );
@@ -1853,6 +1860,7 @@ async fn run_guardian_subagent_review(
                     worker_thread
                         .guardian_root_snapshot()
                         .await
+                        .expect("read root snapshot")
                         .expect("after compacted resume")
                         .messages
                 ),
@@ -1894,6 +1902,7 @@ async fn run_guardian_subagent_review(
             worker_thread
                 .guardian_root_snapshot()
                 .await
+                .expect("read root snapshot")
                 .expect("root snapshot after progress")
                 .messages,
             expected,

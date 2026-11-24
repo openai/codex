@@ -51,7 +51,9 @@ async fn pending_request(
         node_repl_images: None,
     })?;
     let (ready, score) = tokio::sync::oneshot::channel();
-    let authorization = ScoreAuthorization::current(&thread, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&thread, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     let pending_score = PendingScore {
         progress: Arc::clone(
             &ConversationBackend::for_turn(

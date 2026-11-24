@@ -225,17 +225,41 @@ impl ConversationBackend {
 }
 
 impl Reservation {
+    async fn validate_authorization(
+        &self,
+        authorization: &ScoreAuthorization,
+        thread: &CodexThread,
+        pending: &PendingScore,
+    ) -> Result<(), LunaSamplerError> {
+        let active = || self.active.load(Ordering::Acquire) && self.generation.strong_count() > 0;
+        if !active() {
+            return Err(LunaSamplerError::Superseded);
+        }
+        let current = authorization.is_current(thread).await;
+        if !active() || pending.is_expired() {
+            return Err(LunaSamplerError::Superseded);
+        }
+        match current {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(LunaSamplerError::Superseded),
+            Err(_) => Err(LunaSamplerError::RootEvidenceUnavailable),
+        }
+    }
+
     pub(super) async fn prepare(
         self,
         mut request: ConversationRequest,
     ) -> Option<PreparedConversation> {
         request.sampling.pending_score = Some(request.pending_score.clone());
-        if !self.active.load(Ordering::Acquire)
-            || self.generation.strong_count() == 0
-            || !request.authorization.is_current(&request.thread).await
-            || request.pending_score.is_expired()
+        if let Err(error) = self
+            .validate_authorization(
+                &request.authorization,
+                &request.thread,
+                &request.pending_score,
+            )
+            .await
         {
-            let _ = request.ready.send(Err(LunaSamplerError::Superseded));
+            let _ = request.ready.send(Err(error));
             return None;
         }
         let key = ReuseKey {
@@ -306,7 +330,10 @@ impl PreparedConversation {
     /// Publishes the first score, then drains and commits only valid completed history.
     pub(super) async fn run(mut self) {
         // A caller can retain prepared input while authorization or admission expires.
-        let authorization_is_current = self.key.authorization.is_current(&self.thread).await;
+        let authorization = self
+            .reservation
+            .validate_authorization(&self.key.authorization, &self.thread, &self.pending_score)
+            .await;
         let history_superseded = self
             .reservation
             .history
@@ -315,19 +342,19 @@ impl PreparedConversation {
             .as_ref()
             .is_some_and(|history| history.index > self.reservation.index);
         // Keep requests that can still contribute either a score or retained history.
-        if !authorization_is_current
-            || !self.reservation.active.load(Ordering::Acquire)
-            || self.reservation.generation.strong_count() == 0
-            || self.pending_score.is_expired()
-            || (history_superseded
-                && self
-                    .pending_score
-                    .progress
-                    .inspect(/*call_id*/ None)
-                    .sampled_at
-                    .is_some_and(|sampled_at| sampled_at > self.sampled_at))
+        if history_superseded
+            && self
+                .pending_score
+                .progress
+                .inspect(/*call_id*/ None)
+                .sampled_at
+                .is_some_and(|sampled_at| sampled_at > self.sampled_at)
         {
             let _ = self.ready.send(Err(LunaSamplerError::Superseded));
+            return;
+        }
+        if let Err(error) = authorization {
+            let _ = self.ready.send(Err(error));
             return;
         }
         let cursor = self.request.cursor;
@@ -342,7 +369,7 @@ impl PreparedConversation {
             history = self.reservation.sampler.sample_retained(sample, self.ready) => history,
         };
         if let Some(history) = history
-            && self.key.authorization.is_current(&self.thread).await
+            && let Ok(true) = self.key.authorization.is_current(&self.thread).await
             && self.reservation.active.load(Ordering::Acquire)
             && self.reservation.generation.strong_count() > 0
         {

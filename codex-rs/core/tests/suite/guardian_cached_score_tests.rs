@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::guardian_host::HostGuardianContext;
+use super::guardian_host::HostRead;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::FeatureRequirementsToml;
@@ -66,6 +68,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
@@ -848,8 +851,10 @@ fn assert_guardian_headers(requests: &[Request], expected_auth: &str) {
     }
 }
 
+#[test_case(false; "stale score")]
+#[test_case(true; "host read failure")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
+async fn delayed_score_only_covers_the_tool_call_it_classified(hosted: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -862,6 +867,7 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
     let mut classifier_gates = Vec::new();
     let mut parent_responses = Vec::new();
     let mut classifier_responses = Vec::new();
+    let mut held_completions = Vec::new();
     for (call_id, tool, args) in [
         (
             "before-publication",
@@ -893,14 +899,33 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         }]);
         let (classifier_tx, classifier_rx) = oneshot::channel();
         classifier_gates.push(classifier_tx);
-        classifier_responses.push(vec![StreamingSseChunk {
+        let risk = if hosted && call_id == "intervening-call" {
+            "high"
+        } else {
+            "low"
+        };
+        let mut chunks = vec![StreamingSseChunk {
             gate: Some(classifier_rx),
             body: sse(vec![
                 ev_response_created(call_id),
-                ev_assistant_message(call_id, "low"),
+                responses::ev_output_text_delta(risk),
+            ]),
+        }];
+        // Hold retention reads until the injected failure has reached score validation.
+        let gate =
+            (hosted && matches!(call_id, "before-publication" | "intervening-call")).then(|| {
+                let (hold, gate) = oneshot::channel();
+                held_completions.push(hold);
+                gate
+            });
+        chunks.push(StreamingSseChunk {
+            gate,
+            body: sse(vec![
+                ev_assistant_message(call_id, risk),
                 ev_completed(call_id),
             ]),
-        }]);
+        });
+        classifier_responses.push(chunks);
     }
     let (parent_server, _) = start_streaming_sse_server(parent_responses).await;
     let (classifier_server, _) = start_streaming_sse_server(classifier_responses).await;
@@ -970,10 +995,11 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
 
     let mut test = test_codex()
         .with_model("guardian-initial-model")
-        .with_pre_build_hook(|home| {
+        .with_pre_build_hook(move |home| {
+            let lag = if hosted { 2 } else { 1 };
             std::fs::write(
                 home.join("config.toml"),
-                "[features.guardianv2]\nenabled = true\npersist_scores = true\nmax_tool_call_lag = 1\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n",
+                format!("[features.guardianv2]\nenabled = true\npersist_scores = true\nmax_tool_call_lag = {lag}\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n"),
             )
             .expect("write Guardian configuration");
         })
@@ -1002,6 +1028,15 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
     let mut options = test.start_thread_options().await;
     options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
     options.thread_extension_init.insert(metrics.clone());
+    let host = if hosted {
+        options.config.multi_agent_v2.disable_native_tools = true;
+        Some(HostGuardianContext::install(
+            &mut options,
+            test.codex.capture_guardian_root_evidence().await?,
+        ))
+    } else {
+        None
+    };
     test.codex.shutdown_and_wait().await?;
     test.codex = test.thread_manager.start_thread(options).await?.thread;
     test.codex.ensure_rollout_materialized().await;
@@ -1019,14 +1054,20 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         .await?;
 
     let mut parent_gates = parent_gates.into_iter();
-    let mut classifier_gates = classifier_gates.into_iter();
-    parent_gates.next().unwrap().send(()).unwrap();
+    let mut release_parent = || {
+        parent_gates
+            .next()
+            .expect("next parent gate")
+            .send(())
+            .expect("release parent response");
+    };
+    release_parent();
     timeout(Duration::from_secs(30), async {
         classifier_server.wait_for_request_count(/*count*/ 1).await;
         parent_server.wait_for_request_count(/*count*/ 2).await;
     })
     .await?;
-    parent_gates.next().unwrap().send(()).unwrap();
+    release_parent();
     timeout(Duration::from_secs(30), async {
         classifier_server.wait_for_request_count(/*count*/ 2).await;
         parent_server.wait_for_request_count(/*count*/ 3).await;
@@ -1034,13 +1075,15 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
     .await?;
 
     // Publishing call 1 after call 2 starts must not claim coverage through call 2.
-    // At call 3 it is two calls behind, exceeding the configured lag of one.
-    let first_score = classifier_gates.next().unwrap();
-    let _held_intervening_score = classifier_gates.next().unwrap();
-    let current_score = classifier_gates.next().unwrap();
-    let _held_final_score = classifier_gates.next().unwrap();
+    // At call 3 it is two calls behind, still usable only in the hosted case.
+    let [
+        first_score,
+        intervening_score,
+        current_score,
+        _held_final_score,
+    ]: [_; 4] = classifier_gates.try_into().expect("four classifier gates");
     let publish_score = async |call_id: &str, release_score: oneshot::Sender<()>| -> Result<()> {
-        release_score.send(()).unwrap();
+        release_score.send(()).expect("release classifier response");
         // Persisted rollout scores are emitted only after publication. Observe that
         // public result instead of reading or modifying the private score state.
         timeout(Duration::from_secs(30), async {
@@ -1058,7 +1101,37 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         Ok(())
     };
     publish_score("before-publication", first_score).await?;
-    parent_gates.next().unwrap().send(()).unwrap();
+    // Save the first review's metrics before collecting classification updates.
+    let retry_metrics = if let Some(host) = host {
+        let retry_metrics = metrics.snapshot()?;
+        *host.read.lock().expect("host read mode") = HostRead::Unavailable;
+        intervening_score
+            .send(())
+            .expect("release intervening score");
+        timeout(Duration::from_secs(30), async {
+            loop {
+                let snapshot = metrics.snapshot()?;
+                if snapshot.scope_metrics().flat_map(ScopeMetrics::metrics).any(|metric| {
+                    metric.name() == "codex.guardian_v2.classification"
+                        && matches!(metric.data(), AggregatedMetrics::U64(MetricData::Sum(points))
+                            if points.data_points().any(|point| point.attributes().any(|tag|
+                                tag.key.as_str() == "outcome" && tag.value.as_str() != "success")))
+                }) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        *host.read.lock().expect("host read mode") = HostRead::Current;
+        for hold in held_completions {
+            hold.send(()).expect("release classifier completion");
+        }
+        Some(retry_metrics)
+    } else {
+        None
+    };
+    release_parent();
     timeout(Duration::from_secs(30), async {
         classifier_server.wait_for_request_count(/*count*/ 3).await;
         parent_server.wait_for_request_count(/*count*/ 4).await;
@@ -1067,7 +1140,7 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
 
     // Call 3's result is now fresh enough for call 4, whose own score is still held.
     publish_score("stale-publication", current_score).await?;
-    parent_gates.next().unwrap().send(()).unwrap();
+    release_parent();
 
     let mut review_reasons = Vec::new();
     loop {
@@ -1082,13 +1155,6 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
             _ => {}
         }
     }
-    assert_eq!(
-        review_reasons,
-        vec![
-            Some(GuardianReviewReason::MissingScore),
-            Some(GuardianReviewReason::StaleScore)
-        ],
-    );
     let request = final_response.single_request();
     for (call_id, network) in [
         ("before-publication", None),
@@ -1117,13 +1183,24 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         );
     }
 
+    assert_eq!(
+        review_reasons,
+        vec![
+            Some(GuardianReviewReason::MissingScore),
+            Some(if hosted {
+                GuardianReviewReason::ScoringFailure
+            } else {
+                GuardianReviewReason::StaleScore
+            })
+        ],
+    );
     test.codex.shutdown_and_wait().await?;
     let snapshot = metrics.snapshot()?;
     let route = snapshot
         .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .flat_map(ScopeMetrics::metrics)
         .find(|metric| metric.name() == "codex.guardian.review.route")
-        .unwrap();
+        .expect("Guardian route metric");
     let AggregatedMetrics::U64(MetricData::Sum(routes)) = route.data() else {
         panic!("expected route counter");
     };
@@ -1131,14 +1208,16 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         let model = point
             .attributes()
             .find(|tag| tag.key.as_str() == "model")
-            .unwrap();
+            .expect("route model attribute");
         assert_eq!(model.value.as_str(), "guardian-publication-parent");
     }
-    let metric = snapshot
+    let metric = retry_metrics
+        .as_ref()
+        .unwrap_or(&snapshot)
         .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .flat_map(ScopeMetrics::metrics)
         .find(|metric| metric.name() == "codex.guardian.review.retry_wait_ms")
-        .unwrap();
+        .expect("Guardian retry-wait metric");
     let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
         panic!("expected retry-wait histogram");
     };

@@ -43,15 +43,19 @@ fn elastic_root_preparation_preserves_captured_messages() {
         retained_assistants: Vec::new(),
         delivered_messages: Vec::new(),
         retained_user_sources: vec![retained.clone()],
-        handoff_boundaries: Vec::new(),
         latest_user_turn_id: None,
         missing_root_instructions: true,
         missing_assistant_context: false,
         missing_verified_answers: false,
     };
     input.user_messages[0].message = GuardianRootMessage::User(retained.text.clone());
-    let fixed = root::prepare_root_context(&input, vec![legacy.clone()], ContextBudgeting::Fixed);
-    let elastic = root::prepare_root_context(&input, vec![legacy], ContextBudgeting::Elastic);
+    let captured = root::RootConversationInput::new(
+        root::prepare_root_candidates(&input, [legacy.clone()], ContextBudgeting::Fixed),
+        Vec::new(),
+        move || root::prepare_root_candidates(&input, [legacy.clone()], ContextBudgeting::Elastic),
+    );
+    let fixed = captured.prepare(ContextBudgeting::Fixed);
+    let elastic = captured.prepare(ContextBudgeting::Elastic);
     let mut expected = vec![GuardianRootMessage::User(text); ROOT_RECORDS];
     expected[0] = GuardianRootMessage::User(retained.text);
     expected.insert(

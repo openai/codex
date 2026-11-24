@@ -29,6 +29,7 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
+use codex_guardian_context::CachedApprovalContext;
 use codex_guardian_context::truncate_text as truncate_entry;
 use codex_history::RolloutItem;
 use codex_login::AuthManager;
@@ -748,7 +749,9 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
     // The seeded low score belongs to the model selected above.
-    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     seed_cached_score(&progress, thread_store, /*index*/ 1, authorization);
     let cached = progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
@@ -970,7 +973,9 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         &current.progress,
         thread_store,
         index,
-        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
+        ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+            .await
+            .expect("read Guardian authorization"),
     );
     assert_eq!(
         cached_approval(
@@ -1353,7 +1358,9 @@ async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
         assert_eq!(progress.inspect(/*call_id*/ None), expected);
     }
     // A classifier started before these actions may still publish, but cannot approve later CUA.
-    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
     assert!(progress.inspect(/*call_id*/ None).has_unscored_failure);
     assert_eq!(
@@ -2119,7 +2126,9 @@ max_recent_non_user_entries = 8
         &score_progress,
         thread_store,
         first_unscored,
-        ScoreAuthorization::current(&test.codex, &Default::default()).await,
+        ScoreAuthorization::current(&test.codex, &Default::default())
+            .await
+            .expect("read Guardian authorization"),
     );
     assert_eq!(
         cached_approval(
@@ -2736,7 +2745,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             &progress,
             thread_store,
             /*index*/ 1,
-            ScoreAuthorization::current(&test.codex, &permissions).await,
+            ScoreAuthorization::current(&test.codex, &permissions)
+                .await
+                .expect("read Guardian authorization"),
         );
         assert_eq!(
             cached_approval(
@@ -2914,7 +2925,9 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         codex_core::guardian_review::ReviewRetrieval::ConversationHistory,
     )
     .await?;
-    let authorization = ScoreAuthorization::current(&test.codex, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     let progress = ConversationBackend::for_turn(thread_store, thread_store)
         .map(|cache| Arc::clone(&cache.progress))
         .expect("Guardian v2 should track score progress per thread");
@@ -2999,7 +3012,9 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     };
     fixture.score_tool(ToolName::plain("read_file")).await;
     let store = fixture.test.codex.thread_extension_data();
-    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     seed_cached_score(&progress, store, /*index*/ 0, authorization);
     assert!(progress.inspect(/*call_id*/ None).has_unscored_failure);
 
@@ -3109,7 +3124,9 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
     let mut score = cached_score(store).unwrap();
     score.scores.insert("action_risk".to_owned(), 0.25);
     set_cached_score(store, score);
-    let current = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let current = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     let mut stale_local = current.clone();
     stale_local.review_context_revision += 1;
     let mut stale_root = current.clone();
@@ -3207,8 +3224,9 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
         fixture.test.codex.guardian_authorization_version().await,
         authorization
     );
-    let score_authorization =
-        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let score_authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     let progress = ConversationBackend::for_turn(thread_store, thread_store)
         .map(|cache| Arc::clone(&cache.progress))
         .expect("score progress");
@@ -4032,7 +4050,7 @@ impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss<'_> {
     fn review<'a>(
         &'a self,
         _reason: codex_protocol::approvals::GuardianReviewReason,
-        async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
+        async_approval: Option<codex_extension_api::ExtensionFuture<'a, CachedApprovalContext>>,
     ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async move {
             if let Some(snapshots) = self.thread_store.get::<Vec<GuardianPolicySnapshot>>() {
@@ -4046,7 +4064,15 @@ impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss<'_> {
                 let cache =
                     ConversationBackend::for_turn(self.thread_store, self.turn_store).unwrap();
                 let progress = &cache.progress;
-                for (snapshot, expected) in snapshots.iter().zip([Poll::Pending, Poll::Ready(())]) {
+                let history = thread.conversation_history_snapshot().await;
+                for (snapshot, expected) in snapshots.iter().zip([
+                    Poll::Pending,
+                    Poll::Ready(CachedApprovalContext {
+                        user_message_revision: history.user_message_revision(),
+                        review_context_revision: history.guardian_review_context_revision(),
+                        root_versions: None,
+                    }),
+                ]) {
                     assert_eq!(
                         thread.refresh_guardian_policy(snapshot).await,
                         codex_core::ConfigRefreshOutcome::Published
@@ -4172,14 +4198,18 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
         &progress,
         store,
         wrapper,
-        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
+        ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+            .await
+            .expect("read Guardian authorization"),
     );
     assert_eq!(approve("third").await, None);
     seed_cached_score(
         &progress,
         store,
         wrapper + 3,
-        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
+        ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+            .await
+            .expect("read Guardian authorization"),
     );
     // A later LOW may already be cached before an earlier action reaches its
     // initial approval check. It must not approve that action or unknown provenance.
@@ -4204,7 +4234,9 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
         &progress,
         store,
         output,
-        ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
+        ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+            .await
+            .expect("read Guardian authorization"),
     );
     assert_eq!(
         approve("other-second").await,
@@ -4343,7 +4375,9 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
     let progress = ConversationBackend::for_turn(store, store)
         .map(|cache| Arc::clone(&cache.progress))
         .unwrap();
-    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+        .await
+        .expect("read Guardian authorization");
     seed_cached_score(&progress, store, /*index*/ 1, authorization.clone());
     let score = cached_score(store).unwrap();
     observe_unscored_call(&progress, store);

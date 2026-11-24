@@ -16,16 +16,15 @@ use crate::codex_thread::GuardianRootMessage;
 use crate::codex_thread::GuardianRootSnapshot;
 use crate::compact::is_summary_message;
 use crate::context::ContextualUserFragment;
-use crate::context::GuardianReviewEvidence;
 use crate::context::UserGoalUpdate;
 use crate::context::is_contextual_user_fragment;
 use crate::context_manager::ContextManager;
 use crate::event_mapping::parse_turn_item;
+use codex_guardian_context::ContextBudgeting;
+use codex_guardian_context::PreparedRootCandidates;
 use codex_guardian_context::RootAssistantCandidate;
 use codex_guardian_context::RootAssistantContent;
 use codex_guardian_context::RootConversationCandidates;
-use codex_guardian_context::RootConversationInput;
-use codex_guardian_context::RootConversationSource;
 use codex_guardian_context::RootDeliveredMessage;
 use codex_guardian_context::RootMessageCandidate;
 use codex_guardian_context::RootRetainedAssistant;
@@ -41,17 +40,12 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MultiAgentVersion;
 
-struct CapturedRootConversation {
-    history: ContextManager,
-    handoff_boundaries: Vec<RetainedContextOrder>,
-}
-
-impl RootConversationSource for CapturedRootConversation {
-    fn prepare(
+impl ContextManager {
+    pub(super) fn guardian_root_candidates(
         &self,
-        budgeting: codex_guardian_context::ContextBudgeting,
-    ) -> codex_guardian_context::PreparedRootContext {
-        let root_history = &self.history;
+        budgeting: ContextBudgeting,
+    ) -> PreparedRootCandidates {
+        let root_history = self;
         // Join calls to host-confirmed outputs in this snapshot. Older outputs without
         // captured text cannot establish what was sent, including after a hook rewrite.
         let mut missing_delivered_context = false;
@@ -237,14 +231,13 @@ impl RootConversationSource for CapturedRootConversation {
             retained_assistants: retained_assistant_candidates,
             delivered_messages: delivered_candidates,
             retained_user_sources,
-            handoff_boundaries: self.handoff_boundaries.clone(),
             latest_user_turn_id: reconciled.latest_user_turn_id.clone(),
             missing_root_instructions: original_missing_root_instructions,
             missing_assistant_context: missing_delivered_context
                 || retained_context.has_omitted_assistant_messages(),
             missing_verified_answers: !retained_context.verified_answers_complete(),
         };
-        codex_guardian_context::prepare_root_context(
+        codex_guardian_context::prepare_root_candidates(
             &request_candidates,
             root_history.original_legacy_user_messages(),
             budgeting,
@@ -280,39 +273,10 @@ impl LocalAgentControl {
                     .agent_path
             })
             .flatten();
-        let root_history = root_thread.session.clone_history().await;
-        let handoff_boundaries = if let Some(worker) = worker_path {
-            super::root_handoff::handoff_boundaries(
-                root_history.annotated_items(),
-                &worker,
-                root_thread
-                    .config()
-                    .await
-                    .multi_agent_v2
-                    .tool_namespace
-                    .as_deref(),
-            )
-        } else {
-            Vec::new()
-        };
-        let history = root_history.conversation_history_snapshot();
-        let history_reset_version = root_history.reset_version;
-        let request_candidates = RootConversationInput::new(CapturedRootConversation {
-            history: root_history,
-            handoff_boundaries,
-        });
-        let prepared = request_candidates.prepare(codex_guardian_context::ContextBudgeting::Fixed);
-        let root_evidence = root_thread
-            .session
-            .services
-            .thread_extension_data
-            .get_or_init(GuardianReviewEvidence::default);
-        Some(root_evidence.root_snapshot(
-            root_thread_id,
-            history_reset_version,
-            history.as_ref(),
-            prepared,
-            request_candidates,
-        ))
+        Some(
+            root_thread
+                .local_guardian_snapshot(worker_path.as_ref())
+                .await,
+        )
     }
 }

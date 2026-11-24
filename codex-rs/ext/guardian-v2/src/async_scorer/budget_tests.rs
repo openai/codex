@@ -216,7 +216,9 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 .map(|cache| Arc::clone(&cache.progress))
                 .unwrap();
             let authorization =
-                ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+                ScoreAuthorization::current(&fixture.test.codex, &Default::default())
+                    .await
+                    .expect("read Guardian authorization");
             seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
             assert_eq!(
                 cached_approval(

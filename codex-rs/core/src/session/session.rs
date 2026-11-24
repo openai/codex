@@ -1114,7 +1114,8 @@ impl Session {
         {
             thread_extension_data.insert(crate::agent::helper_daybreak::Enrollment::Root);
         }
-        thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
+        let guardian_evidence = Arc::new(crate::context::GuardianReviewEvidence::default());
+        thread_extension_data.insert_arc(Arc::clone(&guardian_evidence));
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -1636,6 +1637,9 @@ impl Session {
                     retention,
                 ),
             );
+            state
+                .history
+                .attach_guardian_evidence_changes(Arc::downgrade(&guardian_evidence));
             if matches!(initial_history, InitialHistory::Resumed(_)) {
                 state.persisted_dynamic_tools = initial_history
                     .get_dynamic_tools()

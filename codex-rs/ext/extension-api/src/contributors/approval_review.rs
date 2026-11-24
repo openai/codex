@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use codex_guardian_context::CachedApprovalContext;
 use codex_protocol::ThreadId;
 
 use crate::ExtensionData;
@@ -26,7 +27,7 @@ pub trait SynchronousApprovalReviewer: Send + Sync {
     fn review<'a>(
         &'a self,
         reason: codex_protocol::approvals::GuardianReviewReason,
-        async_approval: Option<crate::ExtensionFuture<'a, ()>>,
+        async_approval: Option<crate::ExtensionFuture<'a, CachedApprovalContext>>,
     ) -> crate::ExtensionFuture<'a, Option<codex_protocol::protocol::ReviewDecision>>;
 }
 

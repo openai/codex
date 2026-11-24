@@ -460,7 +460,23 @@ impl GuardianV2Extension {
         // Capture root evidence before background metadata resolution or model I/O.
         // Later root authorization or review-context changes invalidate this sample.
         let root_snapshot = if context_mode != GuardianContextMode::Legacy {
-            thread.guardian_root_snapshot().await
+            match thread.guardian_root_snapshot().await {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    tracing::warn!("Guardian root evidence unavailable for async scoring");
+                    score_progress.fail_closed(sampled_at, tool_call_index);
+                    record_classification(
+                        metrics.as_deref(),
+                        probe_comparison.as_ref(),
+                        context_mode,
+                        classification_started_at.elapsed(),
+                        "failure",
+                        /*classification_risk*/ None,
+                        Some("root_evidence_unavailable"),
+                    );
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -478,7 +494,20 @@ impl GuardianV2Extension {
             );
             return;
         };
-        let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
+        let score_authorization = ScoreAuthorization {
+            permissions,
+            settings: thread.thread_settings_snapshot().await,
+            environments: thread
+                .config_snapshot()
+                .await
+                .environment_selections()
+                .to_vec(),
+            local: authorization_version,
+            review_context_revision: history.guardian_review_context_revision(),
+            root: None,
+            root_review_context_revision: None,
+            model: parent_model.clone(),
+        };
         let classification = Classification {
             probe_comparison,
             reservation,

@@ -1001,7 +1001,13 @@ async fn standalone_fork_retains_inherited_user_instructions(
             )
             .await?
     };
-    assert!(fork.thread.guardian_root_snapshot().await.is_none());
+    assert!(
+        fork.thread
+            .guardian_root_snapshot()
+            .await
+            .expect("read root snapshot")
+            .is_none()
+    );
     let history = fork.thread.conversation_history_snapshot().await;
     let retained = history.retained_context().context("root context")?;
     let answers = codex_guardian_context::render_verified_answers(retained);
@@ -1201,7 +1207,11 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
         Some((0, true)),
         "inherited conversation must not populate child-local authorization",
     );
-    let root_snapshot = child.guardian_root_snapshot().await.context("live root")?;
+    let root_snapshot = child
+        .guardian_root_snapshot()
+        .await
+        .expect("read root snapshot")
+        .context("live root")?;
     assert!(
         root_snapshot
             .messages
@@ -1220,6 +1230,7 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
     let snapshot = child
         .guardian_root_snapshot()
         .await
+        .expect("read root snapshot")
         .context("root after goal")?;
     assert!(snapshot.messages.iter().any(|message| {
         matches!(message, codex_core::GuardianRootMessage::User(text) if text.contains(goal))

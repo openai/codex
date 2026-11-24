@@ -124,10 +124,8 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     };
     let config = session.get_config().await;
     let root_authorization = session
-        .services
-        .agent_control
-        .get_guardian_package(session.thread_id)
-        .await
+        .guardian_root_snapshot()
+        .await?
         .and_then(|snapshot| snapshot.request_candidates);
     let budgeting = parent_context.map_or_else(
         || config.guardian_context_budgeting(),

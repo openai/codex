@@ -45,6 +45,7 @@ mod compact_remote_v2;
 mod compact_retained_tool_outputs;
 mod compact_token_budget;
 mod thread_startup_metadata;
+pub use agent::control::GuardianRootEvidence;
 /// Catalog handle installed in each thread's extension data before startup callbacks.
 pub use codex_models_manager::manager::SharedModelsManager;
 pub use codex_network_proxy::EnvironmentNetworkPolicy;
@@ -166,6 +167,7 @@ pub use codex_prompts as review_prompts;
 mod thread_manager;
 mod thread_spawn;
 mod thread_store_builder;
+pub use agent::host::AgentGuardianContext;
 pub use agent::host::AgentMcpMetadataRecipient;
 pub use agent::host::AgentRef;
 pub use agent::host::AgentRuntimeOwnership;

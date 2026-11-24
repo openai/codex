@@ -1,6 +1,7 @@
 //! Selects Guardian answer evidence from the review's history snapshot and retains reviews.
 //! Retained answers survive restart even while incompatible checkpoints use legacy review.
 
+use crate::GuardianEvidenceChanges;
 use codex_thread_context_ids::ThreadContextIds;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -9,28 +10,15 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 
 use codex_extension_api::ConversationHistorySnapshot;
+pub use codex_guardian_context::GuardianAuthorizationVersion;
 use codex_guardian_context::GuardianRootMessage;
 use codex_guardian_context::MAX_PREVIOUS_REVIEWS;
-use codex_guardian_context::PreparedRootContext;
-use codex_guardian_context::RootConversationInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use serde_json::json;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 const MAX_TRUSTED_SKILLS: usize = 16;
 const MAX_TRUSTED_SKILL_PATHS_BYTES: usize = 2_048;
-
-/// Authorization state that changes on genuine user input or history resets.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GuardianAuthorizationVersion {
-    /// User-message/reset revision, preserved across compaction and internal context.
-    pub user_message_revision: u64,
-    /// False when required retained answers or root instructions are unavailable.
-    pub retained_context_complete: bool,
-}
 
 /// Root authorization state, selected messages and request-local originals from one snapshot.
 #[derive(Debug, PartialEq)]
@@ -62,6 +50,8 @@ pub struct GuardianUserInputSnapshot {
 #[derive(Debug, Default)]
 pub struct GuardianReviewEvidence {
     state: Mutex<GuardianReviewEvidenceState>,
+    /// Shared notifications for committed history and verified skill changes.
+    pub changes: GuardianEvidenceChanges,
 }
 
 #[derive(Debug, Default)]
@@ -72,42 +62,6 @@ struct GuardianReviewEvidenceState {
 }
 
 impl GuardianReviewEvidence {
-    /// Projects prepared root evidence without accessing the host runtime.
-    pub fn root_snapshot(
-        &self,
-        root_thread_id: ThreadId,
-        history_reset_version: u64,
-        history: &dyn ConversationHistorySnapshot,
-        prepared: PreparedRootContext,
-        request_candidates: RootConversationInput,
-    ) -> GuardianRootSnapshot {
-        let mut authorization_version = self.authorization_version(history);
-        if prepared.missing_root_instructions {
-            authorization_version.retained_context_complete = false;
-        }
-        let mut review_context_revision = history.guardian_review_context_revision();
-        if let Some(selected) = &prepared.handoff_selection {
-            let mut revision = DefaultHasher::new();
-            review_context_revision.hash(&mut revision);
-            selected.hash(&mut revision);
-            review_context_revision = revision.finish();
-        }
-        let trusted_skill_paths = prepared
-            .latest_user_turn_id
-            .as_deref()
-            .map(|turn_id| self.trusted_skill_paths(turn_id))
-            .unwrap_or_default();
-        GuardianRootSnapshot {
-            root_thread_id,
-            history_reset_version,
-            authorization_version,
-            review_context_revision,
-            messages: prepared.messages,
-            trusted_skill_paths,
-            request_candidates: Some(request_candidates),
-        }
-    }
-
     /// Reads the selected answer path against the caller's action-time history snapshot.
     pub fn user_input_snapshot(
         &self,
@@ -117,6 +71,7 @@ impl GuardianReviewEvidence {
             Some(context) => {
                 let answers = codex_guardian_context::render_verified_answers(context);
                 let authorization_version = GuardianAuthorizationVersion {
+                    root_runtime_id: None,
                     user_message_revision: history.user_message_revision(),
                     retained_context_complete: answers.complete,
                 };
@@ -128,6 +83,7 @@ impl GuardianReviewEvidence {
             None => GuardianUserInputSnapshot {
                 fragments: Vec::new(),
                 authorization_version: GuardianAuthorizationVersion {
+                    root_runtime_id: None,
                     user_message_revision: history.user_message_revision(),
                     retained_context_complete: true,
                 },
@@ -148,7 +104,8 @@ impl GuardianReviewEvidence {
             return;
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.trusted_skill_turn_id.as_deref() != Some(turn_id) {
+        let changed_turn = state.trusted_skill_turn_id.as_deref() != Some(turn_id);
+        if changed_turn {
             state.trusted_skill_turn_id = Some(turn_id.to_owned());
             state.trusted_skill_paths.clear();
         }
@@ -162,9 +119,13 @@ impl GuardianReviewEvidence {
                 .saturating_add(path.len())
                 > MAX_TRUSTED_SKILL_PATHS_BYTES
         {
+            if changed_turn {
+                self.changes.notify();
+            }
             return;
         }
         state.trusted_skill_paths.insert(path);
+        self.changes.notify();
     }
 
     /// Returns verified skill paths only for their original host-owned turn.

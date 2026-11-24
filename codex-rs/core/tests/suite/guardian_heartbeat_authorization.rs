@@ -133,6 +133,7 @@ async fn heartbeat_keeps_user_restriction_after_status_questions(
     let snapshot = worker
         .guardian_root_snapshot()
         .await
+        .expect("read root snapshot")
         .expect("root snapshot");
     let missing_instructions = snapshot
         .messages
@@ -283,6 +284,7 @@ async fn heartbeat_root_projection_uses_latest_turn_skills(
     let snapshot = worker
         .guardian_root_snapshot()
         .await
+        .expect("read root snapshot")
         .expect("root snapshot");
     let mut expected = vec![
         GuardianRootMessage::RetainedContextScope,
@@ -304,6 +306,7 @@ async fn heartbeat_root_projection_uses_latest_turn_skills(
         worker
             .guardian_root_snapshot()
             .await
+            .expect("read root snapshot")
             .expect("root snapshot")
             .trusted_skill_paths,
         Vec::<String>::new(),

@@ -181,6 +181,7 @@ async fn confirmed_root_delivery_refreshes_pending_worker_allow(
     let before = worker
         .guardian_root_snapshot()
         .await
+        .expect("read root snapshot")
         .expect("root review context")
         .review_context_revision;
     test.codex
@@ -201,6 +202,7 @@ async fn confirmed_root_delivery_refreshes_pending_worker_allow(
             let current = worker
                 .guardian_root_snapshot()
                 .await
+                .expect("read root snapshot")
                 .expect("root review context")
                 .review_context_revision;
             if current != before {

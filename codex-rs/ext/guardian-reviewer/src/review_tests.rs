@@ -1,4 +1,4 @@
-//! Exercises async approval and authorization at the host boundary while cleanup is gated.
+//! Exercises async approval and recovered denials at the host boundary.
 
 use super::*;
 use crate::ReviewMetadata;
@@ -22,6 +22,19 @@ use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 
+const SCORED: CachedApprovalContext = CachedApprovalContext {
+    user_message_revision: 2,
+    review_context_revision: 3,
+    root_versions: Some((
+        crate::GuardianAuthorizationVersion {
+            root_runtime_id: Some([1; 16]),
+            user_message_revision: 1,
+            retained_context_complete: true,
+        },
+        1,
+    )),
+};
+
 #[derive(Clone)]
 struct GatedHost {
     started: Arc<Notify>,
@@ -29,7 +42,7 @@ struct GatedHost {
     cleanup: Arc<Semaphore>,
     cleaned: Arc<AtomicBool>,
     evidence_recorded: Arc<AtomicBool>,
-    current: bool,
+    state: ApprovalState,
     validations: Arc<AtomicUsize>,
 }
 
@@ -91,23 +104,39 @@ impl ReviewHost for GatedHost {
         Option<()>,
     ) {
         assert_eq!(deadline, *preparation_deadline);
-        self.started.notify_one();
-        cancellation.cancelled().await;
-        self.cleaning.notify_one();
-        let _permit = self.cleanup.acquire().await.unwrap();
-        self.cleaned.store(true, Ordering::SeqCst);
-        // A terminal verdict racing with cancellation must not publish late evidence.
+        if matches!(self.state, ApprovalState::RecoveredDenial) {
+            deadline.wait().await;
+        } else {
+            self.started.notify_one();
+            cancellation.cancelled().await;
+            self.cleaning.notify_one();
+            let _permit = self.cleanup.acquire().await.unwrap();
+            self.cleaned.store(true, Ordering::SeqCst);
+        }
         (
             GuardianReviewOutcome::Completed(
-                crate::parse_guardian_assessment(r#"{"outcome":"deny"}"#).unwrap(),
+                crate::parse_guardian_assessment(
+                    r#"{"outcome":"deny","rationale":"First denial"}"#,
+                )
+                .unwrap(),
             ),
             GuardianReviewAnalyticsResult::without_session(),
             Some(()),
         )
     }
-    async fn cached_approval_is_current(&self, _: &Self::Prepared) -> bool {
+    async fn cached_approval_context(&self, _: &Self::Prepared) -> Option<CachedApprovalContext> {
         self.validations.fetch_add(/*val*/ 1, Ordering::SeqCst);
-        self.current
+        let mut current = SCORED;
+        let (authorization, context) = current.root_versions.as_mut().unwrap();
+        match self.state {
+            ApprovalState::Invalidated => return None,
+            ApprovalState::Revoked => authorization.user_message_revision += 1,
+            ApprovalState::ContextChanged => *context += 1,
+            ApprovalState::WorkerRevoked => current.user_message_revision += 1,
+            ApprovalState::WorkerContextChanged => current.review_context_revision += 1,
+            ApprovalState::Current | ApprovalState::Cancelled | ApprovalState::RecoveredDenial => {}
+        }
+        Some(current)
     }
     async fn emit(&self, _: EventMsg) {}
     async fn record_evidence(&self, _: &Self::Prepared, _: (), _: &GuardianAssessmentEvent) {
@@ -122,21 +151,31 @@ impl ReviewHost for GatedHost {
 enum ApprovalState {
     Current,
     Invalidated,
+    Revoked,
+    ContextChanged,
+    WorkerRevoked,
+    WorkerContextChanged,
     Cancelled,
+    RecoveredDenial,
 }
 
 #[test_case::test_case(ApprovalState::Current; "current action")]
 #[test_case::test_case(ApprovalState::Invalidated; "invalidated action")]
+#[test_case::test_case(ApprovalState::Revoked; "root revokes permission after late low")]
+#[test_case::test_case(ApprovalState::ContextChanged; "root review context changes after late low")]
+#[test_case::test_case(ApprovalState::WorkerRevoked; "worker authorization changes after late low")]
+#[test_case::test_case(ApprovalState::WorkerContextChanged; "worker review context changes after late low")]
 #[test_case::test_case(ApprovalState::Cancelled; "cancelled action")]
+#[test_case::test_case(ApprovalState::RecoveredDenial; "hosted timeout retains denial")]
 #[tokio::test(start_paused = true)]
-async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: ApprovalState) {
+async fn review_handles_async_approval_and_timeout(state: ApprovalState) {
     let host = GatedHost {
         started: Arc::new(Notify::new()),
         cleaning: Arc::new(Notify::new()),
         cleanup: Arc::new(Semaphore::new(/*permits*/ 0)),
         cleaned: Arc::new(AtomicBool::new(/*v*/ false)),
         evidence_recorded: Arc::new(AtomicBool::new(/*v*/ false)),
-        current: !matches!(state, ApprovalState::Invalidated),
+        state,
         validations: Arc::new(AtomicUsize::new(/*v*/ 0)),
     };
     let thread_id = ThreadId::new();
@@ -186,11 +225,36 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
         full_access: false,
         cancellation: CancellationToken::new(),
         timeout: Some(crate::REVIEW_TIMEOUT),
+        host_deadline: matches!(state, ApprovalState::RecoveredDenial)
+            .then(|| ReviewDeadline::from_timeout(Some(crate::REVIEW_TIMEOUT))),
         model: &model,
         telemetry: &telemetry,
         log_assessments: false,
         analytics: &analytics,
         metrics: None,
+    };
+    let expected = match state {
+        ApprovalState::Current => ReviewDecision::Approved,
+        ApprovalState::Invalidated
+        | ApprovalState::Revoked
+        | ApprovalState::ContextChanged
+        | ApprovalState::WorkerRevoked
+        | ApprovalState::WorkerContextChanged
+        | ApprovalState::Cancelled => ReviewDecision::Abort,
+        ApprovalState::RecoveredDenial => {
+            let decision = request
+                .review(
+                    GuardianReviewReason::MissingScore,
+                    /*async_approval*/ None,
+                )
+                .await;
+            assert!(
+                matches!(decision, Some(ReviewDecision::Denied { rejection })
+                if rejection.contains("First denial"))
+            );
+            assert!(host.evidence_recorded.load(Ordering::SeqCst));
+            return;
+        }
     };
     let decision = request.review(
         GuardianReviewReason::MissingScore,
@@ -199,6 +263,7 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
             if matches!(state, ApprovalState::Cancelled) {
                 request.cancellation.cancel();
             }
+            SCORED
         })),
     );
     tokio::pin!(decision);
@@ -207,13 +272,7 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
         decision = &mut decision => decision,
         () = host.cleaning.notified() => panic!("async decision waited for the cancelled review to drain"),
     };
-    assert_eq!(
-        decision,
-        Some(match state {
-            ApprovalState::Current => ReviewDecision::Approved,
-            ApprovalState::Invalidated | ApprovalState::Cancelled => ReviewDecision::Abort,
-        })
-    );
+    assert_eq!(decision, Some(expected));
     assert_eq!(host.validations.load(Ordering::SeqCst), 1);
     host.cleaning.notified().await;
     assert!(!host.cleaned.load(Ordering::SeqCst));

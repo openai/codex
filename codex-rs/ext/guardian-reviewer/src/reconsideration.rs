@@ -47,7 +47,7 @@ impl DenialResample {
         mut result: ReviewTurnResult,
         telemetry: &SessionTelemetry,
     ) -> ReviewTurnResult {
-        let Some(first) = self
+        let Some(mut first) = self
             .denial
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -93,6 +93,7 @@ impl DenialResample {
         );
         if assessment.is_none() && !matches!(result.outcome, GuardianReviewSessionOutcome::Aborted)
         {
+            first.response.recovered_denial = !result.turn_completed;
             result.outcome = GuardianReviewSessionOutcome::Completed(Ok(Some(first.response)));
             // Preserve the last committed reviewer context, without retaining a failed retry.
             if result.disposition == SessionDisposition::Reusable {

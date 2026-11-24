@@ -207,6 +207,7 @@ async fn request_user_input_sets_non_blocking_outside_plan_mode(
     assert_eq!(
         evidence.authorization_version(history.as_ref()),
         GuardianAuthorizationVersion {
+            root_runtime_id: None,
             user_message_revision: original_history.user_message_revision() + u64::from(has_answer),
             retained_context_complete: expected.complete,
         },

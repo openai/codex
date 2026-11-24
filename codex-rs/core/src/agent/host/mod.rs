@@ -1,5 +1,6 @@
 mod admission;
 mod completion;
+mod guardian;
 mod invocation;
 mod mcp_metadata;
 mod ownership;
@@ -12,6 +13,7 @@ mod usage;
 pub use admission::AgentTurnAdmission;
 pub use admission::AgentTurnAdmissionRequest;
 pub use completion::AgentTurnOutcomeReporter;
+pub use guardian::AgentGuardianContext;
 pub use invocation::HostToolInvocationLookup;
 pub(crate) use invocation::InvocationReservation;
 pub use invocation::ToolInvocationContext;

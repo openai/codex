@@ -126,7 +126,7 @@ impl<T> Ordered<T> {
 
 /// Inherited prefix order precedes the owning thread's local acceptance order.
 /// The counters have separate scopes and must not be compared without their origin.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum RetainedContextOrder {
     Inherited(u64),
     Local(u64),

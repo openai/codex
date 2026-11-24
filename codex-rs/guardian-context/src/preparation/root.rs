@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RootMessageCandidate {
     pub order: Option<RetainedContextOrder>,
     pub message: GuardianRootMessage,
@@ -55,7 +55,6 @@ pub struct RootConversationCandidates<'a> {
     pub delivered_messages: Vec<RootDeliveredMessage<'a>>,
     /// Retained identities used for legacy matching after request-size preparation.
     pub retained_user_sources: Vec<RetainedUserMessage>,
-    pub handoff_boundaries: Vec<RetainedContextOrder>,
     pub latest_user_turn_id: Option<String>,
     pub missing_root_instructions: bool,
     pub missing_assistant_context: bool,
@@ -68,34 +67,35 @@ impl std::fmt::Debug for RootConversationCandidates<'_> {
     }
 }
 
-/// An immutable host snapshot that lends sources only during synchronous preparation.
-/// Implementations must preserve capture-time provenance and avoid reading live session state.
-pub trait RootConversationSource: Send + Sync {
-    /// Prepares one request view without changing captured sources or storage policy.
-    fn prepare(&self, budgeting: ContextBudgeting) -> PreparedRootContext;
-}
-
 /// Shared ownership keeps captured source payloads alive without copying them.
 /// Equality identifies the same capture, rather than comparing potentially sensitive payloads.
 #[derive(Clone)]
 pub struct RootConversationInput {
-    source: std::sync::Arc<dyn RootConversationSource>,
+    elastic: std::sync::Arc<dyn Fn() -> PreparedRootContext + Send + Sync>,
     fixed: std::sync::Arc<PreparedRootContext>,
 }
 
 impl RootConversationInput {
-    pub fn new(source: impl RootConversationSource + 'static) -> Self {
-        let fixed = source.prepare(ContextBudgeting::Fixed);
+    /// Both views must use the same frozen evidence. Native callers prepare elastic
+    /// candidates lazily, while a host can supply candidates captured on another worker.
+    pub fn new(
+        fixed: PreparedRootCandidates,
+        boundaries: Vec<RetainedContextOrder>,
+        elastic: impl Fn() -> PreparedRootCandidates + Send + Sync + 'static,
+    ) -> Self {
+        let fixed = select_root_context(fixed, &boundaries, ContextBudgeting::Fixed);
         Self {
-            source: std::sync::Arc::new(source),
             fixed: std::sync::Arc::new(fixed),
+            elastic: std::sync::Arc::new(move || {
+                select_root_context(elastic(), &boundaries, ContextBudgeting::Elastic)
+            }),
         }
     }
 
     pub fn prepare(&self, budgeting: ContextBudgeting) -> PreparedRootContext {
         match budgeting {
             ContextBudgeting::Fixed => self.fixed.as_ref().clone(),
-            ContextBudgeting::Elastic => self.source.prepare(budgeting),
+            ContextBudgeting::Elastic => (self.elastic)(),
         }
     }
 }
@@ -108,7 +108,7 @@ impl std::fmt::Debug for RootConversationInput {
 
 impl PartialEq for RootConversationInput {
     fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.source, &other.source)
+        std::sync::Arc::ptr_eq(&self.fixed, &other.fixed)
     }
 }
 
@@ -290,13 +290,24 @@ pub struct PreparedRootContext {
     pub latest_user_turn_id: Option<String>,
 }
 
-/// Prepares the selected request policy without changing the captured sources.
-pub fn prepare_root_context(
+/// Resolved root messages for one budgeting policy, before worker selection and the final cap.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreparedRootCandidates {
+    messages: Vec<RootMessageCandidate>,
+    legacy_messages: VecDeque<GuardianRootMessage>,
+    missing_root_instructions: bool,
+    missing_verified_answers: bool,
+    missing_assistant_context: bool,
+    pub latest_user_turn_id: Option<String>,
+}
+
+/// Reconciles the captured evidence once for reuse across workers.
+pub fn prepare_root_candidates(
     input: &RootConversationCandidates<'_>,
     legacy_candidates: impl IntoIterator<Item = RetainedUserMessage>,
     budgeting: ContextBudgeting,
-) -> PreparedRootContext {
-    let mut missing_root_instructions = input.missing_root_instructions;
+) -> PreparedRootCandidates {
+    let missing_root_instructions = input.missing_root_instructions;
     let mut missing_verified_answers = input.missing_verified_answers;
     // Verified answers stay whole; ordinary root user text keeps its existing cap.
     let mut messages = input
@@ -360,13 +371,34 @@ pub fn prepare_root_context(
         input.missing_assistant_context,
         budgeting,
     );
-    let mut missing_assistant_context = assistants.missing_context;
     messages.extend(assistants.messages);
     messages.sort_by_key(|message| message.order);
+    PreparedRootCandidates {
+        messages,
+        legacy_messages,
+        missing_root_instructions,
+        missing_verified_answers,
+        missing_assistant_context: assistants.missing_context,
+        latest_user_turn_id: input.latest_user_turn_id.clone().or(latest_legacy_turn_id),
+    }
+}
+
+/// Applies the worker's handoff windows and the same policy used to prepare the candidates.
+fn select_root_context(
+    candidates: PreparedRootCandidates,
+    boundaries: &[RetainedContextOrder],
+    budgeting: ContextBudgeting,
+) -> PreparedRootContext {
+    let PreparedRootCandidates {
+        mut messages,
+        mut legacy_messages,
+        mut missing_root_instructions,
+        missing_verified_answers,
+        mut missing_assistant_context,
+        latest_user_turn_id,
+    } = candidates;
     let handoff_selection = match budgeting {
-        ContextBudgeting::Fixed => {
-            select_root_handoff_indices(&messages, &input.handoff_boundaries)
-        }
+        ContextBudgeting::Fixed => select_root_handoff_indices(&messages, boundaries),
         ContextBudgeting::Elastic => None,
     };
     if let Some(selected) = &handoff_selection {
@@ -442,6 +474,6 @@ pub fn prepare_root_context(
         messages,
         missing_root_instructions,
         handoff_selection,
-        latest_user_turn_id: input.latest_user_turn_id.clone().or(latest_legacy_turn_id),
+        latest_user_turn_id,
     }
 }

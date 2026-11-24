@@ -133,6 +133,9 @@ pub enum LunaSamplerError {
     /// The classification expired, lost its owning generation, or was replaced at capacity.
     #[error("Luna request was superseded by a newer classification")]
     Superseded,
+    /// Root evidence could not be checked for this classification.
+    #[error("Guardian root evidence unavailable")]
+    RootEvidenceUnavailable,
     /// The complete classifier input exceeded the model allowance.
     #[error("Luna input exceeds the complete request budget")]
     InputTooLarge,

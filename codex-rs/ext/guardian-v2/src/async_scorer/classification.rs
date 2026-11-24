@@ -166,7 +166,7 @@ impl Classification {
                     None => None,
                 };
                 let root_snapshot = if context_mode != GuardianContextMode::Legacy {
-                    root_snapshot
+                    Ok(root_snapshot)
                 } else {
                     thread.guardian_root_snapshot().await
                 };
@@ -186,6 +186,19 @@ impl Classification {
                 "superseded",
                 /*classification_risk*/ None,
                 /*failure_reason*/ None,
+            );
+            return;
+        };
+        let Ok(root_snapshot) = root_snapshot else {
+            score_progress.fail_closed(sampled_at, tool_call_index);
+            record_classification(
+                metrics.as_deref(),
+                probe_comparison.as_ref(),
+                context_mode,
+                classification_started_at.elapsed(),
+                "failure",
+                /*classification_risk*/ None,
+                Some("root_evidence_unavailable"),
             );
             return;
         };
@@ -209,11 +222,8 @@ impl Classification {
             .map(|snapshot| snapshot.review_context_revision);
 
         let score_authorization = ScoreAuthorization {
-            local: authorization_version,
-            review_context_revision,
             root: root_authorization_version,
             root_review_context_revision,
-            model: parent_model.clone(),
             ..score_authorization
         };
         let action_section = PlannedAction {
@@ -422,11 +432,16 @@ impl Classification {
                 ),
                 sampled_at: Some(sampled_at.into()),
             };
-            if !score_authorization.is_current(&thread).await
-                || !active.load(std::sync::atomic::Ordering::Acquire)
+            let current = score_authorization.is_current(&thread).await;
+            if !active.load(std::sync::atomic::Ordering::Acquire)
                 || generation.strong_count() == 0
+                || matches!(current, Ok(false))
             {
                 return Ok(ClassificationOutcome::Superseded);
+            }
+            if current.is_err() {
+                failure_reason = "root_evidence_unavailable";
+                return Err(LunaSamplerError::RootEvidenceUnavailable.to_string());
             }
             let accepted =
                 score_progress.publish(score.clone(), score_authorization, tool_call_index);

@@ -126,9 +126,23 @@ async fn guardian_denial_reconsideration() -> Result<()> {
     requests.sort_by_key(|request| {
         request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
     });
-    let mut snapshot = context_snapshot::format_request_history_snapshot(
+    let snapshot = format_guardian_exec_history(
         "Guardian retries the same request after a denial and preserves evidence for the next review. Only selected assessments enter history. Parent and reviewer streams are grouped.",
         &requests,
+        test,
+    )?;
+    insta::assert_snapshot!("guardian_denial_reconsideration", snapshot);
+    Ok(())
+}
+
+pub(super) fn format_guardian_exec_history(
+    scenario: &str,
+    requests: &[responses::ResponsesRequest],
+    test: &super::TestCodex,
+) -> Result<String> {
+    let mut snapshot = context_snapshot::format_request_history_snapshot(
+        scenario,
+        requests,
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
     let environment_id = &test.executor_environment().selection().environment_id;
@@ -149,6 +163,5 @@ async fn guardian_denial_reconsideration() -> Result<()> {
             .replace_all(&snapshot, replacement)
             .into_owned();
     }
-    insta::assert_snapshot!("guardian_denial_reconsideration", snapshot);
-    Ok(())
+    Ok(snapshot)
 }

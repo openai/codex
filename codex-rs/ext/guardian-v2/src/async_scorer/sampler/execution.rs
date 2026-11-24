@@ -145,6 +145,7 @@ impl SamplingExecution {
             LunaSamplerError::Provider(_)
             | LunaSamplerError::MissingOutput
             | LunaSamplerError::OutputTooLarge
+            | LunaSamplerError::RootEvidenceUnavailable
             | LunaSamplerError::Superseded
             | LunaSamplerError::InputTooLarge
             | LunaSamplerError::QueueFull

@@ -162,18 +162,27 @@ pub(crate) fn decide_approval(
         };
         let mut require_synchronous_review =
             options.require_synchronous_review || attached_reviewer.is_some();
-        if let Some(assessment) = &context.serving_assessment {
+        let host_deadline = session.host_guardian_context().map(|_| {
+            codex_guardian_reviewer::ReviewDeadline::from_timeout(
+                turn.config.guardian_review_timeout,
+            )
+        });
+        if !require_synchronous_review && let Some(assessment) = &context.serving_assessment {
             let permissions = request.request.as_ref().ok().and_then(|request| {
                 super::permissions::for_environment(&context, request.target_environment_id()).ok()
             });
-            require_synchronous_review |= !assessment.authorization.local.retained_context_complete
+            require_synchronous_review = !assessment.authorization.local.retained_context_complete
                 || permissions.as_ref() != Some(&assessment.authorization.permissions)
-                || assessment.authorization
-                    != super::ScoreAuthorization::for_session(
+                || !codex_guardian_reviewer::with_root_evidence_limits(
+                    host_deadline,
+                    &cancellation,
+                    super::ScoreAuthorization::for_session(
                         &session,
                         &assessment.authorization.permissions,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .is_ok_and(|current| assessment.authorization == current);
             // MCP prepares the call after the response is scored. The score must
             // also match the rules of the server that will handle the call.
             if !require_synchronous_review
@@ -220,6 +229,7 @@ pub(crate) fn decide_approval(
             full_access,
             cancellation: cancellation.clone(),
             timeout: turn.config.guardian_review_timeout,
+            host_deadline,
             // Keep the existing turn-level reporting policy during this ownership move.
             model: turn.model_info(),
             telemetry: &turn.session_telemetry,

@@ -98,12 +98,17 @@ pub enum GuardianReviewSessionOutcome {
 pub struct GuardianReviewResponse {
     raw: String,
     assessment: anyhow::Result<GuardianAssessment>,
+    pub(crate) recovered_denial: bool,
 }
 
 impl GuardianReviewResponse {
     pub fn new(raw: String) -> Self {
         let assessment = crate::parse_guardian_assessment(&raw);
-        Self { raw, assessment }
+        Self {
+            raw,
+            assessment,
+            recovered_denial: false,
+        }
     }
 
     pub fn raw(&self) -> &str {
@@ -125,6 +130,11 @@ impl std::fmt::Debug for GuardianReviewResponse {
 }
 
 impl GuardianReviewSessionOutcome {
+    /// The first denial survived an interrupted second sample.
+    pub fn is_recovered_denial(&self) -> bool {
+        matches!(self, Self::Completed(Ok(Some(response))) if response.recovered_denial)
+    }
+
     /// Extract the assessment produced by one reviewer session, preserving failures.
     pub fn into_assessment(self) -> Result<GuardianAssessment, GuardianReviewError> {
         match self {

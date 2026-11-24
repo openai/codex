@@ -47,7 +47,7 @@ impl PreparedGuardianContext {
             GuardianContextMode::from_history(history.conversation_history_snapshot().as_ref());
         let context_policy = ReviewContextPolicy::for_context(context_mode, &config.features);
         let root_review_version =
-            context_policy::root_review_version(context_policy, &parent).await;
+            context_policy::root_review_version(context_policy, &parent).await?;
         let parent_compaction = context_policy.parent_compaction(history.annotated_items())?;
         let mut instructions = parent.inherited_instructions().await;
         context.capture_project_instructions(&parent).await;
@@ -317,6 +317,12 @@ impl ReviewerRequest for PreparedReview {
                 .await
         {
             let outcome = invalidation.outcome;
+            if matches!(outcome, GuardianReviewSessionOutcome::TimedOut)
+                && result.outcome.is_recovered_denial()
+            {
+                // Keep the first denial and the interrupted turn's rollback or discard.
+                return result;
+            }
             result.analytics.context_changed |= invalidation.context_changed;
             result.disposition =
                 if matches!(outcome, GuardianReviewSessionOutcome::StaleAuthorization)

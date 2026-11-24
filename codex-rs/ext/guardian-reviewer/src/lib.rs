@@ -28,6 +28,7 @@ pub use elicitation::GuardianElicitationReview;
 pub use elicitation::guardian_elicitation_review_request;
 pub use elicitation::mcp_elicitation_decline_without_message;
 pub use elicitation::mcp_elicitation_response_from_guardian_decision;
+mod evidence_changes;
 mod feedback;
 mod metrics;
 mod model;
@@ -91,7 +92,9 @@ pub const MAX_REVIEW_ATTEMPTS: i64 = 3;
 pub const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 pub use deadline::ReviewDeadline;
+pub use deadline::root_evidence_limits;
 pub use deadline::run_before_review_deadline;
+pub use deadline::with_root_evidence_limits;
 pub use pool::ReviewSessionResult;
 pub use pool::ReviewerPool;
 pub use pool::ReviewerRequest;
@@ -133,6 +136,7 @@ pub use reporting::ReviewReport;
 pub use routing::ReviewRequest;
 pub use routing::routes_approval_policy_to_guardian;
 
+pub use evidence_changes::GuardianEvidenceChanges;
 pub use node_repl_review_evidence::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
 pub use node_repl_review_evidence::NodeReplReviewEvidence;
 pub use node_repl_review_evidence::NodeReplReviewEvidenceSnapshot;

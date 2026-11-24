@@ -1547,13 +1547,19 @@ impl CodexThread {
             .authorization_version(history.as_ref())
     }
 
-    /// Captures root originals and authorization before request-size preparation.
-    pub async fn guardian_root_snapshot(&self) -> Option<GuardianRootSnapshot> {
-        self.session
-            .services
-            .agent_control
-            .get_guardian_package(self.session.thread_id)
-            .await
+    /// Subscribes to coalesced committed changes to this runtime's Guardian evidence.
+    /// Release the watch borrow before calling Core or awaiting other work.
+    pub fn subscribe_guardian_evidence_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.thread_extension_data()
+            .get_or_init(GuardianReviewEvidence::default)
+            .changes
+            .subscribe()
+    }
+
+    /// Captures root originals and authorization before request-size preparation. A configured
+    /// host provider's failure is returned rather than treated as absent evidence.
+    pub async fn guardian_root_snapshot(&self) -> CodexResult<Option<GuardianRootSnapshot>> {
+        self.session.guardian_root_snapshot().await
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied
