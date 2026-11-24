@@ -46,6 +46,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -1124,6 +1125,7 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
+    const LEASE_OPEN_DELAY_MS: u64 = 100;
     skip_if_no_network!(Ok(()));
     core_test_support::skip_if_remote!(Ok(()), "the shared stdio fixture runs on the host");
     skip_if_wine_exec!(Ok(()), "requires the native stdio server");
@@ -1153,7 +1155,11 @@ async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
                         "cached_rmcp": {
                             "command": command,
                             "cwd": config.cwd,
-                            "env": { "MCP_TEST_DYNAMIC_SERVER_METADATA": "1" },
+                            "env": {
+                                "MCP_TEST_DYNAMIC_SERVER_METADATA": "1",
+                                "MCP_TEST_LEASE_EVENTS_FILE": config.codex_home.join("mcp-leases"),
+                                "MCP_TEST_LEASE_OPEN_DELAY_MS": LEASE_OPEN_DELAY_MS.to_string(),
+                            },
                             "enabled_tools": ["echo"]
                         }
                     }))
@@ -1204,6 +1210,24 @@ async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
     }
     assert_ne!(processes[0], processes[1]);
     assert_eq!(processes[1], processes[2]);
+
+    for (thread, started_process) in [(&first, true), (&second, false)] {
+        let duration_ms = wait_for_event_match(thread, |event| match event {
+            EventMsg::McpStartupUpdate(update)
+                if update.server == SERVER_NAME
+                    && matches!(update.status, McpStartupStatus::Ready) =>
+            {
+                Some(update.duration_ms)
+            }
+            _ => None,
+        })
+        .await;
+        if started_process {
+            assert!(duration_ms.is_some_and(|ms| ms >= LEASE_OPEN_DELAY_MS));
+        } else {
+            assert_eq!(duration_ms, None);
+        }
+    }
 
     let response =
         responses::mount_sse_once(&responses_server, responses::sse_completed("unrelated")).await;

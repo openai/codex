@@ -2059,15 +2059,23 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     release_apps_recovery
         .send(())
         .expect("background Apps recovery should still be waiting");
-    wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::McpStartupUpdate(update)
-                if update.server == CODEX_APPS_MCP_SERVER_NAME
-                    && matches!(update.status, codex_protocol::protocol::McpStartupStatus::Ready)
-        )
+    let duration_ms = core_test_support::wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::McpStartupUpdate(update)
+            if update.server == CODEX_APPS_MCP_SERVER_NAME
+                && matches!(
+                    update.status,
+                    codex_protocol::protocol::McpStartupStatus::Ready
+                ) =>
+        {
+            Some(update.duration_ms)
+        }
+        _ => None,
     })
     .await;
+    assert!(
+        duration_ms.is_some(),
+        "Apps recovery should report its own startup duration"
+    );
 
     test.codex
         .submit(Op::UserInputAnswer {

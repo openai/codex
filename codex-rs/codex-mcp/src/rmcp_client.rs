@@ -30,6 +30,7 @@ use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -210,7 +211,9 @@ impl CodexAppsStartupReconnect {
 
         let reconnect = Arc::clone(self);
         let attempt = async move {
+            let started_at = Instant::now();
             let result = (reconnect.factory)().await;
+            let duration_ms = elapsed_ms(started_at);
             let startup_status_context = reconnect.startup_status_context.clone();
             let recovered = {
                 let mut state = reconnect
@@ -253,6 +256,7 @@ impl CodexAppsStartupReconnect {
                                 .scoped_environment_id()
                                 .map(str::to_owned),
                             status: McpStartupStatus::Ready,
+                            duration_ms: Some(duration_ms),
                         }),
                     })
                     .await;
@@ -266,6 +270,34 @@ impl CodexAppsStartupReconnect {
         // Keep recovery running if the invocation waiting for it is cancelled.
         tokio::spawn(attempt.clone());
         Some(attempt)
+    }
+}
+
+fn elapsed_ms(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+pub(crate) struct StartupMeasurement {
+    duration_ms: u64,
+    succeeded: bool,
+}
+
+impl StartupMeasurement {
+    fn new(started_at: Instant, outcome: &Result<ManagedClient, StartupOutcomeError>) -> Self {
+        Self {
+            duration_ms: elapsed_ms(started_at),
+            succeeded: outcome.is_ok(),
+        }
+    }
+
+    pub(crate) fn duration_ms_for(&self, status: &McpStartupStatus) -> Option<u64> {
+        // Apps recovery or a legacy fallback may have supplied a working client
+        // after the attempt we timed failed.
+        match status {
+            McpStartupStatus::Ready => self.succeeded.then_some(self.duration_ms),
+            McpStartupStatus::Failed { .. } => (!self.succeeded).then_some(self.duration_ms),
+            McpStartupStatus::Starting | McpStartupStatus::Cancelled => None,
+        }
     }
 }
 
@@ -308,7 +340,7 @@ impl ManagedClientStartup {
         &self,
         sharing_declined: Option<CancellationToken>,
         publish_apps: Option<watch::Sender<Option<std::sync::Weak<RmcpClient>>>>,
-    ) -> ManagedClientFuture {
+    ) -> impl Future<Output = Result<ManagedClient, StartupOutcomeError>> + Send + use<> {
         // A new attempt must not expose capabilities from an earlier connection.
         *self
             .server_capabilities
@@ -493,10 +525,7 @@ impl ManagedClientStartup {
             startup_complete.store(true, Ordering::Release);
             outcome
         };
-        originator
-            .scope(codex_rmcp_client::McpRequestTrace::current().scope(Box::pin(startup)))
-            .boxed()
-            .shared()
+        originator.scope(codex_rmcp_client::McpRequestTrace::current().scope(Box::pin(startup)))
     }
 }
 
@@ -526,6 +555,7 @@ impl AsyncManagedClient {
         ema_auth: Option<crate::ema_auth::EmaAuthContext>,
         server_key: McpServerKey,
         startup_submit_id: String,
+        initial_measurement: Arc<OnceLock<StartupMeasurement>>,
         server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
@@ -623,7 +653,7 @@ impl AsyncManagedClient {
             let client = async move {
                 let outcome = pool
                     .connect(
-                        slot,
+                        Arc::clone(&slot),
                         key,
                         server_capabilities,
                         pool_catalog,
@@ -631,7 +661,10 @@ impl AsyncManagedClient {
                         |cancellation, sharing_declined| {
                             let mut shared_startup = (*startup).clone();
                             shared_startup.cancel_token = cancellation;
-                            shared_startup.start(sharing_declined, /*publish_apps*/ None)
+                            shared_startup
+                                .start(sharing_declined, /*publish_apps*/ None)
+                                .boxed()
+                                .shared()
                         },
                     )
                     .await
@@ -647,6 +680,10 @@ impl AsyncManagedClient {
                         }
                         client
                     });
+                // Include lease registration, but don't count joining an existing connection.
+                if let Some(&started_at) = slot.started_at.get() {
+                    let _ = initial_measurement.set(StartupMeasurement::new(started_at, &outcome));
+                }
                 startup_complete.store(true, Ordering::Release);
                 outcome
             }
@@ -654,13 +691,26 @@ impl AsyncManagedClient {
             .shared();
             (client, Some(connection_slot))
         } else {
-            (startup.start(/*sharing_declined*/ None, publish_apps), None)
+            let startup = startup.start(/*sharing_declined*/ None, publish_apps);
+            let client = async move {
+                // Deferred connections can remain dormant until the first poll.
+                let started_at = Instant::now();
+                let outcome = startup.await;
+                let _ = initial_measurement.set(StartupMeasurement::new(started_at, &outcome));
+                outcome
+            }
+            .boxed()
+            .shared();
+            (client, None)
         };
         let startup_reconnect = is_codex_apps_mcp_server.then(|| {
             let startup = Arc::clone(&startup);
             Arc::new(
                 CodexAppsStartupReconnect::new(Arc::new(move || {
-                    startup.start(/*sharing_declined*/ None, /*publish_apps*/ None)
+                    startup
+                        .start(/*sharing_declined*/ None, /*publish_apps*/ None)
+                        .boxed()
+                        .shared()
                 }))
                 .with_startup_status_context(
                     startup_submit_id,
@@ -1749,6 +1799,15 @@ mod tests {
     use rmcp::model::JsonObject;
     use rmcp::model::MetaObject;
     use rmcp::transport::auth::AuthError;
+
+    #[test]
+    fn failed_startup_timing_does_not_describe_a_recovered_connection() {
+        let failed = Err(StartupOutcomeError::from(anyhow!(
+            "initial connection failed"
+        )));
+        let measurement = StartupMeasurement::new(Instant::now(), &failed);
+        assert_eq!(measurement.duration_ms_for(&McpStartupStatus::Ready), None);
+    }
 
     #[test]
     fn startup_outcome_error_identifies_authentication_required() {

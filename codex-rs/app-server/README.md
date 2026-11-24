@@ -588,6 +588,14 @@ switching models. Setting `friendly` or `pragmatic` can replace a previous
 thread's existing instructions or change explicitly supplied base instructions.
 The old `features.personality` flag is ignored.
 
+# MCP server startup
+
+`mcpServer/startupStatus/updated` reports each server's startup state. On
+`ready` or `failed`, `durationMs` gives the elapsed milliseconds for that
+server's startup attempt, even when notifications arrive together. It is null
+when there is no new measurement, including for reused connections, `starting`
+and `cancelled`. Older servers omit the field.
+
 # MCP server capabilities
 
 `mcpServerStatus/list` returns `serverCapabilities` for each initialized MCP server

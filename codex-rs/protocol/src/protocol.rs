@@ -4277,6 +4277,10 @@ pub struct McpStartupUpdateEvent {
     pub environment_id: Option<String>,
     /// Current startup status.
     pub status: McpStartupStatus,
+    /// Time spent initializing this server, when reporting a measured startup outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -6937,12 +6941,14 @@ mod tests {
                     error: "boom".to_string(),
                     reason: Some(McpStartupFailureReason::ReauthenticationRequired),
                 },
+                duration_ms: Some(1_250),
             }),
         };
 
         let value = serde_json::to_value(&event)?;
         assert_eq!(value["msg"]["type"], "mcp_startup_update");
         assert_eq!(value["msg"]["server"], "srv");
+        assert_eq!(value["msg"]["duration_ms"], 1_250);
         assert_eq!(value["msg"]["status"]["state"], "failed");
         assert_eq!(value["msg"]["status"]["error"], "boom");
         assert_eq!(

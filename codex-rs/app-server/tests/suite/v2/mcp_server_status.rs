@@ -150,7 +150,7 @@ async fn desktop_socket_mcp_startup(
     Ok(())
 }
 
-async fn recording_widget_server() -> (MockServer, serde_json::Value) {
+async fn recording_widget_server(initialize_delay: Duration) -> (MockServer, serde_json::Value) {
     let server = MockServer::start().await;
     let tool = json!({
         "name": "open_widget",
@@ -179,13 +179,69 @@ async fn recording_widget_server() -> (MockServer, serde_json::Value) {
                 }),
                 _ => return ResponseTemplate::new(202),
             };
-            ResponseTemplate::new(200).set_body_json(json!({
+            let response = ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0", "id": request["id"], "result": result
-            }))
+            }));
+            if request["method"] == "initialize" {
+                response.set_delay(initialize_delay)
+            } else {
+                response
+            }
         })
         .mount(&server)
         .await;
     (server, tool)
+}
+
+#[tokio::test]
+async fn required_mcp_servers_report_independent_startup_durations() -> Result<()> {
+    const DELAY_MS: u64 = 500;
+    let (fast, _) = recording_widget_server(Duration::ZERO).await;
+    let (slow, _) = recording_widget_server(Duration::from_millis(DELAY_MS)).await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&fast.uri())
+        .with_root_config("mcp_oauth_credentials_store = \"file\"")
+        .with_extra_config(&format!(
+            r#"[mcp_servers.fast]
+url = "{}/mcp"
+required = true
+
+[mcp_servers.slow]
+url = "{}/mcp"
+required = true"#,
+            fast.uri(),
+            slow.uri()
+        ))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    // Required servers finish before thread/start returns and the client sees their updates.
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let mut durations = BTreeMap::new();
+    for name in ["fast", "slow"] {
+        let ready = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_matching_notification("required MCP ready", |notification| {
+                notification.method == "mcpServer/startupStatus/updated"
+                    && notification.params.as_ref().is_some_and(|params| {
+                        params["threadId"] == thread.id
+                            && params["name"] == name
+                            && params["status"] == "ready"
+                    })
+            }),
+        )
+        .await??;
+        let duration_ms = ready.params.expect("ready params")["durationMs"]
+            .as_u64()
+            .expect("measured duration");
+        durations.insert(name, duration_ms);
+    }
+    assert!(durations["slow"] >= DELAY_MS, "{durations:?}");
+    assert!(durations["fast"] < durations["slow"], "{durations:?}");
+    Ok(())
 }
 
 #[test_case("http_headers = { Authorization = \"Bearer fixed-test-token\" }", 1; "fixed authorization")]
@@ -195,7 +251,7 @@ async fn mcp_server_status_discovers_thread_inventory(
     headers: &str,
     expected_lightweight_initializations: usize,
 ) -> Result<()> {
-    let (server, tool) = recording_widget_server().await;
+    let (server, tool) = recording_widget_server(Duration::ZERO).await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_root_config("mcp_oauth_credentials_store = \"file\"")
@@ -298,7 +354,7 @@ async fn mcp_server_status_discovers_thread_inventory(
 
 #[tokio::test]
 async fn mcp_server_status_list_discovers_only_the_requested_page() -> Result<()> {
-    let (server, _) = recording_widget_server().await;
+    let (server, _) = recording_widget_server(Duration::ZERO).await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -1866,16 +1922,19 @@ async fn mcp_server_status_keeps_same_named_environment_inventory_separate() -> 
                 })
         })
         .await?;
+    let params = notification.params.expect("notes ready params");
+    let duration_ms = params["durationMs"].as_u64().expect("measured duration");
     assert_eq!(
-        notification.params,
-        Some(serde_json::json!({
+        params,
+        json!({
             "threadId": thread.id,
             "name": "notes",
             "environmentId": "env-a",
             "status": "ready",
+            "durationMs": duration_ms,
             "error": null,
             "failureReason": null,
-        }))
+        })
     );
     let response: ListMcpServerStatusResponse = app
         .request(|request_id| ClientRequest::McpServerStatusList {

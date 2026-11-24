@@ -766,6 +766,14 @@ impl ServerHandler for TestToolServer {
             .and_then(|params| params.get("leaseId"))
             .ok_or_else(|| McpError::invalid_params("missing lease ID", None))?;
         record_lease_event(&request.method, id)?;
+        if request.method == "codex/connection/open"
+            && let Ok(delay) = std::env::var("MCP_TEST_LEASE_OPEN_DELAY_MS")
+        {
+            let delay = delay
+                .parse()
+                .map_err(|_| McpError::invalid_params("invalid lease delay", None))?;
+            sleep(Duration::from_millis(delay)).await;
+        }
         Ok(rmcp::model::CustomResult(serde_json::json!({})))
     }
 

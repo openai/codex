@@ -3139,6 +3139,15 @@
     },
     "McpServerStatusUpdatedNotification": {
       "properties": {
+        "durationMs": {
+          "description": "Elapsed startup time for a measured attempt. Older servers omit this field.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "environmentId": {
           "description": "Registration scope, not necessarily the server's execution environment.",
           "type": [

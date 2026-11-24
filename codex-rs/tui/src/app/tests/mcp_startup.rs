@@ -45,6 +45,7 @@ async fn remote_mcp_startup_settles_when_attaching_mid_round() -> Result<()> {
                 thread_id: Some(id.to_string()),
                 name: name.to_string(),
                 status,
+                duration_ms: None,
                 error: None,
                 failure_reason: None,
             })
@@ -162,6 +163,7 @@ async fn remote_mcp_startup_reports_terminal_only_failures_and_cancellations() -
                 environment_id: None,
                 thread_id: Some(id.to_string()),
                 name: name.to_string(),
+                duration_ms: None,
                 error: (status == Failed).then(|| error.to_string()),
                 failure_reason: (status == Failed).then_some(ReauthenticationRequired),
                 status,
@@ -267,6 +269,7 @@ async fn subagent_mcp_startup_settles_while_cached_servers_remain_deferred() {
                     thread_id: Some(subagent_thread_id.to_string()),
                     name: name.to_string(),
                     status,
+                    duration_ms: None,
                     error: None,
                     failure_reason: None,
                 }),
@@ -317,6 +320,7 @@ async fn resumed_subagent_mcp_startup_settles_while_cached_servers_remain_deferr
                 thread_id: Some(subagent_thread_id.to_string()),
                 name: "eager".to_string(),
                 status,
+                duration_ms: None,
                 error: None,
                 failure_reason: None,
             }),
@@ -348,6 +352,7 @@ async fn side_conversations_settle_despite_unreported_locally_configured_servers
                 thread_id: Some(side_thread_id.to_string()),
                 name: "eager".to_string(),
                 status,
+                duration_ms: None,
                 error: None,
                 failure_reason: None,
             }),
@@ -356,4 +361,38 @@ async fn side_conversations_settle_despite_unreported_locally_configured_servers
     }
 
     assert!(!app.chat_widget.is_task_running_for_test());
+}
+
+#[tokio::test]
+async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.active_thread_id = Some(thread_id);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                environment_id: None,
+                thread_id: None,
+                name: "sentry".to_string(),
+                status: McpServerStartupState::Failed,
+                duration_ms: None,
+                error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
+            }),
+        )),
+    )
+    .await;
+
+    assert!(app_event_rx.try_recv().is_err());
+    assert_eq!(
+        app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+        None
+    );
 }

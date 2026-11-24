@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_async_utils::OrCancelExt;
 use codex_connectors::ConnectorRuntimeContextKey;
@@ -203,6 +204,8 @@ pub(crate) struct ConnectionLease {
 pub(crate) struct ConnectionSlot {
     state: Mutex<SlotState>,
     shutdown_tasks: OnceLock<TaskTracker>,
+    /// Set only if this acquisition started the selected connection.
+    pub(crate) started_at: OnceLock<Instant>,
 }
 
 #[derive(Default)]
@@ -325,6 +328,7 @@ impl McpConnectionPool {
                 // Older or failed servers leave other chats to initialize privately
                 // with their own elicitation authority.
                 drop(lease);
+                let _ = slot.started_at.set(Instant::now());
                 start(cancellation, /*sharing_declined*/ None).await
             }
         }
@@ -339,6 +343,7 @@ impl McpConnectionPool {
         start: impl Fn(CancellationToken, Option<CancellationToken>) -> ManagedClientFuture,
     ) -> Result<(Arc<ConnectionLease>, AcquisitionRole), StartupOutcomeError> {
         loop {
+            let mut started_at = None;
             let (lease, role) = {
                 let mut state = slot
                     .state
@@ -374,6 +379,7 @@ impl McpConnectionPool {
                 } else {
                     let startup_cancellation = CancellationToken::new();
                     let sharing_declined = CancellationToken::new();
+                    started_at = Some(Instant::now());
                     let client =
                         start(startup_cancellation.clone(), Some(sharing_declined.clone()));
                     // Startup belongs to the connection, including if its first chat is cancelled.
@@ -409,6 +415,9 @@ impl McpConnectionPool {
                 lease.entry.remove_from_pool();
                 lease.release();
                 continue;
+            }
+            if let Some(started_at) = started_at {
+                let _ = slot.started_at.set(started_at);
             }
             return Ok((lease, role));
         }

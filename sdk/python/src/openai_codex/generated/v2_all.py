@@ -2841,6 +2841,14 @@ class McpServerStatusUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    duration_ms: Annotated[
+        int | None,
+        Field(
+            alias="durationMs",
+            description="Elapsed startup time for a measured attempt. Older servers omit this field.",
+            ge=0,
+        ),
+    ] = None
     environment_id: Annotated[
         str | None,
         Field(

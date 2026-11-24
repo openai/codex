@@ -205,6 +205,7 @@ async fn mcp_startup_summary_counts_servers_and_sign_in_subset() -> Result<()> {
                 thread_id: None,
                 name: name.into(),
                 status,
+                duration_ms: None,
                 error: (status == Failed).then(|| format!("MCP {name}: connection unavailable")),
                 failure_reason,
             }),

@@ -9,6 +9,7 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
             thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status,
+            duration_ms: None,
             error: None,
             failure_reason: None,
         }),
@@ -23,6 +24,7 @@ fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
             thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status: McpServerStartupState::Failed,
+            duration_ms: None,
             error: Some(error.to_string()),
             failure_reason: None,
         }),
@@ -54,6 +56,7 @@ async fn mcp_startup_ignores_status_for_other_thread() {
                 thread_id: Some(child_thread_id.to_string()),
                 name: "sentry".to_string(),
                 status,
+                duration_ms: None,
                 error: matches!(status, McpServerStartupState::Failed)
                     .then(|| "sentry is not logged in".to_string()),
                 failure_reason: None,
@@ -85,6 +88,7 @@ async fn mcp_apps_readiness_retries_an_in_flight_installed_mention_lookup() {
         thread_id: None,
         name: "codex_apps".to_string(),
         status: McpServerStartupState::Ready,
+        duration_ms: None,
         error: None,
         failure_reason: None,
     });
@@ -552,6 +556,7 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
             name: "notes".to_string(),
             environment_id: Some(environment_id.to_string()),
             status: McpServerStartupState::Starting,
+            duration_ms: None,
             error: None,
             failure_reason: None,
         });
@@ -570,6 +575,7 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
             name: "notes".to_string(),
             environment_id: Some("env-a".to_string()),
             status: McpServerStartupState::Failed,
+            duration_ms: None,
             error: Some("MCP client for `notes` failed to start: handshake failed".to_string()),
             failure_reason: None,
         });
@@ -595,6 +601,7 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
         name: "notes".to_string(),
         environment_id: Some("env-b".to_string()),
         status: McpServerStartupState::Ready,
+        duration_ms: None,
         error: None,
         failure_reason: None,
     });

@@ -2233,6 +2233,12 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("missing MCP login completion fixture"))?,
         )?;
         assert!(mcp_login_completion_ts.contains("loginId?: string | null"));
+        let mcp_status_update_ts = std::str::from_utf8(
+            fixture_tree
+                .get(Path::new("v2/McpServerStatusUpdatedNotification.ts"))
+                .ok_or_else(|| anyhow::anyhow!("missing MCP status update fixture"))?,
+        )?;
+        assert!(mcp_status_update_ts.contains("durationMs?: number | null"));
         let typescript_index = std::str::from_utf8(
             fixture_tree
                 .get(Path::new("index.ts"))
@@ -2428,6 +2434,8 @@ mod tests {
                         && matches!(field_prefix.trim(), "startedAtMs?" | "completedAtMs?"))
                     || (path == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
                         && field_prefix.trim() == "loginId?")
+                    || (path == Path::new("v2/McpServerStatusUpdatedNotification.ts")
+                        && field_prefix.trim() == "durationMs?")
                     || (path == Path::new("v2/McpServerStatus.ts")
                         && field_prefix.trim() == "environmentId?")
                     || (path == Path::new("v2/ProcessExitedNotification.ts")

@@ -243,6 +243,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 name: update.server,
                 environment_id: update.environment_id,
                 status,
+                duration_ms: update.duration_ms,
                 error,
                 failure_reason,
             };

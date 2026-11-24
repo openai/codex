@@ -394,6 +394,9 @@ pub struct McpServerStatusUpdatedNotification {
     /// Registration scope, not necessarily the server's execution environment.
     pub environment_id: Option<String>,
     pub status: McpServerStartupState,
+    /// Elapsed startup time for a measured attempt. Older servers omit this field.
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<u64>,
     pub error: Option<String>,
     pub failure_reason: Option<McpServerStartupFailureReason>,
 }

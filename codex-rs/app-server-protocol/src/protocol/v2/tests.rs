@@ -2783,7 +2783,7 @@ fn mcp_server_status_accepts_older_inventory_without_runtime_status() {
 }
 
 #[test]
-fn mcp_server_status_updated_accepts_missing_thread_id() {
+fn mcp_server_status_updated_accepts_missing_thread_id_and_duration() {
     let notification: McpServerStatusUpdatedNotification = serde_json::from_value(json!({
         "name": "optional_broken",
         "status": "failed",
@@ -2796,6 +2796,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
         name: "optional_broken".to_string(),
         environment_id: None,
         status: McpServerStartupState::Failed,
+        duration_ms: None,
         error: Some("handshake failed".to_string()),
         failure_reason: None,
     };
@@ -2807,6 +2808,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
             "name": "optional_broken",
             "environmentId": null,
             "status": "failed",
+            "durationMs": null,
             "error": "handshake failed",
             "failureReason": null,
         })
@@ -2814,13 +2816,14 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
 }
 
 #[test]
-fn mcp_server_status_updated_serializes_failure_reason() {
+fn mcp_server_status_updated_serializes_failure_reason_and_duration() {
     let notification =
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some("thread-1".to_string()),
             name: "expired-oauth".to_string(),
             environment_id: Some("remote".to_string()),
             status: McpServerStartupState::Failed,
+            duration_ms: Some(482),
             error: Some("OAuth credentials expired".to_string()),
             failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
         });
@@ -2834,6 +2837,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
                 "name": "expired-oauth",
                 "environmentId": "remote",
                 "status": "failed",
+                "durationMs": 482,
                 "error": "OAuth credentials expired",
                 "failureReason": "reauthenticationRequired",
             },

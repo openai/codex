@@ -756,6 +756,7 @@ async fn daemon_ctrl_c_during_mcp_startup_does_not_show_background_exit_menu() -
             thread_id: Some(thread_id.to_string()),
             name: "slow".to_string(),
             status: McpServerStartupState::Starting,
+            duration_ms: None,
             error: None,
             failure_reason: None,
         }),

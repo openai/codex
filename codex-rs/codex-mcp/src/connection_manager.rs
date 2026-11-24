@@ -948,6 +948,7 @@ impl McpConnectionSet {
                                                 .scoped_environment_id()
                                                 .map(str::to_owned),
                                             status,
+                                            duration_ms: None,
                                         },
                                     )
                                     .await;
@@ -1005,10 +1006,12 @@ impl McpConnectionSet {
                 } else {
                     (None, None)
                 };
+            let initial_measurement = Arc::new(OnceLock::new());
             let mut async_managed_client = AsyncManagedClient::new(
                 ema_auth.clone(),
                 server_key.clone(),
                 startup_submit_id.clone(),
+                Arc::clone(&initial_measurement),
                 server,
                 store_mode,
                 keyring_backend_kind,
@@ -1095,6 +1098,7 @@ impl McpConnectionSet {
                             server: server_name.clone(),
                             environment_id: server_key.scoped_environment_id().map(str::to_owned),
                             status: McpStartupStatus::Starting,
+                            duration_ms: None,
                         },
                     )
                     .await;
@@ -1164,6 +1168,9 @@ impl McpConnectionSet {
                         }
                     };
 
+                    let duration_ms = initial_measurement
+                        .get()
+                        .and_then(|measurement| measurement.duration_ms_for(&status));
                     let _ = emit_update(
                         submit_id.as_str(),
                         tx_event,
@@ -1171,6 +1178,7 @@ impl McpConnectionSet {
                             server: server_name.clone(),
                             environment_id: server_key.scoped_environment_id().map(str::to_owned),
                             status,
+                            duration_ms,
                         },
                     )
                     .await;
@@ -1224,6 +1232,7 @@ impl McpConnectionSet {
                             server: server.name().to_owned(),
                             environment_id: server.scoped_environment_id().map(str::to_owned),
                             status: McpStartupStatus::Starting,
+                            duration_ms: None,
                         },
                     )
                     .await;
@@ -1253,6 +1262,7 @@ impl McpConnectionSet {
                             server: key.name().to_owned(),
                             environment_id: key.scoped_environment_id().map(str::to_owned),
                             status: McpStartupStatus::Ready,
+                            duration_ms: None,
                         },
                     )
                     .await;

@@ -1135,6 +1135,7 @@ mod tests {
                 thread_id: Some(thread_id.to_string()),
                 name: "sentry".to_string(),
                 status: codex_app_server_protocol::McpServerStartupState::Failed,
+                duration_ms: None,
                 error: Some("sentry is not logged in".to_string()),
                 failure_reason: None,
             },

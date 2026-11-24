@@ -220,6 +220,7 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
                     thread_id: Some(id.to_string()),
                     name: "slow".into(),
                     status: McpServerStartupState::Starting,
+                    duration_ms: None,
                     error: None,
                     failure_reason: None,
                 }),
