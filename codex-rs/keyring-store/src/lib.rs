@@ -58,6 +58,9 @@ mod error_display_tests;
 
 mod error_kind;
 
+#[cfg(target_os = "linux")]
+mod secret_service_read;
+
 impl From<CredentialStoreError> for std::io::Error {
     fn from(error: CredentialStoreError) -> Self {
         Self::new(error_kind::classify(&error), error)
@@ -78,7 +81,11 @@ impl KeyringStore for DefaultKeyringStore {
     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
         trace!("keyring.load start");
         let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
-        match entry.get_password() {
+        #[cfg(target_os = "linux")]
+        let password = secret_service_read::get_password(&entry, service, account);
+        #[cfg(not(target_os = "linux"))]
+        let password = entry.get_password();
+        match password {
             Ok(password) => {
                 trace!("keyring.load success");
                 Ok(Some(password))
