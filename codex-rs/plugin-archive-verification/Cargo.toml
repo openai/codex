@@ -24,6 +24,15 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+app_test_support = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-config = { workspace = true }
+codex-core-plugins = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-login = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 wiremock = { workspace = true }

@@ -9,4 +9,14 @@ codex_rust_crate(
     name = "plugin-archive-verification",
     compile_data = ["testdata/plugin_archive_signing_v1.json"],
     crate_name = "codex_plugin_archive_verification",
+    extra_binaries = [
+        "//codex-rs/app-server:codex-app-server",
+        "//codex-rs/app-server:exec-server",
+        "//codex-rs/bwrap:bwrap",
+        "//codex-rs/code-mode-host:codex-code-mode-host",
+    ],
+    integration_compile_data_extra = ["testdata/plugin_archive_signing_v1.json"],
+    integration_test_timeout = "long",
+    run_tests_with_wine_exec = True,
+    test_tags = ["no-sandbox"],
 )

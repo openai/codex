@@ -72,13 +72,13 @@ test-group = 'app_server_protocol_codegen'
 [[profile.default.overrides]]
 # These integration tests spawn a fresh app-server subprocess per case.
 # Keep the library unit tests parallel.
-filter = 'package(codex-app-server) & kind(test)'
+filter = '(package(codex-app-server) | (package(=codex-plugin-archive-verification) & binary(=app_server))) & kind(test)'
 test-group = 'app_server_integration'
 
 [[profile.local.overrides]]
 # Use up to four app-server subprocesses locally. The global nextest pool still
 # limits this to the machine's logical CPU count.
-filter = 'package(codex-app-server) & kind(test)'
+filter = '(package(codex-app-server) | (package(=codex-plugin-archive-verification) & binary(=app_server))) & kind(test)'
 test-group = 'app_server_integration_local'
 
 [[profile.default.overrides]]
