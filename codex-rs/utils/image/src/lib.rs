@@ -3,11 +3,11 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::Weak;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_utils_cache::BlockingLruCache;
-use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -41,7 +41,7 @@ pub use crate::error::ImageProcessingError;
 
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
-    pub bytes: Arc<[u8]>,
+    pub bytes: Arc<Vec<u8>>,
     pub mime: String,
     pub source_width: u32,
     pub source_height: u32,
@@ -101,12 +101,65 @@ struct ImageMetadata {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageCacheKey {
-    digest: [u8; 20],
+    // A hit can authorize reusing the supplied bytes, so the key must resist collisions.
+    digest: blake3::Hash,
     mode: PromptImageMode,
     decoder: PromptImageDecoder,
 }
 
-type ImageCache = BlockingLruCache<ImageCacheKey, EncodedImage>;
+/// A source entry records a successful pixel decode that needed no resizing or re-encoding.
+/// Other results, including sanitized images, always retain the decoder's output.
+#[derive(Clone)]
+enum PreparedImage {
+    Source {
+        // The Vec's buffer is separate from the Arc allocation kept alive by this Weak.
+        bytes: Weak<Vec<u8>>,
+        format: ImageFormat,
+        width: u32,
+        height: u32,
+        encoded_len: usize,
+    },
+    Encoded(EncodedImage),
+}
+
+impl PreparedImage {
+    /// Count the full allocation for retained buffers. Source entries keep their
+    /// original encoded length for eviction even after the last caller drops the bytes.
+    fn cache_cost_bytes(&self) -> usize {
+        match self {
+            Self::Source { encoded_len, .. } => *encoded_len,
+            Self::Encoded(image) => image.bytes.capacity(),
+        }
+    }
+
+    /// Take the matching input buffer only if no caller still owns the source bytes.
+    /// Leave unused input with the caller so it can be freed outside the cache lock.
+    fn resolve(&mut self, source: &mut Vec<u8>) -> EncodedImage {
+        match self {
+            Self::Source {
+                bytes,
+                format,
+                width,
+                height,
+                ..
+            } => EncodedImage {
+                bytes: bytes.upgrade().unwrap_or_else(|| {
+                    let shared = Arc::new(std::mem::take(source));
+                    *bytes = Arc::downgrade(&shared);
+                    shared
+                }),
+                mime: format_to_mime(*format),
+                source_width: *width,
+                source_height: *height,
+                width: *width,
+                height: *height,
+            },
+            Self::Encoded(image) => image.clone(),
+        }
+    }
+}
+
+type ImageCache = BlockingLruCache<ImageCacheKey, PreparedImage>;
 
 static IMAGE_CACHE: LazyLock<ImageCache> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
@@ -121,129 +174,125 @@ pub fn load_for_prompt_bytes(
 
 fn load_for_prompt_bytes_with_decoder(
     path: &Path,
-    file_bytes: Vec<u8>,
+    mut file_bytes: Vec<u8>,
     mode: PromptImageMode,
     decoder: PromptImageDecoder,
 ) -> Result<EncodedImage, ImageProcessingError> {
     let key = ImageCacheKey {
-        digest: sha1_digest(&file_bytes),
+        digest: blake3::hash(&file_bytes),
         mode,
         decoder,
     };
 
-    if let Some(image) = IMAGE_CACHE.get(&key) {
+    if let Some(image) = IMAGE_CACHE.with_mut(|cache| {
+        cache
+            .get_mut(&key)
+            .map(|entry| entry.resolve(&mut file_bytes))
+    }) {
         return Ok(image);
     }
 
-    let image = load_for_prompt_bytes_uncached(path, file_bytes, mode, decoder)?;
-    cache_image(&IMAGE_CACHE, key, image.clone(), MAX_IMAGE_CACHE_BYTES);
-    Ok(image)
+    let image = prepare_for_prompt(path, &file_bytes, mode, decoder)?;
+    Ok(cache_image(
+        &IMAGE_CACHE,
+        key,
+        image,
+        file_bytes,
+        MAX_IMAGE_CACHE_BYTES,
+    ))
 }
 
-fn load_for_prompt_bytes_uncached(
+/// Validate the pixels before deciding whether the caller can reuse the source bytes.
+fn prepare_for_prompt(
     path: &Path,
-    file_bytes: Vec<u8>,
+    file_bytes: &[u8],
     mode: PromptImageMode,
     decoder: PromptImageDecoder,
-) -> Result<EncodedImage, ImageProcessingError> {
+) -> Result<PreparedImage, ImageProcessingError> {
     if decoder == PromptImageDecoder::Sanitizer {
-        return sanitizer::sanitize(path, &file_bytes, mode);
+        return sanitizer::sanitize(path, file_bytes, mode).map(PreparedImage::Encoded);
     }
-    let path_buf = path.to_path_buf();
-    (move || {
-        let guessed_format = image::guess_format(&file_bytes)
-            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
-        let format = match guessed_format {
-            ImageFormat::Png => Some(ImageFormat::Png),
-            ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
-            ImageFormat::Gif => Some(ImageFormat::Gif),
-            ImageFormat::WebP => Some(ImageFormat::WebP),
-            _ => None,
-        };
+    let guessed_format = image::guess_format(file_bytes)
+        .map_err(|source| ImageProcessingError::decode_error(path, source))?;
+    let mut decoder = ImageReader::with_format(Cursor::new(file_bytes), guessed_format)
+        .into_decoder()
+        .map_err(|source| ImageProcessingError::decode_error(path, source))?;
+    // Preserve the metadata most important for rendering prompt images faithfully: the color
+    // profile and EXIF data, including orientation. Other format-specific metadata is
+    // intentionally not copied.
+    let metadata = ImageMetadata {
+        // Only RGB profiles are safe across every re-encoding path. For example, JPEG decoding
+        // can convert CMYK/YCCK pixels to RGB while retaining the source profile; copying it
+        // would mislabel the output. Bytes 16..20 are the ICC data color space signature.
+        icc_profile: decoder
+            .icc_profile()
+            .ok()
+            .flatten()
+            .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
+        exif: decoder.exif_metadata().ok().flatten(),
+    };
+    let dynamic = DynamicImage::from_decoder(decoder)
+        .map_err(|source| ImageProcessingError::decode_error(path, source))?;
 
-        let mut decoder = ImageReader::with_format(Cursor::new(&file_bytes), guessed_format)
-            .into_decoder()
-            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
-        // Preserve the metadata most important for rendering prompt images faithfully: the color
-        // profile and EXIF data, including orientation. Other format-specific metadata is
-        // intentionally not copied.
-        let metadata = ImageMetadata {
-            // Only RGB profiles are safe across every re-encoding path. For example, JPEG decoding
-            // can convert CMYK/YCCK pixels to RGB while retaining the source profile; copying it
-            // would mislabel the output. Bytes 16..20 are the ICC data color space signature.
-            icc_profile: decoder
-                .icc_profile()
-                .ok()
-                .flatten()
-                .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
-            exif: decoder.exif_metadata().ok().flatten(),
-        };
-        let dynamic = DynamicImage::from_decoder(decoder)
-            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+    let (width, height) = dynamic.dimensions();
 
-        let (width, height) = dynamic.dimensions();
-
-        let encoded = if let Some(resized) = resize_for_prompt(&dynamic, mode) {
-            let target_format = format
-                .filter(|format| can_preserve_source_bytes(*format))
-                .unwrap_or(ImageFormat::Png);
-            let (bytes, output_format) = encode_image(&resized, target_format, metadata)?;
-            let mime = format_to_mime(output_format);
-            EncodedImage {
-                bytes: bytes.into(),
-                mime,
-                source_width: width,
-                source_height: height,
-                width: resized.width(),
-                height: resized.height(),
-            }
-        } else {
-            if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
-                let mime = format_to_mime(format);
-                EncodedImage {
-                    bytes: file_bytes.into(),
-                    mime,
-                    source_width: width,
-                    source_height: height,
-                    width,
-                    height,
-                }
-            } else {
-                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png, metadata)?;
-                let mime = format_to_mime(output_format);
-                EncodedImage {
-                    bytes: bytes.into(),
-                    mime,
-                    source_width: width,
-                    source_height: height,
-                    width,
-                    height,
-                }
-            }
-        };
-
-        Ok(encoded)
-    })()
+    let resized = resize_for_prompt(&dynamic, mode);
+    let target_format = if can_preserve_source_bytes(guessed_format) {
+        if resized.is_none() {
+            return Ok(PreparedImage::Source {
+                bytes: Weak::new(),
+                format: guessed_format,
+                width,
+                height,
+                encoded_len: file_bytes.len(),
+            });
+        }
+        guessed_format
+    } else {
+        ImageFormat::Png
+    };
+    let output = resized.as_ref().unwrap_or(&dynamic);
+    let (bytes, output_format) = encode_image(output, target_format, metadata)?;
+    Ok(PreparedImage::Encoded(EncodedImage {
+        bytes: Arc::new(bytes),
+        mime: format_to_mime(output_format),
+        source_width: width,
+        source_height: height,
+        width: output.width(),
+        height: output.height(),
+    }))
 }
 
-fn cache_image(cache: &ImageCache, key: ImageCacheKey, image: EncodedImage, byte_capacity: usize) {
-    if image.bytes.len() > byte_capacity {
-        return;
+fn cache_image(
+    cache: &ImageCache,
+    key: ImageCacheKey,
+    mut entry: PreparedImage,
+    mut source: Vec<u8>,
+    byte_capacity: usize,
+) -> EncodedImage {
+    if entry.cache_cost_bytes() > byte_capacity {
+        return entry.resolve(&mut source);
     }
 
     cache.with_mut(|cache| {
-        cache.put(key, image);
+        // Another caller may have inserted the same image while we decoded it.
+        if let Some(existing) = cache.get_mut(&key) {
+            return existing.resolve(&mut source);
+        }
+        let image = entry.resolve(&mut source);
+        cache.put(key, entry);
         let mut cached_bytes = cache
             .iter()
-            .map(|(_, image)| image.bytes.len())
+            .map(|(_, image)| image.cache_cost_bytes())
             .sum::<usize>();
         while cached_bytes > byte_capacity {
             let Some((_, evicted)) = cache.pop_lru() else {
                 break;
             };
-            cached_bytes -= evicted.bytes.len();
+            cached_bytes -= evicted.cache_cost_bytes();
         }
-    });
+        image
+    })
 }
 
 pub fn load_data_url_for_prompt(
@@ -260,8 +309,11 @@ pub fn load_data_url_for_prompt_uncached(
     mode: PromptImageMode,
     decoder: PromptImageDecoder,
 ) -> Result<EncodedImage, ImageProcessingError> {
-    let bytes = decode_data_url(image_url, decoder)?;
-    load_for_prompt_bytes_uncached(Path::new("<data-url-image>"), bytes, mode, decoder)
+    let mut bytes = decode_data_url(image_url, decoder)?;
+    Ok(
+        prepare_for_prompt(Path::new("<data-url-image>"), &bytes, mode, decoder)?
+            .resolve(&mut bytes),
+    )
 }
 
 fn decode_data_url(

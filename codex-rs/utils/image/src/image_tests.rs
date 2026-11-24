@@ -99,7 +99,7 @@ async fn returns_original_image_when_within_bounds() {
         assert_eq!(encoded.width, 64);
         assert_eq!(encoded.height, 32);
         assert_eq!(encoded.mime, mime);
-        assert_eq!(encoded.bytes.as_ref(), original_bytes);
+        assert_eq!(*encoded.bytes, original_bytes);
     }
 }
 
@@ -165,7 +165,7 @@ async fn resizing_preserves_supported_metadata() {
 
         assert_eq!((processed.width, processed.height), (2048, 2));
 
-        let mut decoder = ImageReader::with_format(Cursor::new(&processed.bytes), format)
+        let mut decoder = ImageReader::with_format(Cursor::new(processed.bytes.as_slice()), format)
             .into_decoder()
             .expect("create decoder");
         assert_eq!(
@@ -198,9 +198,10 @@ async fn resizing_drops_non_rgb_icc_profile() {
     )
     .expect("process image");
 
-    let mut decoder = ImageReader::with_format(Cursor::new(&processed.bytes), ImageFormat::Jpeg)
-        .into_decoder()
-        .expect("create decoder");
+    let mut decoder =
+        ImageReader::with_format(Cursor::new(processed.bytes.as_slice()), ImageFormat::Jpeg)
+            .into_decoder()
+            .expect("create decoder");
     assert_eq!(
         (
             decoder.icc_profile().expect("read ICC profile"),
@@ -225,7 +226,7 @@ async fn preserves_large_image_in_original_mode() {
     assert_eq!(processed.width, 4096);
     assert_eq!(processed.height, 2048);
     assert_eq!(processed.mime, "image/png");
-    assert_eq!(processed.bytes.as_ref(), original_bytes);
+    assert_eq!(*processed.bytes, original_bytes);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -246,7 +247,7 @@ async fn data_url_processing_preserves_supported_source_bytes() {
     assert_eq!(processed.width, 64);
     assert_eq!(processed.height, 32);
     assert_eq!(processed.mime, "image/png");
-    assert_eq!(processed.bytes.as_ref(), original_bytes);
+    assert_eq!(*processed.bytes, original_bytes);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -335,10 +336,16 @@ async fn fails_cleanly_for_invalid_images() {
     ));
 }
 
-#[test]
-fn rejects_png_with_readable_dimensions_and_corrupt_pixels() {
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_png_with_readable_dimensions_and_corrupt_pixels() {
     let image = ImageBuffer::from_pixel(100, 100, Rgba([10u8, 20, 30, 255]));
     let mut bytes = image_bytes(&image, ImageFormat::Png);
+    load_for_prompt_bytes(
+        Path::new("corrupt.png"),
+        bytes.clone(),
+        PromptImageMode::ORIGINAL_DETAIL,
+    )
+    .expect("warm the cache with valid pixels");
     let idat = bytes
         .windows(4)
         .position(|chunk_type| chunk_type == b"IDAT")
@@ -365,8 +372,6 @@ fn rejects_png_with_readable_dimensions_and_corrupt_pixels() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reprocesses_updated_file_contents() {
-    IMAGE_CACHE.clear();
-
     let first_image = ImageBuffer::from_pixel(32, 16, Rgba([20u8, 120, 220, 255]));
     let first_bytes = image_bytes(&first_image, ImageFormat::Png);
 
@@ -394,8 +399,8 @@ async fn reprocesses_updated_file_contents() {
     assert_ne!(second.bytes, first.bytes);
 }
 
-#[test]
-fn legacy_cache_entry_cannot_bypass_sanitization() {
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_cache_entry_cannot_bypass_sanitization() {
     let image = ImageBuffer::from_pixel(7, 11, Rgba([42, 64, 128, 255]));
     let bytes = image_bytes_with_metadata(&image, ImageFormat::Jpeg, TEST_RGB_ICC_PROFILE);
     let path = Path::new("oriented.jpg");
@@ -411,27 +416,107 @@ fn legacy_cache_entry_cannot_bypass_sanitization() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn bounds_cache_by_encoded_byte_size() {
+async fn bounds_cache_by_source_length_and_output_capacity() {
     let cache = ImageCache::new(NonZeroUsize::new(4).expect("non-zero cache capacity"));
     let key = |digest_byte| ImageCacheKey {
-        digest: [digest_byte; 20],
+        digest: blake3::hash(&[digest_byte]),
         mode: PromptImageMode::Original,
         decoder: PromptImageDecoder::Legacy,
     };
-    let image = |size| EncodedImage {
-        bytes: vec![0; size].into(),
-        mime: "image/png".to_string(),
-        source_width: 1,
-        source_height: 1,
-        width: 1,
-        height: 1,
+    let image = |capacity| {
+        let mut bytes = Vec::with_capacity(capacity);
+        bytes.push(0);
+        PreparedImage::Encoded(EncodedImage {
+            bytes: bytes.into(),
+            mime: "image/png".to_string(),
+            source_width: 1,
+            source_height: 1,
+            width: 1,
+            height: 1,
+        })
     };
 
-    cache_image(&cache, key(1), image(3), /*byte_capacity*/ 5);
-    cache_image(&cache, key(2), image(3), /*byte_capacity*/ 5);
-    cache_image(&cache, key(3), image(6), /*byte_capacity*/ 5);
+    let source = PreparedImage::Source {
+        bytes: Weak::new(),
+        format: ImageFormat::Png,
+        width: 1,
+        height: 1,
+        encoded_len: 3,
+    };
+    cache_image(&cache, key(1), source, vec![0; 3], /*byte_capacity*/ 5);
+    cache_image(&cache, key(2), image(3), vec![], /*byte_capacity*/ 5);
+    cache_image(&cache, key(3), image(6), vec![], /*byte_capacity*/ 5);
 
     assert!(cache.get(&key(1)).is_none());
     assert!(cache.get(&key(2)).is_some());
     assert!(cache.get(&key(3)).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_cache_misses_share_the_first_live_buffer() {
+    let image = ImageBuffer::from_pixel(13, 9, Rgba([14, 50, 213, 255]));
+    let source = image_bytes(&image, ImageFormat::Png);
+    let key = ImageCacheKey {
+        digest: blake3::hash(&source),
+        mode: PromptImageMode::Original,
+        decoder: PromptImageDecoder::Legacy,
+    };
+    let cache = ImageCache::new(NonZeroUsize::MIN);
+    let entry = prepare_for_prompt(Path::new("source.png"), &source, key.mode, key.decoder)
+        .expect("prepare PNG");
+
+    // Both callers finished decoding before either inserted its result.
+    let first = cache_image(
+        &cache,
+        key,
+        entry.clone(),
+        source.clone(),
+        MAX_IMAGE_CACHE_BYTES,
+    );
+    let second = cache_image(&cache, key, entry, source, MAX_IMAGE_CACHE_BYTES);
+    assert!(Arc::ptr_eq(&first.bytes, &second.bytes));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_shares_live_source_bytes_but_only_retains_transformed_output() {
+    let image = ImageBuffer::from_pixel(13, 9, Rgba([14, 50, 213, 255]));
+    let source = image_bytes(&image, ImageFormat::Png);
+    let path = Path::new("source.png");
+    let load = |mode| load_for_prompt_bytes(path, source.clone(), mode).expect("prepare PNG");
+
+    let original = load(PromptImageMode::Original);
+    let weak = Arc::downgrade(&original.bytes);
+    let overlap = load(PromptImageMode::Original);
+    assert!(Arc::ptr_eq(&original.bytes, &overlap.bytes));
+    drop((original, overlap));
+    assert!(weak.upgrade().is_none());
+
+    let mut input = source.clone();
+    input.reserve(1);
+    let input_ptr = input.as_ptr();
+    let hit = load_for_prompt_bytes(path, input, PromptImageMode::Original).expect("reuse PNG");
+    assert_eq!(hit.bytes.as_ptr(), input_ptr);
+    assert_eq!(*hit.bytes, source);
+    assert!(Arc::ptr_eq(
+        &hit.bytes,
+        &load(PromptImageMode::Original).bytes
+    ));
+    assert_eq!(hit.mime, "image/png");
+    assert_eq!(
+        (hit.source_width, hit.source_height, hit.width, hit.height),
+        (13, 9, 13, 9)
+    );
+
+    let mode = PromptImageMode::ResizeWithLimits(PromptImageResizeLimits {
+        max_dimension: 8,
+        max_patches: 1,
+    });
+    let resized = load(mode);
+    assert_ne!(*resized.bytes, source);
+    let transformed = Arc::downgrade(&resized.bytes);
+    drop(resized);
+    assert!(Arc::ptr_eq(
+        &transformed.upgrade().expect("cached output"),
+        &load(mode).bytes
+    ));
 }
