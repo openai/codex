@@ -19,6 +19,9 @@ use std::sync::Arc;
 fn terminal_permissions(profile: &PermissionProfile) -> TerminalPermissions {
     TerminalPermissions {
         policy: TerminalPolicy {
+            has_denied_reads: profile
+                .file_system_sandbox_policy()
+                .has_denied_read_restrictions(),
             sandbox: FileSystemSandboxContext::from_permission_profile(
                 effective_permission_profile(profile, /*additional_permissions*/ None),
                 PathUri::from_host_native_path(std::env::temp_dir()).expect("local temporary cwd"),

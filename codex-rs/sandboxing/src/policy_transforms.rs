@@ -648,6 +648,20 @@ pub fn should_require_platform_sandbox(
     network_policy: NetworkSandboxPolicy,
     has_managed_network_requirements: bool,
 ) -> bool {
+    should_require_platform_sandbox_for_convention(
+        file_system_policy,
+        network_policy,
+        has_managed_network_requirements,
+        PathConvention::native(),
+    )
+}
+
+pub(crate) fn should_require_platform_sandbox_for_convention(
+    file_system_policy: &FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    has_managed_network_requirements: bool,
+    convention: PathConvention,
+) -> bool {
     if has_managed_network_requirements {
         return true;
     }
@@ -660,7 +674,9 @@ pub fn should_require_platform_sandbox(
     }
 
     match file_system_policy.kind {
-        FileSystemSandboxKind::Restricted => !file_system_policy.has_full_disk_write_access(),
+        FileSystemSandboxKind::Restricted => {
+            !file_system_policy.has_full_disk_write_access_for_convention(Some(convention))
+        }
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
     }
 }

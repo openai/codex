@@ -713,7 +713,7 @@ async fn submit_turn_preserving_active_permission_profile(
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
+                approvals_reviewer: Some(test.config.approvals_reviewer),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
                     settings: Settings {
@@ -3869,15 +3869,21 @@ touch {outside_path:?}
 }
 
 #[cfg(unix)]
-#[test_case(Some(ReviewDecision::Approved); "approved")]
-#[test_case(Some(ReviewDecision::denied("rejected by user")); "denied")]
-#[test_case(None; "allow_rule_skips_approval_without_widening")]
+#[test_case(ApprovalsReviewer::User, Some(ReviewDecision::Approved); "approved")]
+#[test_case(ApprovalsReviewer::User, Some(ReviewDecision::denied("rejected by user")); "denied")]
+#[test_case(ApprovalsReviewer::User, None; "allow_rule_skips_approval_without_widening")]
+#[test_case(ApprovalsReviewer::AutoReview, Some(ReviewDecision::Approved); "allow_rule_approved_by_auto_review")]
+#[test_case(ApprovalsReviewer::AutoReview, Some(ReviewDecision::denied("rejected by guardian")); "allow_rule_denied_by_auto_review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_escalation_with_denied_reads(decision: Option<ReviewDecision>) -> Result<()> {
+async fn explicit_escalation_with_denied_reads(
+    reviewer: ApprovalsReviewer,
+    decision: Option<ReviewDecision>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
-    if decision.is_none() {
+    let auto_review = reviewer == ApprovalsReviewer::AutoReview;
+    if decision.is_none() || auto_review {
         let rules = home.path().join("rules");
         fs::create_dir(&rules)?;
         fs::write(
@@ -3891,6 +3897,7 @@ async fn explicit_escalation_with_denied_reads(decision: Option<ReviewDecision>)
     let mut builder = test_codex()
         .with_home(home)
         .with_config(move |config| {
+            config.approvals_reviewer = reviewer;
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config.features.enable(Feature::UnifiedExec).unwrap();
             let mut file_system = PermissionProfile::workspace_write_with(
@@ -3935,27 +3942,45 @@ async fn explicit_escalation_with_denied_reads(decision: Option<ReviewDecision>)
         SandboxPermissions::RequireEscalated,
         /*justification*/ None,
     )?;
-    mount_sse_once(&server, sse(vec![event, ev_completed("run")])).await;
-    let response = mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
+    let mut bodies = vec![sse(vec![event, ev_completed("run")])];
+    if auto_review {
+        let assessment = match &decision {
+            Some(ReviewDecision::Approved) => json!({"outcome": "allow"}),
+            Some(ReviewDecision::Denied { rejection }) => {
+                json!({"outcome": "deny", "rationale": rejection})
+            }
+            other => panic!("unexpected Guardian decision: {other:?}"),
+        };
+        bodies.push(sse(vec![
+            ev_assistant_message("guardian", &assessment.to_string()),
+            ev_completed("guardian"),
+        ]));
+    }
+    bodies.push(sse(vec![ev_completed("done")]));
+    let responses = mount_sse_sequence(&server, bodies).await;
     submit_turn_preserving_active_permission_profile(&test, "run the command", approval_policy)
         .await?;
     let approved = decision == Some(ReviewDecision::Approved);
-    let rejected = decision.is_some() && !approved;
-    if let Some(decision) = decision {
+    if !auto_review && let Some(decision) = &decision {
         let request = expect_exec_approval(&test, command).await;
         assert!(!outside_marker.exists() && !workspace_marker.exists());
         test.codex
             .submit(Op::ExecApproval {
                 id: request.effective_approval_id(),
                 turn_id: None,
-                decision,
+                decision: decision.clone(),
             })
             .await?;
     }
     wait_for_completion_without_approval(&test).await;
-    let result = parse_result(&response.single_request().function_call_output(call_id));
-    if rejected {
-        assert!(result.stdout.contains("rejected by user"), "{result:?}");
+    let requests = responses.requests();
+    let reviews = requests.iter().filter(|request| {
+        request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
+    });
+    assert_eq!(reviews.count(), usize::from(auto_review));
+    let result = parse_result(&requests.last().unwrap().function_call_output(call_id));
+    if let Some(ReviewDecision::Denied { rejection }) = decision {
+        assert!(result.stdout.contains(&rejection), "{result:?}");
         assert!(!workspace_marker.exists());
     } else {
         assert_eq!(

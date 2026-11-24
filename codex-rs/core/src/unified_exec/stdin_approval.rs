@@ -43,6 +43,7 @@ pub(crate) struct TerminalPermissions {
 #[derive(PartialEq, Eq)]
 struct TerminalPolicy {
     sandbox: FileSystemSandboxContext,
+    has_denied_reads: bool,
     environment_network: Option<EnvironmentNetworkPolicy>,
     controller_network: Option<NetworkProxySpec>,
     controller_proxy: bool,
@@ -69,6 +70,7 @@ impl TerminalPolicy {
         }
         Self {
             sandbox,
+            has_denied_reads: environment.has_denied_reads(),
             environment_network: environment.config().network_policy.clone(),
             controller_network: turn.config.permissions.network.clone(),
             controller_proxy: turn.network.is_some(),
@@ -125,9 +127,7 @@ impl TerminalPermissions {
         let bypassed = self.launch_permissions.requires_escalated_permissions();
         // Approval cannot retrofit denied reads onto a running process. Unless
         // its sandbox still matches, start a new terminal under the current policy.
-        if baseline
-            .file_system_sandbox_policy()
-            .has_denied_read_restrictions()
+        if current.has_denied_reads
             && (bypassed || self.policy.file_system_context() != current.file_system_context())
         {
             return Err(

@@ -18,6 +18,7 @@ pub struct PermissionContext {
     pub environment_id: Option<String>,
     pub denied_paths: Vec<String>,
     pub denied_globs: Vec<String>,
+    pub reviewing_escalated_exec: bool,
 }
 
 impl ContextualUserFragment for PermissionContext {
@@ -60,8 +61,16 @@ impl ContextualUserFragment for PermissionContext {
         input_text(if entries.is_empty() {
             format!("{scope} has no explicit denied-read paths/globs.\n")
         } else {
+            let after_approval = if self.reviewing_escalated_exec {
+                " Approval can grant read and write access across the rest of the filesystem, \
+                 including repository metadata. The command stays sandboxed with the same read \
+                 denials. A command can encounter a blocked read incidentally and still \
+                 complete its intended operation."
+            } else {
+                ""
+            };
             format!(
-                "{scope} denies reading these paths/globs. These are policy restrictions; do not approve escalation whose purpose is to read them.\n{}\n",
+                "{scope} denies reading these paths/globs. These are policy restrictions; do not approve escalation whose purpose is to read them.{after_approval}\n{}\n",
                 entries.join("\n")
             )
         })

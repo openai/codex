@@ -429,6 +429,10 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
             .context("permission context")?;
         let permissions = &latest[start + 1];
         assert!(permissions.contains(&format!("environment {environment_id:?}")));
+        assert_eq!(
+            permissions.contains("The command stays sandboxed"),
+            tool == "exec_command" && environment_id == secondary_id
+        );
         if environment_id == secondary_id {
             assert!(permissions.contains(&denied.inferred_native_path_string()));
         } else {

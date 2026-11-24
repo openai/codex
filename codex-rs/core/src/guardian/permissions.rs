@@ -30,7 +30,7 @@ pub(super) fn for_request(
     request: &GuardianApprovalRequest,
     context: Option<&GuardianReviewContext>,
 ) -> anyhow::Result<Option<GuardianPermissionContext>> {
-    match request {
+    let mut permissions = match request {
         GuardianApprovalRequest::McpToolCall {
             prompt_permissions: Some((environment_id, sandbox)),
             ..
@@ -38,7 +38,16 @@ pub(super) fn for_request(
         _ => context
             .map(|context| for_environment(context, request.target_environment_id()))
             .transpose(),
+    }?;
+    if let Some(permissions) = &mut permissions
+        && let GuardianApprovalRequest::ExecCommand {
+            sandbox_permissions,
+            ..
+        } = request
+    {
+        permissions.reviewing_escalated_exec = sandbox_permissions.requires_escalated_permissions();
     }
+    Ok(permissions)
 }
 
 pub(super) fn for_mcp_environment(
@@ -142,6 +151,7 @@ fn executor_permissions(
             .map(|path| path.inferred_native_path_string())
             .collect(),
         denied_globs,
+        reviewing_escalated_exec: false,
     })
 }
 
@@ -159,5 +169,6 @@ fn host_permissions(
             .map(|root| root.to_string_lossy().into_owned())
             .collect(),
         denied_globs: file_system_policy.get_unreadable_globs_with_cwd(cwd),
+        reviewing_escalated_exec: false,
     }
 }

@@ -9,7 +9,7 @@ use crate::WindowsSandboxProxySettingsMode;
 #[cfg(target_os = "linux")]
 use crate::bwrap::WSL1_BWRAP_WARNING;
 use crate::policy_transforms::effective_permission_profile;
-use crate::policy_transforms::should_require_platform_sandbox;
+use crate::policy_transforms::should_require_platform_sandbox_for_convention;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PreparedNetworkRoute;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -18,6 +18,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::sandbox::SandboxOverride;
 pub use codex_protocol::sandbox::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -320,6 +321,7 @@ pub(super) trait SandboxBackend {
 
 #[derive(Clone, Default)]
 pub struct SandboxManager {
+    executor_path_convention: Option<PathConvention>,
     #[cfg(windows)]
     windows_token_session: Option<WindowsSandboxProxySettingsMode>,
     linux_sandbox_pid_namespace: LinuxSandboxPidNamespace,
@@ -332,6 +334,12 @@ pub struct SandboxManager {
 impl SandboxManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Evaluate the need for sandboxing using the selected executor's path convention.
+    pub fn with_executor_path_convention(mut self, convention: PathConvention) -> Self {
+        self.executor_path_convention = Some(convention);
+        self
     }
 
     /// Creates a manager that applies the narrower runtime profile required by filesystem helpers.
@@ -423,10 +431,12 @@ impl SandboxManager {
             SandboxablePreference::Auto => {
                 let (file_system_policy, network_policy) =
                     permission_profile.to_runtime_permissions();
-                should_require_platform_sandbox(
+                should_require_platform_sandbox_for_convention(
                     &file_system_policy,
                     network_policy,
                     has_managed_network_requirements,
+                    self.executor_path_convention
+                        .unwrap_or(PathConvention::native()),
                 )
             }
         }

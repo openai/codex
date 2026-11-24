@@ -215,6 +215,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         environment_id: None,
         denied_paths: vec!["/private".into()],
         denied_globs: vec!["**/*.key".into()],
+        reviewing_escalated_exec: false,
     };
     let action = super::PlannedAction {
         tool_descriptions: None,

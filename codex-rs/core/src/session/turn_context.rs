@@ -44,7 +44,10 @@ use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillLoadOutcome;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
+use codex_utils_path_uri::Platform;
 use codex_utils_plugins::PluginIdentity;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -238,6 +241,24 @@ impl TurnEnvironment {
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
         self.config().permission_profile.permission_profile()
+    }
+
+    pub(crate) fn executor_path_convention(&self) -> Option<PathConvention> {
+        if let Some(os) = self.executor_platform_os.as_deref() {
+            return Platform::from_platform_os(Some(os)).path_convention();
+        }
+        // Legacy executors report their shell path. A leading // can also be POSIX.
+        let shell = LegacyAppPathString::from_path(&self.shell.as_ref()?.shell_path);
+        if shell.as_str().starts_with('/') {
+            return Some(PathConvention::Posix);
+        }
+        shell.infer_absolute_path_convention()
+    }
+
+    pub(crate) fn has_denied_reads(&self) -> bool {
+        self.permission_profile()
+            .file_system_sandbox_policy()
+            .has_denied_read_restrictions_for_convention(self.executor_path_convention())
     }
 
     /// Borrows this snapshot's filesystem using its permissions and any additional grants.

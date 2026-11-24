@@ -695,7 +695,7 @@ impl FileSystemSandboxPolicy {
     }
 
     /// Returns whether this policy denies reads on the selected executor.
-    fn has_denied_read_restrictions_for_convention(
+    pub fn has_denied_read_restrictions_for_convention(
         &self,
         convention: Option<PathConvention>,
     ) -> bool {

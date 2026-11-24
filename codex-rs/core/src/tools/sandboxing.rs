@@ -260,12 +260,12 @@ pub(crate) fn ensure_native_sandbox(
 pub(crate) fn sandbox_override_for_first_attempt(
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    has_denied_reads: bool,
     already_approved: bool,
 ) -> SandboxOverride {
     // Only actual approval of an explicit escalation may widen the filesystem;
     // a command allow rule does not authorize removing filesystem restrictions.
-    if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
+    if has_denied_reads {
         return if sandbox_permissions.requires_escalated_permissions() && already_approved {
             SandboxOverride::EscalatedSandboxWithRestrictions
         } else {
@@ -292,25 +292,35 @@ pub(crate) fn sandbox_override_for_first_attempt(
     }
 }
 
-/// Returns true when the active filesystem policy can be represented by
-/// running without a filesystem sandbox.
-///
-/// Denied reads only exist inside the sandbox. If a policy contains any
-/// denied-read paths, bypassing the sandbox would silently grant those reads,
-/// so escalation must keep the command sandboxed with the denied reads intact.
-pub(crate) fn unsandboxed_execution_allowed(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-) -> bool {
-    !file_system_sandbox_policy.has_denied_read_restrictions()
+pub(crate) async fn ensure_executor_can_escalate_with_denied_reads(
+    environment: &codex_exec_server::Environment,
+) -> Result<(), ToolError> {
+    if !environment.is_remote() {
+        return Ok(());
+    }
+    let info = environment.info().await.map_err(|err| {
+        ToolError::Rejected(format!(
+            "could not verify exec-server support for escalation with denied reads: {err}"
+        ))
+    })?;
+    if !matches!(info.platform_os.as_deref(), Some("windows" | "macos"))
+        && !info
+            .capabilities
+            .linux_approved_root_write_preserves_restrictions
+    {
+        return Err(ToolError::Rejected(
+            "this exec-server cannot safely escalate with denied reads; upgrade the exec-server and retry"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn sandbox_permissions_preserving_denied_reads(
     sandbox_permissions: SandboxPermissions,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    has_denied_reads: bool,
 ) -> SandboxPermissions {
-    if sandbox_permissions.requires_escalated_permissions()
-        && !unsandboxed_execution_allowed(file_system_sandbox_policy)
-    {
+    if sandbox_permissions.requires_escalated_permissions() && has_denied_reads {
         // `RequireEscalated` normally asks the executor to bypass the sandbox.
         // When denied reads are active, that would drop the only mechanism that
         // enforces them, so fall back to the default sandboxed attempt instead.

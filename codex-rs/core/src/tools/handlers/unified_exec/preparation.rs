@@ -9,6 +9,7 @@ use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::function_tool::FunctionCallError;
+use crate::guardian::routes_approval_policy_to_guardian;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -23,6 +24,8 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_sandbox_permissions;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::ensure_executor_can_escalate_with_denied_reads;
 use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
 use codex_features::Feature;
 use codex_sandboxing::SandboxManager;
@@ -75,14 +78,17 @@ impl PreparedExecCommand {
             Some("windows") | Some(_) => DangerousCommandPlatform::Windows,
             None => DangerousCommandPlatform::host(),
         };
-        session
+        let approval_policy = step.settings.approval_policy();
+        let profile = environment.permission_profile();
+        let sandbox_permissions = self.permissions.sandbox_permissions;
+        let requirement = session
             .services
             .exec_policy
             .create_exec_approval_requirement_for_shell(
                 ExecApprovalRequest {
                     command: &self.resolved.command,
-                    approval_policy: step.settings.approval_policy(),
-                    permission_profile: environment.permission_profile().clone(),
+                    approval_policy,
+                    permission_profile: profile.clone(),
                     environment_policy: environment.config().exec_policy.as_ref(),
                     windows_sandbox_level: windows_sandbox_level_for_legacy_checks(
                         environment.config().windows_sandbox_type,
@@ -91,7 +97,7 @@ impl PreparedExecCommand {
                     sandbox_permissions: if self.permissions.permissions_preapproved {
                         SandboxPermissions::UseDefault
                     } else {
-                        self.permissions.sandbox_permissions
+                        sandbox_permissions
                     },
                     prefix_rule: self.prefix_rule.clone(),
                     allow_prefix_rules: step.turn.allow_prefix_rules(),
@@ -99,7 +105,29 @@ impl PreparedExecCommand {
                 configured_shell,
                 command_platform,
             )
-            .await
+            .await;
+
+        // With denied reads, a saved allow rule skips review but cannot grant broader writes.
+        if let ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            ..
+        } = requirement
+            && sandbox_permissions.requires_escalated_permissions()
+            && routes_approval_policy_to_guardian(
+                approval_policy,
+                step.settings.approvals_reviewer(),
+            )
+            && environment.has_denied_reads()
+            && ensure_executor_can_escalate_with_denied_reads(environment.environment())
+                .await
+                .is_ok()
+        {
+            return default_exec_approval_requirement(
+                approval_policy,
+                &profile.file_system_sandbox_policy(),
+            );
+        }
+        requirement
     }
 
     pub(crate) fn approval_action(

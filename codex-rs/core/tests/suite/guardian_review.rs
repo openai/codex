@@ -2221,7 +2221,12 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     let permission_section = [
         "\n>>> PARENT TURN PERMISSION CONTEXT START\n".to_string(),
         format!(
-            "The active permission profile for environment \"local\" denies reading these paths/globs. These are policy restrictions; do not approve escalation whose purpose is to read them.\n- path `{}`\n- glob `{}`\n",
+            "The active permission profile for environment \"local\" denies reading these \
+             paths/globs. These are policy restrictions; do not approve escalation whose purpose \
+             is to read them. Approval can grant read and write access across the rest of the \
+             filesystem, including repository metadata. The command stays sandboxed with the same \
+             read denials. A command can encounter a blocked read incidentally and still \
+             complete its intended operation.\n- path `{}`\n- glob `{}`\n",
             fs::canonicalize(&secret_file)?.display(),
             test.config.cwd.join("guardian-*.key").display(),
         ),

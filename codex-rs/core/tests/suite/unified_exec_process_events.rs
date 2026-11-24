@@ -98,6 +98,7 @@ enum PushedExecScenario {
     DenyOldLinux,
     DenyOldLinuxWithRoot(FileSystemAccessMode),
     DenyLinux,
+    SavedRuleWithSlashTmp(SavedRuleExecutor),
     ElevatedPowerShell,
     RejectedLongWindowsDangerousCommand,
     SandboxedInterceptedPatch,
@@ -108,6 +109,14 @@ enum PushedExecScenario {
     FullDiskInterceptedPatch,
     LegacyExit,
     ReplayGap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SavedRuleExecutor {
+    OldWindows,
+    OldLinux,
+    Linux,
+    Windows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +198,16 @@ async fn respond_environment_info(
 ) {
     let shell = if matches!(
         scenario,
+        PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::OldWindows)
+    ) {
+        json!({ "name": "bash", "path": "C:/Program Files/Git/bin/bash.exe" })
+    } else if matches!(
+        scenario,
+        PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::OldLinux)
+    ) {
+        json!({ "name": "zsh", "path": "//usr/bin/zsh" })
+    } else if matches!(
+        scenario,
         PushedExecScenario::DenyWin
             | PushedExecScenario::DenyWinUnchanged
             | PushedExecScenario::ElevatedPowerShell
@@ -211,6 +230,11 @@ async fn respond_environment_info(
         json!({ "name": "zsh", "path": "/bin/zsh" })
     };
     let platform_os = match scenario {
+        PushedExecScenario::SavedRuleWithSlashTmp(
+            SavedRuleExecutor::OldWindows | SavedRuleExecutor::OldLinux,
+        ) => None,
+        PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::Windows) => Some("windows"),
+        PushedExecScenario::SavedRuleWithSlashTmp(_) => Some("linux"),
         PushedExecScenario::DenyWin
         | PushedExecScenario::DenyWinUnchanged
         | PushedExecScenario::RejectedLongWindowsDangerousCommand => Some("windows"),
@@ -238,7 +262,11 @@ async fn respond_environment_info(
     ) {
         capabilities["linuxRootWritePreservesDevices"] = json!(true);
     }
-    if matches!(scenario, PushedExecScenario::DenyLinux) {
+    if matches!(
+        scenario,
+        PushedExecScenario::DenyLinux
+            | PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::Linux)
+    ) {
         capabilities["linuxApprovedRootWritePreservesRestrictions"] = json!(true);
     }
     let mut response = json!({
@@ -580,6 +608,7 @@ async fn serve_exec_with_pushed_events(
         | PushedExecScenario::DenyOldLinux
         | PushedExecScenario::DenyOldLinuxWithRoot(_)
         | PushedExecScenario::DenyLinux
+        | PushedExecScenario::SavedRuleWithSlashTmp(_)
         | PushedExecScenario::CodexPath
         | PushedExecScenario::CodexPathDefaultFeature
         | PushedExecScenario::CodexPathDisabledFeature
@@ -773,6 +802,7 @@ async fn serve_exec_with_pushed_events(
                     | PushedExecScenario::DenyOldLinux
                     | PushedExecScenario::DenyOldLinuxWithRoot(_)
                     | PushedExecScenario::DenyLinux
+                    | PushedExecScenario::SavedRuleWithSlashTmp(_)
                     | PushedExecScenario::ElevatedPowerShell => {
                         panic!("completed remote PowerShell must not read a remote process")
                     }
@@ -891,6 +921,10 @@ async fn serve_exec_with_pushed_events(
 #[cfg_attr(not(windows), test_case(PushedExecScenario::DenyOldLinuxWithRoot(FileSystemAccessMode::Deny), ManagedNetworkScenario::None, false ; "old_linux_deny_read_keeps_root_deny_unchanged"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::DenyOldLinuxWithRoot(FileSystemAccessMode::Write), ManagedNetworkScenario::None, false ; "device_only_linux_deny_read_rejects_unchanged_writable_root_metadata"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::DenyLinux, ManagedNetworkScenario::None, false ; "linux_deny_read_allows_approved_escalation"))]
+#[test_case(PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::OldLinux), ManagedNetworkScenario::None, false ; "saved_escalation_with_slash_tmp_denial_keeps_baseline_on_old_linux")]
+#[test_case(PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::Linux), ManagedNetworkScenario::None, false ; "saved_escalation_with_slash_tmp_denial_reviews_and_widens_on_linux")]
+#[test_case(PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::Windows), ManagedNetworkScenario::None, true ; "saved_escalation_with_slash_tmp_denial_bypasses_on_windows")]
+#[test_case(PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::OldWindows), ManagedNetworkScenario::None, true ; "saved_escalation_with_slash_tmp_denial_bypasses_on_legacy_windows")]
 #[test_case(PushedExecScenario::ElevatedPowerShell, ManagedNetworkScenario::None, true ; "windows_elevated_powershell_disables_profile")]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::RejectedLongWindowsDangerousCommand, ManagedNetworkScenario::None, true ; "remote_windows_dangerous_command_rejection_is_bounded"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::SandboxedInterceptedPatch, ManagedNetworkScenario::None, true ; "foreign_windows_intercepted_patch_is_sandboxed"))]
@@ -936,6 +970,11 @@ async fn exec_command_consumes_pushed_remote_process_events(
             policy_callbacks: true
         }
     );
+    let saved_rule = if let PushedExecScenario::SavedRuleWithSlashTmp(target) = scenario {
+        Some(target)
+    } else {
+        None
+    };
     let deny_read = matches!(
         scenario,
         PushedExecScenario::DenyWin
@@ -943,6 +982,7 @@ async fn exec_command_consumes_pushed_remote_process_events(
             | PushedExecScenario::DenyOldLinux
             | PushedExecScenario::DenyOldLinuxWithRoot(_)
             | PushedExecScenario::DenyLinux
+            | PushedExecScenario::SavedRuleWithSlashTmp(_)
     );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
@@ -1062,6 +1102,16 @@ async fn exec_command_consumes_pushed_remote_process_events(
             ev_completed("resp-drained"),
         ]));
     }
+    if let Some(target) = saved_rule {
+        wiremock::Mock::given(wiremock::matchers::header("x-openai-subagent", "guardian"))
+            .respond_with(core_test_support::responses::sse_response(sse(vec![
+                ev_assistant_message("guardian", r#"{"outcome":"allow"}"#),
+                ev_completed("guardian"),
+            ])))
+            .expect(u64::from(target == SavedRuleExecutor::Linux))
+            .mount(&server)
+            .await;
+    }
     let response_mock = mount_sse_sequence(&server, responses).await;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let process_started = Arc::new(AtomicBool::new(false));
@@ -1160,6 +1210,16 @@ timeout = 900
     }
     let mut builder = builder.with_config(move |config| {
         config.project_doc_max_bytes = 0;
+        if saved_rule.is_some() {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let dir = config.codex_home.join("rules");
+            fs::create_dir_all(&dir).expect("create rules directory");
+            fs::write(
+                dir.join("default.rules"),
+                r#"prefix_rule(pattern=["codex-deny-read-escalation-test"], decision="allow")"#,
+            )
+            .expect("write allow rule");
+        }
         if matches!(scenario, PushedExecScenario::CodexPathDisabledFeature) {
             config
                 .features
@@ -1193,6 +1253,15 @@ timeout = 900
 
     let turn_permission_profile = if managed_network_configured {
         test.session_configured.permission_profile.clone()
+    } else if saved_rule.is_some() {
+        let mut filesystem = FileSystemSandboxPolicy::read_only();
+        filesystem.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::SlashTmp,
+            },
+            FileSystemAccessMode::Deny,
+        ));
+        PermissionProfile::from_runtime_permissions(&filesystem, NetworkSandboxPolicy::Enabled)
     } else if deny_read {
         let mut filesystem = FileSystemSandboxPolicy::read_only();
         if let PushedExecScenario::DenyOldLinuxWithRoot(access) = scenario {
@@ -1723,7 +1792,16 @@ timeout = 900
             json!(["/bin/zsh", "-lc", "pwd"])
         );
     }
-    if foreign_cwd {
+    let windows_rule = matches!(
+        saved_rule,
+        Some(SavedRuleExecutor::Windows | SavedRuleExecutor::OldWindows)
+    );
+    if windows_rule {
+        assert_eq!(
+            exec_server_result.process_start["params"]["sandbox"],
+            Value::Null
+        );
+    } else if foreign_cwd {
         let params = &exec_server_result.process_start["params"];
         assert_eq!(params["cwd"], "file:///C:/workspace");
         assert_eq!(params["sandbox"]["cwd"], "file:///C:/workspace");
@@ -1745,7 +1823,7 @@ timeout = 900
             assert_eq!(params["sandbox"]["windowsSandboxLevel"], "restricted-token");
         }
     }
-    if deny_read {
+    if deny_read && !windows_rule {
         let params = &exec_server_result.process_start["params"];
         let params: ExecParams = serde_json::from_value(params.clone())?;
         let sandbox = params.sandbox.context("sandbox with denied reads")?;
@@ -1754,7 +1832,9 @@ timeout = 900
         let policy = policy.materialize_project_roots_with_path_uris(context.workspace_roots);
         if matches!(
             scenario,
-            PushedExecScenario::DenyWinUnchanged | PushedExecScenario::DenyOldLinuxWithRoot(_)
+            PushedExecScenario::DenyWinUnchanged
+                | PushedExecScenario::DenyOldLinuxWithRoot(_)
+                | PushedExecScenario::SavedRuleWithSlashTmp(SavedRuleExecutor::OldLinux)
         ) {
             let baseline = turn_permission_profile.file_system_sandbox_policy();
             assert_eq!(
@@ -1766,8 +1846,13 @@ timeout = 900
             let matcher =
                 ReadDenyMatcher::from_context(&policy, &context).context("denied reads")?;
             assert!(policy.can_write_path(&context.cwd.join("../outside")?, &context));
+            let denied_paths: &[&str] = if saved_rule.is_some() {
+                &["/tmp/secret"]
+            } else {
+                &["secret.txt", "private.token"]
+            };
             for root in context.workspace_roots {
-                for path in ["secret.txt", "private.token"] {
+                for path in denied_paths {
                     assert!(matcher.is_read_denied_uri(&root.join(path)?, &context));
                 }
             }
@@ -1937,6 +2022,7 @@ timeout = 900
         | PushedExecScenario::DenyOldLinux
         | PushedExecScenario::DenyOldLinuxWithRoot(_)
         | PushedExecScenario::DenyLinux
+        | PushedExecScenario::SavedRuleWithSlashTmp(_)
         | PushedExecScenario::CodexPath
         | PushedExecScenario::CodexPathDefaultFeature
         | PushedExecScenario::CodexPathDisabledFeature

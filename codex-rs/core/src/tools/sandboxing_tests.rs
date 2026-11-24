@@ -170,7 +170,7 @@ fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_ski
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             },
-            &FileSystemSandboxPolicy::default(),
+            /*has_denied_reads*/ false,
             /*already_approved*/ false,
         ),
         SandboxOverride::BypassSandboxFirstAttempt
@@ -186,7 +186,7 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
-            &FileSystemSandboxPolicy::default(),
+            /*has_denied_reads*/ false,
             /*already_approved*/ true,
         ),
         SandboxOverride::BypassSandboxFirstAttempt
@@ -202,6 +202,7 @@ fn deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_byp
         access: FileSystemAccessMode::Deny,
         missing_path_behavior: None,
     }]);
+    let has_denied_reads = file_system_policy.has_denied_read_restrictions();
 
     assert_eq!(
         sandbox_override_for_first_attempt(
@@ -210,13 +211,12 @@ fn deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_byp
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
-            &file_system_policy,
+            has_denied_reads,
             /*already_approved*/ true,
         ),
         SandboxOverride::EscalatedSandboxWithRestrictions,
         "explicit escalation must widen the first attempt without dropping the sandbox",
     );
-    assert!(!unsandboxed_execution_allowed(&file_system_policy));
     assert!(matches!(
         ensure_native_sandbox(SandboxOverride::EscalatedSandboxWithRestrictions, SandboxType::None),
         Err(ToolError::Rejected(reason)) if reason.contains("requires an available filesystem sandbox"),
@@ -224,21 +224,21 @@ fn deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_byp
     assert_eq!(
         sandbox_permissions_preserving_denied_reads(
             SandboxPermissions::RequireEscalated,
-            &file_system_policy,
+            has_denied_reads,
         ),
         SandboxPermissions::UseDefault,
     );
     assert_eq!(
         sandbox_permissions_preserving_denied_reads(
             SandboxPermissions::WithAdditionalPermissions,
-            &file_system_policy,
+            has_denied_reads,
         ),
         SandboxPermissions::WithAdditionalPermissions,
     );
     assert_eq!(
         sandbox_permissions_preserving_denied_reads(
             SandboxPermissions::RequireEscalated,
-            &FileSystemSandboxPolicy::default(),
+            /*has_denied_reads*/ false,
         ),
         SandboxPermissions::RequireEscalated,
     );
@@ -249,7 +249,7 @@ fn deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_byp
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             },
-            &file_system_policy,
+            has_denied_reads,
             /*already_approved*/ true,
         ),
         SandboxOverride::NoOverride,
