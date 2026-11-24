@@ -1516,6 +1516,21 @@ print(json.dumps({{"continue": False}}))
         // SessionStart must run the Python hook installed in the host test home.
         .build(&server)
         .await?;
+    // Force teardown while the hook is running. The next turn must retry it.
+    test.codex
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "interrupted prompt".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let (interrupted_hook, _) = timeout(Duration::from_secs(10), hook_gate.accept()).await??;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    drop(interrupted_hook);
+
     let context = BTreeMap::from([(
         "continuation".to_owned(),
         AdditionalContextEntry::new(
@@ -1560,6 +1575,7 @@ print(json.dumps({{"continue": False}}))
     let texts = requests[0].message_input_texts("user");
     assert!(texts.iter().any(|text| text == "queued steer"));
     assert!(!texts.iter().any(|text| text == "stopped prompt"));
+    assert!(!texts.iter().any(|text| text == "interrupted prompt"));
     assert!(!requests[0].has_content_kinds(&["additional_content.continuation"]));
     assert!(requests[1].has_content_kinds(&["additional_content.continuation"]));
     Ok(())

@@ -26,6 +26,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -49,12 +50,16 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::sync::Notify;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
 
-struct RecordingTurnInputContributor(Arc<Mutex<Vec<RecordedTurnInputEnvironment>>>);
+enum TestTurnInputContributor {
+    RecordEnvironments(Arc<Mutex<Vec<RecordedTurnInputEnvironment>>>),
+    Block(Arc<Notify>),
+}
 
-impl TurnInputContributor for RecordingTurnInputContributor {
+impl TurnInputContributor for TestTurnInputContributor {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext<'a>,
@@ -64,7 +69,15 @@ impl TurnInputContributor for RecordingTurnInputContributor {
         _turn_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
         Box::pin(async move {
-            let mut recorded_environments = self.0.lock().expect("recorded environments lock");
+            let environments = match self {
+                Self::RecordEnvironments(environments) => environments,
+                Self::Block(started) => {
+                    started.notify_one();
+                    return std::future::pending().await;
+                }
+            };
+            let mut recorded_environments =
+                environments.lock().expect("recorded environments lock");
             for environment in input.environments {
                 recorded_environments.push(RecordedTurnInputEnvironment {
                     environment_id: environment.environment_id,
@@ -165,9 +178,9 @@ async fn turn_input_contributors_receive_foreign_environment_cwds() -> Result<()
     .await;
     let recorded_environments = Arc::new(Mutex::new(Vec::new()));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.turn_input_contributor(Arc::new(RecordingTurnInputContributor(Arc::clone(
-        &recorded_environments,
-    ))));
+    extensions.turn_input_contributor(Arc::new(TestTurnInputContributor::RecordEnvironments(
+        Arc::clone(&recorded_environments),
+    )));
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| config.project_doc_max_bytes = 0);
@@ -200,6 +213,57 @@ async fn turn_input_contributors_receive_foreign_environment_cwds() -> Result<()
         }]
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_during_extension_setup_preserves_prompt_on_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resume"), ev_completed("resume")]),
+    )
+    .await;
+    let started = Arc::new(Notify::new());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_input_contributor(Arc::new(TestTurnInputContributor::Block(Arc::clone(
+        &started,
+    ))));
+    let initial = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+
+    let prompt = "Investigate the failing login test";
+    initial
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: prompt.into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    started.notified().await;
+    initial.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+
+    let resumed = test_codex()
+        .restart_with_auto_env(&server, &initial)
+        .await?;
+    let follow_up = "Just explain the cause";
+    resumed.submit_text_turn(follow_up).await?;
+    let messages = response.single_request().message_input_texts("user");
+    let expected = [prompt, "<turn_aborted>", follow_up];
+    let history = messages
+        .iter()
+        .filter_map(|text| text.lines().next())
+        .filter(|line| expected.contains(line))
+        .collect::<Vec<_>>();
+    assert_eq!(history, expected);
     Ok(())
 }
 

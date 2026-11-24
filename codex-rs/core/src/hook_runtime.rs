@@ -58,6 +58,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Map;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
@@ -133,8 +134,9 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    cancellation_token: &CancellationToken,
 ) -> bool {
-    while let Some(session_start_source) = sess.take_pending_session_start_source().await {
+    while let Some(session_start_source) = sess.pending_session_start_source().await {
         // Spawned subagents can start fresh or fork their parent's history, so both
         // sources dispatch SubagentStart. Internal/system subagents skip start hooks.
         let target = match &turn_context.session_source {
@@ -152,7 +154,10 @@ pub(crate) async fn run_pending_session_start_hooks(
                     agent_type: context.agent_type,
                 }
             }
-            SessionSource::SubAgent(_) => return false,
+            SessionSource::SubAgent(_) => {
+                sess.take_pending_session_start_source().await;
+                return false;
+            }
             _ => StartHookTarget::SessionStart {
                 source: session_start_source,
             },
@@ -172,7 +177,16 @@ pub(crate) async fn run_pending_session_start_hooks(
             &turn_context.initial_environments.refresh_readiness(),
         );
         let preview_runs = hooks.preview_session_start(&request);
-        if run_context_injecting_hook(
+        if cancellation_token.is_cancelled()
+            && preview_runs
+                .iter()
+                .any(|run| run.execution_mode == HookExecutionMode::Sync)
+        {
+            return true;
+        }
+        // Only the running turn consumes sources. Keep this one queued until
+        // its outcome is handled so forced teardown cannot skip a blocking hook.
+        let should_stop = run_context_injecting_hook(
             sess,
             turn_context,
             preview_runs,
@@ -180,8 +194,9 @@ pub(crate) async fn run_pending_session_start_hooks(
         )
         .await
         .record_additional_contexts(sess, turn_context)
-        .await
-        {
+        .await;
+        sess.take_pending_session_start_source().await;
+        if should_stop {
             return true;
         }
     }

@@ -6249,6 +6249,17 @@ impl Session {
         Some(rollout_path)
     }
 
+    pub(crate) async fn pending_session_start_source(
+        &self,
+    ) -> Option<codex_hooks::SessionStartSource> {
+        self.state
+            .lock()
+            .await
+            .pending_session_start_sources
+            .front()
+            .copied()
+    }
+
     pub(crate) async fn take_pending_session_start_source(
         &self,
     ) -> Option<codex_hooks::SessionStartSource> {

@@ -376,53 +376,15 @@ pub(crate) async fn run_turn(
         }
         Err(err) => return Err(err),
     };
-    // Record initial context while preparing diff display roots.
-    let (record_context, display_roots) = tokio::join!(
-        preserve_initial_input_during(
-            &sess,
-            &turn_context,
-            &mut input,
-            sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
-        ),
-        async {
-            // Guardian must not wait for remote Git discovery just to display diff paths.
-            if crate::guardian::is_basic_session_source(&turn_context.session_source)
-                || first_step_context
-                    .turn
-                    .config
-                    .features
-                    .enabled(Feature::CwdRelativeTurnDiffs)
-            {
-                first_step_context
-                    .environments
-                    .turn_environments()
-                    .map(|environment| {
-                        (
-                            environment.selection().environment_id,
-                            environment.cwd().clone(),
-                        )
-                    })
-                    .collect()
-            } else {
-                turn_diff_display_roots(first_step_context.as_ref()).await
-            }
-        },
-    );
-    let mut world_state = record_context??;
-
-    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+    let mut world_state = preserve_initial_input_during(
         &sess,
-        first_step_context.as_ref(),
-        &user_input,
-        &mentioned_plugins,
-        &cancellation_token,
+        &turn_context,
+        &mut input,
+        sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
     )
-    .await
-    else {
-        return Ok(None);
-    };
+    .await??;
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
+    if run_pending_session_start_hooks(&sess, &turn_context, &cancellation_token).await {
         // A queued steer can reuse this turn context after the initial input is discarded.
         turn_context
             .extension_data
@@ -495,6 +457,24 @@ pub(crate) async fn run_turn(
     {
         turn_context.session_telemetry.user_prompt(&user_input);
     }
+
+    // Neither extension setup nor diff path discovery should delay recording accepted input.
+    let (extensions, display_roots) = tokio::join!(
+        build_skills_and_plugins(
+            &sess,
+            first_step_context.as_ref(),
+            &user_input,
+            &mentioned_plugins,
+            &cancellation_token,
+        ),
+        cancellation_token
+            .run_until_cancelled(turn_diff_display_roots(first_step_context.as_ref())),
+    );
+    let (Some((injection_items, explicitly_enabled_connectors)), Some(display_roots)) =
+        (extensions, display_roots)
+    else {
+        return Ok(None);
+    };
 
     // Only speculate after hooks accept the turn, using its finalized tools and permissions.
     {
@@ -839,7 +819,13 @@ pub(crate) async fn run_turn(
                     .await;
                     match compacted {
                         Ok(true) => {
-                            if run_pending_session_start_hooks(&sess, &turn_context).await {
+                            if run_pending_session_start_hooks(
+                                &sess,
+                                &turn_context,
+                                &cancellation_token,
+                            )
+                            .await
+                            {
                                 return Ok(None);
                             }
                             // After interrupted sampling, drain pending input even if compaction
@@ -1149,6 +1135,26 @@ impl TurnCompletionHooks {
 
 #[instrument(level = "trace", skip_all)]
 async fn turn_diff_display_roots(step_context: &StepContext) -> Vec<(String, PathUri)> {
+    // Guardian must not wait for remote Git discovery just to display diff paths.
+    if crate::guardian::is_basic_session_source(&step_context.turn.session_source)
+        || step_context
+            .turn
+            .config
+            .features
+            .enabled(Feature::CwdRelativeTurnDiffs)
+    {
+        return step_context
+            .environments
+            .turn_environments()
+            .map(|environment| {
+                (
+                    environment.selection().environment_id,
+                    environment.cwd().clone(),
+                )
+            })
+            .collect();
+    }
+
     let mut display_roots = Vec::new();
     for turn_environment in step_context.environments.turn_environments() {
         let cwd = turn_environment.cwd();
