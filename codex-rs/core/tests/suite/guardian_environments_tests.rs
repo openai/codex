@@ -133,10 +133,11 @@ async fn live_and_recorded_mcp_reviews_use_the_server_owners_denied_paths() -> R
     let options = test.start_thread_options().await;
     let recorded = test.thread_manager.start_thread(options).await?;
     let items = recorded_mcp_items(&test.codex, prompt).await?;
+    let tool_call = items.last().expect("recorded call").clone();
     recorded.thread.inject_response_items(items).await?;
     recorded
         .thread
-        .guardian_review(&tokio_util::sync::CancellationToken::new())
+        .guardian_review(&tool_call, &tokio_util::sync::CancellationToken::new())
         .await?;
     let requests = responses.requests();
     let [review, _, replay] = requests.as_slice() else {

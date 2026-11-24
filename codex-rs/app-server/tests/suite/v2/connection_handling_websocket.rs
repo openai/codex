@@ -489,20 +489,12 @@ async fn websocket_disconnect_cancels_guardian_review_and_releases_thread() -> R
         read_response_for_id(client, /*id*/ 1).await?;
     }
     let thread_id = start_thread(&mut owner, /*id*/ 2).await?;
-    send_request(&mut owner, "thread/inject_items", /*id*/ 3, Some(json!({
-        "threadId":thread_id, "items":[{
+    send_request(&mut owner, "thread/guardianReview", /*id*/ 4, Some(json!({
+        "threadId":thread_id, "toolCall":{
             "type":"function_call","name":"exec_command","call_id":"review",
             "arguments":r#"{"cmd":"touch marker","sandbox_permissions":"require_escalated","justification":"create the marker"}"#
-        }]
+        }
     }))).await?;
-    read_response_for_id(&mut owner, /*id*/ 3).await?;
-    send_request(
-        &mut owner,
-        "thread/guardianReview",
-        /*id*/ 4,
-        Some(json!({"threadId":thread_id})),
-    )
-    .await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         guardian.wait_for_request_count(/*count*/ 1),

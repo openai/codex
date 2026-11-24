@@ -960,7 +960,7 @@ client_request_definitions! {
         response: v2::ThreadItemsReadResponse,
     },
     #[experimental("thread/guardianReview")]
-    /// Review the idle thread's final injected exec_command without executing it.
+    /// Assess a supplied tool call against an idle thread's history without executing it.
     ThreadGuardianReview => "thread/guardianReview" {
         params: v2::ThreadGuardianReviewParams,
         serialization: thread_id(params.thread_id),

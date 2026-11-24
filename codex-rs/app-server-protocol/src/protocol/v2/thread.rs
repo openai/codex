@@ -1855,12 +1855,15 @@ pub struct ThreadReadResponse {
 /// Sequential calls on the same loaded thread can reuse Guardian history across
 /// direct reviews and live approvals. The reviewer keeps a separate conversation
 /// from the actor and follows the parent thread's normal persistence settings.
-/// A retry evaluates the final call again under the current policy.
+/// A retry evaluates the supplied call again under the current policy.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadGuardianReviewParams {
     pub thread_id: String,
+    /// A plaintext Responses API function_call or custom_tool_call to assess against
+    /// the idle thread's history. The call is neither appended nor executed.
+    pub tool_call: Box<ResponseItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

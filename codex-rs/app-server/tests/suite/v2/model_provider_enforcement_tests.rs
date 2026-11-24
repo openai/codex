@@ -143,7 +143,10 @@ base_url = "{}/v1"
         ("thread/resume", json!({"threadId": started.thread.id})),
         (
             "thread/guardianReview",
-            json!({ "threadId": started.thread.id }),
+            json!({"threadId": started.thread.id, "toolCall": {
+                "type": "function_call", "name": "exec_command", "call_id": "blocked",
+                "arguments": r#"{"cmd":"pwd"}"#,
+            }}),
         ),
         (
             "thread/goal/set",

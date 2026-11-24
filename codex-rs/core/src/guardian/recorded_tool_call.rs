@@ -76,7 +76,7 @@ pub(crate) async fn review_tool_call(
             ));
         }
     };
-    if history.raw_items().rev().skip(1).any(|item| {
+    if history.raw_items().any(|item| {
         matches!(item, ResponseItem::FunctionCall { name, namespace, .. }
             if name == "request_permissions"
                 && ToolName::new(namespace.clone(), name).is_default_namespace())

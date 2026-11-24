@@ -216,14 +216,13 @@ impl TurnRequestProcessor {
             EnsureConversationListenerResult::Attached => {}
             EnsureConversationListenerResult::ConnectionClosed => return Ok(None),
         }
-        let result =
-            thread
-                .guardian_review(cancellation)
-                .await
-                .map_err(|err| match err.details() {
-                    CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
-                    _ => internal_error(format!("Guardian review failed: {err}")),
-                })?;
+        let result = thread
+            .guardian_review(&params.tool_call, cancellation)
+            .await
+            .map_err(|err| match err.details() {
+                CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+                _ => internal_error(format!("Guardian review failed: {err}")),
+            })?;
         Ok(Some(
             ThreadGuardianReviewResponse {
                 call_id: result.call_id,

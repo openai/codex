@@ -812,43 +812,56 @@ async fn guardian_review_assesses_allowlisted_calls_and_reuses_private_history_p
     let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
     let other = app.start_thread(ThreadStartParams::default()).await?.thread;
 
-    for (thread, call_id) in [(&parent, "a"), (&parent, "b"), (&other, "c")] {
-        let evidence = if call_id == "b" {
-            json!({
-                "type": "function_call_output",
-                "call_id": "a",
-                "output": "Recorded success.",
-            })
-        } else {
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "List tracked files."}],
-            })
-        };
-        let items = vec![
-            evidence,
-            json!({
-                "type": "function_call",
-                "name": "exec_command",
-                "call_id": call_id,
-                "arguments": r#"{"cmd":"git ls-files"}"#,
-            }),
-        ];
+    let script = r#"for (const path of ["a", "b"]) await tools.exec_command({cmd: "git ls-files " + path});"#;
+    let command = |id: &str| {
+        json!({
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": id,
+            "arguments": json!({"cmd": format!("git ls-files {id}")}).to_string(),
+        })
+    };
+    for (thread, last) in [
+        (
+            &parent,
+            json!({"type":"custom_tool_call", "name":"exec", "call_id":"outer", "input":script}),
+        ),
+        (&other, command("c")),
+    ] {
         let _: ThreadInjectItemsResponse = app
             .request(|request_id| ClientRequest::ThreadInjectItems {
                 request_id,
                 params: ThreadInjectItemsParams {
                     thread_id: thread.id.clone(),
-                    items,
+                    items: vec![
+                        json!({
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "List tracked files."}],
+                        }),
+                        last,
+                    ],
                 },
             })
             .await?;
+    }
+
+    let id = app
+        .send_raw_request("thread/guardianReview", Some(json!({"threadId":other.id})))
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert!(error.error.message.contains("toolCall"));
+
+    for (thread, call_id) in [(&parent, "a"), (&parent, "b"), (&other, "c")] {
+        let tool_call = serde_json::from_value(command(call_id))?;
         let result: Value = app
             .request(|request_id| ClientRequest::ThreadGuardianReview {
                 request_id,
                 params: ThreadGuardianReviewParams {
                     thread_id: thread.id.clone(),
+                    tool_call,
                 },
             })
             .await?;
@@ -870,6 +883,23 @@ async fn guardian_review_assesses_allowlisted_calls_and_reuses_private_history_p
     let [a, b, c] = requests.as_slice() else {
         anyhow::bail!("expected three Guardian requests, got {}", requests.len());
     };
+    for (request, id) in [(a, "a"), (b, "b")] {
+        let input = request.input();
+        let texts = input
+            .iter()
+            .filter_map(|item| item["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["text"].as_str());
+        assert!(texts.clone().any(|text| text.contains(script)));
+        let action = texts
+            .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+            .rfind(|action| action["tool"] == "exec_command")
+            .expect("planned command");
+        assert_eq!(
+            action["command"].as_array().unwrap().last().unwrap(),
+            &json!(format!("git ls-files {id}"))
+        );
+    }
     for request in [a, b, c] {
         assert_eq!(
             request.body_json()["client_metadata"]["x-openai-subagent"],
@@ -892,6 +922,15 @@ async fn guardian_review_assesses_allowlisted_calls_and_reuses_private_history_p
     );
 
     app.shutdown_gracefully().await?;
+    let rollout = std::fs::read_to_string(parent.path.expect("parent rollout"))?;
+    let mut calls = Vec::new();
+    for line in rollout.lines() {
+        let entry: Value = serde_json::from_str(line)?;
+        if entry["type"] == "response_item" && entry["payload"]["call_id"].is_string() {
+            calls.push(entry["payload"]["call_id"].clone());
+        }
+    }
+    assert_eq!(calls, vec![json!("outer")]);
     Ok(())
 }
 

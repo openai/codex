@@ -100,10 +100,11 @@ async fn direct_mcp_review_without_dispatch() -> Result<()> {
     );
     let direct = test.thread_manager.start_thread(options).await?;
     wait_for_mcp_server(&direct.thread, "codex_apps").await?;
+    let tool_call = items.last().expect("recorded call").clone();
     direct.thread.inject_response_items(items).await?;
     let result = direct
         .thread
-        .guardian_review(&CancellationToken::new())
+        .guardian_review(&tool_call, &CancellationToken::new())
         .await?;
     assert_eq!(
         result,
