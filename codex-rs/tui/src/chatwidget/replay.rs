@@ -488,7 +488,14 @@ impl ChatWidget {
                     ));
                 }
             }
-            ThreadItemPayload::HookPrompt { .. } => {}
+            ThreadItemPayload::HookPrompt { .. } => {
+                // A Stop hook continued the turn after the final answer hid the status row.
+                if self.turn_lifecycle.agent_turn_running
+                    && self.last_turn_id() == Some(turn_id.as_str())
+                {
+                    self.bottom_pane.ensure_status_indicator();
+                }
+            }
             ThreadItemPayload::CollabAgentToolCall {
                 id,
                 tool,

@@ -2682,6 +2682,44 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
 }
 
 #[tokio::test]
+async fn stop_hook_retry_restores_working_after_final_answer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    complete_assistant_message(&mut chat, "msg-1", "Done.", Some(MessagePhase::FinalAnswer));
+
+    let prompt = ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+        String::new(),
+        "turn-1".into(),
+        AppServerThreadItemPayload::HookPrompt {
+            id: "prompt-1".into(),
+            fragments: vec![codex_app_server_protocol::HookPromptFragment {
+                text: "Include test results.".into(),
+                hook_run_id: "stop-1".into(),
+            }],
+        },
+        /*started_at_ms*/ None,
+        /*completed_at_ms*/ 0,
+    ));
+    chat.handle_server_notification(prompt.clone(), /*replay_kind*/ None);
+    assert_chatwidget_snapshot!(
+        "stop_hook_retry_working",
+        hook_status_frame(&chat, /*width*/ 60)
+    );
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let replay = ReplayKind::ThreadSnapshot;
+    replay_turn_started(&mut chat, replay);
+    replay_agent_message(&mut chat, "msg-1", "Done.", replay);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    chat.handle_server_notification(prompt.clone(), Some(replay));
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+    chat.handle_server_notification(prompt, Some(replay));
+    assert!(!chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
 async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
