@@ -19,6 +19,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
+use crate::context::world_state::AdditionalContextState;
 use crate::context_manager::rejected_audio;
 use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -1178,6 +1179,15 @@ pub(crate) async fn run_hooks_and_record_input_entries(
     pending_input: &[InputQueueEntry],
     persist_context: PersistContext,
 ) -> CodexResult<bool> {
+    if let Some(pending) = turn_context.extension_data.get::<PendingToolContext>()
+        && can_record_input(sess)
+    {
+        let sections = std::mem::take(&mut *pending.lock().await);
+        for section in sections {
+            sess.record_input_world_state(turn_context, model_info, section)
+                .await;
+        }
+    }
     // A started turn owns one initial submission; consume its context exactly once.
     let initial_context = turn_context
         .extension_data
@@ -1261,29 +1271,17 @@ pub(crate) async fn record_delivered_additional_context(
     model_info: &ModelInfo,
     context: &SubmittedAdditionalContext,
 ) {
-    let items = merge_submitted_context(sess, turn_context, context).await;
-    if !items.is_empty() {
-        sess.record_annotated_conversation_items(turn_context, model_info, items)
-            .await;
-    }
-}
-
-pub(crate) async fn merge_submitted_context(
-    sess: &Session,
-    turn_context: &TurnContext,
-    context: &SubmittedAdditionalContext,
-) -> Vec<ResponseItemEnvelope> {
-    let items = sess.state.lock().await.additional_context.merge(
-        context.0.clone(),
-        sess.additional_context_format(),
+    let section = AdditionalContextState::new(
+        &context.0,
+        sess.enabled(Feature::UntrustedAsToolOutput),
         &turn_context.session_telemetry,
         &sess.context_ids,
     );
-    items
-        .into_iter()
-        .map(|item| sess.annotate_client_response_item(item))
-        .collect()
+    sess.record_input_world_state(turn_context, model_info, section)
+        .await;
 }
+
+pub(super) type PendingToolContext = tokio::sync::Mutex<Vec<AdditionalContextState>>;
 
 /// Yields usable input with its context in order, then reports unsupported audio after valid siblings can be recorded.
 pub(crate) fn recordable_inputs<'a>(

@@ -1,8 +1,6 @@
 //! Captured originals preserve attribution, complete contents and a fixed history boundary.
 
-use codex_context_fragments::AdditionalContextUserFragment;
 use codex_context_fragments::AnnotatedContent;
-use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::message_from_parts;
 use codex_guardian_v3::EvidenceCursor;
 use codex_guardian_v3::OriginalEvidence;
@@ -103,8 +101,13 @@ async fn captures_originals_without_generated_context_or_later_appends() -> anyh
     let result = ResponseItemEnvelope::new(serde_json::from_value(json!({
         "type":"function_call_output","call_id":"call-1","output":"/workspace"
     }))?);
-    let generated = ResponseItemEnvelope::new(ContextualUserFragment::into(
-        AdditionalContextUserFragment::new("environment".into(), "Generated context".into()),
+    let generated = ResponseItemEnvelope::new(message_from_parts(
+        "user",
+        vec![AnnotatedContent::text(
+            "<external_environment>Generated context</external_environment>",
+            ContentItemKind("additional_content.environment".into()),
+            ContentItemMetadata::harness(),
+        )],
     ));
     let mut summary = assistant.clone();
     summary.metadata = Some(CodexHarnessMetadata {

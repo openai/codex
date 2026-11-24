@@ -3,7 +3,6 @@ use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-use super::AdditionalContextUserFragment;
 use super::AgentMessageBoardNotification;
 use super::ContextualUserFragment;
 use super::GuardianRetainedInstructions;
@@ -18,13 +17,14 @@ use super::UnsupportedMedia;
 use super::UserGoalUpdate;
 use super::UserInstructions;
 use super::UserShellCommand;
+use super::world_state::AdditionalContextState;
 use super::world_state::EnvironmentsState;
 use crate::image_preparation::ImagePreparationError;
 
 const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
     UserInstructions::matches_text,
     EnvironmentsState::matches_text,
-    AdditionalContextUserFragment::matches_text,
+    AdditionalContextState::matches_user_text,
     AgentMessageBoardNotification::matches_text,
     codex_skills_extension::is_skill_prompt_fragment,
     UserShellCommand::matches_text,

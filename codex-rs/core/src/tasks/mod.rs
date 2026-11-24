@@ -37,7 +37,7 @@ use crate::session::SamplingInterrupt;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn::McpStartupRequirements;
-use crate::session::turn::merge_submitted_context;
+use crate::session::turn::record_delivered_additional_context;
 use crate::session::turn::run_hooks_and_record_input_entries;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_context::TurnContext;
@@ -1265,7 +1265,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             // Injection acknowledges queueing. Preserve accepted agent mail before
             // teardown discards pending input and the host observes TurnAborted.
-            let mut pending_mail = Vec::new();
+            let model_info = task.turn_context.capture_current_model_info();
             let mut remaining_input = Vec::new();
             for input in self
                 .input_queue
@@ -1278,11 +1278,20 @@ impl Session {
                         additional_context,
                     } if matches!(item.item, ResponseItem::AgentMessage { .. }) => {
                         if let Some(context) = additional_context {
-                            pending_mail.extend(
-                                merge_submitted_context(self, &task.turn_context, &context).await,
-                            );
+                            record_delivered_additional_context(
+                                self,
+                                &task.turn_context,
+                                &model_info,
+                                &context,
+                            )
+                            .await;
                         }
-                        pending_mail.push(item);
+                        self.record_annotated_conversation_items(
+                            &task.turn_context,
+                            &model_info,
+                            vec![item],
+                        )
+                        .await;
                     }
                     input => remaining_input.push(input),
                 }
@@ -1291,14 +1300,6 @@ impl Session {
             self.input_queue
                 .extend_pending_input_for_turn_state(turn_state, remaining_input)
                 .await;
-            if !pending_mail.is_empty() {
-                self.record_annotated_conversation_items(
-                    &task.turn_context,
-                    &task.turn_context.capture_current_model_info(),
-                    pending_mail,
-                )
-                .await;
-            }
             self.record_interrupted_turn_history(
                 &task.turn_context,
                 error

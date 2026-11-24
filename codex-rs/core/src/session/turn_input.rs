@@ -28,8 +28,8 @@ use crate::WithTurnExtensionData;
 use crate::agent::helper_daybreak::turn::HelperTurnAdmission;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianSenderMessages;
+use crate::context::world_state::AdditionalContextState;
 use crate::state::ActiveTurn;
-use crate::state::AdditionalContextFormat;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_features::Feature;
@@ -870,31 +870,23 @@ impl Session {
         else {
             return;
         };
-        let input = self.state.lock().await.additional_context.extend(
-            BTreeMap::from([(
+        let section = AdditionalContextState::new(
+            &BTreeMap::from([(
                 key.to_owned(),
                 AdditionalContextEntry::new(value, AdditionalContextKind::Untrusted),
             )]),
-            self.additional_context_format(),
+            self.enabled(Feature::UntrustedAsToolOutput),
             &task.turn_context.session_telemetry,
             &self.context_ids,
-        );
-        if !input.is_empty() {
-            self.input_queue
-                .extend_pending_input_for_turn_state(
-                    &turn.turn_state,
-                    input.into_iter().map(TurnInput::ResponseItem).collect(),
-                )
-                .await;
-        }
-    }
-
-    pub(super) fn additional_context_format(&self) -> AdditionalContextFormat {
-        if self.enabled(Feature::UntrustedAsToolOutput) {
-            AdditionalContextFormat::ToolOutputs
-        } else {
-            AdditionalContextFormat::Messages
-        }
+        )
+        .extending();
+        // Tool-produced context belongs after tool results and before the next prompt.
+        task.turn_context
+            .extension_data
+            .get_or_init(super::turn::PendingToolContext::default)
+            .lock()
+            .await
+            .push(section);
     }
 
     /// Called under the active-turn lock when registering a task (or a realtime transcript turn).

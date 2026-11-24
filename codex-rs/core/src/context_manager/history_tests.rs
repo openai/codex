@@ -599,20 +599,16 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
         thread_context_ids(),
         /*retention*/ None,
     );
-    let additional_context: ResponseItem = crate::context::AdditionalContextToolOutput::new(
-        "browser_info",
-        /*name*/ None,
-        "captured page",
-    )
-    .into();
-    let ordinary_output = ResponseItem::FunctionCallOutput {
+    let output = |value: &str| ResponseItem::FunctionCallOutput {
         id: None,
         call_id: None,
         name: Some("browser_info".to_owned()),
         namespace: Some("agent".to_owned()),
-        output: FunctionCallOutputPayload::from_text("ordinary result".to_owned()),
+        output: FunctionCallOutputPayload::from_text(value.to_owned()),
         internal_chat_message_metadata_passthrough: None,
     };
+    let additional_context = output("captured page");
+    let ordinary_output = output("ordinary result");
     history.record_annotated_items(
         &mut [
             ResponseItemEnvelope {

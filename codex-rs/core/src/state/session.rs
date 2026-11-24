@@ -11,7 +11,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 
-use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
@@ -97,7 +96,6 @@ pub(crate) struct SessionState {
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    pub(crate) additional_context: AdditionalContextStore,
     /// Settings used by the latest regular user turn, used for turn-to-turn
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
@@ -161,7 +159,6 @@ impl SessionState {
             latest_token_usage_record: None,
             last_sampling_cot_removed: None,
             mcp_dependency_prompted: HashSet::new(),
-            additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
             last_started_turn_id: None,
             turn_attribution: None,

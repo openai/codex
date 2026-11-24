@@ -978,6 +978,8 @@ async fn additional_context_values_are_truncated_before_model_input(
         assert!(body.ends_with("browser-tail"));
         assert!(body.contains("tokens truncated"));
         assert!(body.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES);
+        let mut hidden_edit = long_automation_value.clone();
+        hidden_edit.replace_range(20_000..20_001, "c");
         let mut changed_middle = long_browser_value.clone();
         changed_middle.replace_range(20_000..20_001, "c");
         let changed_prefix = changed_middle.replacen("browser-head", "browser-view", 1);
@@ -994,7 +996,7 @@ async fn additional_context_values_are_truncated_before_model_input(
                             "automation_info".to_owned(),
                             AdditionalContextEntry {
                                 name: None,
-                                value: long_automation_value.clone(),
+                                value: hidden_edit.clone(),
                                 kind: AdditionalContextKind::Application,
                             },
                         ),
@@ -1014,6 +1016,13 @@ async fn additional_context_values_are_truncated_before_model_input(
             })
             .await;
             let next = next.single_request();
+            assert_eq!(
+                next.message_input_texts("developer")
+                    .into_iter()
+                    .filter(|text| text.starts_with("<automation_info>"))
+                    .collect::<Vec<_>>(),
+                developer_texts
+            );
             let outputs = next.inputs_of_type("function_call_output");
             assert_eq!(outputs.len(), expected_count);
             assert_eq!(outputs[0]["output"], body);

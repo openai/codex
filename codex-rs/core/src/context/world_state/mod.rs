@@ -1,3 +1,4 @@
+mod additional_context;
 mod agents_md;
 mod apps_instructions;
 mod collaboration_mode;
@@ -41,6 +42,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+pub(crate) use additional_context::AdditionalContextState;
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use collaboration_mode::CollaborationModeState;
@@ -131,6 +133,13 @@ impl WorldStateUpdate {
     pub(crate) fn standalone(mut self) -> Self {
         self.placement = Placement::Standalone;
         self
+    }
+
+    pub(crate) fn item(item: ResponseItem) -> Self {
+        Self {
+            placement: Placement::Standalone,
+            content: WorldStateUpdateContent::Item(Box::new(item)),
+        }
     }
 
     pub(crate) fn prefix_item(item: ResponseItem) -> Self {
@@ -647,6 +656,21 @@ impl WorldState {
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
         let (snapshot, mut updates) = self.render_full();
         self.resolve_host_roster(&mut updates).await;
+        (snapshot, updates)
+    }
+
+    /// Render a single input-driven section without dropping unrelated step state.
+    pub(crate) fn render_section<'a, S: WorldStateSection>(
+        section: S,
+        previous: Option<&WorldStateSnapshot>,
+        items: impl IntoIterator<Item = &'a ResponseItem, IntoIter: DoubleEndedIterator> + Clone,
+    ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
+        let mut state = Self::default();
+        state.add_section(section);
+        let (current, updates) = state.render_history_diff(previous, items);
+        let mut snapshot = previous.cloned().unwrap_or_default();
+        snapshot.remove_section(S::ID);
+        snapshot.sections.extend(current.sections);
         (snapshot, updates)
     }
 

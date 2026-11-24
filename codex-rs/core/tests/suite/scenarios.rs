@@ -613,17 +613,18 @@ async fn admitted_prompt_id_reaches_responses() -> Result<()> {
 async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let test = test_codex()
-        .with_config(move |config| {
-            configure_scenario_catalog(config);
-            config.include_environment_context = false;
-            if !tool_outputs {
-                config
-                    .features
-                    .disable(Feature::UntrustedAsToolOutput)
-                    .expect("test config should allow feature update");
-            }
-        })
+    let configure = move |config: &mut Config| {
+        configure_scenario_catalog(config);
+        config.include_environment_context = false;
+        if !tool_outputs {
+            config
+                .features
+                .disable(Feature::UntrustedAsToolOutput)
+                .expect("test config should allow feature update");
+        }
+    };
+    let mut test = test_codex()
+        .with_config(configure)
         .build_with_auto_env(&server)
         .await?;
     let mock = mount_sse_sequence(
@@ -634,7 +635,7 @@ async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
     )
     .await;
 
-    for (prompt, name, value) in [
+    for (index, (prompt, name, value)) in [
         (
             "Summarize the selected document.",
             Some("browser"),
@@ -655,7 +656,17 @@ async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
             None,
             "The launch is on Tuesday.",
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 2 {
+            // The unchanged submission must use the baseline restored from the rollout.
+            test = test_codex()
+                .with_config(configure)
+                .restart_with_auto_env(&server, &test)
+                .await?;
+        }
         test.codex
             .start_or_steer_turn(
                 TurnInputRequest::user_input(vec![text(prompt)]).with_additional_context(

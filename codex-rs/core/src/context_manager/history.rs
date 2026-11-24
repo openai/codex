@@ -22,6 +22,7 @@ use crate::context::ModelSwitchInstructions;
 use crate::context::is_guardian_context_message;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSection;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context::world_state::WorldStateUpdate;
 use crate::context_manager::normalize;
@@ -626,6 +627,23 @@ impl ContextManager {
         self.reference_context_item.as_ref()
     }
 
+    pub(crate) fn render_input_world_state(
+        &self,
+        section: impl WorldStateSection,
+    ) -> (
+        WorldStateSnapshot,
+        Vec<WorldStateUpdate>,
+        Option<WorldStateItem>,
+    ) {
+        let (snapshot, updates) = WorldState::render_section(
+            section,
+            self.world_state_baseline.as_ref(),
+            self.raw_items(),
+        );
+        let rollout_item = self.world_state_item(&snapshot);
+        (snapshot, updates, rollout_item)
+    }
+
     pub(crate) fn render_step_world_state(
         &self,
         world_state: &WorldState,
@@ -634,8 +652,11 @@ impl ContextManager {
         Vec<WorldStateUpdate>,
         Option<WorldStateItem>,
     ) {
-        let (snapshot, fragments) =
+        let (mut snapshot, fragments) =
             world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
+        if let Some(previous) = &self.world_state_baseline {
+            snapshot.retain_input_context(previous);
+        }
         let rollout_item = self.world_state_item(&snapshot);
         (snapshot, fragments, rollout_item)
     }
@@ -653,6 +674,10 @@ impl ContextManager {
 
     pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {
         self.world_state_baseline = Some(snapshot);
+    }
+
+    pub(crate) fn world_state_baseline(&self) -> Option<&WorldStateSnapshot> {
+        self.world_state_baseline.as_ref()
     }
 
     pub(crate) fn world_state_checkpoint(&self) -> Option<WorldStateItem> {

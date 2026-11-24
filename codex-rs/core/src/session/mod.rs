@@ -39,7 +39,6 @@ use crate::context::world_state::Placement;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context::world_state::WorldStateUpdate;
-use crate::context::world_state::WorldStateUpdateContent;
 use crate::context::world_state::split_prefix_updates;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -4428,6 +4427,16 @@ impl Session {
                 .await;
         }
 
+        self.commit_world_state(world_state_snapshot, world_state_item)
+            .await;
+        Ok(Arc::new(world_state))
+    }
+
+    async fn commit_world_state(
+        &self,
+        world_state_snapshot: WorldStateSnapshot,
+        world_state_item: Option<WorldStateItem>,
+    ) {
         self.state
             .lock()
             .await
@@ -4438,7 +4447,6 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;
         }
-        Ok(Arc::new(world_state))
     }
 
     /// Retains the step captured for execution.
@@ -5082,9 +5090,12 @@ impl Session {
                 matches!(&installation, CompactedHistoryInstallation::Complete(..));
             let replacement = match installation {
                 CompactedHistoryInstallation::Complete(metadata, _) => {
-                    let context = state
-                        .additional_context
-                        .restore_compacted_items(state.history.annotated_items(), &mut items);
+                    let mut world_state_baseline = world_state_baseline;
+                    if let Some(previous) = state.history.world_state_baseline() {
+                        world_state_baseline.retain_input_context(previous);
+                    }
+                    let context = world_state_baseline
+                        .restore_input_context(state.history.annotated_items(), &mut items);
                     if !context.is_empty() {
                         items = compact::insert_initial_context_before_last_real_user_or_summary(
                             items, context,
@@ -5594,10 +5605,7 @@ impl Session {
         let updates = prefix
             .into_iter()
             .map(WorldStateUpdate::prefix_item)
-            .chain(items.into_iter().map(|item| WorldStateUpdate {
-                placement: Placement::Standalone,
-                content: WorldStateUpdateContent::Item(Box::new(item)),
-            }))
+            .chain(items.into_iter().map(WorldStateUpdate::item))
             .collect();
         (updates, snapshot)
     }
