@@ -83,6 +83,20 @@ struct McpPermissionRequestHookFixture {
 
 #[ctor]
 fn maybe_run_mcp_permission_request_hook_fixture() {
+    // musl does not pass argv to constructors. The hook subprocess must
+    // recognize its fixture command before libtest parses the arguments.
+    #[cfg(all(target_os = "linux", target_env = "musl"))]
+    let cmdline = std::fs::read("/proc/self/cmdline").expect("read hook fixture arguments");
+    #[cfg(all(target_os = "linux", target_env = "musl"))]
+    let mut args = {
+        use std::os::unix::ffi::OsStrExt;
+        cmdline
+            .strip_suffix(&[0])
+            .unwrap_or(&cmdline)
+            .split(|byte| *byte == 0)
+            .map(|arg| std::ffi::OsStr::from_bytes(arg).to_owned())
+    };
+    #[cfg(not(all(target_os = "linux", target_env = "musl")))]
     let mut args = std::env::args_os();
     let _program = args.next();
     if args.next().as_deref()

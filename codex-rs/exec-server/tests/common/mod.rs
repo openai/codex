@@ -17,8 +17,8 @@ use codex_sandboxing::linux::CODEX_LINUX_SANDBOX_ARG0;
 use codex_test_binary_support::TestBinaryDispatchGuard;
 use codex_test_binary_support::TestBinaryDispatchMode;
 use codex_test_binary_support::configure_test_binary_dispatch;
-use ctor::ctor;
 
+#[cfg(test)]
 pub(crate) mod exec_server;
 
 pub(crate) const TEST_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -42,8 +42,19 @@ macro_rules! skip_if_mxc_unavailable {
     }};
 }
 
-#[ctor]
-pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
+#[cfg(test)]
+#[ctor::ctor]
+pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = { dispatch() };
+
+// On musl, Rust's argv is unavailable in a constructor. Bazel builds the
+// same dispatch code as a child executable so it runs after Rust initializes.
+#[cfg(not(test))]
+fn main() {
+    let _guard = dispatch();
+    panic!("expected an exec-server test helper command");
+}
+
+fn dispatch() -> Option<TestBinaryDispatchGuard> {
     let guard = configure_test_binary_dispatch("codex-exec-server-tests", |exe_name, argv1| {
         if argv1 == Some(CODEX_ARG0_EXEC_HELPER_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
@@ -65,9 +76,15 @@ pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
     maybe_run_delayed_output_after_exit_from_test_binary();
     maybe_run_exec_server_from_test_binary(guard.as_ref());
     guard
-};
+}
 
+#[cfg(test)]
 pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
+    #[cfg(target_env = "musl")]
+    if option_env!("BAZEL_PACKAGE").is_some() {
+        let helper = codex_utils_cargo_bin::find_resource!("exec-server-test-helper")?;
+        return Ok((helper.clone(), Some(helper)));
+    }
     let current_exe = env::current_exe()?;
     let codex_linux_sandbox_exe = if cfg!(target_os = "linux") {
         TEST_BINARY_DISPATCH_GUARD

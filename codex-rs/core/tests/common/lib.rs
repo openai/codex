@@ -257,8 +257,24 @@ fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides::default()
 }
 
+// On musl the test binary cannot dispatch helper arguments before libtest
+// starts. Use the CLI and sandbox binaries that Bazel provides as runfiles.
+pub fn exec_server_helper_exe() -> std::io::Result<PathBuf> {
+    if cfg!(target_env = "musl")
+        && let Ok(exe) = codex_utils_cargo_bin::cargo_bin("codex")
+    {
+        return Ok(exe);
+    }
+    std::env::current_exe()
+}
+
 #[cfg(target_os = "linux")]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    if cfg!(target_env = "musl")
+        && let Ok(exe) = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+    {
+        return Ok(exe);
+    }
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)

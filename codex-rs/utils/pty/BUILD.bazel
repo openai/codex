@@ -3,4 +3,5 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "pty",
     crate_name = "codex_utils_pty",
+    linux_python_tests = ["pty-unit-tests"],
 )

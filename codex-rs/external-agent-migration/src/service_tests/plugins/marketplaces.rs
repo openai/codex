@@ -1,4 +1,6 @@
 use super::super::*;
+use crate::migration_source::MarketplaceImportSource;
+use crate::source_cla;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -482,19 +484,46 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
 async fn import_plugins_infers_external_official_marketplace_when_missing_from_settings() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
-    fs::create_dir_all(&codex_home).expect("create codex home");
-
+    let settings = serde_json::json!({
+        "enabledPlugins": { (format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}")): true }
+    });
+    let sources = source_cla::marketplace_import_sources(
+        &settings,
+        &external_agent_home,
+        &external_agent_home,
+    );
+    assert_eq!(
+        sources.get(EXTERNAL_OFFICIAL_MARKETPLACE_NAME),
+        Some(&MarketplaceImportSource {
+            source: "anthropics/claude-plugins-official".to_string(),
+            ref_name: None,
+        })
+    );
     fs::write(
         external_agent_home.join("settings.json"),
-        format!(
-            r#"{{
-          "enabledPlugins": {{
-            "sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}": true
-          }}
-        }}"#
-        ),
+        settings.to_string(),
     )
     .expect("write settings");
+
+    // Import against a local copy so the missing-plugin result is independent
+    // of network access and changes to the upstream catalog.
+    let marketplace = external_agent_home.join("plugins/marketplace");
+    let manifest_dir = marketplace.join(EXTERNAL_AGENT_PLUGIN_MANIFEST_DIR);
+    fs::create_dir_all(&manifest_dir).expect("create marketplace manifest dir");
+    fs::write(
+        manifest_dir.join("marketplace.json"),
+        serde_json::json!({"name": EXTERNAL_OFFICIAL_MARKETPLACE_NAME, "plugins": []}).to_string(),
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        external_agent_home.join(EXTERNAL_AGENT_KNOWN_MARKETPLACES_PATH),
+        serde_json::json!({
+            (EXTERNAL_OFFICIAL_MARKETPLACE_NAME): {"source": "directory", "path": marketplace}
+        })
+        .to_string(),
+    )
+    .expect("write local marketplace registry");
+    fs::create_dir_all(&codex_home).expect("create codex home");
 
     let outcome = service_for_paths(external_agent_home, codex_home)
         .import_plugins(

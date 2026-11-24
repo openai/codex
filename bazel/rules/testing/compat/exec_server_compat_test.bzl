@@ -6,7 +6,8 @@ def exec_server_compat_test(
         name,
         comparison_binary = None,
         current_binary = "//codex-rs/cli:codex",
-        release = None):
+        release = None,
+        tags = []):
     """Tests both executor directions against another Codex build or release.
 
     Args:
@@ -14,6 +15,7 @@ def exec_server_compat_test(
         comparison_binary: Built Codex executable to compare with the current build.
         current_binary: Built Codex executable representing the current version.
         release: External release repository exposing `:codex` and `:package`.
+        tags: Additional Bazel tags for the generated test target.
     """
     if (comparison_binary == None) == (release == None):
         fail("exactly one of comparison_binary and release must be set")
@@ -37,7 +39,7 @@ def exec_server_compat_test(
             current_binary: "CODEX_TEST_CURRENT_CODEX",
             ":" + comparison_alias: "CODEX_TEST_RELEASED_CODEX",
         },
-        tags = ["no-sandbox"],
+        tags = ["no-sandbox"] + tags,
         target_compatible_with = [
             "@platforms//cpu:x86_64",
             "@platforms//os:linux",

@@ -5,4 +5,6 @@ codex_rust_crate(
     compile_data = glob(["tests/fixtures/**"]),
     crate_name = "codex_http_client",
     integration_compile_data_extra = glob(["tests/fixtures/*.pem"]),
+    # The scoped tracing subscribers share a process-wide callsite registry.
+    unit_test_args = ["--test-threads=1"],
 )

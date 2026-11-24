@@ -69,7 +69,10 @@ async fn open_in_codex_scenario() -> Result<()> {
     let linux_sandbox_exe = None;
     let environment = EnvironmentManager::create_for_tests_with_local(
         /*exec_server_url*/ None,
-        ExecServerRuntimeOptions::new(std::env::current_exe()?, linux_sandbox_exe)?,
+        ExecServerRuntimeOptions::new(
+            core_test_support::exec_server_helper_exe()?,
+            linux_sandbox_exe,
+        )?,
     )
     .await;
     app.environment_manager = Arc::new(environment);

@@ -1665,6 +1665,8 @@ async fn config_requests_surface_cloud_config_bundle_load_errors(
     let refresh_token_url = format!("{}/oauth/token", server.uri());
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // Startup falls back to defaults after the 401 and ignores config.toml.
+        .with_args(&["-c", &format!("chatgpt_base_url={chatgpt_base_url:?}")])
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (

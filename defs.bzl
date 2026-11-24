@@ -1,5 +1,6 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_python//python:py_runtime_info.bzl", "PyRuntimeInfo")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_binary")
@@ -67,6 +68,9 @@ def _workspace_root_test_impl(ctx):
     )
 
     runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+    if ctx.attr.python_runtime:
+        python = ctx.attr.python_runtime[PyRuntimeInfo]
+        runfiles = runfiles.merge(ctx.runfiles(files = [python.interpreter], transitive_files = python.files))
     for data_dep in ctx.attr.data:
         runfiles = runfiles.merge(ctx.runfiles(files = data_dep[DefaultInfo].files.to_list()))
         runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
@@ -106,6 +110,12 @@ def _workspace_root_test_impl(ctx):
 
 def _bash_runfile_env_exports(ctx):
     lines = []
+    if ctx.attr.python_runtime:
+        interpreter = ctx.attr.python_runtime[PyRuntimeInfo].interpreter
+        lines.extend([
+            'python="$(resolve_runfile "{}")"'.format(_runfile_logical_path(interpreter)),
+            'export PATH="${python%/*}:$PATH"',
+        ])
     for runfile_dep, env_var in ctx.attr.runfile_env.items():
         runfile = _runfile_env_file(runfile_dep)
         lines.append('RUNFILE_ENV_ARGS+=("{}=$(resolve_runfile "{}")")'.format(env_var, _runfile_logical_path(runfile)))
@@ -140,15 +150,16 @@ def _runfile_logical_path(file):
     return file.short_path.removeprefix("../")
 
 def _bash_workspace_root_setup(ctx):
-    if not ctx.attr.chdir_workspace_root:
-        return ""
-    return 'export INSTA_WORKSPACE_ROOT="${workspace_root}"\ncd "${workspace_root}"'
+    setup = 'export INSTA_WORKSPACE_ROOT="${workspace_root}"'
+    if ctx.attr.chdir_workspace_root:
+        setup += '\ncd "${workspace_root}"'
+    return setup
 
 def _windows_workspace_root_setup(ctx):
-    if not ctx.attr.chdir_workspace_root:
-        return ""
-    return """set "INSTA_WORKSPACE_ROOT=%workspace_root%"
-cd /d "%workspace_root%" || exit /b 1"""
+    setup = 'set "INSTA_WORKSPACE_ROOT=%workspace_root%"'
+    if ctx.attr.chdir_workspace_root:
+        setup += '\ncd /d "%workspace_root%" || exit /b 1'
+    return setup
 
 workspace_root_test = rule(
     implementation = _workspace_root_test_impl,
@@ -163,6 +174,7 @@ workspace_root_test = rule(
         ),
         "env": attr.string_dict(),
         "env_inherit": attr.string_list(),
+        "python_runtime": attr.label(cfg = "exec", providers = [PyRuntimeInfo]),
         "runfile_env": attr.label_keyed_string_dict(
             allow_files = True,
             cfg = "target",
@@ -221,13 +233,16 @@ def codex_rust_crate(
         binary_unit_test_windows_runtime = None,
         integration_test_timeout = None,
         test_data_extra = [],
+        linux_python_tests = [],
         test_shard_counts = {},
         test_tags = [],
         test_threads = 0,
         unit_test_timeout = None,
         extra_binaries = [],
         extra_binaries_non_windows = [],
-        run_tests_with_wine_exec = False):
+        run_tests_with_wine_exec = False,
+        integration_test_tags = {},
+        local_linux_cases = {}):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
     The macro mirrors Cargo conventions: it builds a library when `src/` exists,
@@ -283,8 +298,13 @@ def codex_rust_crate(
             and then assigns each libtest case to a stable bucket by hashing
             the test name. Matching tests are also marked flaky, which gives
             them Bazel's default three attempts.
+        linux_python_tests: Unit and integration test names that run python3 on Linux.
+        local_linux_cases: Exact libtest names keyed by test launcher. On Linux,
+            run these cases in a companion launcher with no-remote-exec.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+        integration_test_tags: Extra execution tags keyed by native integration
+            test name. Compilation, Wine and Windows cross tests are unaffected.
         test_threads: Optional Rust test thread limit for sharded integration tests.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
@@ -411,9 +431,11 @@ def codex_rust_crate(
             unit_test_kwargs["shard_count"] = unit_test_shard_count
             unit_test_kwargs["flaky"] = True
 
-        workspace_root_test(
+        _partitioned_workspace_test(
             name = unit_test_name,
+            local_cases = local_linux_cases.get(unit_test_name, []),
             env = test_env | unit_test_env,
+            python_runtime = _test_python_runtime(linux_python_tests, unit_test_name),
             runfile_env = {
                 binary: "CARGO_BIN_EXE_" + Label(binary).name
                 for binary in extra_binaries
@@ -582,15 +604,17 @@ def codex_rust_crate(
             test_kwargs["flaky"] = True
 
         integration_test_binary = test_name + "-bin"
+        execution_tags = integration_test_tags.get(test_name, [])
+        use_test_launcher = test_shard_count or execution_tags or test_name in linux_python_tests or test_name in local_linux_cases
 
         # There are four generated integration-test shapes:
         #
         # 1. Unsharded native tests keep the plain rust_test label for minimal
         #    churn and the usual rules_rust Cargo-like environment.
-        # 2. Sharded native tests split into a manual rust_test binary plus an
-        #    outer workspace_root_test. The outer test action receives Bazel's
-        #    sharding environment, resolves the real binary through the
-        #    runfiles manifest, and implements stable libtest sharding itself.
+        # 2. Tests with shards, execution tags, or Python use a manual rust_test
+        #    binary plus an outer workspace_root_test. The launcher resolves
+        #    the binary through runfiles, handles sharding, and keeps test
+        #    execution tags off compilation and lint actions.
         # 3. Windows cross tests always use the workspace_root_test wrapper so
         #    runfile env vars become Windows-native absolute paths before the
         #    Rust process starts.
@@ -600,7 +624,7 @@ def codex_rust_crate(
         #    owns cleanup. The outer workspace_root_test resolves the runner,
         #    test, and server from runfiles, sets a Cargo-like cwd, and applies
         #    the native test's shard count.
-        if test_shard_count:
+        if use_test_launcher:
             # This target is intentionally a binary-like helper, not the public
             # test target. The wrapper below owns cwd setup, runfile env
             # materialization, sharding, and flaky retry behavior.
@@ -625,9 +649,14 @@ def codex_rust_crate(
                 version = crate_version,
             )
 
-            workspace_root_test(
+            _partitioned_workspace_test(
                 name = test_name,
+                local_cases = local_linux_cases.get(test_name, []),
+                # Unsharded rust_test binaries can embed paths relative to
+                # Bazel's runfiles workspace. Preserve that working directory.
+                chdir_workspace_root = bool(test_shard_count),
                 env = test_env,
+                python_runtime = _test_python_runtime(linux_python_tests, test_name),
                 # CARGO_BIN_EXE_* values are rlocation paths at analysis time.
                 # The launcher rewrites them to absolute paths at execution
                 # time so tests keep working after chdir_workspace_root and on
@@ -637,7 +666,7 @@ def codex_rust_crate(
                 test_threads = test_threads,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags,
+                tags = test_tags + execution_tags,
                 **test_kwargs
             )
         else:
@@ -670,7 +699,7 @@ def codex_rust_crate(
 
         if run_tests_with_wine_exec:
             wine_test_name = test_name.removesuffix("-test") + "-wine-exec-test"
-            native_test_binary = ":" + (integration_test_binary if test_shard_count else test_name)
+            native_test_binary = ":" + (integration_test_binary if use_test_launcher else test_name)
             wine_test_binaries = dict(wine_host_binaries)
 
             wine_exec_server = wine_test_name + "-windows-exec-server"
@@ -701,10 +730,12 @@ def codex_rust_crate(
             # The Wine runner is a binary rather than a rust_test, but it still
             # needs a Cargo-like cwd, Bazel sharding, and absolute runfile paths.
             # `workspace_root_test` establishes all three before Wine starts.
-            workspace_root_test(
+            _partitioned_workspace_test(
                 name = wine_test_name,
+                local_cases = local_linux_cases.get(wine_test_name, []),
                 data = wine_runtime.data,
                 env = test_env,
+                python_runtime = _test_python_runtime(linux_python_tests, test_name),
                 runfile_env = wine_runfile_env,
                 test_bin = "//codex-rs/exec-server/testing:wine-exec-test-runner",
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
@@ -751,6 +782,47 @@ def codex_rust_crate(
             tags = test_tags,
             **windows_cross_test_kwargs
         )
+
+def _partitioned_workspace_test(name, local_cases, env, tags, **kwargs):
+    """Share one binary between complementary Linux test launchers."""
+    if not local_cases:
+        workspace_root_test(name = name, env = env, tags = tags, **kwargs)
+        return
+
+    cases = ",".join(local_cases)
+    workspace_root_test(
+        name = name,
+        env = select({
+            "@platforms//os:linux": env | {"CODEX_BAZEL_EXCLUDE_CASES": cases},
+            "//conditions:default": env,
+        }),
+        tags = tags,
+        **kwargs
+    )
+
+    # Keep the Wine constraints and any runtime arguments. The local subset
+    # is small enough to run in one action instead of duplicating all shards.
+    local_kwargs = dict(kwargs)
+    local_kwargs.pop("shard_count", None)
+    if name.endswith("-wine-exec-test"):
+        compatible = WINE_TEST_TARGET_COMPATIBLE_WITH
+    else:
+        compatible = ["@platforms//os:linux"]
+    local_kwargs["target_compatible_with"] = compatible
+    workspace_root_test(
+        name = name + "-linux-local",
+        env = env | {"CODEX_BAZEL_INCLUDE_CASES": cases},
+        tags = tags + ["no-remote-exec"],
+        **local_kwargs
+    )
+
+def _test_python_runtime(linux_python_tests, test_name):
+    if test_name not in linux_python_tests:
+        return None
+    return select({
+        "@platforms//os:linux": "@python_3_12//:py3_runtime",
+        "//conditions:default": None,
+    })
 
 def _test_shard_count(test_shard_counts, test_name):
     shard_count = test_shard_counts.get(test_name)

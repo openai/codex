@@ -6,4 +6,8 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/cli:codex",
     ],
+    linux_python_tests = [
+        "rmcp-client-stdio_descriptor_boundary-test",
+        "rmcp-client-stdio_stderr_cleanup-test",
+    ],
 )

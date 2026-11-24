@@ -90,14 +90,19 @@ for line in sys.stdin:
 
     symlink(&python, temporary.path().join("python-fixture"))?;
     let wrapper = temporary.path().join("executable-text");
-    // No shebang: exercise Command's shell fallback after native macOS spawn
-    // returns ENOEXEC, including the fallback descriptor cleanup.
-    codex_utils_cargo_bin::write_executable(&wrapper, "exec \"$@\"\n")?;
+    // musl execvp reports ENOEXEC for scripts without a shebang. On other
+    // platforms keep exercising the implicit shell fallback and its cleanup.
+    let script_body = if cfg!(target_env = "musl") {
+        "#!/bin/sh\nexec \"$@\"\n"
+    } else {
+        "exec \"$@\"\n"
+    };
+    codex_utils_cargo_bin::write_executable(&wrapper, script_body)?;
     for (launch, program, mut args) in [
         ("absolute", python.clone().into_os_string(), Vec::new()),
         ("relative", OsString::from("./python-fixture"), Vec::new()),
         (
-            "shell fallback",
+            "shell wrapper",
             OsString::from("./executable-text"),
             vec![python.clone().into_os_string()],
         ),

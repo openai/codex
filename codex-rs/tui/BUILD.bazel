@@ -10,9 +10,11 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/cli:codex",
+        "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
     ],
     integration_compile_data_extra = ["src/test_backend.rs"],
+    linux_python_tests = ["tui-all-test"],
     rustc_flags_extra = MACOS_WEBRTC_RUSTC_LINK_FLAGS,
     test_data_extra = glob([
         "src/**/*.rs",

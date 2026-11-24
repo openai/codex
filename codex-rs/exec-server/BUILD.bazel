@@ -1,3 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("//:defs.bzl", "codex_rust_crate")
 load("//bazel/rules/testing/compat:exec_server_compat_test.bzl", "exec_server_compat_test")
 
@@ -25,8 +26,37 @@ codex_rust_crate(
     # process-global test-binary dispatch state, and the remote exec-server
     # cases already rely on serialization around the full CLI path.
     integration_test_args = ["--test-threads=1"],
+    test_data_extra = [":musl-test-helper"],
     test_tags = ["no-sandbox"],
     unit_test_args = ["--test-threads=1"],
+)
+
+filegroup(
+    name = "musl-test-helper",
+    testonly = True,
+    srcs = select({
+        "@llvm//constraints/libc:musl": [":exec-server-test-helper"],
+        "//conditions:default": [],
+    }),
+)
+
+rust_binary(
+    name = "exec-server-test-helper",
+    testonly = True,
+    srcs = ["tests/common/mod.rs"],
+    crate_root = "tests/common/mod.rs",
+    edition = "2024",
+    target_compatible_with = ["@llvm//constraints/libc:musl"],
+    deps = [
+        ":exec-server",
+        "//codex-rs/build-info",
+        "//codex-rs/http-client",
+        "//codex-rs/sandboxing",
+        "//codex-rs/test-binary-support",
+        "//codex-rs/websocket-auth",
+        "@crates//tokio",
+        "@crates//tracing-subscriber",
+    ],
 )
 
 exec_server_compat_test(

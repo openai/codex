@@ -63,7 +63,7 @@ async fn executor_discovery_uses_current_environment_grants(
         #[cfg(not(target_os = "linux"))]
         let sandbox_exe = None;
         let runtime_paths = codex_exec_server::ExecServerRuntimeOptions::new(
-            std::env::current_exe()?,
+            core_test_support::exec_server_helper_exe()?,
             sandbox_exe,
         )?;
         codex_mcp_extension::install_plugins(

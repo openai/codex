@@ -526,6 +526,7 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(unix, test_case(Some("git version 2.20.0"); "released Git"))]
 #[cfg_attr(unix, test_case(Some("git version 2.19.6"); "older Git"))]
 #[cfg_attr(unix, test_case(Some("unknown"); "unknown Git version"))]
 #[test_case(None; "installed Git")]
@@ -535,6 +536,11 @@ async fn marketplace_upgrade_reuses_the_installed_revision_when_git_supports_it(
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
+    let supports_alternate_refs = run_git(source.path(), &["help", "--config"])
+        .is_ok_and(|keys| keys.lines().any(|key| key == "core.alternateRefsCommand"));
+    // Only present a Git that can limit advertised refs as a supported release.
+    let reported_version = reported_version
+        .filter(|version| *version != "git version 2.20.0" || supports_alternate_refs);
     let installed_revision = init_marketplace_repo(source.path(), "debug", "debug old")?;
     // file:// exercises fetch negotiation even though the server is local.
     let url = url::Url::from_directory_path(source.path())
@@ -619,12 +625,28 @@ PATH=$TEST_GIT_PATH exec git "$@"
         updated_revision
     );
     let packets = std::fs::read_to_string(packets)?;
-    let can_reuse = reported_version.is_none()
-        && run_git(source.path(), &["help", "--config"])
-            .is_ok_and(|keys| keys.lines().any(|key| key == "core.alternateRefsCommand"));
+    // A custom build can advertise the option but have an unrecognized
+    // version. Codex must use a plain clone for those builds.
+    let installed_version = run_git(source.path(), &["--version"])?;
+    let version = reported_version.unwrap_or(&installed_version);
+    let release = version
+        .strip_prefix("git version ")
+        .and_then(|v| v.split_ascii_whitespace().next())
+        .unwrap_or_default();
+    let release = match release.split_once(".windows.") {
+        Some((release, build)) if build.parse::<u32>().is_ok() => release,
+        _ => release,
+    };
+    let parts = release
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Vec<_>>();
+    let can_reuse = supports_alternate_refs
+        && matches!(parts.as_slice(), [Ok(major), Ok(minor), Ok(_)] if (*major, *minor) >= (2, 20));
     assert_eq!(
         packets.contains(&format!("have {installed_revision}")),
-        can_reuse
+        can_reuse,
+        "negotiating with {version}"
     );
     assert!(!packets.contains(&format!("have {private_revision}")));
     assert!(!root.join(".git/objects/info/alternates").exists());

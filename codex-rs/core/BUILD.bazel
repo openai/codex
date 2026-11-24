@@ -24,6 +24,10 @@ codex_rust_crate(
         "//codex-rs/prompts:templates/permissions/approval_policy/on_request_rule_request_permission.md",
     ],
     integration_test_timeout = "long",
+    linux_python_tests = [
+        "core-all-test",
+        "core-unit-tests",
+    ],
     run_tests_with_wine_exec = True,
     rustc_env = {
         # Keep manifest-root path lookups inside the Bazel execroot for code

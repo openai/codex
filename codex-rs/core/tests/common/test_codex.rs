@@ -824,7 +824,7 @@ impl TestCodexBuilder {
         #[cfg(not(target_os = "linux"))]
         let codex_linux_sandbox_exe = None;
         let local_runtime_paths = codex_exec_server::ExecServerRuntimeOptions::new(
-            std::env::current_exe()?,
+            crate::exec_server_helper_exe()?,
             codex_linux_sandbox_exe,
         )?;
         let environment_manager = Arc::new(if include_local_environment {

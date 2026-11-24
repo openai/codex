@@ -6,4 +6,5 @@ codex_rust_crate(
         "templates/**",
     ]),
     crate_name = "codex_memories_write",
+    linux_python_tests = ["write-unit-tests"],
 )

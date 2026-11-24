@@ -10,5 +10,6 @@ codex_rust_crate(
     compile_data = SCHEMA_FIXTURES,
     crate_name = "codex_hooks",
     integration_compile_data_extra = SCHEMA_FIXTURES,
+    linux_python_tests = ["hooks-unit-tests"],
     test_data_extra = SCHEMA_FIXTURES,
 )
