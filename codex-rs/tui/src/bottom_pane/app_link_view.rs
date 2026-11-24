@@ -487,6 +487,16 @@ impl AppLinkView {
         }
     }
 
+    fn push_suggest_reason(&self, lines: &mut Vec<Line<'static>>, width: usize) {
+        let reason = self.suggest_reason.as_deref().unwrap_or_default().trim();
+        if !reason.is_empty() {
+            for line in wrap(reason, width) {
+                lines.push(Line::from(line.into_owned().italic()));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
     fn link_content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let usable_width = width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -504,17 +514,7 @@ impl AppLinkView {
         }
 
         lines.push(Line::from(""));
-        if let Some(suggest_reason) = self
-            .suggest_reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|suggest_reason| !suggest_reason.is_empty())
-        {
-            for line in wrap(suggest_reason, usable_width) {
-                lines.push(Line::from(line.into_owned().italic()));
-            }
-            lines.push(Line::from(""));
-        }
+        self.push_suggest_reason(&mut lines, usable_width);
         let is_browser_action_suggestion = self.is_browser_action_suggestion();
         if self.is_installed && !is_browser_action_suggestion {
             for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
@@ -603,6 +603,7 @@ impl AppLinkView {
                 lines.push(Line::from(line.into_owned()));
             }
         } else if is_external_action_suggestion {
+            self.push_suggest_reason(&mut lines, usable_width);
             for line in wrap(
                 "Complete the requested action in the browser window that just opened.",
                 usable_width,
@@ -1746,7 +1747,7 @@ mod tests {
         let target = generic_url_target();
         let request = codex_app_server_protocol::McpServerElicitationRequest::Url {
             meta: None,
-            message: "Review the payment details to continue.".to_string(),
+            message: "Enter code ABCD-1234 to confirm the payment.".to_string(),
             url: "https://payments.example/checkout/123".to_string(),
             elicitation_id: "payment-123".to_string(),
         };
