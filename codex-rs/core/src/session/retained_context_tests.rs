@@ -2,12 +2,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_history::RetainedContextEntry;
+use codex_history::RetainedContextEvent;
 use codex_history::RetainedUserMessage;
+use codex_history::RolloutItem;
+use codex_protocol::protocol::EventMsg;
+use core_test_support::responses::user_message_item;
+use futures::FutureExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use test_case::test_case;
 
 use super::thread_settings;
 use crate::guardian_review::PendingReviewWrites;
+use crate::guardian_review::ReviewPreparationError;
+use crate::rollout::recorder::RolloutRecorder;
 use crate::session::tests::attach_thread_persistence;
 use crate::session::tests::make_session_and_context;
 
@@ -37,6 +45,82 @@ async fn guardian_waits_for_detached_confirmed_delivery() {
     drop(checkpoint);
     waiting.await.expect("confirmed delivery appended");
     recording.await.expect("delivery task finished");
+}
+
+#[test_case(false; "complete history")]
+#[test_case(true; "earlier write unconfirmed")]
+#[tokio::test]
+async fn guardian_retains_an_accepted_answer_when_the_tool_is_cancelled(
+    earlier_write_unconfirmed: bool,
+) -> anyhow::Result<()> {
+    let (mut session, turn) = make_session_and_context().await;
+    let writes = Arc::new(PendingReviewWrites::default());
+    session.pending_review_writes = Some(Arc::clone(&writes));
+    if earlier_write_unconfirmed {
+        // Without a live writer the instruction is recorded but its receipt goes unconfirmed.
+        session
+            .record_conversation_items(&turn, turn.model_info(), &[user_message_item("Wait.")])
+            .await;
+    }
+    let path = attach_thread_persistence(&mut session).await;
+    *session.active_turn.lock().await = Some(Default::default());
+    let (tx, events) = async_channel::unbounded();
+    session.tx_event = tx;
+    let args = serde_json::from_value(json!({
+        "questions": [{"id": "publish", "header": "Release", "question": "May I publish?"}],
+        "isBlocking": true,
+    }))?;
+    let mut request =
+        Box::pin(session.prompt_user(&turn, "ask".into(), args, /*verify*/ true));
+    tokio::select! {
+        _ = &mut request => panic!("tool completed before the answer"),
+        event = events.recv() => assert!(matches!(event.unwrap().msg, EventMsg::RequestUserInput(_))),
+    }
+    let response = serde_json::from_value(json!({"answers": {"publish": {"answers": ["No"]}}}))?;
+    // Hold the writer. Accepting the answer must leave the session free to process Stop.
+    let flush = tokio::task::unconstrained(session.live_thread().unwrap().flush());
+    tokio::pin!(flush);
+    assert!(futures::poll!(&mut flush).is_pending());
+    tokio::task::unconstrained(session.notify_user_input_response(&turn.sub_id, response))
+        .now_or_never()
+        .expect("answer handling blocked on the writer");
+    drop(request);
+
+    // Queue the interrupt before the detached task gets a turn on this runtime.
+    let interrupt = [RolloutItem::EventMsg(EventMsg::TurnAborted(
+        serde_json::from_value(json!({"turn_id": turn.sub_id, "reason": "interrupted"}))?,
+    ))];
+    let append = tokio::task::unconstrained(session.persist_rollout_items(&interrupt));
+    let (appended, flushed) = tokio::join!(biased; append, flush);
+    flushed?;
+    assert!(appended);
+    session.drain_code_mode_messages().await;
+    if earlier_write_unconfirmed {
+        assert_eq!(
+            writes.wait().await,
+            Err(ReviewPreparationError::HistoryWriteUnconfirmed)
+        );
+    } else {
+        writes.wait().await?;
+    }
+
+    let history = RolloutRecorder::get_rollout_history(&path).await?;
+    let events = history
+        .get_rollout_items()
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer {
+                answer, ..
+            }) => Some(answer.questions[0].answer.as_str()),
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnAborted(_),
+                ..
+            } => Some("interrupted"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(events, ["No", "interrupted"]);
+    Ok(())
 }
 
 #[tokio::test]

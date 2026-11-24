@@ -18,9 +18,11 @@ pub struct PendingReviewWrites {
     pending: Mutex<Vec<watch::Receiver<bool>>>,
 }
 
-/// Receipt for one history append. Dropping it without confirmation leaves the
-/// evidence unavailable to reviews for the lifetime of this root.
-pub(crate) struct ReviewWrite(watch::Sender<bool>);
+/// An evidence write that the session must finish. After a failed append, we
+/// still preserve later writes, but can no longer confirm a complete history.
+pub(crate) struct ReviewWrite {
+    receipt: Option<watch::Sender<bool>>,
+}
 
 impl ReviewWrite {
     /// Record under the session lock so a reviewer cannot see the new revision
@@ -35,21 +37,19 @@ impl ReviewWrite {
         };
         let before = history.guardian_revisions();
         let result = record(history);
-        let write = if history.guardian_revisions() != before {
-            writes.begin()
-        } else {
-            None
-        };
+        let write = (history.guardian_revisions() != before).then(|| writes.begin());
         (result, write)
     }
 
     pub(crate) fn confirm(self) {
-        self.0.send_replace(true);
+        if let Some(receipt) = self.receipt {
+            receipt.send_replace(true);
+        }
     }
 }
 
 impl PendingReviewWrites {
-    fn begin(&self) -> Option<ReviewWrite> {
+    fn begin(&self) -> ReviewWrite {
         let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         pending.retain(|write| !*write.borrow());
         // A dropped or failed append leaves a gap for this root's lifetime.
@@ -57,11 +57,13 @@ impl PendingReviewWrites {
             .iter()
             .any(|write| write.has_changed().is_err() && !*write.borrow())
         {
-            return None;
+            return ReviewWrite { receipt: None };
         }
         let (appended, write) = watch::channel(/*init*/ false);
         pending.push(write);
-        Some(ReviewWrite(appended))
+        ReviewWrite {
+            receipt: Some(appended),
+        }
     }
 
     /// Wait for writes already visible to this review. Later instructions are

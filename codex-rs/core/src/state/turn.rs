@@ -15,13 +15,13 @@ use codex_diagnostics::GaugeGuard;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
 use super::TurnTokenUsage;
 use crate::agent::types::AgentExecutionGuard;
+use crate::session::PendingUserInput;
 use crate::session::SamplingInterrupt;
 use crate::session::TurnInput;
 use crate::session::TurnInputQueue;
@@ -112,7 +112,7 @@ pub(crate) struct RunningTask {
 pub(crate) struct TurnState {
     pending_approvals: Arc<PendingApprovals>,
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
-    pending_user_input: HashMap<String, oneshot::Sender<AcceptedUserInputResponse>>,
+    pending_user_input: HashMap<String, PendingUserInput>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
@@ -146,13 +146,6 @@ impl PendingApproval {
             decision
         }
     }
-}
-
-/// Host receipt metadata follows the response through the asynchronous tool waiter.
-pub(crate) struct AcceptedUserInputResponse {
-    pub(crate) response: RequestUserInputResponse,
-    /// Order reserved when the host accepts this response.
-    pub(crate) acceptance_order: u64,
 }
 
 pub(crate) struct PendingRequestPermissions {
@@ -273,15 +266,12 @@ impl TurnState {
     pub(crate) fn insert_pending_user_input(
         &mut self,
         key: String,
-        tx: oneshot::Sender<AcceptedUserInputResponse>,
-    ) -> Option<oneshot::Sender<AcceptedUserInputResponse>> {
-        self.pending_user_input.insert(key, tx)
+        pending: PendingUserInput,
+    ) -> Option<PendingUserInput> {
+        self.pending_user_input.insert(key, pending)
     }
 
-    pub(crate) fn remove_pending_user_input(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<AcceptedUserInputResponse>> {
+    pub(crate) fn remove_pending_user_input(&mut self, key: &str) -> Option<PendingUserInput> {
         self.pending_user_input.remove(key)
     }
 

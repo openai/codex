@@ -13,9 +13,6 @@ use crate::tools::handlers::request_user_input_spec::request_user_input_unavaila
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_features::Feature;
-use codex_history::RetainedContextEvent;
-use codex_history::VerifiedAnswer;
-use codex_history::VerifiedQuestionAnswer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -83,9 +80,10 @@ impl RequestUserInputHandler {
             is_blocking: mode == ModeKind::Plan,
             auto_resolution_ms: None,
         };
-        let questions = args.questions.clone();
-        let accepted = session
-            .request_user_input(turn.as_ref(), call_id.to_string(), args)
+        // Retain answers even while an older checkpoint needs compatibility review.
+        let verify = turn.config.features.enabled(Feature::GuardianApproval);
+        let response = session
+            .prompt_user(turn.as_ref(), call_id.into(), args, verify)
             .await
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
@@ -93,58 +91,11 @@ impl RequestUserInputHandler {
                 ))
             })?;
 
-        let response = accepted.response;
-
         let content = serde_json::to_string(&response).map_err(|err| {
             FunctionCallError::Fatal(format!(
                 "failed to serialize {REQUEST_USER_INPUT_TOOL_NAME} response: {err}"
             ))
         })?;
-        // Persist answers even while an older checkpoint needs compatibility review.
-        if turn.config.features.enabled(Feature::GuardianApproval) {
-            let user_input = questions
-                .iter()
-                .filter_map(|question| {
-                    let response = response.answers.get(&question.id)?;
-                    let answers = response
-                        .answers
-                        .iter()
-                        .filter(|answer| !answer.trim().is_empty())
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    if answers.is_empty() {
-                        return None;
-                    }
-                    let mut question_text = question.question.clone();
-                    for option in question
-                        .options
-                        .iter()
-                        .flatten()
-                        .filter(|option| response.answers.contains(&option.label))
-                    {
-                        question_text
-                            .push_str(&format!("\n{}: {}", option.label, option.description));
-                    }
-                    Some(VerifiedQuestionAnswer {
-                        question: question_text,
-                        answer: answers.join("\n"),
-                    })
-                })
-                .collect::<Vec<_>>();
-            if !user_input.is_empty() {
-                session
-                    .record_retained_context(RetainedContextEvent::VerifiedAnswer {
-                        answer: VerifiedAnswer {
-                            turn_id: turn.sub_id.clone(),
-                            call_id: call_id.into(),
-                            questions: user_input,
-                        },
-                        acceptance_order: Some(accepted.acceptance_order),
-                    })
-                    .await;
-            }
-        }
-
         Ok(boxed_tool_output(FunctionToolOutput::from_text(
             content,
             /*success*/ Some(true),

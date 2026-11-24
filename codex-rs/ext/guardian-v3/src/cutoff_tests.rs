@@ -38,12 +38,12 @@ use tokio::sync::mpsc::error::TryRecvError;
 #[path = "../tests/common/board_host.rs"]
 mod board_host;
 
-#[test_case::test_case(false; "queued revocation")]
-#[test_case::test_case(true; "interrupted revocation")]
+#[test_case::test_case(false; "caller cancelled before recorder admission")]
+#[test_case::test_case(true; "caller cancelled with projection blocked")]
 #[tokio::test]
-async fn initial_cutoff_and_retry_wait_for_live_revocation(interrupt: bool) -> anyhow::Result<()> {
-    use codex_core::guardian_review::ReviewPreparationError;
-
+async fn initial_cutoff_and_retry_wait_for_live_revocation(
+    during_projection: bool,
+) -> anyhow::Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
@@ -62,8 +62,12 @@ async fn initial_cutoff_and_retry_wait_for_live_revocation(interrupt: bool) -> a
         .thread_extension_data()
         .get::<PendingReviewWrites>()
         .context("root write tracker")?;
-    let (evidence, mut writer) =
-        RootEvidence::new(Default::default(), history.clone(), cursor, writes);
+    let (evidence, mut writer) = RootEvidence::new(
+        Default::default(),
+        history.clone(),
+        cursor.clone(),
+        writes.clone(),
+    );
     let before = test.codex.guardian_authorization_version().await;
 
     // A local flush holds the writer lock while awaiting the recorder task.
@@ -89,47 +93,52 @@ async fn initial_cutoff_and_retry_wait_for_live_revocation(interrupt: bool) -> a
         }) => result?,
     }
     let initial = evidence.capture_cutoff();
-    let retry = evidence.request_through(/*cutoff*/ None);
+    let retry = evidence.request_catch_up();
     tokio::pin!(initial, retry);
-    assert!(futures::poll!(&mut initial).is_pending());
-    assert!(futures::poll!(&mut retry).is_pending());
-    // Release the writer without polling the revocation again. Both reviews
-    // must still depend on that append, even though a flush can now succeed.
-    flush.await?;
-    if interrupt {
-        drop(revoke);
-        let (initial, retry) = tokio::join!(initial, retry);
-        for error in [
-            initial.err(),
-            retry.err(),
-            evidence.capture_cutoff().await.err(),
-        ] {
-            assert_eq!(
-                error
-                    .context("accepted interrupted write")?
-                    .downcast::<ReviewPreparationError>()?,
-                ReviewPreparationError::HistoryWriteUnconfirmed,
-            );
-        }
-    } else {
-        let (saved, cutoff, routed) = tokio::join!(revoke, initial, retry);
-        saved?;
-        let cutoff = cutoff?;
-        let routed = routed?;
-        let capture = writer.try_recv()?;
-        let [record] = capture.snapshot.records() else {
-            anyhow::bail!("expected the revocation");
-        };
-        assert_eq!(
-            serde_json::to_value(record)?["original"]["payload"]["content"][0]["text"],
-            "Stop the release."
-        );
-        assert_eq!(capture.snapshot.cutoff(), cutoff);
-        capture.finish();
-        assert_eq!(routed.await?, cutoff);
-        batches.next().await?;
+    // Exercise a shared capture before admission and a lone retry during projection.
+    if !during_projection {
+        assert!(futures::poll!(&mut initial).is_pending());
     }
+    assert!(futures::poll!(&mut retry).is_pending());
+
+    if during_projection {
+        assert!(test.codex.state_db().is_some());
+        let db = codex_state::open_thread_history_db(test.config.sqlite_config()).await?;
+        let lock = db.begin_with("BEGIN IMMEDIATE").await?;
+        flush.await?;
+        // Read the complete canonical record without flushing or waiting for SQLite.
+        tokio::select! {
+            result = &mut revoke => anyhow::bail!("revocation finished with projection blocked: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+                while cursor.capture(history.as_ref()).await?.records().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+                anyhow::Ok(())
+            }) => result??,
+        }
+        drop(revoke);
+        assert!(writes.wait().now_or_never().is_none());
+        lock.rollback().await?;
+    } else {
+        drop(revoke);
+        assert!(writes.wait().now_or_never().is_none());
+        flush.await?;
+    }
+    let routed = retry.await?;
+    let cutoff = initial.await?;
+    let capture = writer.try_recv()?;
+    let [record] = capture.snapshot.records() else {
+        anyhow::bail!("expected the revocation");
+    };
+    assert_eq!(
+        serde_json::to_value(record)?["original"]["payload"]["content"][0]["text"],
+        "Stop the release."
+    );
+    assert_eq!(capture.snapshot.cutoff(), cutoff);
+    capture.finish();
+    assert_eq!(routed.await?, cutoff);
     earlier.await?;
+    batches.next().await?;
     assert!(batches.next().now_or_never().is_none());
     test.codex.shutdown_and_wait().await?;
     Ok(())

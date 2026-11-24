@@ -319,6 +319,8 @@ pub(crate) use self::input_queue::SubmittedAdditionalContext;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 pub(crate) use self::input_queue::UserInputMetadata;
+use self::retained_context::AcceptedUserInputResponse;
+pub(crate) use self::retained_context::PendingUserInput;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
@@ -346,7 +348,6 @@ use crate::mcp::McpThreadIdentity;
 use crate::rollout::map_session_init_error;
 use crate::session::startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
-use crate::state::AcceptedUserInputResponse;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingApproval;
@@ -3745,48 +3746,76 @@ impl Session {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn request_user_input(
         &self,
         turn_context: &TurnContext,
         call_id: String,
         args: RequestUserInputArgs,
-    ) -> Option<AcceptedUserInputResponse> {
+    ) -> Option<RequestUserInputResponse> {
+        self.prompt_user(turn_context, call_id, args, /*verify*/ false)
+            .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub(crate) async fn prompt_user(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestUserInputArgs,
+        verify: bool,
+    ) -> Option<RequestUserInputResponse> {
         let user_wait_owner = self.user_wait_timing_owner(turn_context, Some(&call_id));
-        let _elicitation = self.services.elicitations.register();
-        let sub_id = turn_context.sub_id.clone();
+        let elicitation = self.services.elicitations.register();
+        let sub_id = &turn_context.sub_id;
         let (tx_response, rx_response) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let prompt = RequestUserInputEvent {
+            call_id,
+            turn_id: sub_id.clone(),
+            questions: args.questions,
+            is_blocking: args.is_blocking,
+            auto_resolution_ms: args.auto_resolution_ms,
+        };
+        // Only a tracked root takes ownership of the prompt before the tool resumes.
+        let mut verify_on_return = verify.then(|| prompt.clone());
+        let verify_on_accept = verify_on_return.take_if(|_| self.pending_review_writes.is_some());
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_user_input(sub_id, tx_response)
+                    ts.insert_pending_user_input(
+                        sub_id.clone(),
+                        PendingUserInput {
+                            tx_response,
+                            verify_on_accept,
+                        },
+                    )
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending user input for sub_id: {event_id}");
+            warn!("Overwriting existing pending user input for sub_id: {sub_id}");
         }
 
-        let event = EventMsg::RequestUserInput(RequestUserInputEvent {
-            call_id,
-            turn_id: turn_context.sub_id.clone(),
-            questions: args.questions,
-            is_blocking: args.is_blocking,
-            auto_resolution_ms: args.auto_resolution_ms,
-        });
         turn_context
             .turn_metadata_state
             .mark_user_input_requested_during_turn();
-        let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
-        self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        let user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
+        self.send_event(turn_context, EventMsg::RequestUserInput(prompt))
+            .await;
+        let mut accepted = rx_response.await.ok()?;
+        drop(user_wait);
+        drop(elicitation);
+        if let Some(recording) = accepted.recording.take() {
+            let _ = recording.await;
+        } else if let Some(event) = accepted.verified_answer(verify_on_return) {
+            self.record_retained_context(event).await;
+        }
+        Some(accepted.response)
     }
 
     #[expect(
@@ -3804,7 +3833,13 @@ impl Session {
                 Some(at) => {
                     let sender = at.turn_state.lock().await.remove_pending_user_input(sub_id);
                     match sender {
-                        Some(sender) => Some((sender, self.reserve_user_input_order().await)),
+                        Some(pending)
+                            if pending.verify_on_accept.is_some()
+                                && pending.tx_response.is_closed() =>
+                        {
+                            return;
+                        }
+                        Some(pending) => Some((pending, self.reserve_user_input_order().await)),
                         None => None,
                     }
                 }
@@ -3812,13 +3847,17 @@ impl Session {
             }
         };
         match entry {
-            Some((tx_response, acceptance_order)) => {
-                tx_response
-                    .send(AcceptedUserInputResponse {
-                        response,
-                        acceptance_order,
-                    })
-                    .ok();
+            Some((pending, acceptance_order)) => {
+                let mut accepted = AcceptedUserInputResponse {
+                    response,
+                    acceptance_order,
+                    recording: None,
+                };
+                // Publish tracked evidence before waking the cancellable tool waiter.
+                if let Some(event) = accepted.verified_answer(pending.verify_on_accept) {
+                    accepted.recording = self.start_retained_context(event).await;
+                }
+                let _ = pending.tx_response.send(accepted);
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
@@ -4187,20 +4226,21 @@ impl Session {
         let has_user_turn_boundary = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        // Thread settings precede the first accepted input. Keep the persistence lock
-        // through its seal, and clear the pending flag only after the seal succeeds.
-        let realtime_settings_guard = if realtime.is_some()
+        // Prepare settings before publishing tracked evidence so there is no await
+        // between recording the revision and handing the append to the session.
+        let prepare_before_recording = realtime.is_some() || self.pending_review_writes.is_some();
+        let mut early_guard = if prepare_before_recording
             && has_user_turn_boundary
             && self.reference_context_item().await.is_none()
         {
-            Some(thread_settings::acquire_persistence_lock(self).await)
+            Some(thread_settings::acquire_owned_persistence_lock(self).await)
         } else {
             None
         };
-        let realtime_initial_settings = realtime_settings_guard.is_some()
+        let initial_settings_pending = early_guard.is_some()
             && self.reference_context_item().await.is_none()
             && self.state.lock().await.initial_settings_pending();
-        let realtime_settings_event = if realtime_initial_settings {
+        let mut early_settings = if initial_settings_pending {
             Some(thread_settings::applied_event(self).await)
         } else {
             None
@@ -4262,13 +4302,10 @@ impl Session {
                         &turn_context.sub_id,
                         envelope,
                         prepared,
-                        realtime_settings_event,
+                        early_settings.take(),
                         policy,
                     )
                     .await?;
-                if realtime_initial_settings {
-                    state.take_initial_settings_pending();
-                }
                 response_items = vec![envelope.item.clone()];
                 items = vec![envelope];
             } else if matches!(&realtime, Some(RealtimeRecord::Chunk)) {
@@ -4281,23 +4318,24 @@ impl Session {
                     .record_realtime_chunk_input(
                         &mut state,
                         envelope.clone(),
-                        realtime_settings_event,
+                        early_settings.take(),
                         policy,
                     )
                     .await?;
-                if realtime_initial_settings {
-                    state.take_initial_settings_pending();
-                }
                 response_items = vec![envelope.item];
             } else {
                 state
                     .pending_audio_duration_ids
                     .extend(file_audio::file_ids(&items).cloned());
-                (_, review_write) = ReviewWrite::record(
+                let (_, write) = ReviewWrite::record(
                     self.pending_review_writes.as_deref(),
                     &mut state.history,
                     |history| history.record_annotated_items(&mut items, policy),
                 );
+                review_write = write.and_then(|write| self.track_review_write(write));
+            }
+            if initial_settings_pending {
+                state.take_initial_settings_pending();
             }
             state
                 .current_time_reminder
@@ -4319,30 +4357,39 @@ impl Session {
         if let Some(RealtimeRecord::Handoff(prepared)) = &realtime {
             self.finish_realtime_handoff(prepared, &items[0]).await;
         } else if !matches!(&realtime, Some(RealtimeRecord::Chunk)) {
-            let settings_guard =
-                if has_user_turn_boundary && self.reference_context_item().await.is_none() {
-                    Some(thread_settings::acquire_persistence_lock(self).await)
-                } else {
-                    None
-                };
+            let settings_guard = if !prepare_before_recording
+                && has_user_turn_boundary
+                && self.reference_context_item().await.is_none()
+            {
+                Some(thread_settings::acquire_persistence_lock(self).await)
+            } else {
+                None
+            };
             let initial_settings = if settings_guard.is_some()
                 && self.reference_context_item().await.is_none()
                 && self.state.lock().await.take_initial_settings_pending()
             {
                 Some(thread_settings::applied_event(self).await)
             } else {
-                None
+                early_settings
             };
             let rollout_items = initial_settings
                 .into_iter()
                 .map(RolloutItem::EventMsg)
                 .chain(items.into_iter().map(RolloutItem::ResponseItem))
                 .collect::<Vec<_>>();
-            self.persist_rollout_items_with_ack(&rollout_items, review_write)
-                .await;
+            if let Some(write) = review_write {
+                if let Some(recording) =
+                    self.start_review_write(rollout_items, write, early_guard.take())
+                {
+                    let _ = recording.await;
+                }
+            } else {
+                self.persist_rollout_items(&rollout_items).await;
+            }
             drop(settings_guard);
         }
-        drop(realtime_settings_guard);
+        drop(early_guard);
         if turn_context.config.memories.disable_on_external_context
             && let Some(item) = response_items
                 .iter()
@@ -5556,13 +5603,30 @@ impl Session {
             .await
     }
 
-    #[tracing::instrument(name = "persist_rollout_items", level = "trace", skip_all, fields(item_count = items.len()))]
     async fn persist_rollout_items_with_ack(
         &self,
         items: &[RolloutItem],
         write: Option<ReviewWrite>,
     ) -> bool {
-        if let Some(live_thread) = self.live_thread()
+        Self::append_rollout_items(
+            self.live_thread(),
+            &self.services.local_agent_runtime,
+            self.thread_id,
+            items,
+            write,
+        )
+        .await
+    }
+
+    #[tracing::instrument(name = "persist_rollout_items", level = "trace", skip_all, fields(item_count = items.len()))]
+    async fn append_rollout_items(
+        live_thread: Option<&LiveThread>,
+        runtime: &crate::agent::control::LocalAgentRuntime,
+        thread_id: ThreadId,
+        items: &[RolloutItem],
+        write: Option<ReviewWrite>,
+    ) -> bool {
+        if let Some(live_thread) = live_thread
             && let Err(e) = live_thread
                 .append_items_with_ack(items, move || {
                     if let Some(write) = write {
@@ -5572,17 +5636,12 @@ impl Session {
                 .await
         {
             error!("failed to record rollout items: {e:#}");
-            if self
-                .services
-                .local_agent_runtime
-                .suspension_root()
-                .is_some()
-            {
-                self.services.local_agent_runtime.record_shutdown_failure(
+            if runtime.suspension_root().is_some() {
+                runtime.record_shutdown_failure(
                     crate::thread_manager::AgentTreeShutdownFailure::operation_failed(
                         "tree_suspension",
                         "append_history",
-                        Some(self.thread_id),
+                        Some(thread_id),
                         crate::thread_manager::thread_store_error_kind(&e),
                     ),
                 );

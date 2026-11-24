@@ -90,7 +90,7 @@ pub(crate) struct Session {
     pub(super) initial_context_publication: Semaphore,
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
-    pub(super) thread_settings_persistence: Semaphore,
+    pub(super) thread_settings_persistence: Arc<Semaphore>,
     pub(super) code_mode_message_tasks: CodeModeMessageTasks,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
@@ -2045,7 +2045,7 @@ impl Session {
                 agent_status,
                 state: Mutex::new(state),
                 initial_context_publication: Semaphore::new(/*permits*/ 1),
-                thread_settings_persistence: Semaphore::new(/*permits*/ 1),
+                thread_settings_persistence: Arc::new(Semaphore::new(/*permits*/ 1)),
                 code_mode_message_tasks: CodeModeMessageTasks::default(),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),

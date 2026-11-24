@@ -19,6 +19,7 @@ use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use std::sync::Arc;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::SemaphorePermit;
 
 impl Session {
@@ -153,6 +154,14 @@ pub(super) async fn acquire_persistence_lock(session: &Session) -> SemaphorePerm
     session
         .thread_settings_persistence
         .acquire()
+        .await
+        .unwrap_or_else(|_| unreachable!("thread settings persistence semaphore is never closed"))
+}
+
+/// Keep checkpoint ordering when a history write outlives its caller.
+pub(super) async fn acquire_owned_persistence_lock(session: &Session) -> OwnedSemaphorePermit {
+    Arc::clone(&session.thread_settings_persistence)
+        .acquire_owned()
         .await
         .unwrap_or_else(|_| unreachable!("thread settings persistence semaphore is never closed"))
 }
