@@ -43,6 +43,24 @@ fn terminal_info(
 }
 
 #[test]
+fn dev_container_requires_vscode_and_an_enabled_container_marker() {
+    for (program, marker, expected) in [
+        ("vscode", Some("true"), true),
+        ("VSCode", Some("true"), true),
+        ("vscode", None, false),
+        ("vscode", Some("false"), false),
+        ("kitty", Some("true"), false),
+    ] {
+        let mut env = FakeEnvironment::new().with_var("TERM_PROGRAM", program);
+        if let Some(marker) = marker {
+            env = env.with_var("REMOTE_CONTAINERS", marker);
+        }
+        let terminal = detect_terminal_info_from_env(&env);
+        assert_eq!(terminal.is_vscode_dev_container_in(&env), expected);
+    }
+}
+
+#[test]
 fn detects_term_program() {
     let env = FakeEnvironment::new()
         .with_var("TERM_PROGRAM", "iTerm.app")

@@ -257,12 +257,13 @@ fn render_markdown_transcript(cells: &[Arc<dyn HistoryCell>]) -> Result<String, 
                     [
                         "• Saved conversation to ",
                         "• Copied conversation to clipboard",
-                        "• Copy unconfirmed; /export saves chat",
                         "■ Export failed: ",
                         "■ Copy failed: ",
                     ]
                     .iter()
                     .any(|prefix| text.starts_with(prefix))
+                        || text.strip_prefix("• ")
+                            == Some(crate::clipboard_copy::UNCONFIRMED_COPY_MESSAGE)
                 })
         {
             continue;

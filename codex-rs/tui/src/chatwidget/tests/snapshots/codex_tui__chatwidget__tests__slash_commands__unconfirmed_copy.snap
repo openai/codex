@@ -3,4 +3,4 @@ source: tui/src/chatwidget/tests/slash_commands.rs
 assertion_line: 2404
 expression: rendered
 ---
-• Copy unconfirmed; /export saves chat
+• Try pasting. If the text isn’t there, use /export to save the chat.

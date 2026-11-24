@@ -82,6 +82,65 @@ fn local_tmux_environment() -> CopyEnvironment {
 }
 
 #[test]
+fn terminal_only_copy_reports_the_send_result() {
+    let environment = CopyEnvironment {
+        terminal_copy: ClipboardCopyMode::PreferTerminal {
+            tmux: false,
+            native_for_large_copies: false,
+        },
+        forwarded_x11: false,
+        wsl_session: false,
+    };
+    for send in [Ok(()), Err("write failed".to_string())] {
+        let result = copy_to_clipboard_with(
+            "hello",
+            CopyFormat::Markdown,
+            environment,
+            |_| panic!("not in tmux"),
+            |text| {
+                assert_eq!(text, "hello");
+                send.clone()
+            },
+            |_, _| panic!("must not write to the container clipboard"),
+            |_| panic!("must not write to the WSL clipboard"),
+        );
+        assert_eq!(
+            result.map(|outcome| outcome.store(&mut None)),
+            send.map(|()| CopyStatus::Unconfirmed)
+        );
+    }
+}
+
+#[test]
+fn oversized_dev_container_copy_can_keep_native_ownership_without_confirming_delivery() {
+    let environment = CopyEnvironment {
+        terminal_copy: ClipboardCopyMode::PreferTerminal {
+            tmux: true,
+            native_for_large_copies: true,
+        },
+        ..local_tmux_environment()
+    };
+    for size in [OSC52_MAX_RAW_BYTES, OSC52_MAX_RAW_BYTES + 1] {
+        let text = "x".repeat(size);
+        let result = copy_to_clipboard_with(
+            &text,
+            CopyFormat::PlainText,
+            environment,
+            |_| Ok(()),
+            |_| panic!("no OSC 52 fallback expected"),
+            |actual, _| {
+                assert_eq!(actual, text);
+                Ok(Some(ClipboardLease::test()))
+            },
+            |_| panic!("must not target the WSL clipboard"),
+        );
+        let mut lease = None;
+        assert_eq!(result.unwrap().store(&mut lease), CopyStatus::Unconfirmed);
+        assert_eq!(lease.is_some(), size > OSC52_MAX_RAW_BYTES);
+    }
+}
+
+#[test]
 fn rex_selects_osc52_without_ssh_or_tmux() {
     assert_eq!(
         ClipboardCopyMode::for_terminal(TerminalName::Rex),

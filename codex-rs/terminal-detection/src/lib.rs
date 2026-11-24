@@ -214,6 +214,15 @@ impl TerminalInfo {
     pub fn is_zellij(&self) -> bool {
         matches!(self.multiplexer, Some(Multiplexer::Zellij { .. }))
     }
+
+    /// Whether this terminal is VS Code running in a dev container.
+    pub fn is_vscode_dev_container(&self) -> bool {
+        self.is_vscode_dev_container_in(&ProcessEnvironment)
+    }
+
+    fn is_vscode_dev_container_in(&self, env: &dyn Environment) -> bool {
+        self.name == TerminalName::VsCode && env.var("REMOTE_CONTAINERS").as_deref() == Some("true")
+    }
 }
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();

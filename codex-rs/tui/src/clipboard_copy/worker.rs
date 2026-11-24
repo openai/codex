@@ -421,7 +421,7 @@ impl ClipboardWorker {
                             });
                             match primary {
                                 Some(result) if destination == CopyDestination::Primary => {
-                                    (result.map(|_| super::CopyOutcome::Requested), None)
+                                    (result.map(|_| super::CopyOutcome::Unconfirmed(None)), None)
                                 }
                                 // Unavailable PRIMARY must not break configured CLIPBOARD copy.
                                 _ => copy(&text, format, &setup),
