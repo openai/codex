@@ -350,6 +350,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
@@ -4911,7 +4912,17 @@ impl ChatComposer {
             selection.register(footer_rect.intersection(buf.area), changed);
         }
         let style = user_message_style();
-        Block::default().style(style).render(composer_rect, buf);
+        let mut block = Block::default().style(style);
+        // Mark the padding without guessing a fill that could hide the terminal's cursor.
+        if style.bg.is_none() && !textarea_rect.is_empty() {
+            let gray = crate::terminal_palette::best_color((128, 128, 128));
+            if gray != Color::Reset {
+                block = block
+                    .borders(Borders::TOP | Borders::BOTTOM)
+                    .border_style(gray);
+            }
+        }
+        block.render(composer_rect, buf);
         if let Some(previews) = options.image_previews {
             previews.render(
                 thumbnails,
@@ -5155,17 +5166,17 @@ mod tests {
     }
 
     #[test]
-    fn light_terminal_palette_renders_light_composer_snapshot() {
+    fn composer_with_light_or_missing_palette() {
         let colors = crate::terminal_probe::DefaultColors {
             fg: (0x55, 0x57, 0x53),
             bg: (0xff, 0xff, 0xff),
         };
 
+        let (mut composer, _rx) = new_test_composer();
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 6,
+        );
         crate::terminal_palette::with_test_default_colors(colors, || {
-            let (composer, _rx) = new_test_composer();
-            let area = Rect::new(
-                /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 6,
-            );
             let mut buffer = Buffer::empty(area);
             composer.render(area, &mut buffer);
 
@@ -5174,6 +5185,14 @@ mod tests {
                 crate::terminal_palette::rgb_color((244, 244, 244))
             );
             insta::assert_snapshot!("light_terminal_palette_composer", format!("{buffer:?}"));
+        });
+        crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+            composer.draft.textarea.insert_str("Explain ");
+            composer.draft.textarea.insert_element("@file.rs");
+            composer.set_remote_image_urls(vec!["https://example.com/image.png".to_string()]);
+            let mut buffer = Buffer::empty(area);
+            composer.render(area, &mut buffer);
+            insta::assert_snapshot!("missing_terminal_palette_composer", format!("{buffer:?}"));
         });
     }
 
