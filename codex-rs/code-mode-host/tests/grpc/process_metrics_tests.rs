@@ -26,12 +26,16 @@ async fn metrics_failures_and_deadlines_preserve_sessions_and_keepalive() -> Res
     let collector_calls = calls.clone();
     let (release, blocked) = std::sync::mpsc::channel::<()>();
     let blocked = Mutex::new(blocked);
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
     let host = codex_code_mode_host::GrpcCodeModeHost::with_process_metrics(Arc::new(move || {
         match collector_calls.fetch_add(1, Ordering::SeqCst) {
             0 => Ok(snapshot.clone()),
             1 => Err("metrics unavailable".to_string()),
-            2 => panic!("collector panic"),
+            // Exercise the host's unwind handling without running the process panic hook:
+            // formatting a backtrace can itself outlast the metrics RPC deadline.
+            2 => std::panic::resume_unwind(Box::new("collector panic")),
             _ => {
+                started_tx.send(()).unwrap();
                 blocked
                     .lock()
                     .unwrap()
@@ -82,8 +86,15 @@ async fn metrics_failures_and_deadlines_preserve_sessions_and_keepalive() -> Res
             .map_err(anyhow::Error::msg)?,
         CodeModeProcessMetricsSample::Snapshot(expected)
     );
-    for cell in 2..=4 {
-        assert!(provider.sample_process_metrics().await.is_err());
+    for (cell, expected_error) in [
+        (2, Some("process metrics collection failed")),
+        (3, Some("process metrics collector panicked")),
+        (4, None),
+    ] {
+        let error = provider.sample_process_metrics().await.unwrap_err();
+        if let Some(expected_error) = expected_error {
+            assert!(error.contains(expected_error), "{error}");
+        }
         let response = execute(
             &session,
             request("text(load('survives'));"),
@@ -97,7 +108,11 @@ async fn metrics_failures_and_deadlines_preserve_sessions_and_keepalive() -> Res
     }
     // A canceled blocked RPC retains its collector quota: no unbounded worker
     // threads are added, and neither the sample nor overload opens another channel.
-    assert!(provider.sample_process_metrics().await.is_err());
+    let busy = provider.sample_process_metrics().await.unwrap_err();
+    assert!(busy.contains("collector is busy"), "{busy}");
+    // Busy proves the server admitted the blocked call. It may have acquired the
+    // permit before its detached worker got scheduled, even after the RPC deadline.
+    started_rx.recv().await.expect("blocked collector started");
     assert_eq!(calls.load(Ordering::SeqCst), 4);
     assert_eq!(connections.load(Ordering::SeqCst), 1);
     release.send(())?;

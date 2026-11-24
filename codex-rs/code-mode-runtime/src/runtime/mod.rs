@@ -388,10 +388,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), failure_rx.recv())
-                .await
-                .expect("runtime failure timeout")
-                .expect("runtime failure"),
+            failure_rx.recv().await.expect("runtime failure"),
             "code-mode V8 runtime thread panicked"
         );
     }
@@ -406,9 +403,7 @@ mod tests {
         );
 
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-                .await
-                .expect("runtime panic event timeout"),
+            event_rx.recv().await,
             Some(RuntimeEvent::ThreadPanicked)
         ));
     }
